@@ -9,7 +9,10 @@ from sqlalchemy.pool import StaticPool
 from app.database import get_db
 from app.main import app
 from app.models import Base, NotificationTemplate, TemplateVersion
-from app.routes.dispatch import verify_jwt_token
+from app.auth.dependencies import (
+    AuthenticatedUser,
+    get_current_user_or_tenant,
+)
 
 
 # ==========================================================
@@ -81,9 +84,17 @@ def client(
     def override_get_db():
         yield db_session
 
+    def override_get_current_user_or_tenant():
+        user = AuthenticatedUser(
+            user_id="test-user",
+            tenant_id="**platform**",
+            role="admin",
+        )
+        return user, "**platform**"
+
     app.dependency_overrides[
-        verify_jwt_token
-    ] = lambda: "mock_token"
+        get_current_user_or_tenant
+    ] = override_get_current_user_or_tenant
 
     app.dependency_overrides[
         get_db
@@ -97,7 +108,7 @@ def client(
         test_client.close()
 
         app.dependency_overrides.pop(
-            verify_jwt_token,
+            get_current_user_or_tenant,
             None,
         )
 
@@ -164,6 +175,7 @@ def test_preview_template_failure_sanitized(
         "app.routes.templates.render_preview",
     ) as mock_render:
         from app.services.template_engine import MessageTemplateEngineError
+
         mock_render.side_effect = MessageTemplateEngineError(
             f"Failed because {sensitive_marker}"
         )
@@ -197,7 +209,7 @@ def test_preview_template_auth_validation_unchanged() -> None:
 
     previous_auth_override = (
         app.dependency_overrides.pop(
-            verify_jwt_token,
+            get_current_user_or_tenant,
             None,
         )
     )
@@ -222,7 +234,7 @@ def test_preview_template_auth_validation_unchanged() -> None:
 
         if previous_auth_override is not None:
             app.dependency_overrides[
-                verify_jwt_token
+                get_current_user_or_tenant
             ] = previous_auth_override
 
     assert response.status_code in {
@@ -356,7 +368,6 @@ def test_legacy_route_unsafe_rejected(
         "Template validation failed."
     )
 
-    # Security assertions must remain active.
     assert (
         "{{ secret_method() }}"
         not in response.text
@@ -461,12 +472,12 @@ def test_repeated_legacy_create_reuses_live_row(
 # §5 — Whitespace-only name validation
 # ==========================================================
 
-
 def test_post_whitespace_only_name_returns_400() -> None:
     """
     PromptTemplateCreate must reject whitespace-only names at the schema level.
     An HTTP layer building on this schema will also return 400.
     """
+
     from app.services.ai.FieldOpsAI.schemas.prompt_template import (
         PromptTemplateCreate,
         AgentType,
@@ -474,7 +485,10 @@ def test_post_whitespace_only_name_returns_400() -> None:
         PromptLanguage,
     )
 
-    with pytest.raises(ValueError, match="Name cannot be blank"):
+    with pytest.raises(
+        ValueError,
+        match="Name cannot be blank",
+    ):
         PromptTemplateCreate(
             name="   ",
             agent_type=AgentType.CommsAgent,
@@ -494,7 +508,7 @@ def test_patch_whitespace_only_name_returns_400(
     A PATCH request with a whitespace-only name must return HTTP 400
     and must not create a new version.
     """
-    # Create a valid template first via the legacy route.
+
     first_response = client.post(
         "/templates",
         json={
@@ -506,15 +520,17 @@ def test_patch_whitespace_only_name_returns_400(
             "body_template": "Hello",
         },
     )
+
     assert first_response.status_code == 200
 
-    # The legacy route does not expose a PATCH endpoint so we test
-    # whitespace-only name validation at the schema level.
     from app.services.ai.FieldOpsAI.schemas.prompt_template import (
         PromptTemplateUpdate,
     )
 
-    with pytest.raises(ValueError, match="Name cannot be blank"):
+    with pytest.raises(
+        ValueError,
+        match="Name cannot be blank",
+    ):
         PromptTemplateUpdate(name="   ")
 
 
@@ -522,11 +538,11 @@ def test_patch_whitespace_only_name_returns_400(
 # §6 — Format validation via legacy route
 # ==========================================================
 
-
 def test_legacy_route_accepts_text_format(
     client: TestClient,
 ) -> None:
     """text is a valid format and must be accepted by the legacy route."""
+
     response = client.post(
         "/templates",
         json={
@@ -538,6 +554,7 @@ def test_legacy_route_accepts_text_format(
             "body_template": "Hello {{ customer.name }}",
         },
     )
+
     assert response.status_code == 200
 
 
@@ -545,6 +562,7 @@ def test_legacy_route_accepts_html_format(
     client: TestClient,
 ) -> None:
     """html is a valid format and must be accepted by the legacy route."""
+
     response = client.post(
         "/templates",
         json={
@@ -556,18 +574,38 @@ def test_legacy_route_accepts_html_format(
             "body_template": "<p>Hello {{ customer.name }}</p>",
         },
     )
+
     assert response.status_code == 200
 
 
-@pytest.mark.parametrize("bad_format", ["markdown", "xml", "raw", "javascript", "   "])
+@pytest.mark.parametrize(
+    "bad_format",
+    [
+        "markdown",
+        "xml",
+        "raw",
+        "javascript",
+        "   ",
+    ],
+)
 def test_legacy_route_rejects_unsupported_format(
     client: TestClient,
     db_session: Session,
     bad_format: str,
 ) -> None:
     """The legacy /templates route must reject unsupported formats with HTTP 400 without DB mutation."""
-    templates_before = db_session.query(NotificationTemplate).count()
-    versions_before = db_session.query(TemplateVersion).count()
+
+    templates_before = (
+        db_session.query(
+            NotificationTemplate
+        ).count()
+    )
+
+    versions_before = (
+        db_session.query(
+            TemplateVersion
+        ).count()
+    )
 
     response = client.post(
         "/templates",
@@ -583,8 +621,17 @@ def test_legacy_route_rejects_unsupported_format(
 
     assert response.status_code == 400
 
-    templates_after = db_session.query(NotificationTemplate).count()
-    versions_after = db_session.query(TemplateVersion).count()
+    templates_after = (
+        db_session.query(
+            NotificationTemplate
+        ).count()
+    )
+
+    versions_after = (
+        db_session.query(
+            TemplateVersion
+        ).count()
+    )
 
     assert templates_after == templates_before
     assert versions_after == versions_before
@@ -599,6 +646,7 @@ def test_client_version_field_is_rejected_schema_level() -> None:
     PromptTemplateCreate must reject any client-supplied version field
     because the schema uses extra='forbid'.
     """
+
     from app.services.ai.FieldOpsAI.schemas.prompt_template import (
         PromptTemplateCreate,
         AgentType,
@@ -606,7 +654,9 @@ def test_client_version_field_is_rejected_schema_level() -> None:
         PromptLanguage,
     )
 
-    with pytest.raises((ValueError, TypeError)):
+    with pytest.raises(
+        (ValueError, TypeError)
+    ):
         PromptTemplateCreate(
             name="Test",
             agent_type=AgentType.CommsAgent,
@@ -615,8 +665,9 @@ def test_client_version_field_is_rejected_schema_level() -> None:
             status="assigned",
             body="Hello {{ name }}",
             variables=["name"],
-            version=5,  # must be rejected
+            version=5,
         )
+
 
 def test_preview_html_escapes_context(
     client: TestClient,
@@ -655,6 +706,7 @@ def test_preview_html_escapes_context(
         data["rendered_body"]
     )
 
+
 @pytest.mark.parametrize(
     "bad_format",
     [
@@ -680,6 +732,7 @@ def test_preview_rejects_invalid_format(
     )
 
     assert response.status_code == 400
+
 
 def test_preview_normalizes_html_format(
     client: TestClient,

@@ -39,13 +39,9 @@ def get_job_for_user(
     """Find a job that the authenticated user is allowed to access."""
 
     query = db.query(Job).filter(
-        Job.id == job_id
+        Job.id == job_id,
+        Job.tenant_id == current_user.tenant_id,
     )
-
-    if not current_user.is_super_admin:
-        query = query.filter(
-            Job.tenant_id == current_user.tenant_id
-        )
 
     job = query.first()
 
@@ -60,10 +56,9 @@ def get_job_for_user(
 def get_active_escalation(db: Session, job_id: int, current_user: Optional[AuthenticatedUser] = None):
     query = db.query(SLAEscalation).filter(
         SLAEscalation.job_id == job_id,
-        SLAEscalation.manager_responded_at.is_(None)
+        SLAEscalation.tenant_id == current_user.tenant_id,
+        SLAEscalation.manager_responded_at.is_(None),
     )
-    if current_user and not current_user.is_super_admin:
-        query = query.filter(SLAEscalation.tenant_id == current_user.tenant_id)
     esc = query.first()
     if not esc:
         raise HTTPException(status_code=404, detail="Active escalation not found for this job")

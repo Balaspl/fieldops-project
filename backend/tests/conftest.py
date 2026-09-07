@@ -24,16 +24,27 @@ _current_request = None
 _last_request_module = None
 
 def dynamic_get_redis_client():
+    request = _current_request
     module = None
-    if _current_request and _current_request.module:
-        module = _current_request.module
+
+    if request is not None and request.module:
+        module = request.module
     elif _last_request_module:
         module = _last_request_module
 
-    if module:
-        for attr_name in ("fake_redis", "fake_sync_redis", "mock_redis", "fake_async_redis"):
+    if request is not None and module:
+        for attr_name in (
+            "fake_redis",
+            "fake_sync_redis",
+            "mock_redis",
+            "fake_async_redis",
+        ):
             if hasattr(module, attr_name):
-                return getattr(module, attr_name)
+                try:
+                    return request.getfixturevalue(attr_name)
+                except Exception:
+                    pass
+
     return _orig_get_redis()
 
 def dynamic_session_local(*args, **kwargs):
@@ -151,6 +162,37 @@ class FakeRedisClient:
             return 1
         return 0
 
+    def incr(self, key: str, amount: int = 1) -> int:
+        self._track("incr", key)
+
+        current = self.store.get(key)
+
+        if current is None:
+            value = 0
+        else:
+            value = int(current[0])
+
+        value += amount
+        self.store[key] = (
+            str(value),
+            self.timer.time() + 60,
+        )
+
+        return value
+
+    def expire(self, key: str, time_seconds: int) -> bool:
+        self._track("expire", key)
+
+        if key not in self.store:
+            return False
+
+        value, _ = self.store[key]
+        self.store[key] = (
+            value,
+            self.timer.time() + time_seconds,
+        )
+
+        return True
 
 @pytest.fixture
 def sim_timer():

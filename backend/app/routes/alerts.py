@@ -7,7 +7,10 @@ from app.database import get_db
 from app.models import DispatcherAlert
 from app.sentiment.audit import SentimentAuditLogger
 from app.schemas import AlertAcknowledgeRequest, DispatcherAlertResponse
-from app.routes.dispatch import verify_jwt_token
+from app.auth.dependencies import (
+    AuthenticatedUser,
+    get_current_user_or_tenant,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -16,18 +19,35 @@ router = APIRouter(
     tags=["Alerts"]
 )
 
+
 @router.post("/{alert_id}/acknowledge")
 def acknowledge_alert(
-    alert_id: str, 
+    alert_id: str,
     payload: AlertAcknowledgeRequest,
     db: Session = Depends(get_db),
-    authorization: str = Depends(verify_jwt_token)
+    user_tenant: tuple[AuthenticatedUser, str] = Depends(
+        get_current_user_or_tenant
+    ),
 ):
-    alert = db.query(DispatcherAlert).filter(DispatcherAlert.id == alert_id).first()
+    user, tenant_id = user_tenant
+
+    alert = (
+        db.query(DispatcherAlert)
+        .filter(
+            DispatcherAlert.id == alert_id,
+            DispatcherAlert.tenant_id == tenant_id,
+        )
+        .first()
+    )
+
     if not alert:
-        raise HTTPException(status_code=404, detail="Alert not found")
-        
+        raise HTTPException(
+            status_code=404,
+            detail="Alert not found",
+        )
+
     alert.acknowledged = 1 if payload.acknowledged else 0
+
     if alert.type == "customer_sentiment":
         audit_logger = SentimentAuditLogger(db)
 
@@ -43,16 +63,44 @@ def acknowledge_alert(
                 "notes": None,
             }
         )
-    db.commit()
-    
-    logger.info(f"Alert {alert_id} acknowledged by user {authorization}")
-    return {"message": "Alert acknowledged successfully"}
 
-@router.get("/", response_model=list[DispatcherAlertResponse])
-def get_alerts(db: Session = Depends(get_db), authorization: str = Depends(verify_jwt_token)):
-    alerts = db.query(DispatcherAlert).order_by(DispatcherAlert.created_at.desc()).limit(50).all()
-    
+    db.commit()
+
+    logger.info(
+        f"Alert {alert_id} acknowledged by user {user.user_id}"
+    )
+
+    return {
+        "message": "Alert acknowledged successfully"
+    }
+
+
+@router.get(
+    "/",
+    response_model=list[DispatcherAlertResponse],
+)
+def get_alerts(
+    db: Session = Depends(get_db),
+    user_tenant: tuple[AuthenticatedUser, str] = Depends(
+        get_current_user_or_tenant
+    ),
+):
+    user, tenant_id = user_tenant
+
+    alerts = (
+        db.query(DispatcherAlert)
+        .filter(
+            DispatcherAlert.tenant_id == tenant_id
+        )
+        .order_by(
+            DispatcherAlert.created_at.desc()
+        )
+        .limit(50)
+        .all()
+    )
+
     results = []
+
     for a in alerts:
         results.append(
             DispatcherAlertResponse(
@@ -60,13 +108,14 @@ def get_alerts(db: Session = Depends(get_db), authorization: str = Depends(verif
                 type=a.type,
                 severity=a.severity,
                 job_id=str(a.job_id),
-                job_title=f"Job {a.job_id}", # In a real scenario we'd join with Job
+                job_title=f"Job {a.job_id}",
                 attempt_count=a.attempt_count,
                 max_attempts=a.max_attempts,
                 excluded_technicians=a.excluded_technicians or [],
                 recommended_action=a.recommended_action,
                 created_at=a.created_at,
-                acknowledged=bool(a.acknowledged)
+                acknowledged=bool(a.acknowledged),
             )
         )
+
     return results

@@ -484,13 +484,9 @@ def _get_assigned_jobs_query(db: Session, user_id: str, tenant_id: str):
     tech = _get_tech_for_user(db, user_id, tenant_id)
     if not tech:
         return db.query(Job).filter(Job.id < 0)  # empty query
-    # Jobs are owned by the customer tenant, but access here is based on
-    # the authenticated technician's assigned_technician_id.
-    # This allows Super Admin to dispatch a customer job to a technician
-    # from another tenant while keeping technician access restricted to
-    # jobs explicitly assigned to that technician.
     return db.query(Job).filter(
-        Job.assigned_technician_id == tech.technician_id
+        Job.tenant_id == tenant_id,
+        Job.assigned_technician_id == tech.technician_id,
     )
 
 
@@ -540,6 +536,7 @@ async def get_job_detail(
 
     job = db.query(Job).filter(
         Job.id == job_id,
+        Job.tenant_id == current_user.tenant_id,
         Job.assigned_technician_id == tech.technician_id,
     ).first()
 
@@ -563,6 +560,7 @@ async def accept_job(
 
     job = db.query(Job).filter(
         Job.id == job_id,
+        Job.tenant_id == current_user.tenant_id,
         Job.assigned_technician_id == tech.technician_id,
     ).first()
 
@@ -638,6 +636,7 @@ async def reject_job(
 
     job = db.query(Job).filter(
         Job.id == job_id,
+        Job.tenant_id == current_user.tenant_id,
         Job.assigned_technician_id == tech.technician_id,
     ).first()
 
@@ -707,6 +706,7 @@ async def start_job(
 
     job = db.query(Job).filter(
         Job.id == job_id,
+        Job.tenant_id == current_user.tenant_id,
         Job.assigned_technician_id == tech.technician_id,
     ).first()
     if not job:
@@ -752,6 +752,7 @@ async def pause_job(
 
     job = db.query(Job).filter(
         Job.id == job_id,
+        Job.tenant_id == current_user.tenant_id,
         Job.assigned_technician_id == tech.technician_id,
     ).first()
     if not job:
@@ -785,8 +786,9 @@ async def resume_job(
 
     job = db.query(Job).filter(
         Job.id == job_id,
+        Job.tenant_id == current_user.tenant_id,
         Job.assigned_technician_id == tech.technician_id,
-    ).first()
+    ).first()   
     if not job:
         raise HTTPException(status_code=403, detail="Job not found or not assigned to you")
 
@@ -819,6 +821,7 @@ async def complete_job(
 
     job = db.query(Job).filter(
         Job.id == job_id,
+        Job.tenant_id == current_user.tenant_id,
         Job.assigned_technician_id == tech.technician_id,
     ).first()
     if not job:
@@ -907,11 +910,8 @@ async def get_notifications(
     # Create missing notifications for pending jobs.
     if tech:
         pending_jobs = db.query(Job).filter(
+            Job.tenant_id == current_user.tenant_id,
             Job.assigned_technician_id == tech.technician_id,
-            # func.lower(Job.status).in_(
-            #     ["assigned", "active", "planned", "queued"]
-            # ),
-            
         ).all()
 
         pending_job_ids = [
@@ -1006,6 +1006,7 @@ async def get_notifications(
             Job.status,
         ).filter(
             Job.id.in_(job_ids),
+            Job.tenant_id == current_user.tenant_id,
         ).all()
 
         job_status_map = {
@@ -1182,6 +1183,7 @@ async def get_technician_dashboard(
         return TechnicianDashboardResponse()
 
     base = db.query(Job).filter(
+        Job.tenant_id == current_user.tenant_id,
         Job.assigned_technician_id == tech.technician_id,
     )
 

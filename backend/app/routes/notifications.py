@@ -23,7 +23,7 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 
-from .dispatch import verify_jwt_token
+from ..auth.dependencies import get_current_user_or_tenant, AuthenticatedUser
 
 from ..context import correlation_id_ctx
 from ..database import get_db
@@ -405,18 +405,14 @@ def register_fcm_token(
     id: str,
     payload: FCMTokenRegistration,
     request: Request,
-    x_tenant_id: str = Header(
-        ...,
-        alias="X-Tenant-ID",
-    ),
-    authorization: str = Depends(
-        verify_jwt_token
+    user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(
+        get_current_user_or_tenant
     ),
     db: Session = Depends(
         get_db
     ),
 ):
-    _ = authorization
+    user, tenant_id = user_tenant
 
     correlation_id = request.headers.get(
         "X-Correlation-ID",
@@ -427,7 +423,7 @@ def register_fcm_token(
 
     log_extra = {
         "correlation_id": correlation_id,
-        "tenant_id": x_tenant_id,
+        "tenant_id": tenant_id,
         "tech_id": id,
     }
 
@@ -454,7 +450,8 @@ def register_fcm_token(
     technician = (
         db.query(Technician)
         .filter(
-            Technician.tech_id == id
+            Technician.tech_id == id,
+            Technician.tenant_id == tenant_id,
         )
         .first()
     )
@@ -470,20 +467,7 @@ def register_fcm_token(
             detail="Technician not found.",
         )
 
-    if (
-        technician.tenant_id
-        and technician.tenant_id
-        != x_tenant_id
-    ):
-        logger.error(
-            "Access denied for tenant.",
-            extra=log_extra,
-        )
-
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied.",
-        )
+    
 
     technician.fcm_token = (
         payload.token
@@ -518,12 +502,8 @@ def register_fcm_token(
 async def send_push_notification(
     payload: NotificationSendRequest,
     request: Request,
-    x_tenant_id: str = Header(
-        ...,
-        alias="X-Tenant-ID",
-    ),
-    authorization: str = Depends(
-        verify_jwt_token
+    user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(
+        get_current_user_or_tenant
     ),
     db: Session = Depends(
         get_db
@@ -532,7 +512,7 @@ async def send_push_notification(
         get_communication_integration
     ),
 ):
-    _ = authorization
+    user, tenant_id = user_tenant
 
     correlation_id = request.headers.get(
         "X-Correlation-ID",
@@ -544,14 +524,14 @@ async def send_push_notification(
     job = _load_tenant_job(
         db=db,
         job_id=payload.job_id,
-        tenant_id=x_tenant_id,
+        tenant_id=tenant_id,
     )
 
     technician_ids = (
         _validate_tenant_technicians(
             db=db,
             tech_ids=payload.tech_ids,
-            tenant_id=x_tenant_id,
+            tenant_id=tenant_id,
         )
     )
 
@@ -559,7 +539,7 @@ async def send_push_notification(
         await _generate_safe_technician_content(
             communication=communication,
             job=job,
-            tenant_id=x_tenant_id,
+            tenant_id=tenant_id,
             channel="push",
             correlation_id=(
                 correlation_id
@@ -627,12 +607,8 @@ async def send_push_notification(
 async def send_sms_notification(
     payload: SMSSendRequest,
     request: Request,
-    x_tenant_id: str = Header(
-        ...,
-        alias="X-Tenant-ID",
-    ),
-    authorization: str = Depends(
-        verify_jwt_token
+    user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(
+        get_current_user_or_tenant
     ),
     db: Session = Depends(
         get_db
@@ -641,7 +617,7 @@ async def send_sms_notification(
         get_communication_integration
     ),
 ):
-    _ = authorization
+    user, tenant_id = user_tenant
 
     correlation_id = request.headers.get(
         "X-Correlation-ID",
@@ -653,14 +629,14 @@ async def send_sms_notification(
     job = _load_tenant_job(
         db=db,
         job_id=payload.job_id,
-        tenant_id=x_tenant_id,
+        tenant_id=tenant_id,
     )
 
     technician_ids = (
         _validate_tenant_technicians(
             db=db,
             tech_ids=payload.tech_ids,
-            tenant_id=x_tenant_id,
+            tenant_id=tenant_id,
         )
     )
 
@@ -668,7 +644,7 @@ async def send_sms_notification(
         await _generate_safe_technician_content(
             communication=communication,
             job=job,
-            tenant_id=x_tenant_id,
+            tenant_id=tenant_id,
             channel="sms",
             correlation_id=(
                 correlation_id

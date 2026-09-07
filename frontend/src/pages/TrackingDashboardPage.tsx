@@ -91,7 +91,10 @@ export const TrackingDashboardPage: React.FC = () => {
   });
 
   // WebSocket lifecycle with reconnect support
-  const { reconnect } = useTrackingWebSocket('tenant-1');
+  const tenantId =
+    localStorage.getItem("tenant_id") || "";
+
+  const { reconnect } = useTrackingWebSocket(tenantId);
 
   // Tracking store
   const {

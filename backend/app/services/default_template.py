@@ -1328,7 +1328,7 @@ def validate_catalog():
                 if base_paths != target_paths:
                     raise ValueError(f"Variable paths mismatch for {event_key} {channel_key} in {loc}. Base: {base_paths}, Target: {target_paths}")
 
-def generate_default_templates(tenant_id: str = "tenant-1"):
+def generate_default_templates(tenant_id: str):
     validate_catalog()
     templates = []
     for locale in SUPPORTED_LOCALES:
@@ -1365,7 +1365,7 @@ def generate_default_templates(tenant_id: str = "tenant-1"):
                 })
     return templates
 
-def seed_default_templates(db: Session, target_tenant_id: str = "tenant-1"):
+def seed_default_templates(db: Session, target_tenant_id: str):
     templates = generate_default_templates(tenant_id=target_tenant_id)
     from app.services.template_version_service import create_initial_version
     

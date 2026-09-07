@@ -168,11 +168,11 @@ export const getOverrideHistory = async (jobId: string | number): Promise<any> =
 /**
  * Trigger AI candidate ranking for a job.
  */
-export const getJobPlan = async (jobId: string | number, tenantId: string = "default-tenant", adminOverride: boolean = false): Promise<any> => {
+export const getJobPlan = async (jobId: string | number, adminOverride: boolean = false): Promise<any> => {
   try {
     const response = await api.post(`/jobs/${jobId}/plan`, null, {
       params: { admin_override: adminOverride },
-      headers: { "X-Tenant-ID": tenantId }
+      
     });
     return response.data;
   } catch (error) {
@@ -183,10 +183,10 @@ export const getJobPlan = async (jobId: string | number, tenantId: string = "def
 /**
  * Fetch override audit trail for a job.
  */
-export const getAuditOverrides = async (jobId: string | number, tenantId: string = "default-tenant"): Promise<any> => {
+export const getAuditOverrides = async (jobId: string | number): Promise<any> => {
   try {
     const response = await api.get(`/audit/overrides/${jobId}`, {
-      headers: { "X-Tenant-ID": tenantId }
+      
     });
     return response.data;
   } catch (error) {
@@ -203,7 +203,7 @@ export const assignJobDirect = async (
   justification: string,
   skipSkillCheck: boolean = false,
   skipWorkloadCheck: boolean = false,
-  tenantId: string = "default-tenant"
+
 ): Promise<any> => {
   try {
     const response = await api.post(`/jobs/${jobId}/assign`, {
@@ -212,7 +212,7 @@ export const assignJobDirect = async (
       skip_skill_check: skipSkillCheck,
       skip_workload_check: skipWorkloadCheck
     }, {
-      headers: { "X-Tenant-ID": tenantId }
+      
     });
     return response.data;
   } catch (error) {

@@ -944,8 +944,11 @@ const ShareTrackingLinkButton = ({ jobId }: { jobId: string | number }) => {
       const response = await fetch(`http://localhost:8000/api/v1/jobs/${jobId}/share`, {
         method: "POST",
         headers: {
-          "X-Tenant-ID": "tenant-1",
-          "Authorization": "Bearer dev-dispatcher-token"
+          "Authorization": `Bearer ${
+            localStorage.getItem("access_token") ||
+            localStorage.getItem("token") ||
+            ""
+          }`
         }
       });
       if (!response.ok) throw new Error("Failed to generate share link");

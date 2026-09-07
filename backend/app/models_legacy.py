@@ -789,7 +789,7 @@ def on_job_status_changed(mapper, connection, target):
         import time
 
         job_id = target.id
-        tenant_id = target.tenant_id or "tenant-1"
+        tenant_id = target.tenant_id
         correlation_id = correlation_id_ctx.get() or None
 
         # Store transition start time in Redis for SLA tracking
