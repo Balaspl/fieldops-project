@@ -117,10 +117,7 @@ async def send_job_assignment_sms(
     correlation_id = correlation_id or str(uuid.uuid4())
     log_extra = {"correlation_id": correlation_id, "job_id": job_id}
     
-    techs = db.query(Technician).filter(
-        Technician.tech_id.in_(tech_ids),
-        Technician.tenant_id == job.tenant_id,
-    ).all()
+    techs = db.query(Technician).filter(Technician.tech_id.in_(tech_ids)).all()
     
     redis_client = get_redis_client()
     
@@ -178,11 +175,7 @@ async def send_job_assignment_sms(
             continue
             
         # Check explicit preference
-        prefs = get_technician_preferences(
-            db=db,
-            tech_id=tech.tech_id,
-            tenant_id=tech.tenant_id,
-        )
+        prefs = get_technician_preferences(db, tech.tech_id)
         if not prefs.get("sms_enabled", True):
             logger.info(f"Skipping tech {tech.tech_id} (SMS notifications disabled via preferences)", extra=log_extra)
             failed_count += 1
@@ -205,13 +198,8 @@ async def send_job_assignment_sms(
             continue
             
         # Ready to send
-        if not tech.tenant_id:
-            raise ValueError(
-                f"Technician {tech.tech_id} does not have a tenant_id"
-            )
-
         delivery = SMSDelivery(
-            tenant_id=tech.tenant_id,
+            tenant_id=tech.tenant_id or "tenant-1",
             tech_id=tech.tech_id,
             job_id=str(job_id),
             status="queued"

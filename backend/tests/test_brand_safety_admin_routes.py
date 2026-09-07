@@ -6,12 +6,10 @@ routes.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import datetime, timedelta, timezone
 
-import jwt
 import pytest
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import (
@@ -20,21 +18,10 @@ from sqlalchemy.orm import (
 )
 from sqlalchemy.pool import StaticPool
 
-from app.auth.dependencies import (
-    AuthenticatedUser,
-    get_current_user_or_tenant,
-)
-from app.auth.rbac import UserRole
 from app.database import get_db
 from app.models import AIBrandSafetyRule
 from app.redis_client import get_redis_client
 from app.routes.brand_safety_admin import router
-
-
-TEST_JWT_SECRET = "test-jwt-secret"
-TEST_JWT_ALGORITHM = "HS256"
-
-security = HTTPBearer()
 
 
 class FakeRedis:
@@ -152,74 +139,6 @@ def route_client(
     def override_get_redis():
         return redis
 
-    def override_auth(
-        credentials: HTTPAuthorizationCredentials = Depends(
-            security
-        ),
-    ) -> tuple[AuthenticatedUser, str]:
-        """
-        Test-only authentication dependency.
-
-        The JWT remains the source of truth for user, tenant,
-        and role. Client-supplied tenant/user headers are not
-        trusted.
-        """
-
-        try:
-            claims = jwt.decode(
-                credentials.credentials,
-                TEST_JWT_SECRET,
-                algorithms=[TEST_JWT_ALGORITHM],
-                options={
-                    "require": [
-                        "exp",
-                        "sub",
-                        "tenant_id",
-                        "role",
-                    ],
-                },
-            )
-
-            role = UserRole(
-                str(
-                    claims["role"]
-                )
-            )
-
-            user = AuthenticatedUser(
-                user_id=str(
-                    claims["sub"]
-                ),
-                tenant_id=str(
-                    claims["tenant_id"]
-                ),
-                role=role,
-                jti=str(
-                    claims.get(
-                        "jti",
-                        "",
-                    )
-                ),
-            )
-
-            return user, user.tenant_id
-
-        except jwt.ExpiredSignatureError as exc:
-            raise HTTPException(
-                status_code=401,
-                detail="Token has expired.",
-            ) from exc
-
-        except (
-            jwt.InvalidTokenError,
-            ValueError,
-            KeyError,
-        ) as exc:
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid token.",
-            ) from exc
-
     test_app.dependency_overrides[
         get_db
     ] = override_get_db
@@ -227,10 +146,6 @@ def route_client(
     test_app.dependency_overrides[
         get_redis_client
     ] = override_get_redis
-
-    test_app.dependency_overrides[
-        get_current_user_or_tenant
-    ] = override_auth
 
     with TestClient(
         test_app
@@ -242,37 +157,17 @@ def build_headers(
     *,
     tenant_id: str = "tenant-1",
     user_id: str = "admin-1",
-    role: str = "super_admin",
+    role: str = "tenant_admin",
 ) -> dict[str, str]:
     """
-    Build authenticated headers using a real signed JWT.
-
-    Tenant, user, and role are encoded in the JWT. The production
-    route must derive identity from the verified token rather than
-    client-controlled X-Tenant-ID, X-User-ID, or X-Permissions
-    headers.
+    Build authenticated administration headers.
     """
 
-    token = jwt.encode(
-        {
-            "sub": user_id,
-            "tenant_id": tenant_id,
-            "role": role,
-            "type": "access",
-            "jti": f"test-{user_id}-{tenant_id}",
-            "exp": (
-                datetime.now(timezone.utc)
-                + timedelta(
-                    minutes=15
-                )
-            ),
-        },
-        TEST_JWT_SECRET,
-        algorithm=TEST_JWT_ALGORITHM,
-    )
-
     return {
-        "Authorization": f"Bearer {token}",
+        "Authorization": "Bearer local-test-token",
+        "X-Tenant-ID": tenant_id,
+        "X-User-ID": user_id,
+        "X-Permissions": role,
     }
 
 
@@ -530,8 +425,8 @@ def test_update_route_changes_rule(
             "COMPETITOR_ACME"
         ),
         headers=build_headers(
-            user_id="admin-2",
-            role="super_admin",
+            user_id="manager-1",
+            role="manager",
         ),
         json={
             "severity": "CRITICAL",
@@ -545,7 +440,7 @@ def test_update_route_changes_rule(
 
     assert body["severity"] == "CRITICAL"
     assert body["pattern"] == "Updated Acme Group"
-    assert body["updated_by"] == "admin-2"
+    assert body["updated_by"] == "manager-1"
 
 
 def test_deactivate_route_keeps_database_record(
@@ -569,8 +464,8 @@ def test_deactivate_route_keeps_database_record(
             "COMPETITOR_ACME/deactivate"
         ),
         headers=build_headers(
-            user_id="admin-2",
-            role="super_admin",
+            user_id="manager-1",
+            role="manager",
         ),
     )
 

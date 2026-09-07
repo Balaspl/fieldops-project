@@ -5,16 +5,13 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Header
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
 from app.models import Job, Technician
-from app.auth.dependencies import (
-    get_current_user_or_tenant,
-    AuthenticatedUser,
-)
+from app.routes.dispatch import verify_jwt_token
 from app.schemas import (
     DispatchMetricsResponse,
     TodayMetrics,
@@ -43,74 +40,45 @@ def _generate_sparkline(current: int, length: int = 24) -> list[int]:
     """Generate a realistic sparkline: gradual ramp from ~0 to current value."""
     if current <= 0:
         return [0] * length
-
     result = []
-
     for i in range(length):
         progress = (i + 1) / length
-
         # S-curve ramp using sigmoid-ish shape
         val = int(current * (progress ** 1.3))
-
         # Add slight jitter for realism (deterministic based on position)
         jitter = (i % 3) - 1
-
         result.append(max(0, val + jitter))
-
     # Ensure last value equals current
     result[-1] = current
-
     return result
 
 
 @router.get("/metrics", response_model=DispatchMetricsResponse)
 def get_dispatch_metrics(
-    time_range: str = Query(
-        "today",
-        description="Time range for metrics (today, 7d, 30d)"
-    ),
-    user_tenant: tuple[AuthenticatedUser, str] = Depends(
-        get_current_user_or_tenant
-    ),
+    time_range: str = Query("today", description="Time range for metrics (today, 7d, 30d)"),
+    x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
+    authorization: str = Depends(verify_jwt_token),
     db: Session = Depends(get_db),
-    redis_client=Depends(get_redis_client)
+    redis_client = Depends(get_redis_client)
 ):
-    user, x_tenant_id = user_tenant
-
     start_time = time.time()
 
     # 1. Check Cache
     cache_key = f"metrics:dispatch:{x_tenant_id}:{time_range}"
-
     if redis_client:
         cached = redis_client.get(cache_key)
-
         if cached:
             execution_time_ms = (time.time() - start_time) * 1000
-
-            logger.info(
-                f"dispatch_metrics_cache_hit - "
-                f"{execution_time_ms:.2f}ms"
-            )
-
+            logger.info(f"dispatch_metrics_cache_hit - {execution_time_ms:.2f}ms")
             return json.loads(cached)
 
     now_utc = datetime.now(timezone.utc)
-
     if time_range == "7d":
         start_date = now_utc - timedelta(days=7)
-
     elif time_range == "30d":
         start_date = now_utc - timedelta(days=30)
-
-    else:
-        # today
-        start_date = now_utc.replace(
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0
-        )
+    else:  # today
+        start_date = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
 
     yesterday_start = start_date - timedelta(days=1)
     yesterday_end = start_date
@@ -127,14 +95,8 @@ def get_dispatch_metrics(
     )
 
     # ── Today Counts ─────────────────────────────────────────────────────
-
-    jobs_dispatched = base_query.filter(
-        Job.status != "QUEUED"
-    ).count()
-
-    jobs_pending = base_query.filter(
-        Job.status.in_(["QUEUED", "ASSIGNED"])
-    ).count()
+    jobs_dispatched = base_query.filter(Job.status != "QUEUED").count()
+    jobs_pending = base_query.filter(Job.status.in_(["QUEUED", "ASSIGNED"])).count()
 
     # Expired = jobs whose SLA deadline has passed
     jobs_expired = base_query.filter(
@@ -144,62 +106,30 @@ def get_dispatch_metrics(
     ).count()
 
     # Re-dispatched = jobs with attempt_count > 1
-    jobs_redispatched = base_query.filter(
-        Job.attempt_count > 1
-    ).count()
+    jobs_redispatched = base_query.filter(Job.attempt_count > 1).count()
 
     # ── Yesterday Counts ─────────────────────────────────────────────────
-
-    y_dispatched = yesterday_query.filter(
-        Job.status != "QUEUED"
-    ).count()
-
-    y_pending = yesterday_query.filter(
-        Job.status.in_(["QUEUED", "ASSIGNED"])
-    ).count()
-
+    y_dispatched = yesterday_query.filter(Job.status != "QUEUED").count()
+    y_pending = yesterday_query.filter(Job.status.in_(["QUEUED", "ASSIGNED"])).count()
     y_expired = yesterday_query.filter(
         Job.sla_deadline.isnot(None),
         Job.sla_deadline < yesterday_end,
         Job.status.in_(["QUEUED", "ASSIGNED"])
     ).count()
-
-    y_redispatched = yesterday_query.filter(
-        Job.attempt_count > 1
-    ).count()
+    y_redispatched = yesterday_query.filter(Job.attempt_count > 1).count()
 
     # ── Status/Priority Breakdowns (legacy fields) ───────────────────────
-
-    status_counts = db.query(
-        Job.status,
-        func.count(Job.id)
-    ).filter(
+    status_counts = db.query(Job.status, func.count(Job.id)).filter(
         Job.tenant_id == x_tenant_id
-    ).group_by(
-        Job.status
-    ).all()
+    ).group_by(Job.status).all()
+    status_breakdown = {status: count for status, count in status_counts}
 
-    status_breakdown = {
-        status: count
-        for status, count in status_counts
-    }
-
-    priority_counts = db.query(
-        Job.priority,
-        func.count(Job.id)
-    ).filter(
+    priority_counts = db.query(Job.priority, func.count(Job.id)).filter(
         Job.tenant_id == x_tenant_id
-    ).group_by(
-        Job.priority
-    ).all()
-
-    priority_breakdown = {
-        priority: count
-        for priority, count in priority_counts
-    }
+    ).group_by(Job.priority).all()
+    priority_breakdown = {priority: count for priority, count in priority_counts}
 
     # ── Tech Utilization (legacy) ────────────────────────────────────────
-
     tech_stats = db.query(
         func.sum(Technician.current_jobs).label("active"),
         func.sum(Technician.max_jobs).label("max")
@@ -209,61 +139,25 @@ def get_dispatch_metrics(
     ).first()
 
     tech_utilization = 0.0
-
     if tech_stats and tech_stats.max and tech_stats.max > 0:
-        tech_utilization = round(
-            (
-                float(tech_stats.active or 0)
-                / float(tech_stats.max)
-            ) * 100,
-            1
-        )
+        tech_utilization = round((float(tech_stats.active or 0) / float(tech_stats.max)) * 100, 1)
 
     # Re-dispatch rate
     re_dispatch_rate = 0.0
-
     if jobs_dispatched > 0:
-        re_dispatch_rate = round(
-            (jobs_redispatched / jobs_dispatched) * 100,
-            1
-        )
+        re_dispatch_rate = round((jobs_redispatched / jobs_dispatched) * 100, 1)
 
     # ── Build Response ───────────────────────────────────────────────────
-
     response_data = DispatchMetricsResponse(
         jobs_dispatched=jobs_dispatched,
         jobs_pending=jobs_pending,
         jobs_expired=jobs_expired,
         jobs_redispatched=jobs_redispatched,
         trends=DispatchTrends(
-            dispatched=DispatchTrend(
-                yesterday=y_dispatched,
-                change_pct=_safe_change_pct(
-                    jobs_dispatched,
-                    y_dispatched
-                )
-            ),
-            pending=DispatchTrend(
-                yesterday=y_pending,
-                change_pct=_safe_change_pct(
-                    jobs_pending,
-                    y_pending
-                )
-            ),
-            expired=DispatchTrend(
-                yesterday=y_expired,
-                change_pct=_safe_change_pct(
-                    jobs_expired,
-                    y_expired
-                )
-            ),
-            redispatched=DispatchTrend(
-                yesterday=y_redispatched,
-                change_pct=_safe_change_pct(
-                    jobs_redispatched,
-                    y_redispatched
-                )
-            ),
+            dispatched=DispatchTrend(yesterday=y_dispatched, change_pct=_safe_change_pct(jobs_dispatched, y_dispatched)),
+            pending=DispatchTrend(yesterday=y_pending, change_pct=_safe_change_pct(jobs_pending, y_pending)),
+            expired=DispatchTrend(yesterday=y_expired, change_pct=_safe_change_pct(jobs_expired, y_expired)),
+            redispatched=DispatchTrend(yesterday=y_redispatched, change_pct=_safe_change_pct(jobs_redispatched, y_redispatched)),
         ),
         sparklines=DispatchSparklines(
             dispatched=_generate_sparkline(jobs_dispatched),
@@ -284,17 +178,9 @@ def get_dispatch_metrics(
 
     # Set Cache
     if redis_client:
-        redis_client.setex(
-            cache_key,
-            60,
-            response_data.model_dump_json()
-        )
+        redis_client.setex(cache_key, 60, response_data.model_dump_json())
 
     execution_time_ms = (time.time() - start_time) * 1000
-
-    logger.info(
-        f"dispatch_metrics_calculated - "
-        f"{execution_time_ms:.2f}ms"
-    )
+    logger.info(f"dispatch_metrics_calculated - {execution_time_ms:.2f}ms")
 
     return response_data

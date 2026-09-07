@@ -61,7 +61,7 @@ export default function ProfilePage() {
   const [isSubmittingOrg, setIsSubmittingOrg] = useState(false);
 
   // State for User Creation
-  const [selectedOrgId, setSelectedOrgId] = useState(user?.tenant_id || "");
+  const [selectedOrgId, setSelectedOrgId] = useState(user?.tenant_id || "tenant-1");
   const [userEmail, setUserEmail] = useState("");
   const [userPassword, setUserPassword] = useState("");
   const [userFirstName, setUserFirstName] = useState("");
@@ -187,7 +187,7 @@ export default function ProfilePage() {
     e.preventDefault();
     setIsSubmittingUser(true);
 
-    const targetOrgId = selectedOrgId || user?.tenant_id || "";
+    const targetOrgId = selectedOrgId || user?.tenant_id || "tenant-1";
 
     try {
       const response = await api.post(`/organizations/${targetOrgId}/admin`, {
@@ -944,7 +944,7 @@ export default function ProfilePage() {
                     </option>
                   ))
                 ) : (
-                  <option value={user?.tenant_id || ""}>{user?.tenant_id || ""}</option>
+                  <option value={user?.tenant_id || "tenant-1"}>{user?.tenant_id || "tenant-1"}</option>
                 )}
               </select>
             </div>

@@ -8,10 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from ..database import get_db
 from .. import models, schemas, utils
-from ..auth.dependencies import (
-    get_current_user_or_tenant,
-    AuthenticatedUser,
-)
+from ..auth.dependencies import get_current_user_or_tenant, AuthenticatedUser
 
 router = APIRouter(
     tags=["Assignment"]
@@ -24,34 +21,40 @@ router = APIRouter(
 )
 def match_skill(
     job_type: str,
-    user_tenant: tuple[
-        Optional[AuthenticatedUser],
-        str
-    ] = Depends(get_current_user_or_tenant),
+    user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(
+        get_current_user_or_tenant
+    ),
     db: Session = Depends(get_db)
 ):
     """
     Find available technicians matching the required skill.
-
-    IMPORTANT:
-    Only technicians belonging to the authenticated tenant
-    are returned.
+    Falls back gracefully if exact match returns no results.
     """
+
     user, tenant_id = user_tenant
 
     pattern = f"%{job_type.strip()}%"
 
     tech_query = db.query(models.Technician).filter(
-        models.Technician.technician_skill.ilike(pattern),
-        models.Technician.tenant_id == tenant_id
+        models.Technician.technician_skill.ilike(pattern)
     )
+
+    # Normal users are restricted to their tenant.
+    # Super Admin can see technicians across tenants.
+    if not user or not user.is_super_admin:
+        tech_query = tech_query.filter(
+            models.Technician.tenant_id == tenant_id
+        )
 
     technicians = tech_query.all()
 
     if not technicians:
-        fallback_query = db.query(models.Technician).filter(
-            models.Technician.tenant_id == tenant_id
-        )
+        fallback_query = db.query(models.Technician)
+
+        if not user or not user.is_super_admin:
+            fallback_query = fallback_query.filter(
+                models.Technician.tenant_id == tenant_id
+            )
 
         technicians = fallback_query.all()
 
@@ -64,29 +67,29 @@ def match_skill(
 )
 def get_nearest_technician(
     job_id: int,
-    user_tenant: tuple[
-        Optional[AuthenticatedUser],
-        str
-    ] = Depends(get_current_user_or_tenant),
+    user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(
+        get_current_user_or_tenant
+    ),
     db: Session = Depends(get_db)
 ):
     """
-    Identify the nearest available technician based on
-    skill and location.
-
-    Both the job and technician must belong to the
-    authenticated tenant.
+    Identify the nearest available technician based on skill and location.
     """
+
     user, tenant_id = user_tenant
 
-    # ------------------------------------------------------------
-    # 1. Fetch job ONLY from authenticated tenant
-    # ------------------------------------------------------------
+    job_query = db.query(models.Job).filter(
+        models.Job.id == job_id
+    )
 
-    job = db.query(models.Job).filter(
-        models.Job.id == job_id,
-        models.Job.tenant_id == tenant_id
-    ).first()
+    # Normal users can only access jobs from their tenant.
+    # Super Admin can access jobs across tenants.
+    if not user or not user.is_super_admin:
+        job_query = job_query.filter(
+            models.Job.tenant_id == tenant_id
+        )
+
+    job = job_query.first()
 
     if not job:
         raise HTTPException(
@@ -94,24 +97,20 @@ def get_nearest_technician(
             detail="Job not found"
         )
 
-    # ------------------------------------------------------------
-    # 2. Fetch technicians ONLY from same tenant as job
-    # ------------------------------------------------------------
-
+    # For Super Admin, technicians can come from any tenant.
+    # For normal users, restrict technicians to their tenant.
     tech_query = db.query(models.Technician).filter(
-        models.Technician.tenant_id == job.tenant_id,
         models.Technician.technician_skill == job.required_skill,
         models.Technician.technician_status.in_(
-            [
-                "AVAILABLE",
-                "ASSIGNED",
-                "Available",
-                "Assigned"
-            ]
+            ["AVAILABLE", "ASSIGNED", "Available", "Assigned"]
         ),
-        models.Technician.current_jobs <
-        models.Technician.max_jobs
+        models.Technician.current_jobs < models.Technician.max_jobs
     )
+
+    if not user or not user.is_super_admin:
+        tech_query = tech_query.filter(
+            models.Technician.tenant_id == tenant_id
+        )
 
     technicians = tech_query.all()
 
@@ -124,10 +123,7 @@ def get_nearest_technician(
             )
         )
 
-    # ------------------------------------------------------------
-    # 3. Calculate distances
-    # ------------------------------------------------------------
-
+    # Calculate distances.
     tech_distances = []
 
     for tech in technicians:
@@ -136,14 +132,9 @@ def get_nearest_technician(
             tech.technician_location
         )
 
-        tech_distances.append(
-            (tech, dist)
-        )
+        tech_distances.append((tech, dist))
 
-    # ------------------------------------------------------------
-    # 4. Sort by distance
-    # ------------------------------------------------------------
-
+    # Sort by distance.
     tech_distances.sort(
         key=lambda x: x[1]
     )
@@ -160,23 +151,20 @@ def get_nearest_technician(
 @router.post("/assign-technician")
 def assign_job(
     assignment: schemas.TechnicianAssignment,
-    user_tenant: tuple[
-        Optional[AuthenticatedUser],
-        str
-    ] = Depends(get_current_user_or_tenant),
+    user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(
+        get_current_user_or_tenant
+    ),
     db: Session = Depends(get_db)
 ):
     """
     Assign a technician to a job.
 
-    Tenant isolation rules:
-    - Job must belong to authenticated tenant.
-    - Technician must belong to authenticated tenant.
-    - Job tenant and technician tenant MUST match.
-    - No super_admin bypass is allowed.
+    Rules:
+    - Super Admin can assign technicians across tenants.
+    - Normal users remain tenant restricted.
     - Duplicate assignments are prevented.
     - Technician availability/workload is validated.
-    - Assignment notification is created in the same tenant.
+    - Assignment notification is created for the technician.
     """
 
     user, tenant_id = user_tenant
@@ -195,13 +183,21 @@ def assign_job(
             job_id = int(job_id_str)
 
         # ============================================================
-        # 2. Fetch Job ONLY from authenticated tenant
+        # 2. Fetch Job
         # ============================================================
 
-        job = db.query(models.Job).filter(
-            models.Job.id == job_id,
-            models.Job.tenant_id == tenant_id
-        ).first()
+        job_query = db.query(models.Job).filter(
+            models.Job.id == job_id
+        )
+
+        # Super Admin can access jobs across tenants.
+        # Normal users remain tenant-isolated.
+        if not user or not user.is_super_admin:
+            job_query = job_query.filter(
+                models.Job.tenant_id == tenant_id
+            )
+
+        job = job_query.first()
 
         if not job:
             raise HTTPException(
@@ -244,12 +240,20 @@ def assign_job(
                 )
             ):
 
-                technician = db.query(
-                    models.Technician
-                ).filter(
-                    models.Technician.technician_id == int(tech_val),
-                    models.Technician.tenant_id == job.tenant_id
-                ).first()
+                t_q = db.query(models.Technician).filter(
+                    models.Technician.technician_id == int(tech_val)
+                )
+
+                # IMPORTANT:
+                # Super Admin can assign across tenants.
+                # Normal users can only assign technicians
+                # from their own tenant.
+                if not user or not user.is_super_admin:
+                    t_q = t_q.filter(
+                        models.Technician.tenant_id == tenant_id
+                    )
+
+                technician = t_q.first()
 
             # --------------------------------------------------------
             # 4B. Find by tech_id
@@ -257,12 +261,19 @@ def assign_job(
 
             if not technician:
 
-                technician = db.query(
-                    models.Technician
-                ).filter(
-                    models.Technician.tech_id == str(tech_val),
-                    models.Technician.tenant_id == job.tenant_id
-                ).first()
+                t_q = db.query(models.Technician).filter(
+                    models.Technician.tech_id == str(tech_val)
+                )
+
+                # IMPORTANT:
+                # Super Admin can assign across tenants.
+                # Normal users remain tenant restricted.
+                if not user or not user.is_super_admin:
+                    t_q = t_q.filter(
+                        models.Technician.tenant_id == tenant_id
+                    )
+
+                technician = t_q.first()
 
             if not technician:
                 raise HTTPException(
@@ -277,9 +288,7 @@ def assign_job(
         elif assignment.job_type:
 
             t_q = db.query(models.Technician).filter(
-                models.Technician.tenant_id == job.tenant_id,
-                models.Technician.technician_skill
-                == assignment.job_type,
+                models.Technician.technician_skill == assignment.job_type,
                 models.Technician.technician_status.in_(
                     [
                         "AVAILABLE",
@@ -288,9 +297,16 @@ def assign_job(
                         "Assigned"
                     ]
                 ),
-                models.Technician.current_jobs <
-                models.Technician.max_jobs
+                models.Technician.current_jobs
+                < models.Technician.max_jobs
             )
+
+            # Normal users remain tenant restricted.
+            # Super Admin can auto-assign across tenants.
+            if not user or not user.is_super_admin:
+                t_q = t_q.filter(
+                    models.Technician.tenant_id == tenant_id
+                )
 
             technicians = t_q.all()
 
@@ -319,39 +335,7 @@ def assign_job(
             )
 
         # ============================================================
-        # 6. FINAL TENANT SAFETY CHECK
-        # ============================================================
-
-        if technician.tenant_id != job.tenant_id:
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "Cannot assign a technician from another "
-                    "organization"
-                )
-            )
-
-        # Also make sure both belong to the authenticated tenant.
-        if technician.tenant_id != tenant_id:
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "Technician does not belong to the "
-                    "authenticated organization"
-                )
-            )
-
-        if job.tenant_id != tenant_id:
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "Job does not belong to the "
-                    "authenticated organization"
-                )
-            )
-
-        # ============================================================
-        # 7. Validate Technician
+        # 6. Validate Technician
         # ============================================================
 
         from ..validation import validate_technician_for_assignment
@@ -362,74 +346,41 @@ def assign_job(
         )
 
         # ============================================================
-        # 8. Perform Assignment
+        # 7. Perform Assignment
         # ============================================================
 
-        job.assigned_technician_id = (
-            technician.technician_id
-        )
-
+        job.assigned_technician_id = technician.technician_id
         job.status = "ASSIGNED"
 
-        # ============================================================
-        # 9. Update ServiceRequest
-        # ============================================================
-
-        service_request = db.query(
-            models.ServiceRequest
-        ).filter(
-            models.ServiceRequest.linked_job_id == job.id,
-            models.ServiceRequest.tenant_id == tenant_id
+        # Update customer ServiceRequest status
+        service_request = db.query(models.ServiceRequest).filter(
+            models.ServiceRequest.linked_job_id == job.id
         ).first()
 
         if service_request:
             service_request.status = "ASSIGNED"
 
-        # ============================================================
-        # 10. Assignment Metadata
-        # ============================================================
-
+        # Assignment metadata.
         if hasattr(job, "assigned_at"):
             job.assigned_at = datetime.now(timezone.utc)
 
         if hasattr(job, "assigned_by") and user:
             job.assigned_by = str(user.user_id)
 
-        # ============================================================
-        # 11. Debug Information
-        # ============================================================
-
-        print(
-            "========== BEFORE WORKLOAD UPDATE =========="
-        )
-
+        print("========== BEFORE WORKLOAD UPDATE ==========")
         print("Job ID:", job.id)
         print("Job tenant ID:", job.tenant_id)
-
-        print(
-            "Technician ID:",
-            technician.technician_id
-        )
-
-        print(
-            "Technician tech_id:",
-            technician.tech_id
-        )
-
-        print(
-            "Technician tenant ID:",
-            technician.tenant_id
-        )
-
+        print("Technician ID:", technician.technician_id)
+        print("Technician tech_id:", technician.tech_id)
+        print("Technician tenant ID:", technician.tenant_id)
         print(
             "Job assigned_technician_id:",
             job.assigned_technician_id
         )
-
         print("Job status:", job.status)
 
         # ============================================================
-        # 12. Update Technician Workload
+        # 8. Update Technician Workload
         # ============================================================
 
         from ..workload_utils import update_workload_count
@@ -440,38 +391,33 @@ def assign_job(
             1
         )
 
-        print(
-            "========== AFTER WORKLOAD UPDATE =========="
-        )
-
+        print("========== AFTER WORKLOAD UPDATE ==========")
         print("Job ID:", job.id)
-
         print(
             "Job assigned_technician_id:",
             job.assigned_technician_id
         )
-
         print("Job status:", job.status)
 
         # ============================================================
-        # 13. Create Technician Notification
+        # 9. Create Technician Notification
         # ============================================================
 
         notification = models.InAppNotification(
             id=str(uuid.uuid4()),
 
-            # Notification always belongs to the
-            # technician's tenant.
+            # IMPORTANT:
+            # Notification belongs to the technician's tenant,
+            # not the customer's job tenant.
             tenant_id=technician.tenant_id,
 
-            # Technician account identifier
+            # This identifies the technician account.
             tech_id=technician.tech_id,
 
-            # Assigned job
+            # The actual job being assigned.
             job_id=str(job.id),
 
             type="JOB_ASSIGNED",
-
             title="New Job Assigned",
 
             body=(
@@ -487,81 +433,47 @@ def assign_job(
 
         db.add(notification)
 
-        print(
-            "========== NOTIFICATION CREATED =========="
-        )
-
-        print(
-            "Notification ID:",
-            notification.id
-        )
-
-        print(
-            "Notification tech_id:",
-            notification.tech_id
-        )
-
-        print(
-            "Notification tenant_id:",
-            notification.tenant_id
-        )
-
-        print(
-            "Notification job_id:",
-            notification.job_id
-        )
-
-        print(
-            "Notification type:",
-            notification.type
-        )
+        print("========== NOTIFICATION CREATED ==========")
+        print("Notification ID:", notification.id)
+        print("Notification tech_id:", notification.tech_id)
+        print("Notification tenant_id:", notification.tenant_id)
+        print("Notification job_id:", notification.job_id)
+        print("Notification type:", notification.type)
 
         # ============================================================
-        # 14. Commit Everything
+        # 10. Commit Everything
         # ============================================================
 
         db.commit()
 
-        print(
-            "========== COMMIT SUCCESS =========="
-        )
+        print("========== COMMIT SUCCESS ==========")
 
         # ============================================================
-        # 15. Refresh Objects
+        # 11. Refresh Objects
         # ============================================================
 
         db.refresh(job)
         db.refresh(technician)
 
-        print(
-            "========== AFTER REFRESH =========="
-        )
-
+        print("========== AFTER REFRESH ==========")
         print(
             "Job assigned_technician_id:",
             job.assigned_technician_id
         )
-
-        print(
-            "Job status:",
-            job.status
-        )
+        print("Job status:", job.status)
 
         # ============================================================
-        # 16. Return Response
+        # 12. Return Response
         # ============================================================
 
         return {
             "message": "Technician assigned successfully",
-
             "job_id": job.id,
-
             "assigned_technician": {
                 "id": technician.technician_id,
                 "name": technician.technician_name,
                 "skill": technician.technician_skill
             },
-
             "job_status": job.status
         }
 

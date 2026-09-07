@@ -27,9 +27,9 @@ interface JobFormData {
 
 const getActiveTenantId = () => {
   if (typeof window !== "undefined") {
-    return localStorage.getItem("tenant_id") || "";
+    return localStorage.getItem("tenant_id") || "tenant-1";
   }
-  return "";
+  return "tenant-1";
 };
 
 const initialFormData: JobFormData = {
@@ -367,7 +367,7 @@ function JobCreationForm() {
       preferred_service_date: job.preferred_service_date || "",
       status: jobStatus,
       required_skill: job.required_skill || "",
-      tenant_id: (job as any).tenant_id || "",
+      tenant_id: (job as any).tenant_id || "tenant-1",
       sla_deadline: (job as any).sla_deadline ? new Date((job as any).sla_deadline).toISOString().slice(0, 16) : "",
       attempt_count: (job as any).attempt_count !== undefined ? (job as any).attempt_count : 0,
     });

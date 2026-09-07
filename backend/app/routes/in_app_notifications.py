@@ -60,7 +60,12 @@ def notification_query_for_user(
 ):
     """Return notifications accessible to the authenticated user."""
 
-    query = db.query(InAppNotification).filter(
+    query = db.query(InAppNotification)
+
+    if current_user.is_super_admin:
+        return query
+
+    query = query.filter(
         InAppNotification.tenant_id == current_user.tenant_id
     )
 
@@ -101,9 +106,13 @@ async def get_technician_notifications(
                 detail="You can only access your own notifications",
             )
     tech_query = db.query(Technician).filter(
-        Technician.tech_id == id,
-        Technician.tenant_id == current_user.tenant_id,
+        Technician.tech_id == id
     )
+
+    if not current_user.is_super_admin:
+        tech_query = tech_query.filter(
+            Technician.tenant_id == current_user.tenant_id
+        )
 
     tech = tech_query.first()
 
@@ -286,8 +295,7 @@ async def cleanup_notifications(
     )
 
     db.query(InAppNotification).filter(
-        InAppNotification.tenant_id == current_user.tenant_id,
-        InAppNotification.created_at < threshold,
+        InAppNotification.created_at < threshold
     ).delete(
         synchronize_session=False
     )

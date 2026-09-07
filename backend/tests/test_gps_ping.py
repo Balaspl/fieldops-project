@@ -11,11 +11,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import sessionmaker
 from app.redis_client import get_redis_client
-from app.auth.dependencies import (
-    get_current_user_or_tenant,
-    AuthenticatedUser,
-)
-
 
 # Setup test DB
 SQLALCHEMY_DATABASE_URL = "sqlite://"
@@ -58,23 +53,7 @@ def setup_db():
 def apply_overrides():
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_redis_client] = override_get_redis
-
-    def override_auth():
-        user = AuthenticatedUser(
-            user_id="test-admin",
-            tenant_id="tenant-1",
-            role="super_admin",
-            jti="test-jti",
-        )
-
-        return user, "tenant-1"
-
-    app.dependency_overrides[
-        get_current_user_or_tenant
-    ] = override_auth
-
     yield
-
     app.dependency_overrides.clear()
 
 def test_gps_ping_success_android(setup_db):

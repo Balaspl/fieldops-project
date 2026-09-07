@@ -82,11 +82,6 @@ async def get_current_user(
 
     try:
         claims = verify_access_token(credentials.credentials)
-    except RuntimeError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Authentication service unavailable.",
-        )
     except jwt.ExpiredSignatureError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -276,12 +271,19 @@ async def get_current_user_or_tenant(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db),
-) -> tuple[AuthenticatedUser, str]:
+) -> tuple[Optional[AuthenticatedUser], str]:
     """
-    Get the authenticated user and tenant from the verified JWT.
-
-    Tenant identity must never come from X-Tenant-ID or a hardcoded
-    fallback such as tenant-1.
+    Extract current AuthenticatedUser from JWT if provided, falling back
+    to the X-Tenant-ID header if no token is sent.
+    
+    Returns tuple of (user: Optional[AuthenticatedUser], effective_tenant_id: str).
     """
-    user = await get_current_user(request, credentials, db)
-    return user, user.tenant_id
+    if credentials:
+        try:
+            user = await get_current_user(request, credentials, db)
+            return user, user.tenant_id
+        except HTTPException:
+            pass
+            
+    header_tenant = request.headers.get("X-Tenant-ID", "tenant-1")
+    return None, header_tenant

@@ -16,13 +16,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import get_db
 from app.main import app
-from app.models import (
-    Base,
-    NotificationTemplate,
-    Organization,
-    TemplateVersion,
-    User,
-)
+from app.models import Base, NotificationTemplate, TemplateVersion
 from app.redis_client import get_redis_client
 from app.services.ai.FieldOpsAI.repositories.prompt_template_repository import (
     PromptTemplateRepository,
@@ -163,35 +157,6 @@ def api_client(
 
     fake_redis.reset()
 
-    # Create the tenant used by the test JWTs.
-    db = TestingSessionLocal()
-
-    organization = Organization(
-        id="tenant_1",
-        name="Test Organization",
-        slug="test-organization",
-        status="ACTIVE",
-    )
-
-    db.add(organization)
-    db.commit()
-
-    # Create the user represented by sub=user_1 in the test JWT.
-    test_user = User(
-        id="user_1",
-        email="user1@test.com",
-        password_hash="test-password-hash",
-        first_name="Test",
-        last_name="User",
-        tenant_id="tenant_1",
-        role="admin",
-    )
-
-    db.add(test_user)
-    db.commit()
-
-    db.close()
-
     def override_get_db():
         db: Session = TestingSessionLocal()
 
@@ -258,8 +223,6 @@ def create_test_jwt(
                 minutes=expires_in_minutes
             )
         ),
-        "type": "access",
-        "jti": "test-jti",
     }
 
     if include_tenant:
@@ -269,7 +232,7 @@ def create_test_jwt(
         payload["sub"] = user_id
 
     if include_roles:
-        payload["role"] = roles[0] if isinstance(roles, list) else roles
+        payload["roles"] = roles
 
     return jwt.encode(
         payload,
@@ -280,7 +243,7 @@ def create_test_jwt(
 
 def get_headers(
     *,
-    role: str = "super_admin",
+    role: str = "admin",
     roles: Any = None,
     tenant: str = "tenant_1",
     user_id: str = "user_1",
@@ -323,31 +286,11 @@ def prompt_payload(
         normalize_template_status,
         UnsupportedTemplateStatusError,
     )
-
     try:
-        norm = normalize_template_status(
-            prompt_status,
-            allow_default=True,
-        )
-        status_val = (
-            norm.value
-            if hasattr(norm, "value")
-            else str(norm)
-        )
+        norm = normalize_template_status(prompt_status, allow_default=True)
+        status_val = norm.value if hasattr(norm, "value") else str(norm)
     except UnsupportedTemplateStatusError:
-        if prompt_status in {
-            "closed",
-            "active",
-            "pending",
-            "new",
-            "open",
-            "in_progress",
-            "invalid_status_xyz",
-            "random_status",
-            "foo_bar",
-            "   ",
-            "",
-        }:
+        if prompt_status in {"closed", "active", "pending", "new", "open", "in_progress", "invalid_status_xyz", "random_status", "foo_bar", "   ", ""}:
             status_val = prompt_status
         else:
             status_val = "default"
@@ -476,7 +419,7 @@ def test_roles_string_is_supported(
     api_client: TestClient,
 ) -> None:
     token = create_test_jwt(
-        roles="super_admin",
+        roles="admin",
     )
 
     response = api_client.get(
@@ -495,7 +438,7 @@ def test_comma_separated_roles_string_is_supported(
     api_client: TestClient,
 ) -> None:
     token = create_test_jwt(
-        roles="super_admin",
+        roles="manager,admin",
     )
 
     response = api_client.get(
@@ -517,7 +460,8 @@ def test_roles_list_is_supported(
         "/admin/prompts",
         headers=get_headers(
             roles=[
-                "super_admin",
+                "manager",
+                "admin",
             ]
         ),
     )
@@ -541,7 +485,7 @@ def test_missing_tenant_claim_returns_403(
         },
     )
 
-    assert response.status_code == 401
+    assert response.status_code == 403
 
 
 def test_missing_user_claim_returns_403(
@@ -560,7 +504,7 @@ def test_missing_user_claim_returns_403(
         },
     )
 
-    assert response.status_code == 401
+    assert response.status_code == 403
 
 
 def test_missing_roles_claim_returns_403(
@@ -579,15 +523,14 @@ def test_missing_roles_claim_returns_403(
         },
     )
 
-    assert response.status_code == 401
+    assert response.status_code == 403
 
 
-def test_tenant_header_cannot_override_jwt_tenant(
+def test_tenant_header_mismatch_returns_403(
     api_client: TestClient,
 ) -> None:
     token = create_test_jwt(
         tenant_id="tenant_1",
-        roles="super_admin",
     )
 
     response = api_client.get(
@@ -600,15 +543,14 @@ def test_tenant_header_cannot_override_jwt_tenant(
         },
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 403
 
 
-def test_user_header_cannot_override_jwt_user(
+def test_user_header_mismatch_returns_403(
     api_client: TestClient,
 ) -> None:
     token = create_test_jwt(
         user_id="user_1",
-        roles="super_admin",
     )
 
     response = api_client.get(
@@ -621,14 +563,14 @@ def test_user_header_cannot_override_jwt_user(
         },
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 403
 
 
 def test_permission_header_cannot_add_role(
     api_client: TestClient,
 ) -> None:
     token = create_test_jwt(
-        roles=["technician"],
+        roles=["admin"],
     )
 
     response = api_client.get(
@@ -653,21 +595,24 @@ def test_platform_requires_super_admin(
         "/admin/prompts",
         headers=get_headers(
             tenant="**platform**",
-            roles=["technician"],
+            roles=["admin"],
         ),
     )
 
     assert response.status_code == 403
 
 
-def test_platform_accepts_super_admin(
+def test_platform_accepts_multiple_roles_with_super_admin(
     api_client: TestClient,
 ) -> None:
     response = api_client.get(
         "/admin/prompts",
         headers=get_headers(
             tenant="**platform**",
-            roles="super_admin",
+            roles=[
+                "admin",
+                "super_admin",
+            ],
         ),
     )
 
@@ -703,14 +648,13 @@ def test_post_whitespace_preserved(
     api_client: TestClient,
 ) -> None:
     body_with_spaces = "  Hello \n  "
-
     response = api_client.post(
         "/admin/prompts",
         json=prompt_payload(
             name="  spaced name  ",
             prompt_status=" ASSIGNED ",
             body=body_with_spaces,
-            variables=[],
+            variables=[]
         ),
         headers=get_headers(),
     )
@@ -848,18 +792,17 @@ def test_patch_agent_channel_and_language(
             prompt_status="patch_lookup_fields",
             body="Original",
             variables=[],
-            language="en",
+            language="en"
         ),
         headers=get_headers(),
     )
-
     create_response = api_client.post(
         "/admin/prompts",
         json=prompt_payload(
             prompt_status="patch_lookup_fields",
             body="Original",
             variables=[],
-            language="es",
+            language="es"
         ),
         headers=get_headers(),
     )
@@ -881,7 +824,6 @@ def test_patch_agent_channel_and_language(
         ),
         headers=get_headers(),
     )
-
     response = api_client.patch(
         f"/admin/prompts/{template_id}",
         json={
@@ -948,7 +890,7 @@ def test_cross_tenant_access_returns_404(
             variables=[],
         ),
         headers=get_headers(
-            tenant="tenant_1",
+            tenant="tenant_1"
         ),
     )
 
@@ -959,7 +901,7 @@ def test_cross_tenant_access_returns_404(
     response = api_client.get(
         f"/admin/prompts/{template_id}",
         headers=get_headers(
-            tenant="tenant_2",
+            tenant="tenant_2"
         ),
     )
 
@@ -1062,19 +1004,12 @@ def test_persistence_error_returns_503(
     )
 
 
-def test_platform_completeness_super_admin(
-    api_client,
-) -> None:
-    headers = get_headers(
-        tenant="**platform**",
-        role="super_admin",
-    )
-
+def test_platform_completeness_super_admin(api_client):
+    headers = get_headers(tenant="**platform**", role="super_admin")
     resp = api_client.get(
         "/admin/prompts/translations/completeness",
         headers=headers,
     )
-
     assert resp.status_code == 200
 
 
@@ -1089,7 +1024,7 @@ def test_tenant_cannot_select_platform_completeness(
         ),
         headers=get_headers(
             tenant="tenant_1",
-            role="super_admin",
+            role="admin",
         ),
     )
 
@@ -1117,10 +1052,7 @@ def test_http_post_with_client_version_returns_400(
     POST /admin/prompts including a version field must return HTTP 400,
     creating no database prompt row or version history row.
     """
-    payload = prompt_payload(
-        prompt_status="http_version_test"
-    )
-
+    payload = prompt_payload(prompt_status="http_version_test")
     payload["version"] = 99
 
     response = api_client.post(
@@ -1134,12 +1066,9 @@ def test_http_post_with_client_version_returns_400(
     # Verify no template row created
     list_resp = api_client.get(
         "/admin/prompts",
-        params={
-            "status": payload["status"],
-        },
+        params={"status": payload["status"]},
         headers=get_headers(),
     )
-
     assert list_resp.status_code == 200
     assert len(list_resp.json()) == 0
 
@@ -1153,25 +1082,17 @@ def test_http_patch_whitespace_only_name_returns_400(
     """
     create_resp = api_client.post(
         "/admin/prompts",
-        json=prompt_payload(
-            name="Original Name",
-            prompt_status="ws_patch_http",
-        ),
+        json=prompt_payload(name="Original Name", prompt_status="ws_patch_http"),
         headers=get_headers(),
     )
-
     assert create_resp.status_code == 201
-
     prompt_id = create_resp.json()["id"]
 
     db_session = TestingSessionLocal()
-
     try:
         versions_before = (
             db_session.query(TemplateVersion)
-            .filter(
-                TemplateVersion.template_id == prompt_id
-            )
+            .filter(TemplateVersion.template_id == prompt_id)
             .count()
         )
     finally:
@@ -1179,12 +1100,9 @@ def test_http_patch_whitespace_only_name_returns_400(
 
     patch_resp = api_client.patch(
         f"/admin/prompts/{prompt_id}",
-        json={
-            "name": "   "
-        },
+        json={"name": "   "},
         headers=get_headers(),
     )
-
     assert patch_resp.status_code == 400
 
     # Verify live row & version count unchanged
@@ -1192,24 +1110,19 @@ def test_http_patch_whitespace_only_name_returns_400(
         f"/admin/prompts/{prompt_id}",
         headers=get_headers(),
     )
-
     assert get_resp.status_code == 200
     assert get_resp.json()["name"] == "Original Name"
     assert get_resp.json()["version"] == 1
 
     db_session = TestingSessionLocal()
-
     try:
         versions_after = (
             db_session.query(TemplateVersion)
-            .filter(
-                TemplateVersion.template_id == prompt_id
-            )
+            .filter(TemplateVersion.template_id == prompt_id)
             .count()
         )
     finally:
         db_session.close()
-
     assert versions_after == versions_before
 
 
@@ -1219,10 +1132,7 @@ def test_http_post_unsupported_format_returns_400(
     """
     POST /admin/prompts with unsupported format returns HTTP 400 and causes no DB mutation.
     """
-    payload = prompt_payload(
-        prompt_status="unsupported_fmt_post"
-    )
-
+    payload = prompt_payload(prompt_status="unsupported_fmt_post")
     payload["format"] = "markdown"
 
     response = api_client.post(
@@ -1230,17 +1140,13 @@ def test_http_post_unsupported_format_returns_400(
         json=payload,
         headers=get_headers(),
     )
-
     assert response.status_code == 400
 
     list_resp = api_client.get(
         "/admin/prompts",
-        params={
-            "status": payload["status"],
-        },
+        params={"status": payload["status"]},
         headers=get_headers(),
     )
-
     assert list_resp.status_code == 200
     assert len(list_resp.json()) == 0
 
@@ -1254,24 +1160,17 @@ def test_http_patch_unsupported_format_returns_400(
     """
     create_resp = api_client.post(
         "/admin/prompts",
-        json=prompt_payload(
-            prompt_status="unsupported_fmt_patch"
-        ),
+        json=prompt_payload(prompt_status="unsupported_fmt_patch"),
         headers=get_headers(),
     )
-
     assert create_resp.status_code == 201
-
     prompt_id = create_resp.json()["id"]
 
     db_session = TestingSessionLocal()
-
     try:
         versions_before = (
             db_session.query(TemplateVersion)
-            .filter(
-                TemplateVersion.template_id == prompt_id
-            )
+            .filter(TemplateVersion.template_id == prompt_id)
             .count()
         )
     finally:
@@ -1279,36 +1178,28 @@ def test_http_patch_unsupported_format_returns_400(
 
     patch_resp = api_client.patch(
         f"/admin/prompts/{prompt_id}",
-        json={
-            "format": "xml"
-        },
+        json={"format": "xml"},
         headers=get_headers(),
     )
-
     assert patch_resp.status_code == 400
 
     get_resp = api_client.get(
         f"/admin/prompts/{prompt_id}",
         headers=get_headers(),
     )
-
     assert get_resp.status_code == 200
     assert get_resp.json()["format"] == "text"
     assert get_resp.json()["version"] == 1
 
     db_session = TestingSessionLocal()
-
     try:
         versions_after = (
             db_session.query(TemplateVersion)
-            .filter(
-                TemplateVersion.template_id == prompt_id
-            )
+            .filter(TemplateVersion.template_id == prompt_id)
             .count()
         )
     finally:
         db_session.close()
-
     assert versions_after == versions_before
 
 
@@ -1321,24 +1212,17 @@ def test_http_patch_invalid_source_returns_400(
     """
     create_resp = api_client.post(
         "/admin/prompts",
-        json=prompt_payload(
-            prompt_status="invalid_source_patch"
-        ),
+        json=prompt_payload(prompt_status="invalid_source_patch"),
         headers=get_headers(),
     )
-
     assert create_resp.status_code == 201
-
     prompt_id = create_resp.json()["id"]
 
     db_session = TestingSessionLocal()
-
     try:
         versions_before = (
             db_session.query(TemplateVersion)
-            .filter(
-                TemplateVersion.template_id == prompt_id
-            )
+            .filter(TemplateVersion.template_id == prompt_id)
             .count()
         )
     finally:
@@ -1346,36 +1230,28 @@ def test_http_patch_invalid_source_returns_400(
 
     patch_resp = api_client.patch(
         f"/admin/prompts/{prompt_id}",
-        json={
-            "body": "{% if %}"
-        },
+        json={"body": "{% if %}"},
         headers=get_headers(),
     )
-
     assert patch_resp.status_code == 400
 
     get_resp = api_client.get(
         f"/admin/prompts/{prompt_id}",
         headers=get_headers(),
     )
-
     assert get_resp.status_code == 200
     assert get_resp.json()["body"] == "Hello {{ name }}"
     assert get_resp.json()["version"] == 1
 
     db_session = TestingSessionLocal()
-
     try:
         versions_after = (
             db_session.query(TemplateVersion)
-            .filter(
-                TemplateVersion.template_id == prompt_id
-            )
+            .filter(TemplateVersion.template_id == prompt_id)
             .count()
         )
     finally:
         db_session.close()
-
     assert versions_after == versions_before
 
 
@@ -1388,26 +1264,18 @@ def test_http_patch_text_to_html_succeeds(
     """
     create_resp = api_client.post(
         "/admin/prompts",
-        json=prompt_payload(
-            prompt_status="patch_text_html",
-            channel="email",
-        ),
+        json=prompt_payload(prompt_status="patch_text_html", channel="email"),
         headers=get_headers(),
     )
-
     assert create_resp.status_code == 201
     prompt_id = create_resp.json()["id"]
-
     assert create_resp.json()["format"] == "text"
 
     db_session = TestingSessionLocal()
-
     try:
         versions_before = (
             db_session.query(TemplateVersion)
-            .filter(
-                TemplateVersion.template_id == prompt_id
-            )
+            .filter(TemplateVersion.template_id == prompt_id)
             .count()
         )
     finally:
@@ -1415,44 +1283,30 @@ def test_http_patch_text_to_html_succeeds(
 
     patch_resp = api_client.patch(
         f"/admin/prompts/{prompt_id}",
-        json={
-            "format": "html"
-        },
+        json={"format": "html"},
         headers=get_headers(),
     )
-
     assert patch_resp.status_code == 200
     assert patch_resp.json()["format"] == "html"
     assert patch_resp.json()["version"] == 2
 
     db_session = TestingSessionLocal()
-
     try:
         versions_after = (
             db_session.query(TemplateVersion)
-            .filter(
-                TemplateVersion.template_id == prompt_id
-            )
+            .filter(TemplateVersion.template_id == prompt_id)
             .count()
         )
-
         latest_version = (
             db_session.query(TemplateVersion)
-            .filter(
-                TemplateVersion.template_id == prompt_id
-            )
-            .order_by(
-                TemplateVersion.version_number.desc()
-            )
+            .filter(TemplateVersion.template_id == prompt_id)
+            .order_by(TemplateVersion.version_number.desc())
             .first()
         )
-
         assert latest_version is not None
         assert latest_version.format == "html"
-
     finally:
         db_session.close()
-
     assert versions_after == versions_before + 1
 
 
@@ -1468,10 +1322,7 @@ def test_sanitized_exceptions_do_not_leak_sensitive_markers(
     # Injecting invalid syntax body
     payload = prompt_payload(
         prompt_status="sensitive_leak_test",
-        body=(
-            f"Hello {{{{ "
-            f"{SENSITIVE_MARKER} | invalid_filter }}}}"
-        ),
+        body=f"Hello {{{{ {SENSITIVE_MARKER} | invalid_filter }}}}",
     )
 
     response = api_client.post(
@@ -1485,3 +1336,4 @@ def test_sanitized_exceptions_do_not_leak_sensitive_markers(
     assert SENSITIVE_MARKER not in response.text
     assert SENSITIVE_MARKER not in captured.out
     assert SENSITIVE_MARKER not in captured.err
+

@@ -17,13 +17,18 @@ api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     const token =
       localStorage.getItem("access_token") ||
-      localStorage.getItem("token");
+      localStorage.getItem("token") ||
+      import.meta.env.VITE_AUTH_TOKEN;
 
     if (token && config.headers) {
       config.headers.Authorization = `Bearer ${token}`;
     }
 
-    
+    // Tenant ID from JWT-derived storage (set during login)
+    const tenantId = localStorage.getItem("tenant_id") || import.meta.env.VITE_TENANT_ID;
+    if (tenantId && config.headers) {
+      config.headers["X-Tenant-ID"] = tenantId;
+    }
 
     return config;
   },

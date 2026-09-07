@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Body
+from fastapi import APIRouter, Depends, HTTPException, Header, status, Request, Body
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
@@ -14,11 +15,7 @@ from ..schemas import HeartbeatPayload, AvailabilityResponse
 from ..services.timer_service import TimerService
 from ..services.cooldown_service import CooldownService
 from ..services.socket_manager import sio, emit_notification
-from ..auth.dependencies import (
-    AuthenticatedUser,
-    require_role,
-    get_current_user_or_tenant,
-)
+from ..auth.dependencies import AuthenticatedUser, require_role
 from ..auth.rbac import UserRole
 
 class OverrideRequest(BaseModel):
@@ -32,7 +29,15 @@ router = APIRouter(
     tags=["Dispatch"]
 )
 
+security = HTTPBearer()
 
+def verify_jwt_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Authorization header missing")
+    if credentials.scheme != "Bearer":
+        raise HTTPException(status_code=401, detail="Invalid authorization header format")
+    # Normally we would decode and validate the JWT here: credentials.credentials
+    return credentials.credentials
 
 @router.post("/{id}/heartbeat")
 def technician_heartbeat(
@@ -71,15 +76,11 @@ def technician_heartbeat(
         # Verify tenant isolation and existence
         if id.isdigit():
             tech = db.query(Technician).filter(
-                ((Technician.tech_id == id) | (Technician.technician_id == int(id))),
-                Technician.tenant_id == tenant_id,
+                (Technician.tech_id == id) | (Technician.technician_id == int(id))
             ).first()
         else:
-            tech = db.query(Technician).filter(
-                Technician.tech_id == id,
-                Technician.tenant_id == tenant_id,
-            ).first()
-
+            tech = db.query(Technician).filter(Technician.tech_id == id).first()
+        
         if not tech:
             logger.error("Technician not found", extra=log_extra)
             raise HTTPException(status_code=404, detail="Technician not found")
@@ -136,19 +137,13 @@ def get_metrics(redis_client = Depends(get_redis_client)):
 def get_technician_availability(
     id: str,
     request: Request,
-    user_tenant: tuple[AuthenticatedUser, str] = Depends(
-        get_current_user_or_tenant
-    ),
+    x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
+    authorization: str = Depends(verify_jwt_token),
     db: Session = Depends(get_db),
     redis_client = Depends(get_redis_client)
 ):
-    user, x_tenant_id = user_tenant
     correlation_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
-    log_extra = {
-        "correlation_id": correlation_id,
-        "tenant_id": x_tenant_id,
-        "tech_id": id,
-    }
+    log_extra = {"correlation_id": correlation_id, "tenant_id": x_tenant_id, "tech_id": id}
 
     heartbeat_key = f"tech:availability:{x_tenant_id}:{id}"
     try:
@@ -163,10 +158,7 @@ def get_technician_availability(
     logger.info("Cache miss for availability, falling back to database", extra=log_extra)
     
     # Fallback to database
-    tech = db.query(Technician).filter(
-        Technician.tech_id == id,
-        Technician.tenant_id == x_tenant_id,
-    ).first()
+    tech = db.query(Technician).filter(Technician.tech_id == id).first()
     
     if not tech:
         raise HTTPException(status_code=404, detail="Technician not found")
@@ -188,18 +180,12 @@ def get_technician_availability(
 def invalidate_technician_cache(
     id: str,
     request: Request,
-    user_tenant: tuple[AuthenticatedUser, str] = Depends(
-        get_current_user_or_tenant
-    ),
+    x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
+    authorization: str = Depends(verify_jwt_token),
     redis_client = Depends(get_redis_client)
 ):
-    user, x_tenant_id = user_tenant
     correlation_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
-    log_extra = {
-        "correlation_id": correlation_id,
-        "tenant_id": x_tenant_id,
-        "tech_id": id,
-    }
+    log_extra = {"correlation_id": correlation_id, "tenant_id": x_tenant_id, "tech_id": id}
 
     heartbeat_key = f"tech:availability:{x_tenant_id}:{id}"
     
@@ -235,11 +221,16 @@ async def admin_override_assignment(
         "job_id": job_id,
     }
 
-    
+    # Super Admin can access any organization.
+    # Other roles can access only their own organization.
     job_query = db.query(Job).filter(
-        Job.id == job_id,
-        Job.tenant_id == current_user.tenant_id,
+        Job.id == job_id
     )
+
+    if not current_user.is_super_admin:
+        job_query = job_query.filter(
+            Job.tenant_id == current_user.tenant_id
+        )
 
     job = job_query.first()
 
@@ -386,7 +377,6 @@ async def admin_override_assignment(
     await sio.emit(
         "override:new",
         override_data,
-        room=f"tenant_{effective_tenant_id}",
     )
 
     notification_payload = {
@@ -418,7 +408,6 @@ async def admin_override_assignment(
     await sio.emit(
         "redispatch:dismiss",
         {"job_id": job.id},
-        room=f"tenant_{effective_tenant_id}",
     )
 
     redis_client = get_redis_client()

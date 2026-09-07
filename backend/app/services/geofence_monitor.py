@@ -37,10 +37,7 @@ class GeofenceMonitor:
             return
 
         from ..models import Technician
-        tech = db.query(Technician).filter(
-            Technician.tech_id == str(tech_id),
-            Technician.tenant_id == ping.tenant_id,
-        ).first()
+        tech = db.query(Technician).filter(Technician.tech_id == str(tech_id)).first()
         if tech:
             tech_int_id = tech.technician_id
         elif str(tech_id).isdigit():
@@ -51,8 +48,7 @@ class GeofenceMonitor:
         # Find active EN_ROUTE jobs assigned to this technician
         jobs = db.query(Job).filter(
             Job.assigned_technician_id == tech_int_id,
-            Job.tenant_id == ping.tenant_id,
-            Job.status == "EN_ROUTE",
+            Job.status == "EN_ROUTE"
         ).all()
         
         for job in jobs:
