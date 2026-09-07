@@ -25,10 +25,11 @@ class MapsAPIException(Exception):
         super().__init__(self.message)
 
 class CircuitBreaker:
-    def __init__(self, redis_client):
+    def __init__(self, redis_client, tenant_id: str):
         self.redis = redis_client
-        self.key_failures = "cb:failures:gmaps"
-        self.key_state = "cb:state:gmaps"
+        self.tenant_id = tenant_id
+        self.key_failures = f"tenant:{tenant_id}:cb:failures:gmaps"
+        self.key_state = f"tenant:{tenant_id}:cb:state:gmaps"
 
     def is_open(self):
         try:
@@ -62,8 +63,9 @@ class CircuitBreaker:
             pass
 
 class RateLimiter:
-    def __init__(self, redis_client, rate_limit=100, window=60):
+    def __init__(self, redis_client, tenant_id: str, rate_limit=100, window=60):
         self.redis = redis_client
+        self.tenant_id = tenant_id
         self.rate_limit = rate_limit
         self.window = window
 
@@ -71,7 +73,7 @@ class RateLimiter:
         """Token bucket inspired rate limiter using redis INCR and EXPIRE."""
         try:
             current_minute = int(time.time() // self.window)
-            key = f"rate_limit:gmaps:{current_minute}"
+            key = f"tenant:{self.tenant_id}:rate_limit:gmaps:{current_minute}"
             
             count = self.redis.incr(key)
             if count is None:
@@ -105,37 +107,48 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     return c * r
 
 
-def get_route_cache_key(origin_lat: float, origin_lng: float, dest_lat: float, dest_lng: float) -> str:
+def get_route_cache_key(
+    tenant_id: str,
+    origin_lat: float,
+    origin_lng: float,
+    dest_lat: float,
+    dest_lng: float,
+) -> str:
     origin_str = f"{origin_lat:.6f},{origin_lng:.6f}"
     dest_str = f"{dest_lat:.6f},{dest_lng:.6f}"
-    origin_hash = hashlib.md5(origin_str.encode('utf-8')).hexdigest()
-    dest_hash = hashlib.md5(dest_str.encode('utf-8')).hexdigest()
-    return f"maps:route:{origin_hash}:{dest_hash}"
+    origin_hash = hashlib.md5(origin_str.encode("utf-8")).hexdigest()
+    dest_hash = hashlib.md5(dest_str.encode("utf-8")).hexdigest()
+
+    return f"tenant:{tenant_id}:maps:route:{origin_hash}:{dest_hash}"
 
 
 class GoogleMapsClient:
-    def __init__(self, redis_client):
+    def __init__(self, redis_client, tenant_id: str):
         self.api_key = os.getenv("GOOGLE_MAPS_API_KEY", "")
         self.base_url = "https://maps.googleapis.com/maps/api/distancematrix/json"
         self.redis = redis_client
-        self.cb = CircuitBreaker(redis_client)
-        self.rate_limiter = RateLimiter(redis_client)
+        self.tenant_id = tenant_id
+        self.cb = CircuitBreaker(redis_client, tenant_id)
+        self.rate_limiter = RateLimiter(redis_client, tenant_id)
 
     def _record_metric_call(self):
         try:
-            self.redis.incr("metrics:maps_api_calls_total")
+            self.redis.incr(f"metrics:maps_api_calls_total:{self.tenant_id}")
         except Exception:
             pass
 
     def _record_metric_hit(self):
         try:
-            self.redis.incr("metrics:maps_api_cache_hits")
+            self.redis.incr(f"metrics:maps_api_cache_hits:{self.tenant_id}")
         except Exception:
             pass
 
     def _record_metric_latency(self, latency: float):
         try:
-            self.redis.incrbyfloat("metrics:maps_api_latency_seconds", latency)
+            self.redis.incrbyfloat(
+                f"metrics:maps_api_latency_seconds:{self.tenant_id}",
+                latency,
+            )
         except Exception:
             pass
 
@@ -167,7 +180,12 @@ class GoogleMapsClient:
             "route_calculated_at": datetime.now(timezone.utc).isoformat()
         }
 
-    async def get_distance(self, origin: dict, dest: dict) -> float:
+    async def get_distance(
+        self,
+        origin: dict,
+        dest: dict,
+        tenant_id: str,
+    ) -> float:
         """
         Returns distance in km between origin and dest.
         Uses Redis cache, Rate Limiting, Circuit Breaker, and Haversine fallback.
@@ -181,7 +199,10 @@ class GoogleMapsClient:
         if not (-90 <= dest_lat <= 90 and -180 <= dest_lng <= 180):
             return haversine_distance(origin_lat, origin_lng, dest_lat, dest_lng)
 
-        cache_key = f"proximity:{origin_lat},{origin_lng}:{dest_lat},{dest_lng}"
+        cache_key = (
+            f"tenant:{tenant_id}:proximity:"
+            f"{origin_lat},{origin_lng}:{dest_lat},{dest_lng}"
+        )
         
         # 1. Check Cache
         try:
@@ -248,7 +269,8 @@ class GoogleMapsClient:
         origin_lat: float,
         origin_lng: float,
         dest_lat: float,
-        dest_lng: float
+        dest_lng: float,
+        tenant_id: str,
     ) -> dict:
         """
         Returns routing details (distance, duration, traffic duration) between origin and destination.
@@ -257,7 +279,13 @@ class GoogleMapsClient:
         if not (-90 <= origin_lat <= 90 and -180 <= origin_lng <= 180) or not (-90 <= dest_lat <= 90 and -180 <= dest_lng <= 180):
             raise MapsAPIException("INVALID_REQUEST", "Invalid latitude/longitude coordinates")
 
-        cache_key = get_route_cache_key(origin_lat, origin_lng, dest_lat, dest_lng)
+        cache_key = get_route_cache_key(
+            tenant_id,
+            origin_lat,
+            origin_lng,
+            dest_lat,
+            dest_lng,
+        )
         
         # Check Cache
         try:
@@ -374,7 +402,8 @@ class GoogleMapsClient:
     async def get_batch_route_durations(
         self,
         origins: List[tuple[float, float]],
-        destinations: List[tuple[float, float]]
+        destinations: List[tuple[float, float]],
+        tenant_id: str,
     ) -> List[dict]:
         """
         Returns routing details for a batch of origins to a single destination.
@@ -397,7 +426,13 @@ class GoogleMapsClient:
             if not (-90 <= origin_lat <= 90 and -180 <= origin_lng <= 180):
                 raise MapsAPIException("INVALID_REQUEST", "Invalid origin coordinates")
 
-            cache_key = get_route_cache_key(origin_lat, origin_lng, dest_lat, dest_lng)
+            cache_key = get_route_cache_key(
+                tenant_id,
+                origin_lat,
+                origin_lng,
+                dest_lat,
+                dest_lng,
+            )
             try:
                 cached = self.redis.get(cache_key)
                 if cached:
@@ -506,7 +541,13 @@ class GoogleMapsClient:
                 }
 
                 # Cache individual pair
-                pair_cache_key = get_route_cache_key(origin_lat, origin_lng, dest_lat, dest_lng)
+                pair_cache_key = get_route_cache_key(
+                    tenant_id,
+                    origin_lat,
+                    origin_lng,
+                    dest_lat,
+                    dest_lng,
+                )    
                 try:
                     self.redis.setex(pair_cache_key, 300, json.dumps(result))
                 except Exception:

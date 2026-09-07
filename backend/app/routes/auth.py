@@ -287,10 +287,16 @@ async def login(
     email = payload.email.lower().strip()
 
     # Find user (check all tenants — email alone identifies during login)
-    user = db.query(User).filter(
+    users = db.query(User).filter(
         User.email == email,
         User.deleted_at.is_(None),
-    ).first()
+    ).all()
+
+    user = next(
+        (candidate for candidate in users
+        if verify_password(payload.password, candidate.password_hash)),
+        None,
+    )
 
     if user is None:
         # Log failed attempt but don't reveal whether email exists
@@ -397,6 +403,7 @@ async def refresh_tokens(
     # Load user
     user = db.query(User).filter(
         User.id == claims["sub"],
+        User.tenant_id == claims["tenant_id"],
         User.is_active == True,
         User.deleted_at.is_(None),
     ).first()

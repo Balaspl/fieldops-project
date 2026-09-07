@@ -37,10 +37,15 @@ def get_planned_assignments(
         Job.status,
         Technician.current_jobs,
         Technician.max_jobs
-    ).join(Technician, Job.assigned_technician_id == Technician.technician_id)
+    ).join(
+        Technician,
+        (Job.assigned_technician_id == Technician.technician_id)
+        & (Job.tenant_id == Technician.tenant_id)
+    )
     
-    if not user or not user.is_super_admin:
-        query = query.filter(Job.tenant_id == tenant_id)
+    query = query.filter(
+        Job.tenant_id == tenant_id
+    )
         
     if search:
         search_pattern = f"%{search}%"
@@ -90,10 +95,10 @@ def get_planning_kpi(
     today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
     yesterday_start = today_start - timedelta(days=1)
 
-    # Base query - filter by tenant
-    base = db.query(Job)
-    if not user or not user.is_super_admin:
-        base = base.filter(Job.tenant_id == tenant_id)
+    # Base query - always filter by organization
+    base = db.query(Job).filter(
+        Job.tenant_id == tenant_id
+    )
 
     today_q = base.filter(Job.created_at >= today_start)
     yesterday_q = base.filter(
@@ -112,14 +117,51 @@ def get_planning_kpi(
         "ESCALATED", "ESCALATED_TO_CTO"
     ]
 
-    jobs_dispatched = base.filter(
-        Job.assigned_technician_id.isnot(None)
+    # Normalize status values so:
+    # IN_PROGRESS and "in progress" are treated identically.
+    status_expr = func.lower(
+        func.replace(
+            func.trim(Job.status),
+            "_",
+            " "
+        )
+    )
+
+    # Active operational jobs
+    jobs_active = base.filter(
+        status_expr.in_([
+            "assigned",
+            "en route",
+            "on site",
+            "in progress",
+        ])
     ).count()
 
-    # Pending = unassigned jobs excluding terminal + escalated statuses
+    # Jobs currently being worked on
+    jobs_in_progress = base.filter(
+        status_expr == "in progress"
+    ).count()
+
+    # Completed jobs
+    jobs_completed = base.filter(
+        status_expr == "completed"
+    ).count()
+
+    # Pending jobs waiting for technician assignment
     jobs_pending = base.filter(
-        Job.assigned_technician_id.is_(None),
-        Job.status.notin_(EXCLUDED_FROM_PENDING)
+        status_expr.in_([
+            "queued",
+            "active",
+        ]),
+        Job.assigned_technician_id.is_(None)
+    ).count()
+
+    # Total jobs
+    jobs_total = base.count()
+
+    # Keep dispatched as assigned jobs
+    jobs_dispatched = base.filter(
+        Job.assigned_technician_id.isnot(None)
     ).count()
 
     # Expired = unresolved, non-escalated jobs with SLA past due
@@ -147,11 +189,16 @@ def get_planning_kpi(
 
     # Today/yesterday dispatched (same corrected rules)
     t_dispatched = today_q.filter(Job.assigned_technician_id.isnot(None)).count()
-    y_dispatched = yesterday_q.filter(Job.assigned_technician_id.isnot(None)).count()
+    t_dispatched = yesterday_q.filter(
+        Job.assigned_technician_id.isnot(None)
+    ).count()
 
-    t_pending = today_q.filter(
-        Job.assigned_technician_id.is_(None),
-        Job.status.notin_(EXCLUDED_FROM_PENDING)
+    t_pending = yesterday_q.filter(
+        status_expr.in_([
+            "queued",
+            "active",
+        ]),
+        Job.assigned_technician_id.is_(None)
     ).count()
     y_pending = yesterday_q.filter(
         Job.assigned_technician_id.is_(None),
@@ -232,9 +279,15 @@ def get_planning_kpi(
         utilization_pct = round((float(tech_stats.active or 0) / float(tech_stats.max_cap)) * 100, 1)
 
     return {
-        # Primary KPI values (all-time for meaningful numbers)
-        "jobs_dispatched": jobs_dispatched,
+        # Primary job KPI values
+        "jobs_total": jobs_total,
+        "jobs_active": jobs_active,
+        "jobs_in_progress": jobs_in_progress,
+        "jobs_completed": jobs_completed,
         "jobs_pending": jobs_pending,
+
+        # Existing planning KPIs
+        "jobs_dispatched": jobs_dispatched,
         "jobs_expired": jobs_expired,
         "jobs_redispatched": jobs_redispatched,
 
@@ -279,7 +332,10 @@ import uuid as uuid_mod
 @router.get("/planning/declined-jobs")
 def get_declined_jobs(
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.SUPER_ADMIN, UserRole.SUPER_ADMIN, UserRole.DISPATCHER)
+        require_role(
+            UserRole.SUPER_ADMIN,
+            UserRole.DISPATCHER
+        )
     ),
     db: Session = Depends(get_db),
 ):
@@ -301,10 +357,8 @@ def get_declined_jobs(
         Job.rejected_by_tech_id,
     ).filter(
         func.lower(Job.status) == "rejected_by_technician",
+        Job.tenant_id == current_user.tenant_id,
     )
-
-    if not current_user.is_super_admin:
-        query = query.filter(Job.tenant_id == current_user.tenant_id)
 
     rows = query.order_by(Job.rejected_at.desc()).all()
 
@@ -313,7 +367,8 @@ def get_declined_jobs(
         tech_name = None
         if row.rejected_by_tech_id:
             tech = db.query(Technician).filter(
-                Technician.tech_id == row.rejected_by_tech_id
+                Technician.tech_id == row.rejected_by_tech_id,
+                Technician.tenant_id == current_user.tenant_id,
             ).first()
             if tech:
                 tech_name = tech.technician_name
@@ -341,8 +396,11 @@ def reassign_declined_job(
     request: Request,
     new_technician_id: int = Query(..., description="ID of the new technician"),
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.SUPER_ADMIN, UserRole.SUPER_ADMIN, UserRole.DISPATCHER)
-    ),
+        require_role(
+            UserRole.SUPER_ADMIN,
+            UserRole.DISPATCHER
+        )
+    ),  
     db: Session = Depends(get_db),
 ):
     """
@@ -352,7 +410,11 @@ def reassign_declined_job(
     - Logs the audit event
     - Removes from declined list
     """
-    job = db.query(Job).filter(Job.id == job_id).first()
+    job_query = db.query(Job).filter(
+        Job.id == job_id,
+        Job.tenant_id == current_user.tenant_id,
+    )
+    job = job_query.first()
     if not job:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Job not found")
@@ -362,7 +424,8 @@ def reassign_declined_job(
         raise HTTPException(status_code=400, detail="Job is not in declined status")
 
     new_tech = db.query(Technician).filter(
-        Technician.technician_id == new_technician_id
+        Technician.technician_id == new_technician_id,
+        Technician.tenant_id == job.tenant_id,
     ).first()
     if not new_tech:
         from fastapi import HTTPException

@@ -57,7 +57,7 @@ const darkMapStyles = [
   { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#4b5563' }] },
 ];
 
-export const LiveMap: React.FC<{ tenantId?: string }> = ({ tenantId = 'tenant-1' }) => {
+export const LiveMap: React.FC<{ tenantId?: string }> = ({ tenantId = '' }) => {
   const { isLoaded, loadError } = useLoadScript({
     googleMapsApiKey: (import.meta as any).env?.VITE_GOOGLE_MAPS_API_KEY || '',
     libraries,

@@ -878,8 +878,8 @@ class NotificationRouter:
                     Technician
                 )
                 .filter(
-                    Technician.tech_id
-                    == event.technician_id
+                    Technician.tech_id == event.technician_id,
+                    Technician.tenant_id == event.tenant_id,
                 )
                 .first()
             )
@@ -962,11 +962,11 @@ class NotificationRouter:
                         Technician
                     )
                     .filter(
-                        Technician.tech_id
-                        == event.technician_id
+                        Technician.tech_id == event.technician_id,
+                        Technician.tenant_id == event.tenant_id,
                     )
                     .first()
-                )
+                )   
 
                 if technician is None:
                     return True
@@ -1259,8 +1259,8 @@ class NotificationRouter:
                     Technician
                 )
                 .filter(
-                    Technician.tech_id
-                    == event.technician_id
+                    Technician.tech_id == event.technician_id,
+                    Technician.tenant_id == event.tenant_id,
                 )
                 .first()
             )

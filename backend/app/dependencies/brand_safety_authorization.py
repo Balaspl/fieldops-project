@@ -23,12 +23,14 @@ from typing import Annotated
 
 from fastapi import (
     Depends,
-    Header,
     HTTPException,
     status,
 )
 
-from app.routes.dispatch import verify_jwt_token
+from app.auth.dependencies import (
+    AuthenticatedUser,
+    get_current_user_or_tenant,
+)
 
 
 ALLOWED_BRAND_SAFETY_ROLES = frozenset(
@@ -55,51 +57,29 @@ class BrandSafetyAdminPrincipal:
 
 
 def get_trusted_tenant_id(
-    x_tenant_id: Annotated[
-        str,
-        Header(
-            alias="X-Tenant-ID",
-            min_length=1,
-            max_length=50,
-        ),
-    ],
+    user_tenant: tuple[AuthenticatedUser, str] = Depends(
+        get_current_user_or_tenant
+    ),
 ) -> str:
     """
-    Read and normalize the trusted tenant header.
+    Get the tenant ID from the verified JWT/current user.
     """
 
-    tenant_id = x_tenant_id.strip()
+    _, tenant_id = user_tenant
 
     if not tenant_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="X-Tenant-ID must not be empty.",
+            detail="Tenant ID must not be empty.",
         )
 
     return tenant_id
 
 
 def require_brand_safety_admin(
-    authorization: Annotated[
-        str,
-        Depends(verify_jwt_token),
-    ],
-    x_user_id: Annotated[
-        str,
-        Header(
-            alias="X-User-ID",
-            min_length=1,
-            max_length=100,
-        ),
-    ],
-    x_permissions: Annotated[
-        str,
-        Header(
-            alias="X-Permissions",
-            min_length=1,
-            max_length=50,
-        ),
-    ],
+    user_tenant: tuple[AuthenticatedUser, str] = Depends(
+        get_current_user_or_tenant
+    ),
 ) -> BrandSafetyAdminPrincipal:
     """
     Require an authenticated administrator or manager.
@@ -111,10 +91,10 @@ def require_brand_safety_admin(
     ID because authentication tokens are secrets.
     """
 
-    _ = authorization
+    user, _ = user_tenant
 
-    actor_id = x_user_id.strip()
-    role = x_permissions.strip().lower()
+    actor_id = user.user_id
+    role = user.role.value.lower()
 
     if not actor_id:
         raise HTTPException(

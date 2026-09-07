@@ -80,7 +80,10 @@ async def send_job_assignment_notification(
             "Push title exceeds 50 characters."
         )    
     
-    techs = db.query(Technician).filter(Technician.tech_id.in_(tech_ids)).all()
+    techs = db.query(Technician).filter(
+        Technician.tech_id.in_(tech_ids),
+        Technician.tenant_id == tenant_id,
+    ).all()
     valid_techs = [t for t in techs if t.fcm_token]
     
     final_valid_techs = []
@@ -209,7 +212,10 @@ async def send_job_assignment_notification(
                     err_type = type(resp.exception).__name__
                     if "UnregisteredError" in err_type or "InvalidArgumentError" in err_type:
                         # Invalid token - cleanup
-                        tech = db.query(Technician).filter(Technician.tech_id == tech_id).first()
+                        tech = db.query(Technician).filter(
+                            Technician.tech_id == tech_id,
+                            Technician.tenant_id == tenant_id,
+                        ).first()
                         if tech:
                             tech.fcm_token = None
                             logger.info(f"Cleaned up invalid token for tech_id {tech_id}", extra=log_extra)

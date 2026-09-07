@@ -47,31 +47,14 @@ def decode_ws_token(token: str) -> dict[str, Any]:
     Decode and validate a WebSocket JWT token.
 
     Returns the claims dict on success.
-    Raises jwt.PyJWTError (or subclass) on failure, but falls back to mock claims for dev.
+    Raises jwt.PyJWTError on failure.
     """
     try:
         return jwt.decode(token, WS_JWT_SECRET, algorithms=[WS_JWT_ALGORITHM])
     except jwt.ExpiredSignatureError as e:
         raise e
     except jwt.PyJWTError as e:
-        # If it looks like a real JWT token, propagate the validation error
-        if token and len(token.split('.')) == 3:
-            raise e
-        
-        token_lower = (token or "").lower()
-        role = "dispatcher"
-        if "admin" in token_lower:
-            role = "admin"
-        elif "supervisor" in token_lower:
-            role = "supervisor"
-        elif "tenant_admin" in token_lower:
-            role = "tenant_admin"
-        
-        return {
-            "tenant_id": "tenant-1",
-            "user_id": "dev-user",
-            "role": role
-        }
+        raise e
 
 
 def log_security_event(db, event_type: str, severity: str, user_tenant: str | None, attempted_channel: str | None, ip_address: str | None, websocket_id: str | None, action_taken: str, payload_tenant: str | None = None, target_tenant: str | None = None, technician_id: str | None = None, job_id: str | None = None):
@@ -144,15 +127,6 @@ class TenantValidator:
         
         if channel_tenant_id == jwt_tenant_id:
             return True
-        
-        if jwt_role == "tenant_admin":
-            from ..models import Tenant
-            child = self.db.query(Tenant).filter(
-                Tenant.id == channel_tenant_id,
-                Tenant.parent_tenant_id == jwt_tenant_id
-            ).first()
-            if child:
-                return True
         
         ip_addr = "unknown"
         if websocket.client and hasattr(websocket.client, "host"):
@@ -282,13 +256,41 @@ class ConnectionManager:
         logger.info(f"[ws:subscribe] channel={channel}")
         return True
 
-    async def unsubscribe(self, websocket: WebSocket, channel: str) -> None:
-        """Remove a WebSocket from a channel."""
+    async def unsubscribe(
+        self,
+        websocket: WebSocket,
+        channel: str,
+        tenant_id: str,
+    ) -> bool:
+        """Remove a WebSocket from a tenant-owned channel."""
+
+        parts = channel.split(":")
+        channel_tenant_id = (
+            parts[1]
+            if len(parts) > 1 and parts[0] == "tenant"
+            else None
+        )
+
+        if channel_tenant_id != tenant_id:
+            await websocket.send_json({
+                "type": "error",
+                "code": "CROSS_TENANT_ACCESS",
+                "message": "Access denied: channel belongs to different tenant",
+            })
+            return False
+
         if channel in self.channel_subscriptions:
             self.channel_subscriptions[channel].discard(websocket)
+
             if not self.channel_subscriptions[channel]:
                 del self.channel_subscriptions[channel]
-        await websocket.send_json({"type": "unsubscribed", "channel": channel})
+
+        await websocket.send_json({
+            "type": "unsubscribed",
+            "channel": channel,
+        })
+
+        return True
 
     # ── Broadcasting ──────────────────────────────────────────────────────────
 
@@ -467,14 +469,34 @@ class ConnectionManager:
 
     # ── Metrics ───────────────────────────────────────────────────────────────
 
-    def get_metrics(self) -> dict:
-        """Return current connection metrics."""
-        active_by_tenant = {t: len(ws) for t, ws in self.active_connections.items()}
+    def get_metrics(self, tenant_id: str | None = None) -> dict:
+        """Return connection metrics scoped to the requested tenant."""
+
+        if tenant_id:
+            active_connections = len(
+                self.active_connections.get(tenant_id, [])
+            )
+
+            return {
+                "active_connections": active_connections,
+                "total_active_connections": active_connections,
+                "total_messages_broadcast": self._total_messages_broadcast,
+                "uptime_seconds": round(
+                    time.monotonic() - self._started_at,
+                    1,
+                ),
+            }
+
         return {
-            "active_connections_by_tenant": active_by_tenant,
-            "total_active_connections": sum(active_by_tenant.values()),
+            "total_active_connections": sum(
+                len(ws)
+                for ws in self.active_connections.values()
+            ),
             "total_messages_broadcast": self._total_messages_broadcast,
-            "uptime_seconds": round(time.monotonic() - self._started_at, 1),
+            "uptime_seconds": round(
+                time.monotonic() - self._started_at,
+                1,
+            ),
         }
 
 

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 import logging
 
@@ -12,7 +12,10 @@ from app.models import (
 )
 from app.models.sentiment_audit import SentimentAuditRecord
 from app.schemas import OverrideAuditResponse
-from app.dependencies.override_authorization import verify_jwt_token
+from app.auth.dependencies import (
+    get_current_user_or_tenant,
+    AuthenticatedUser,
+)
 from app.sentiment.audit import SentimentAuditLogger
 
 logger = logging.getLogger(__name__)
@@ -29,10 +32,13 @@ router = APIRouter(
 )
 def get_override_audits_for_job(
     job_id: str,
-    x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
-    authorization: str = Depends(verify_jwt_token),
+    user_tenant: tuple[AuthenticatedUser, str] = Depends(
+        get_current_user_or_tenant
+    ),
     db: Session = Depends(get_db),
 ):
+    user, x_tenant_id = user_tenant
+
     try:
         job_db_id = int(job_id)
     except ValueError:
@@ -41,7 +47,7 @@ def get_override_audits_for_job(
             detail="Invalid job ID format",
         )
 
-    # Verify job belongs to tenant
+    # Verify job belongs to authenticated user's tenant
     job = (
         db.query(Job)
         .filter(
@@ -74,12 +80,16 @@ def get_override_audits_for_job(
 
 @router.get("/security")
 def get_security_audit_logs(
-    tenant_id: str,
-    event_type: str = None,
-    start_date: str = None,
-    end_date: str = None,
+    event_type: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    user_tenant: tuple[AuthenticatedUser, str] = Depends(
+        get_current_user_or_tenant
+    ),
     db: Session = Depends(get_db),
 ):
+    user, tenant_id = user_tenant
+
     query = db.query(SecurityAuditLog).filter(
         SecurityAuditLog.tenant_id == tenant_id
     )
@@ -96,8 +106,9 @@ def get_security_audit_logs(
                 SecurityAuditLog.timestamp >= dt
             )
         except ValueError:
-            query = query.filter(
-                SecurityAuditLog.timestamp >= start_date
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid start_date format. Use ISO-8601 format.",
             )
 
     if end_date:
@@ -107,8 +118,9 @@ def get_security_audit_logs(
                 SecurityAuditLog.timestamp <= dt
             )
         except ValueError:
-            query = query.filter(
-                SecurityAuditLog.timestamp <= end_date
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid end_date format. Use ISO-8601 format.",
             )
 
     logs = (
@@ -146,13 +158,15 @@ def get_security_audit_logs(
 
 @router.get("/sentiment")
 def get_sentiment_audit_logs(
-    tenant_id: str,
     customer_id: str | None = None,
     job_id: int | None = None,
     manager_id: str | None = None,
     sentiment_label: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    user_tenant: tuple[AuthenticatedUser, str] = Depends(
+        get_current_user_or_tenant
+    ),
     db: Session = Depends(get_db),
 ):
     """
@@ -165,7 +179,10 @@ def get_sentiment_audit_logs(
         - sentiment_label
         - start_date
         - end_date
+
+    Tenant is always derived from the authenticated JWT.
     """
+    user, tenant_id = user_tenant
 
     try:
         parsed_start_date = (
@@ -230,3 +247,4 @@ def get_sentiment_audit_logs(
         }
         for record in records
     ]
+
