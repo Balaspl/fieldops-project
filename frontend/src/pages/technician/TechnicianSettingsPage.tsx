@@ -300,7 +300,7 @@ export default function TechnicianSettingsPage() {
             Tenant ID
           </span>
           <span style={{ fontSize: "13px", fontWeight: 700, color: "#2F4F3E" }}>
-            {user?.tenant_id || ""}
+            {user?.tenant_id || "tenant-1"}
           </span>
         </div>
       </div>

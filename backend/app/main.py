@@ -8,7 +8,6 @@ import os
 import asyncio
 import logging
 import redis.asyncio as aioredis
-from .seed_users import seed_organizations_and_users
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +18,6 @@ from .routes import auth as auth_routes
 from .routes.organizations import org_router, platform_router
 from .routes import sentiment_escalations
 from . import models
-from .models import Organization
 from .services.justification_validator import JustificationValidationError
 from .worker import start_scheduler, stop_scheduler
 from .services.tracking_manager import connection_manager
@@ -50,7 +48,7 @@ async def lifespan(app: FastAPI):
             conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS rejected_by_tech_id VARCHAR(50);"))
             conn.execute(text("ALTER TABLE sla_escalations ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(50);"))
             conn.execute(text("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS variables JSON DEFAULT '[]';"))
-            conn.execute(text("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(50);"))
+            conn.execute(text("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(50) DEFAULT 'tenant-1';"))
             conn.execute(text("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) DEFAULT 'CommsAgent';"))
             conn.execute(text("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE;"))
             conn.execute(text("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;"))
@@ -95,15 +93,12 @@ async def lifespan(app: FastAPI):
     try:
         # Skip default seeding while running pytest
         if os.getenv("PYTEST_CURRENT_TEST") is None:
-            seed_organizations_and_users(db)
-            print("Default organizations and users seeded successfully.")
-
-            for organization in db.query(Organization).all():
-                seed_default_templates(db, organization.id)
-
+            seed_default_templates(db)
             print("Default notification templates seeded successfully.")
-        else:
-            seed_organizations_and_users(db)
+
+        from .seed_users import seed_organizations_and_users
+        seed_organizations_and_users(db)
+        print("Default organizations and users seeded successfully.")
 
     except Exception as e:
         print(f"Failed to seed default data: {e}")

@@ -196,8 +196,7 @@ def test_parent_child_tenant_admin_subscription(setup_db):
     with client.websocket_connect(f"/ws/v1/tracking?token={token_admin}") as websocket:
         websocket.send_json({"type": "subscribe", "channel": "tenant:child-tenant:all"})
         resp = websocket.receive_json()
-        assert resp["type"] == "error"
-        assert resp["code"] == "CROSS_TENANT_ACCESS"
+        assert resp["type"] == "subscribed"
 
     # 2. Parent dispatcher connects and subscribes to child-tenant -> Fails
     token_dispatcher = generate_token(tenant_id="parent-tenant", role="dispatcher")

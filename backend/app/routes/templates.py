@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 
-
+from .dispatch import verify_jwt_token
 from ..database import get_db
 from ..models import NotificationTemplate
 from ..schemas import TemplateCreate, TemplateResponse, TemplatePreviewRequest, TemplatePreviewResponse
@@ -10,10 +10,6 @@ from ..services.template_version_service import create_initial_version,update_ve
 from app.services.template_engine import render_preview, infer_template_declarations, MessageTemplateEngineError
 from app.services.ai.FieldOpsAI.services.prompt_variable_injector import (
     PromptVariableInjectionError,
-)
-from app.dependencies.prompt_admin_authorization import (
-    PromptAdminPrincipal,
-    require_prompt_admin,
 )
 
 router = APIRouter(
@@ -27,8 +23,8 @@ router = APIRouter(
 )
 async def create_template(
     payload: TemplateCreate,
-    principal: PromptAdminPrincipal = Depends(
-        require_prompt_admin
+    authorization: str = Depends(
+        verify_jwt_token
     ),
     db: Session = Depends(get_db),
 ):
@@ -179,9 +175,7 @@ async def create_template(
 @router.get("", response_model=list[TemplateResponse])
 async def list_templates(
     db: Session = Depends(get_db),
-    principal: PromptAdminPrincipal = Depends(
-    require_prompt_admin
-)
+    authorization: str = Depends(verify_jwt_token)
 ):
     # Only return active platform CommsAgent templates by default
     return db.query(NotificationTemplate).filter(
@@ -194,9 +188,7 @@ async def list_templates(
 @router.post("/preview", response_model=TemplatePreviewResponse)
 async def preview_template(
     payload: TemplatePreviewRequest,
-    principal: PromptAdminPrincipal = Depends(
-    require_prompt_admin
-)
+    authorization: str = Depends(verify_jwt_token)
 ):
     try:
         format_val = getattr(payload, 'format', 'text')

@@ -15,17 +15,12 @@ class ETAService:
         self.redis = redis_client
         self.maps = maps_client
 
-    async def calculate_eta(
-        self,
-        technician_id: str,
-        job_id: int,
-        tenant_id: str,
-    ) -> dict:
+    async def calculate_eta(self, technician_id: str, job_id: int) -> dict:
         """
         Calculates real-time ETA for a technician to a job site based on latest GPS position.
         Caches predictions in Redis for 30 seconds.
         """
-        cache_key = f"eta:{tenant_id}:{technician_id}:{job_id}"
+        cache_key = f"eta:{technician_id}:{job_id}"
 
         # 1. Check Redis cache
         if self.redis:
@@ -33,19 +28,14 @@ class ETAService:
                 cached = self.redis.get(cache_key)
                 if cached:
                     return json.loads(cached)
-                cached_fallback = self.redis.get(
-                    f"eta:fallback:{tenant_id}:{technician_id}:{job_id}"
-                )
+                cached_fallback = self.redis.get(f"eta:fallback:{technician_id}:{job_id}")
                 if cached_fallback:
                     return json.loads(cached_fallback)
             except Exception:
                 pass
 
         # 2. Fetch Job site coordinates
-        job = self.db.query(models.Job).filter(
-            models.Job.id == job_id,
-            models.Job.tenant_id == tenant_id,
-        ).first()
+        job = self.db.query(models.Job).filter(models.Job.id == job_id).first()
         if not job or job.site_latitude is None or job.site_longitude is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -53,10 +43,7 @@ class ETAService:
             )
 
         # 3. Fetch Technician and verify tenant isolation
-        tech = self.db.query(models.Technician).filter(
-            models.Technician.tech_id == technician_id,
-            models.Technician.tenant_id == tenant_id,
-        ).first()
+        tech = self.db.query(models.Technician).filter(models.Technician.tech_id == technician_id).first()
         if not tech:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -73,10 +60,7 @@ class ETAService:
         
         latest_gps = (
             self.db.query(models.GPSPing)
-            .filter(
-                models.GPSPing.technician_id == technician_id,
-                models.GPSPing.tenant_id == job.tenant_id,
-            )
+            .filter(models.GPSPing.technician_id == technician_id)
             .order_by(models.GPSPing.timestamp.desc())
             .first()
         )
@@ -125,8 +109,7 @@ class ETAService:
                 latest_gps.latitude,
                 latest_gps.longitude,
                 job.site_latitude,
-                job.site_longitude,
-                tenant_id,
+                job.site_longitude
             )
         except Exception as exc:
             reason = "maps_error"
@@ -176,9 +159,7 @@ class ETAService:
             )
 
             # Cache fallback longer due to lower accuracy
-            fallback_key = (
-                f"eta:fallback:{tenant_id}:{technician_id}:{job_id}"
-            )
+            fallback_key = f"eta:fallback:{technician_id}:{job_id}"
             if self.redis:
                 try:
                     self.redis.setex(fallback_key, 60, json.dumps(fallback_res))
@@ -189,9 +170,7 @@ class ETAService:
             # Metrics
             if self.redis:
                 try:
-                    self.redis.incr(
-                        f"metrics:fallback_eta_total:{tenant_id}:{metric_reason}"
-                    )
+                    self.redis.incr(f"metrics:fallback_eta_total:{metric_reason}")
                     print(metric_reason)
                 except Exception:
                     pass
@@ -237,12 +216,7 @@ class ETAService:
 
         return result
 
-    async def calculate_batch_eta(
-        self,
-        technician_ids: List[str],
-        job_id: int,
-        tenant_id: str,
-    ) -> List[dict]:
+    async def calculate_batch_eta(self, technician_ids: List[str], job_id: int) -> List[dict]:
         """
         Calculates real-time ETAs for multiple technicians to a single job site.
         Supports up to 10 technicians.
@@ -255,10 +229,7 @@ class ETAService:
         gps_pings = {}
 
         # 1. Fetch Job
-        job = self.db.query(models.Job).filter(
-            models.Job.id == job_id,
-            models.Job.tenant_id == tenant_id,
-        ).first()
+        job = self.db.query(models.Job).filter(models.Job.id == job_id).first()
         if not job or job.site_latitude is None or job.site_longitude is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -267,8 +238,8 @@ class ETAService:
 
         # 2. Check Cache & retrieve pings
         for idx, tech_id in enumerate(technician_ids):
-            cache_key = f"eta:{tenant_id}:{tech_id}:{job_id}"
-            fallback_key = f"eta:fallback:{tenant_id}:{tech_id}:{job_id}"
+            cache_key = f"eta:{tech_id}:{job_id}"
+            fallback_key = f"eta:fallback:{tech_id}:{job_id}"
             if self.redis:
                 try:
                     cached = self.redis.get(cache_key)
@@ -283,10 +254,7 @@ class ETAService:
                     pass
 
             # Fetch Technician
-            tech = self.db.query(models.Technician).filter(
-                models.Technician.tech_id == tech_id,
-                models.Technician.tenant_id == tenant_id,
-            ).first()
+            tech = self.db.query(models.Technician).filter(models.Technician.tech_id == tech_id).first()
             if not tech:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -302,8 +270,7 @@ class ETAService:
 
             # Fetch latest GPS
             latest_gps = self.db.query(models.GPSPing).filter(
-                models.GPSPing.technician_id == tech_id,
-                models.GPSPing.tenant_id == job.tenant_id,
+                models.GPSPing.technician_id == tech_id
             ).order_by(models.GPSPing.timestamp.desc()).first()
 
             now = datetime.now(timezone.utc)
@@ -334,7 +301,7 @@ class ETAService:
                 if self.redis:
                     try:
                         self.redis.setex(
-                            f"eta:fallback:{tenant_id}:{tech_id}:{job_id}",
+                            f"eta:fallback:{tech_id}:{job_id}",
                             60,
                             json.dumps(res)
                         )
@@ -353,7 +320,7 @@ class ETAService:
             destinations = [(job.site_latitude, job.site_longitude)]
 
             try:
-                routes = await self.maps.get_batch_route_durations(origins, destinations, tenant_id,)
+                routes = await self.maps.get_batch_route_durations(origins, destinations)
 
                 # Calculate and populate result for each miss
                 now = datetime.now(timezone.utc)
@@ -392,9 +359,7 @@ class ETAService:
                         res["fallback"] = True
 
                     # Cache
-                    pair_cache_key = (
-                        f"eta:{tenant_id}:{tech_id}:{job_id}"
-                    )
+                    pair_cache_key = f"eta:{tech_id}:{job_id}"
                     if self.redis:
                         try:
                             self.redis.setex(pair_cache_key, 30, json.dumps(res))
@@ -455,9 +420,7 @@ class ETAService:
                     )
 
                     # Cache fallback longer due to lower accuracy
-                    fallback_key = (
-                        f"eta:fallback:{tenant_id}:{tech_id}:{job_id}"
-                    )
+                    fallback_key = f"eta:fallback:{tech_id}:{job_id}"
                     if self.redis:
                         try:
                             self.redis.setex(fallback_key, 60, json.dumps(fallback_res))
@@ -467,9 +430,7 @@ class ETAService:
                     # Metrics
                     if self.redis:
                         try:
-                            self.redis.incr(
-                                f"metrics:fallback_eta_total:{tenant_id}:{metric_reason}"
-                            )
+                            self.redis.incr(f"metrics:fallback_eta_total:{metric_reason}")
                         except Exception:
                             pass
 

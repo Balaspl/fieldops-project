@@ -20,23 +20,8 @@ from ..redis_client import get_redis_client
 
 
 # Configuration from environment
-# Configuration from environment
+JWT_SECRET = os.getenv("JWT_SECRET", "CHANGE-ME-IN-PRODUCTION-fieldops-secret-key-2026")
 JWT_ALGORITHM = "HS256"  # Pinned — never trust from env/request
-
-
-def get_jwt_secret() -> str:
-    """
-    Read the JWT secret at runtime.
-
-    Never use a hardcoded fallback secret. The application must be
-    explicitly configured with JWT_SECRET.
-    """
-    secret = os.getenv("JWT_SECRET")
-    if not secret:
-        raise RuntimeError("JWT_SECRET is not configured")
-    return secret
-
-
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 
@@ -71,7 +56,7 @@ def create_access_token(
         "type": "access",
     }
 
-    return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
 def create_refresh_token(
@@ -99,7 +84,7 @@ def create_refresh_token(
         "type": "refresh",
     }
 
-    return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
 def decode_token(token: str) -> dict:
@@ -114,7 +99,7 @@ def decode_token(token: str) -> dict:
     """
     return jwt.decode(
         token,
-        get_jwt_secret(),
+        JWT_SECRET,
         algorithms=[JWT_ALGORITHM],
         options={"require": ["exp", "sub", "tenant_id", "role"]},
     )

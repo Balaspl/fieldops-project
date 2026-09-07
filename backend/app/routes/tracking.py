@@ -27,12 +27,8 @@ import json
 import os
 
 import msgpack
-from fastapi import Depends
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from ..auth.dependencies import (
-    get_current_user_or_tenant,
-    AuthenticatedUser,
-)
+
 from ..logger import logger
 from ..services.tracking_manager import connection_manager
 from ..services.broadcast_scheduler import REDIS_GPS_CHANNEL
@@ -97,11 +93,7 @@ async def ws_tracking(websocket: WebSocket, token: str = "", tenant_id: str = ""
 
             elif msg_type == "unsubscribe":
                 channel = data.get("channel", "")
-                await connection_manager.unsubscribe(
-                    websocket,
-                    channel,
-                    tenant_id,
-                )
+                await connection_manager.unsubscribe(websocket, channel)
 
             elif msg_type == "pong":
                 # heartbeat pong handled inside _heartbeat coroutine via receive_json;
@@ -165,14 +157,6 @@ async def redis_gps_listener(redis_async) -> None:
 # Metrics Endpoint
 # ─────────────────────────────────────────────────────────────────────────────
 @router.get("/api/v1/tracking/metrics")
-def get_tracking_metrics(
-    user_tenant: tuple[AuthenticatedUser, str] = Depends(
-        get_current_user_or_tenant
-    ),
-):
-    """Return tenant-scoped WebSocket connection metrics."""
-    user, tenant_id = user_tenant
-
-    return connection_manager.get_metrics(
-        tenant_id=tenant_id
-    )
+def get_tracking_metrics():
+    """Return a snapshot of active WebSocket connections and broadcast metrics."""
+    return connection_manager.get_metrics()

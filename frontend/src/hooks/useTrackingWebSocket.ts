@@ -30,13 +30,8 @@ export const useTrackingWebSocket = (tenantId: string) => {
 
     const socketUrl = (import.meta as any).env?.VITE_SOCKET_URL || 'http://localhost:8000';
     const wsUrl = socketUrl.replace(/^http/, 'ws') + '/ws/v1/tracking';
-
-    const token =
-      localStorage.getItem('access_token') ||
-      localStorage.getItem('token') ||
-      '';
-
-    const finalTenant = tenantId || localStorage.getItem('tenant_id') || '';
+    const token = localStorage.getItem('token') || localStorage.getItem('access_token') || (import.meta as any).env?.VITE_AUTH_TOKEN || 'dev-dispatcher-token';
+    const finalTenant = tenantId || localStorage.getItem('tenant_id') || 'tenant-1';
 
     const fullWsUrl = `${wsUrl}?token=${token}&tenant_id=${finalTenant}`;
     

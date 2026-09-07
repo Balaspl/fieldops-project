@@ -539,7 +539,7 @@ async def complete_organization_onboarding(
 async def create_organization(
     payload: OrgCreateRequest,
     request: Request,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.HEAD)),
+    current_user: AuthenticatedUser = Depends(require_role(UserRole.SUPER_ADMIN)),
     db: Session = Depends(get_db),
 ):
     """Create a new organization. Super Admin only."""
@@ -641,9 +641,7 @@ current_user: AuthenticatedUser = Depends(
 @org_router.get("/{org_id}")
 async def get_organization(
     org_id: str,
-    current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.HEAD, UserRole.SUPER_ADMIN)
-    ),
+    current_user: AuthenticatedUser = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.SUPER_ADMIN)),
     db: Session = Depends(get_db),
 ):
     """Get organization details. Super Admin or own org Admin."""
@@ -868,9 +866,7 @@ async def create_org_admin(
     org_id: str,
     payload: OrgAdminCreateRequest,
     request: Request,
-    current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.HEAD, UserRole.SUPER_ADMIN)
-    ),
+    current_user: AuthenticatedUser = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.SUPER_ADMIN)),
     db: Session = Depends(get_db),
 ):
     """Create an admin or user for an organization. Super Admin or Org Admin."""
@@ -984,7 +980,7 @@ platform_router = APIRouter(
 
 @platform_router.get("/health")
 async def platform_health(
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.HEAD)),
+    current_user: AuthenticatedUser = Depends(require_role(UserRole.SUPER_ADMIN)),
     db: Session = Depends(get_db),
 ):
     """System health check. Super Admin only."""
@@ -1033,7 +1029,7 @@ async def platform_health(
 
 @platform_router.get("/analytics")
 async def platform_analytics(
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.HEAD)),
+    current_user: AuthenticatedUser = Depends(require_role(UserRole.SUPER_ADMIN)),
     db: Session = Depends(get_db),
 ):
     """Cross-tenant analytics. Super Admin only."""
