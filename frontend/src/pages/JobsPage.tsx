@@ -502,6 +502,7 @@ function JobCreationForm() {
     if (s === "inprogress" || s === "in progress") return { ...base, background: "#FEF3DC", color: "#7A5120" };
     if (s === "completed") return { ...base, background: "#E8F0FE", color: "#2F5090" };
     if (s === "canceled" || s === "cancelled") return { ...base, background: "#FAE5E5", color: "#7A2020" };
+    if(s==='rejected_by_technician') return { ...base, background: "#FEE2E2", color: "#DC2626" };
     return { ...base, background: "#DDEEE5", color: "#2F4F3E" };
   };
 
@@ -1372,17 +1373,20 @@ const styles = {
     marginBottom: "4px",
   } as React.CSSProperties,
   tableContainer: {
-    overflowX: "hidden",
-    overflowY: "hidden",
-    flex: 1,
-    minHeight: 0,
-    boxSizing: "border-box",
-  } as React.CSSProperties,
+  width: "100%",
+  overflowX: "auto",
+  overflowY: "auto",
+  flex: 1,
+  minHeight: 0,
+  boxSizing: "border-box",
+  WebkitOverflowScrolling: "touch",
+} as React.CSSProperties,
   dashboardTable: {
-    width: "100%",
-    borderCollapse: "collapse",
-    tableLayout: "fixed",
-  } as React.CSSProperties,
+  width: "100%",
+  minWidth: "950px",
+  borderCollapse: "collapse",
+  tableLayout: "auto",
+} as React.CSSProperties,
   th: {
     background: "#F6FAF8",
     padding: "0 10px",
@@ -1473,17 +1477,20 @@ const styles = {
     flex: 1,
   } as React.CSSProperties,
   jobFormSidebar: {
-    position: "fixed",
-    top: 0,
-    width: "420px",
-    height: "100vh",
-    background: "#FFFFFF",
-    zIndex: 2000,
-    boxShadow: "-4px 0 24px rgba(47,79,62,.1)",
-    display: "flex",
-    flexDirection: "column",
-    transition: "right .3s cubic-bezier(0.4, 0, 0.2, 1)",
-  } as React.CSSProperties,
+  position: "fixed",
+  top: 0,
+  right: 0,
+  width: "min(420px, 100vw)",
+  maxWidth: "100vw",
+  height: "100vh",
+  background: "#FFFFFF",
+  zIndex: 2000,
+  boxShadow: "-4px 0 24px rgba(47,79,62,.1)",
+  display: "flex",
+  flexDirection: "column",
+  boxSizing: "border-box",
+  transition: "right .3s cubic-bezier(0.4, 0, 0.2, 1)",
+} as React.CSSProperties,
   sidebarHeader: {
     padding: "20px 24px",
     borderBottom: "1px solid #E3ECE7",
