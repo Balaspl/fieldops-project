@@ -229,6 +229,26 @@ class SMSSendRequest(BaseModel):
     job_id: str
     tech_ids: list[str]
 
+class SMSPreviewRequest(BaseModel):
+    # Recipient number and message to validate without sending.
+    to_number: str
+    body: str
+
+
+class SMSSendDirectRequest(BaseModel):
+    # Single SMS request that will be processed asynchronously.
+    to_number: str
+    body: str
+    from_number: str | None = None
+
+
+class SMSBulkSendRequest(BaseModel):
+    # Bulk SMS request processed by the Celery worker.
+    recipients: list[str]
+    body: str
+    from_number: str | None = None
+
+    
 class InAppNotificationResponse(BaseModel):
     id: str
     tech_id: str

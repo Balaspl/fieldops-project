@@ -16,9 +16,9 @@ from .services.task_queue import PriorityTaskQueue
 from .redis_client import get_redis_client
 from .services.socket_manager import ws_manager
 from .services.task_queue_worker import consume_task_queue
+from app.services.sms.twilio_service import TwilioSMSService
+from celery import shared_task
 
-
-from .services.task_queue import PriorityTaskQueue
 
 @celery_app.task(name="app.tasks.aggregate_prompt_analytics_task")
 def aggregate_prompt_analytics_task():
@@ -859,3 +859,48 @@ def auto_requeue_dlq(limit: int = 100):
 
     finally:
         db.close()
+
+@shared_task(
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    max_retries=3,
+)
+def send_sms_async(
+    self,
+    to_number: str,
+    body: str,
+    from_number: str | None = None,
+):
+    # Send SMS in a Celery worker so the API request remains non-blocking.
+    service = TwilioSMSService()
+
+    return service.send_sms(
+        to_number=to_number,
+        body=body,
+        from_number=from_number,
+    )
+
+@shared_task(
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    max_retries=3,
+)
+
+
+def send_bulk_sms_async(
+    self,
+    recipients: list[str],
+    body: str,
+    from_number: str | None = None,
+):
+    # Process bulk SMS delivery in a Celery worker.
+    # Each recipient is handled independently by the SMS service.
+    service = TwilioSMSService()
+
+    return service.send_bulk_sms(
+        recipients=recipients,
+        body=body,
+        from_number=from_number,
+    )
