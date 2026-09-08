@@ -9,3 +9,4 @@ class AITask(str, Enum):
     CLOSURE = "closure"
     SENTIMENT = "sentiment"
     INTENT = "intent"
+    INTAKE = "intake"

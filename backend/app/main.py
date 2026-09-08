@@ -30,7 +30,9 @@ scheduler = None
 redis_async_client = None
 redis_pubsub_client = None
 listener_task = None
+from dotenv import load_dotenv
 
+load_dotenv()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global scheduler, redis_async_client, redis_pubsub_client, listener_task
