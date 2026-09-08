@@ -9,6 +9,7 @@ CommunicationService workflow before calling transport adapters.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from dataclasses import dataclass
 from typing import Optional, Sequence
@@ -38,7 +39,12 @@ from ..schemas import (
     NotificationSendRequest,
     NotificationSendResponse,
     SMSSendRequest,
+    SMSPreviewRequest,
+    SMSSendDirectRequest,
+    SMSBulkSendRequest,
 )
+
+
 from ..services.ai.integrations.communication_integration import (
     CommunicationIntegration,
     CommunicationIntegrationError,
@@ -55,6 +61,9 @@ from app.services.ai.FieldOpsAI.schemas.intent import IntentContext
 from app.services.ai.FieldOpsAI.services.realtime_sentiment import (
     RealTimeSentimentScorer,
 )
+from app.services.sms.twilio_service import TwilioSMSService
+from app.tasks import send_sms_async, send_bulk_sms_async
+
 
 router = APIRouter(
     tags=["Notifications"]
@@ -759,21 +768,40 @@ async def twilio_status_webhook(
     )
 
     if delivery:
-        delivery.status = (
-            MessageStatus
-        )
+        delivery.status = MessageStatus
 
         if ErrorCode:
-            delivery.error_message = (
-                f"ErrorCode: {ErrorCode}"
-            )
+            delivery.error_message = f"ErrorCode: {ErrorCode}"
 
         if Price is not None:
-            delivery.cost = abs(
-                Price
-            )
+            delivery.cost = abs(Price)
 
         db.commit()
+
+    # Update the latest Twilio delivery status in Redis.
+    try:
+        from app.redis_client import get_redis_client
+
+        redis_client = get_redis_client()
+
+        if redis_client:
+            redis_client.set(
+                f"sms_delivery:{MessageSid}",
+                {
+                    "sid": MessageSid,
+                    "status": MessageStatus,
+                    "error_code": ErrorCode,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+                ex=86400,
+            )
+
+    except Exception as exc:
+        logger.warning(
+            "Failed to update SMS delivery status in Redis. sid=%s error=%s",
+            MessageSid,
+            exc,
+        )
 
     return {
         "status": "ok"
@@ -938,3 +966,102 @@ async def twilio_inbound_webhook(
                 "user_id=%s",
                 customer.id,
             )
+
+
+@router.post("/sms/preview")
+def preview_sms(
+    payload: SMSPreviewRequest,
+):
+    # Preview validates the SMS but never sends it through Twilio.
+    service = TwilioSMSService()
+
+    try:
+        return service.preview_sms(
+            to_number=payload.to_number,
+            body=payload.body,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        )
+
+@router.post("/sms/send")
+def queue_sms(
+    payload: SMSSendDirectRequest,
+):
+    # Validate the SMS before putting it into the background queue.
+    service = TwilioSMSService()
+
+    try:
+        service.preview_sms(
+            to_number=payload.to_number,
+            body=payload.body,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        )
+
+    # Queue the actual Twilio delivery so the API stays non-blocking.
+    task = send_sms_async.delay(
+        to_number=payload.to_number,
+        body=payload.body,
+        from_number=payload.from_number,
+    )
+
+    return {
+        "success": True,
+        "status": "queued",
+        "task_id": task.id,
+    }
+
+@router.post("/sms/send-bulk")
+def queue_bulk_sms(
+    payload: SMSBulkSendRequest,
+):
+    # Validate the message and every recipient before queueing.
+    service = TwilioSMSService()
+
+    if not payload.recipients:
+        raise HTTPException(
+            status_code=422,
+            detail="Recipients list cannot be empty",
+        )
+
+    if len(payload.recipients) > 50:
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot send to more than 50 recipients at once",
+        )
+
+    try:
+        for recipient in payload.recipients:
+            service.validate_phone_number(recipient)
+
+        if not payload.body or not payload.body.strip():
+            raise ValueError("SMS body cannot be empty")
+
+        if len(payload.body) > 160:
+            raise ValueError("SMS body cannot exceed 160 characters")
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        )
+
+    # Queue bulk delivery so the API remains non-blocking.
+    task = send_bulk_sms_async.delay(
+        recipients=payload.recipients,
+        body=payload.body,
+        from_number=payload.from_number,
+    )
+
+    return {
+        "success": True,
+        "status": "queued",
+        "recipient_count": len(payload.recipients),
+        "task_id": task.id,
+    }
