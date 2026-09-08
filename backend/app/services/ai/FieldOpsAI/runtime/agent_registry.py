@@ -586,6 +586,7 @@ def create_default_agent_registry() -> AgentRegistry:
     # Import here to avoid circular imports at module load time.
     from app.services.ai.FieldOpsAI.agents.planning_agent import PlanningAgent
     from app.services.ai.FieldOpsAI.agents.dispatch_agent import DispatchAgent
+    from app.services.ai.FieldOpsAI.agents.intake_agent import IntakeAgent
 
     registry = AgentRegistry()
 
@@ -605,6 +606,16 @@ def create_default_agent_registry() -> AgentRegistry:
         orchestrator: object | None,
     ) -> DispatchAgent:
         return DispatchAgent(
+            config=config,
+            orchestrator=orchestrator,  # type: ignore[arg-type]
+        )
+
+    # IntakeAgent factory — forwards the optional orchestrator.
+    def _intake_factory(
+        config: AgentConfig,
+        orchestrator: object | None,
+    ) -> IntakeAgent:
+        return IntakeAgent(
             config=config,
             orchestrator=orchestrator,  # type: ignore[arg-type]
         )
@@ -629,6 +640,20 @@ def create_default_agent_registry() -> AgentRegistry:
             description="AI agent responsible for technician dispatch workflow decisions.",
         ),
         factory=_dispatch_factory,
+    )
+
+    registry.register(
+        registration=AgentRegistration(
+            agent_type=AITask.INTAKE,
+            agent_class=IntakeAgent,
+            version="1.0",
+            enabled=True,
+            description=(
+                "AI agent responsible for converting customer requests "
+                "into structured intake information."
+            ),
+        ),
+        factory=_intake_factory,
     )
 
     return registry

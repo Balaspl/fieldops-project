@@ -111,3 +111,4 @@ agents:
   communication:
     timeout_seconds: 5.0
   closure: {}
+  intake: {}
