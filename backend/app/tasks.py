@@ -18,6 +18,7 @@ from .services.socket_manager import ws_manager
 from .services.task_queue_worker import consume_task_queue
 from app.services.sms.twilio_service import TwilioSMSService
 from celery import shared_task
+from .services.email.sendgrid_email import SendGridEmailService
 
 
 @celery_app.task(name="app.tasks.aggregate_prompt_analytics_task")
@@ -904,3 +905,47 @@ def send_bulk_sms_async(
         body=body,
         from_number=from_number,
     )
+
+
+@shared_task(
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    max_retries=3,
+)
+
+def send_email_async(
+    self,
+    to_email: str,
+    subject: str,
+    html_body: str,
+    plain_text: str | None = None,
+    attachments: list[dict] | None = None,
+):
+    """
+    Send an email asynchronously through SendGrid.
+
+    The API request only queues this task. The actual SendGrid
+    delivery happens inside the Celery worker.
+    """
+    service = SendGridEmailService()
+
+    import asyncio
+
+    result = asyncio.run(
+        service.send_email(
+            to_email=to_email,
+            subject=subject,
+            html_body=html_body,
+            plain_text=plain_text,
+            attachments=attachments,
+        )
+    )
+
+    return {
+        "success": result.success,
+        "message_id": result.message_id,
+        "status_code": result.status_code,
+        "error": result.error,
+        "simulated": result.simulated,
+    }

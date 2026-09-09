@@ -51,6 +51,10 @@ from app.services.ai.FieldOpsAI.services.message_output_formatter import (
     MessageOutputFormatter,
 )
 
+from app.services.email.email_template_renderer import (
+    EmailTemplateRenderer,
+)
+
 from typing import Any, Dict
 
 from app.services.ai.FieldOpsAI.runtime.orchestrator import AIOrchestrator
@@ -500,10 +504,62 @@ class AIMessageGenerator:
             )
 
         # --------------------------------------------------
-        # 14. Return validated communication
+        # 14. Apply reusable email presentation
         # --------------------------------------------------
 
-        # All validations and guardrails passed successfully.
+        # All validations and guardrails have passed.
+        #
+        # The reusable email template is intentionally applied
+        # AFTER guardrail validation. This keeps the guardrails
+        # focused on the original generated communication content
+        # instead of the HTML presentation layer.
+
+        if channel == "EMAIL":
+            try:
+                renderer = EmailTemplateRenderer()
+
+                rendered_body = renderer.render(
+                    "transactional.html",
+                    {
+                        "email_title": (
+                            decision.subject
+                            or "FieldOps Notification"
+                        ),
+                        "email_heading": (
+                            decision.subject
+                            or "FieldOps Notification"
+                        ),
+                        "email_body": decision.message,
+                    },
+                )
+
+                formatted_email = MessageOutputFormatter.format(
+                    channel="EMAIL",
+                    rendered_title=decision.subject,
+                    rendered_body=rendered_body,
+                    template_format="html",
+                )
+
+                decision = CommunicationDecision(
+                    channel="EMAIL",
+                    output=formatted_email,
+                    tone=decision.tone,
+                    confidence=decision.confidence,
+                )
+
+            except Exception:
+                # If the reusable email presentation fails,
+                # do not return partially formatted content.
+                # Use the existing deterministic fallback.
+                return self._fallback(
+                    context=context,
+                    template_key=template_key,
+                )
+
+        # --------------------------------------------------
+        # 15. Return validated communication
+        # --------------------------------------------------
+
         return decision
 
     def _fallback(

@@ -54,6 +54,10 @@ from app.services.ai.FieldOpsAI.schemas.communication import (
     CommunicationDecision,
 )
 
+from app.services.email.email_template_renderer import (
+    EmailTemplateRenderer,
+)
+
 
 # ==========================================================
 # Fallback Result Contracts
@@ -388,19 +392,78 @@ class GuardrailFallbackService:
             resolved_locale="en",
         )
 
-    def _build_decision_from_res(self, result, context: CommunicationContext):
-        from app.services.ai.FieldOpsAI.services.message_output_formatter import MessageOutputFormatter
-        
-        try:
-            format_channel = "PORTAL" if context.channel == "IN_APP" else context.channel
-            template_format = getattr(result, "template_format", "text")
+    def _build_decision_from_res(
+        self,
+        result,
+        context: CommunicationContext,
+    ):
+        from app.services.ai.FieldOpsAI.services.message_output_formatter import (
+            MessageOutputFormatter,
+        )
 
-            output = MessageOutputFormatter.format(
-                channel=format_channel,
-                rendered_title=result.title,
-                rendered_body=result.body,
-                template_format=template_format,
+        try:
+            format_channel = (
+                "PORTAL"
+                if context.channel == "IN_APP"
+                else context.channel
             )
+
+            template_format = getattr(
+                result,
+                "template_format",
+                "text",
+            )
+
+            # --------------------------------------------------
+            # EMAIL
+            #
+            # Wrap the already-approved transactional content
+            # with the reusable FieldOps email template system.
+            # --------------------------------------------------
+
+            if context.channel == "EMAIL":
+                renderer = EmailTemplateRenderer()
+
+                rendered_body = renderer.render(
+                    "transactional.html",
+                    {
+                        "email_title": (
+                            result.title
+                            or "FieldOps Notification"
+                        ),
+                        "email_heading": (
+                            result.title
+                            or "FieldOps Notification"
+                        ),
+                        "email_body": result.body,
+                    },
+                )
+
+                output = MessageOutputFormatter.format(
+                    channel=format_channel,
+                    rendered_title=result.title,
+                    rendered_body=rendered_body,
+                    template_format="html",
+                )
+
+            # --------------------------------------------------
+            # NON-EMAIL CHANNELS
+            #
+            # Preserve the existing behavior for SMS, PUSH,
+            # and IN_APP/PORTAL communications.
+            # --------------------------------------------------
+
+            else:
+                output = MessageOutputFormatter.format(
+                    channel=format_channel,
+                    rendered_title=result.title,
+                    rendered_body=result.body,
+                    template_format=template_format,
+                )
+
+            # --------------------------------------------------
+            # Build canonical communication decision.
+            # --------------------------------------------------
 
             decision = CommunicationDecision(
                 channel=context.channel,
@@ -409,15 +472,34 @@ class GuardrailFallbackService:
                 confidence=1.0,
             )
 
-            if self.INVALID_OUTPUT_TOKEN_PATTERN.search(decision.message):
+            # --------------------------------------------------
+            # Existing output validation.
+            # --------------------------------------------------
+
+            if self.INVALID_OUTPUT_TOKEN_PATTERN.search(
+                decision.message
+            ):
                 return None
-            if decision.title and self.INVALID_OUTPUT_TOKEN_PATTERN.search(decision.title):
+
+            if (
+                decision.title
+                and self.INVALID_OUTPUT_TOKEN_PATTERN.search(
+                    decision.title
+                )
+            ):
                 return None
-            if decision.subject and self.INVALID_OUTPUT_TOKEN_PATTERN.search(decision.subject):
+
+            if (
+                decision.subject
+                and self.INVALID_OUTPUT_TOKEN_PATTERN.search(
+                    decision.subject
+                )
+            ):
                 return None
 
             if not self._within_channel_limits(decision):
                 return None
+
             return decision
 
         except ValueError:
