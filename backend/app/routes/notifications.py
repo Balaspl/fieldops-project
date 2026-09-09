@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 from dataclasses import dataclass
 from typing import Optional, Sequence
-
+from app.services.sms.delivery_status import SMSDeliveryStatusService
 from fastapi import (
     APIRouter,
     Depends,
@@ -740,6 +740,9 @@ async def twilio_status_webhook(
     ErrorCode: Optional[str] = Form(
         None
     ),
+
+    ErrorMessage: Optional[str] = Form(None),
+    
     To: Optional[str] = Form(
         None
     ),
@@ -750,33 +753,34 @@ async def twilio_status_webhook(
         get_db
     ),
 ):
-    _ = To
-
     logger.info(
         "Received Twilio status webhook. "
-        "status=%s",
+        "sid=%s status=%s",
+        MessageSid,
         MessageStatus,
     )
 
-    delivery = (
-        db.query(SMSDelivery)
-        .filter(
-            SMSDelivery.sms_sid
-            == MessageSid
-        )
-        .first()
+    payload = {
+        "MessageSid": MessageSid,
+        "MessageStatus": MessageStatus,
+        "ErrorCode": ErrorCode,
+        "ErrorMessage": ErrorMessage,
+        "To": To,
+        "Price": Price,
+    }
+
+    service = SMSDeliveryStatusService(db)
+
+    delivery = service.process_webhook(
+        payload
     )
 
-    if delivery:
-        delivery.status = MessageStatus
-
-        if ErrorCode:
-            delivery.error_message = f"ErrorCode: {ErrorCode}"
-
-        if Price is not None:
-            delivery.cost = abs(Price)
-
-        db.commit()
+    if delivery is None:
+        logger.warning(
+            "SMS delivery record not found. "
+            "sid=%s",
+            MessageSid,
+        )
 
     # Update the latest Twilio delivery status in Redis.
     try:
