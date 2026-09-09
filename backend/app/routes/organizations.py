@@ -14,12 +14,14 @@ Endpoints:
 - GET    /platform/analytics      — cross-tenant analytics
 """
 
+
 import uuid
 import re
 import logging
 import secrets
 import hashlib
 from datetime import datetime, timezone, timedelta
+import requests
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
@@ -134,6 +136,11 @@ class OrganizationOnboardingRequest(BaseModel):
     admin_first_name: str = Field(..., min_length=1, max_length=100)
     admin_last_name: str = Field(..., min_length=1, max_length=100)
     admin_email: str = Field(..., min_length=5, max_length=255)
+    address: Optional[str] = Field(None, max_length=500)
+
+
+    site_latitude: Optional[float] = None
+    site_longitude: Optional[float] = None
 
 class OnboardingStartResponse(BaseModel):
     message: str
@@ -253,6 +260,9 @@ async def start_organization_onboarding(
         admin_first_name=payload.admin_first_name.strip(),
         admin_last_name=payload.admin_last_name.strip(),
         admin_email=email,
+        address=payload.address.strip() if payload.address else None,
+        site_latitude=payload.site_latitude,
+        site_longitude=payload.site_longitude,
         otp_hash=otp_hash,
         otp_expires_at=otp_expires_at,
         otp_verified=False,
@@ -477,6 +487,9 @@ async def complete_organization_onboarding(
         max_technicians=50,
         max_jobs_per_month=500,
         contact_email=onboarding.admin_email,
+        address=onboarding.address,
+        site_latitude=onboarding.site_latitude,
+        site_longitude=onboarding.site_longitude,
     )
 
     db.add(organization)
@@ -637,6 +650,84 @@ current_user: AuthenticatedUser = Depends(
 
     return {"data": results, "total": total, "page": page, "limit": limit}
 
+@org_router.get("/reverse-location")
+async def reverse_location(
+    latitude: float,
+    longitude: float,
+):
+    try:
+        ola_api_key = os.getenv("OLA_MAPS_API_KEY")
+
+        if not ola_api_key:
+            return {
+                "verified": False,
+                "message": "Ola Maps API key is not configured.",
+            }
+
+        response = requests.get(
+            "https://api.olamaps.io/places/v1/reverse-geocode",
+            params={
+                "latlng": f"{latitude},{longitude}",
+                "api_key": ola_api_key,
+            },
+            timeout=10,
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+        results = data.get("results", [])
+
+        if not results:
+            return {
+                "verified": False,
+                "message": "Unable to find an address for this location.",
+            }
+
+        result = results[0]
+
+        address = result.get("formatted_address")
+
+        if not address:
+            return {
+                "verified": False,
+                "message": "Unable to determine address from this location.",
+            }
+
+        return {
+            "verified": True,
+            "address": address,
+            "latitude": latitude,
+            "longitude": longitude,
+        }
+
+    except Exception as e:
+        logger.error("Ola Maps reverse geocoding failed: %s", e)
+
+        return {
+            "verified": False,
+            "message": "Unable to determine address from this location.",
+        }
+@org_router.get("/current")
+async def get_current_organization(
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    org = db.query(Organization).filter(
+        Organization.id == current_user.tenant_id,
+        Organization.deleted_at.is_(None),
+    ).first()
+
+    if not org:
+        raise HTTPException(
+            status_code=404,
+            detail="Organization not found",
+        )
+
+    return {
+        "id": org.id,
+        "name": org.name,
+    }
 
 @org_router.get("/{org_id}")
 async def get_organization(
@@ -1072,3 +1163,52 @@ async def platform_analytics(
         "users_by_role": users_by_role,
         "organizations_by_plan": orgs_by_plan,
     }
+
+@org_router.post("/verify-location")
+async def verify_location(address: str):
+    try:
+        response = requests.get(
+    "https://photon.komoot.io/api/",
+    params={
+        "q": address,
+        "limit": 1,
+    },
+    headers={
+        "User-Agent": "FieldOps/1.0 (location verification)",
+    },
+    timeout=10,
+)
+
+        response.raise_for_status()
+
+        data = response.json()
+        features = data.get("features", [])
+
+        if not features:
+            return {
+                "verified": False,
+                "message": "Location could not be verified",
+            }
+
+        feature = features[0]
+        coordinates = feature["geometry"]["coordinates"]
+
+        longitude = coordinates[0]
+        latitude = coordinates[1]
+
+        properties = feature.get("properties", {})
+
+        return {
+            "verified": True,
+            "address": address,
+            "latitude": latitude,
+            "longitude": longitude,
+            "display_name": properties.get("name") or address,
+        }
+
+    except Exception:
+        return {
+            "verified": False,
+            "message": "Unable to verify location",
+        }
+

@@ -52,7 +52,7 @@ class Job(Base):
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(String(50),ForeignKey("organizations.id", ondelete="RESTRICT"), index=True, nullable=True) # Added for tenant isolation
     customer_name = Column(String(100), nullable=False)
-    location = Column(String(150), nullable=False)
+    location = Column(String(500), nullable=False)
     issue_description = Column(Text, nullable=False)
     priority = Column(String(20), nullable=False)
     service_type = Column(String(50), nullable=False)

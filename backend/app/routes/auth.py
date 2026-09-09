@@ -124,6 +124,12 @@ def _build_token_response(user: User, request: Request, db: Session) -> TokenRes
         role=user.role,
     )
 
+    # Get organization name for the logged-in user's tenant
+    org = db.query(Organization).filter(
+        Organization.id == user.tenant_id
+    ).first()
+
+
     # Store refresh token hash in DB
     token_hash = hashlib.sha256(refresh_token_str.encode()).hexdigest()
     refresh_record = RefreshToken(
@@ -149,6 +155,8 @@ def _build_token_response(user: User, request: Request, db: Session) -> TokenRes
             "last_name": user.last_name,
             "role": user.role,
             "tenant_id": user.tenant_id,
+            "organization_name": org.name if org else None,
+
         },
     )
 

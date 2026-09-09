@@ -105,9 +105,15 @@ def get_all_technicians(
     user, tenant_id = user_tenant
     try:
         query = db.query(models.Technician)
-        if not user or not user.is_super_admin:
-            query = query.filter(models.Technician.tenant_id == tenant_id)
-        
+
+        if user:
+            query = query.filter(
+                models.Technician.tenant_id == user.tenant_id
+            )
+        else:
+            query = query.filter(
+                models.Technician.tenant_id == tenant_id
+            )
         if search:
             search_pattern = f"%{search}%"
             query = query.filter(

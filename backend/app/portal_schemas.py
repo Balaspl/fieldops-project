@@ -141,6 +141,8 @@ class ServiceRequestCreate(BaseModel):
     images: Optional[List[str]] = Field(default_factory=list)
     location: Optional[str] = None
     contact_number: Optional[str] = None
+    site_latitude: Optional[float] = None
+    site_longitude: Optional[float] = None
 
     @field_validator("priority")
     @classmethod

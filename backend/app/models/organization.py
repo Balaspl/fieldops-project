@@ -10,7 +10,7 @@ This extends the existing Tenant model with enterprise features:
 
 import uuid
 from sqlalchemy import (
-    Boolean, Column, DateTime, Integer, String, JSON,
+    Boolean, Column, DateTime, Integer, String, JSON, Float,
     Index, CheckConstraint,
 )
 from sqlalchemy.orm import relationship
@@ -55,6 +55,10 @@ class Organization(Base):
     contact_email = Column(String(255), nullable=True)
     contact_phone = Column(String(20), nullable=True)
     address = Column(String(500), nullable=True)
+
+    # Organization location
+    site_latitude = Column(Float, nullable=True)
+    site_longitude = Column(Float, nullable=True)
     
     # Branding
     logo_url = Column(String(500), nullable=True)

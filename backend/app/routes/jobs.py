@@ -73,8 +73,7 @@ def get_jobs_stats(
 
         # Base query for jobs with tenant isolation
         query = db.query(Job)
-        if not user or not user.is_super_admin:
-            query = query.filter(Job.tenant_id == tenant_id)
+        query = query.filter(Job.tenant_id == tenant_id)
         if start_date:
             query = query.filter(Job.created_at >= start_date)
 
@@ -88,10 +87,9 @@ def get_jobs_stats(
         pending_count = query.filter(func.lower(Job.status) == "active", Job.assigned_technician_id.is_(None)).count()
 
         # Technician availability counts with tenant isolation
-        tech_query = db.query(Technician)
-        if not user or not user.is_super_admin:
-            tech_query = tech_query.filter(Technician.tenant_id == tenant_id)
-
+        tech_query = db.query(Technician).filter(
+        Technician.tenant_id == tenant_id
+    )
         tech_available = tech_query.filter(func.lower(Technician.technician_status) == "available").count()
         tech_busy = tech_query.filter((func.lower(Technician.technician_status) == "busy") | (func.lower(Technician.technician_status) == "on job") | (func.lower(Technician.technician_status) == "on job / busy")).count()
         tech_break = tech_query.filter(func.lower(Technician.technician_status) == "break").count()
@@ -143,9 +141,8 @@ def get_service_types(
     user, tenant_id = user_tenant
     try:
         query = db.query(Job.service_type)
-        if not user or not user.is_super_admin:
-            query = query.filter(Job.tenant_id == tenant_id)
-
+        query = query.filter(Job.tenant_id == tenant_id)
+        
         results = query.distinct().all()
         service_types = sorted(list(set(r[0].strip() for r in results if r[0] and r[0].strip())))
         return service_types
@@ -168,7 +165,10 @@ def create_job(
         if not req_skill or not req_skill.strip():
             req_skill = map_service_type_to_skill(job.service_type)
 
-        effective_tenant = tenant_id if (user and not user.is_super_admin) else (job.tenant_id or tenant_id)
+        if user and user.is_super_admin and user.tenant_id == "__platform__":
+            effective_tenant = job.tenant_id or tenant_id
+        else:
+            effective_tenant = tenant_id
 
         new_job = Job(
             customer_name=job.customer_name,
@@ -227,8 +227,7 @@ def get_jobs(
     user, tenant_id = user_tenant
     try:
         query = db.query(Job)
-        if not user or not user.is_super_admin:
-            query = query.filter(Job.tenant_id == tenant_id)
+        query = query.filter(Job.tenant_id == tenant_id)
         
         if search:
             search_pattern = f"%{search}%"
@@ -298,9 +297,12 @@ def get_pending_jobs(
     TERMINAL_STATUSES = ["completed", "cancelled", "canceled",
                          "COMPLETED", "CANCELLED", "CANCELED"]
     try:
-        query = db.query(Job).filter(Job.assigned_technician_id.is_(None),Job.status.notin_(TERMINAL_STATUSES))
-        if not user or not user.is_super_admin:
-            query = query.filter(Job.tenant_id == tenant_id)
+        query = db.query(Job).filter(
+    Job.assigned_technician_id.is_(None),
+    Job.status.notin_(TERMINAL_STATUSES)
+)
+
+        query = query.filter(Job.tenant_id == tenant_id)
         
         if search:
             search_pattern = f"%{search}%"
@@ -345,8 +347,16 @@ def get_pending_jobs(
         )
 
 @router.put("/{job_id}", response_model=JobResponse)
-def update_job(job_id: int, job: JobCreate, db: Session = Depends(get_db)):
-    existing_job = db.query(Job).filter(Job.id == job_id).first()
+def update_job(
+    job_id: int,
+    job: JobCreate,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    existing_job = db.query(Job).filter(
+        Job.id == job_id,
+        Job.tenant_id == current_user.tenant_id,
+    ).first()
 
     if not existing_job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -364,7 +374,7 @@ def update_job(job_id: int, job: JobCreate, db: Session = Depends(get_db)):
     existing_job.preferred_service_date = job.preferred_service_date
     existing_job.status = job.status
     existing_job.required_skill = req_skill
-    existing_job.tenant_id = job.tenant_id or "tenant-1"
+    existing_job.tenant_id = current_user.tenant_id
     existing_job.sla_deadline = job.sla_deadline
     existing_job.attempt_count = job.attempt_count or 0
 
@@ -388,13 +398,9 @@ async def plan_job_assignment(
     redis_client=Depends(get_redis_client),
 ):
     job_query = db.query(Job).filter(
-        Job.id == job_id
+    Job.id == job_id,
+    Job.tenant_id == current_user.tenant_id,
     )
-
-    if not current_user.is_super_admin:
-        job_query = job_query.filter(
-            Job.tenant_id == current_user.tenant_id
-        )
 
     job = job_query.first()
 
@@ -1065,14 +1071,9 @@ async def assign_job(
     with with_job_lock(str(job_id)):
         # Step 1: Find the job.
         job_query = db.query(Job).filter(
-            Job.id == job_id
-        )
-
-        # Normal users can access only their organization's jobs.
-        if not current_user.is_super_admin:
-            job_query = job_query.filter(
-                Job.tenant_id == current_user.tenant_id
-            )
+        Job.id == job_id,
+        Job.tenant_id == current_user.tenant_id,
+    )
 
         job = job_query.first()
 
@@ -1181,7 +1182,7 @@ async def assign_job(
         tech.current_jobs = (tech.current_jobs or 0) + 1
 
         override_log = AssignmentOverride(
-            tenant_id=current_user.tenant_id,
+            tenant_id=effective_tenant_id,
             job_id=job.id,
             actor_name=str(current_user.user_id),
             actor_role=current_user.role.value,
@@ -1347,20 +1348,34 @@ async def assign_job(
                 "exclusion_bypassed": True,
             },
         }
-
 @router.get("/{job_id}", response_model=JobResponse)
-def get_job_by_id(job_id: int, db: Session = Depends(get_db)):
-    job = db.query(Job).filter(Job.id == job_id).first()
+def get_job_by_id(
+    job_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    job = db.query(Job).filter(
+        Job.id == job_id,
+        Job.tenant_id == current_user.tenant_id,
+    ).first()
+
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
 
 @router.get("/{job_id}/redispatch-history")
-def get_redispatch_history(job_id: int, db: Session = Depends(get_db)):
+def get_redispatch_history(
+    job_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     from app.models import DispatcherAlert, Technician
     from datetime import timedelta
     
-    job = db.query(Job).filter(Job.id == job_id).first()
+    job = db.query(Job).filter(
+    Job.id == job_id,
+    Job.tenant_id == current_user.tenant_id,
+    ).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
         
@@ -1432,10 +1447,17 @@ def get_redispatch_history(job_id: int, db: Session = Depends(get_db)):
     return attempts
 
 @router.get("/{job_id}/override-history")
-def get_override_history(job_id: int, db: Session = Depends(get_db)):
+def get_override_history(
+    job_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     from app.models import AssignmentOverride
     
-    job = db.query(Job).filter(Job.id == job_id).first()
+    job = db.query(Job).filter(
+    Job.id == job_id,
+    Job.tenant_id == current_user.tenant_id,
+).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
         
@@ -1460,11 +1482,18 @@ def get_override_history(job_id: int, db: Session = Depends(get_db)):
 api_v1_router = APIRouter(prefix="/api/v1")
 
 @api_v1_router.get("/jobs/{job_id}/history")
-def get_job_status_history(job_id: int, db: Session = Depends(get_db)):
+def get_job_status_history(
+    job_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):    
     from app.models import AuditEvent, Technician
     from datetime import datetime, timezone
     
-    job = db.query(Job).filter(Job.id == job_id).first()
+    job = db.query(Job).filter(
+    Job.id == job_id,
+    Job.tenant_id == current_user.tenant_id,
+).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
         
@@ -1500,7 +1529,10 @@ def get_job_status_history(job_id: int, db: Session = Depends(get_db)):
             actor_role = "SYSTEM"
             
             if event.tech_id and event.tech_id != "system":
-                tech = db.query(Technician).filter(Technician.technician_id == event.tech_id).first()
+                tech = db.query(Technician).filter(
+                Technician.technician_id == event.tech_id,
+                Technician.tenant_id == current_user.tenant_id,
+            ).first()
                 if tech:
                     actor_name = tech.name
                     actor_role = "Technician"
@@ -1544,13 +1576,9 @@ def get_job_valid_transitions(
         )
 
     job_query = db.query(Job).filter(
-        Job.id == int(id)
-    )
-
-    if not current_user.is_super_admin:
-        job_query = job_query.filter(
-            Job.tenant_id == current_user.tenant_id
-        )
+    Job.id == int(id),
+    Job.tenant_id == current_user.tenant_id,
+)
 
     job = job_query.first()
 
@@ -1612,13 +1640,9 @@ def transition_job_endpoint(
     )
 
     job_query = db.query(Job).filter(
-        Job.id == int(id)
-    )
-
-    if not current_user.is_super_admin:
-        job_query = job_query.filter(
-            Job.tenant_id == current_user.tenant_id
-        )
+    Job.id == int(id),
+    Job.tenant_id == current_user.tenant_id,
+)
 
     job = job_query.first()
 
@@ -1706,13 +1730,9 @@ def get_job_sla(
         )
 
     job_query = db.query(Job).filter(
-        Job.id == int(id)
-    )
-
-    if not current_user.is_super_admin:
-        job_query = job_query.filter(
-            Job.tenant_id == current_user.tenant_id
-        )
+    Job.id == int(id),
+    Job.tenant_id == current_user.tenant_id,
+)
 
     job = job_query.first()
 
@@ -1760,15 +1780,11 @@ def get_sla_dashboard(
     db: Session = Depends(get_db),
 ):
     query = db.query(Job).filter(
-        Job.status.in_(
-            ["ASSIGNED", "EN_ROUTE", "ON_SITE"]
-        )
-    )
-
-    if not current_user.is_super_admin:
-        query = query.filter(
-            Job.tenant_id == current_user.tenant_id
-        )
+    Job.status.in_(
+        ["ASSIGNED", "EN_ROUTE", "ON_SITE"]
+    ),
+    Job.tenant_id == current_user.tenant_id,
+)
 
     jobs = query.all()
 
@@ -1832,13 +1848,9 @@ def share_job_tracking(
         )
 
     job_query = db.query(Job).filter(
-        Job.id == int(id)
-    )
-
-    if not current_user.is_super_admin:
-        job_query = job_query.filter(
-            Job.tenant_id == current_user.tenant_id
-        )
+    Job.id == int(id),
+    Job.tenant_id == current_user.tenant_id,
+)
 
     job = job_query.first()
 
@@ -1916,7 +1928,10 @@ def get_public_tracking_info(
     latest_gps = None
 
     if job.assigned_technician_id:
-        tech = db.query(Technician).filter(Technician.technician_id == job.assigned_technician_id).first()
+        tech = db.query(Technician).filter(
+        Technician.technician_id == job.assigned_technician_id,
+        Technician.tenant_id == job.tenant_id,
+    ).first()
         if tech:
             ping = db.query(GPSPing).filter(GPSPing.technician_id == tech.tech_id).order_by(GPSPing.timestamp.desc()).first()
             if ping:
@@ -2059,12 +2074,10 @@ def get_job_closure_endpoint(
     ),
     db: Session = Depends(get_db),
 ):
-    job_query = db.query(Job).filter(Job.id == job_id)
-
-    if not current_user.is_super_admin:
-        job_query = job_query.filter(
-            Job.tenant_id == current_user.tenant_id
-        )
+    job_query = db.query(Job).filter(
+    Job.id == job_id,
+    Job.tenant_id == current_user.tenant_id,
+)
 
     job = job_query.first()
 
