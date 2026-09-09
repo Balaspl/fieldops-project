@@ -140,7 +140,7 @@ const AcceptanceTimer = ({
         title="Awaiting assignment"
       >
         <Clock size={12} />
-        <span>Pending</span>
+        <span>Unassigned</span>
       </span>
     );
   }

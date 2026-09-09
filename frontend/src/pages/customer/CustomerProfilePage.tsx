@@ -254,9 +254,9 @@ export default function CustomerProfilePage() {
         style={{
           background: "#fff",
           borderRadius: "14px",
-          padding: "28px",
-          maxWidth: "600px",
-          margin: "0 auto",
+          padding: "45px 20px 20px",
+          maxWidth: "1100px",
+          margin: "40px auto 0",
           boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
           border: "1px solid #E3ECE7",
         }}

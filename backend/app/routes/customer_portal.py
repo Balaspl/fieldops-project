@@ -692,7 +692,7 @@ async def create_service_request(
         images=data.images,
         location=data.location,
         contact_number=data.contact_number,
-        status="PENDING",
+        status="UNASSIGNED",
         linked_job_id=new_job.id,
     )
 
@@ -794,11 +794,8 @@ async def update_service_request(
             detail="Service request not found",
         )
 
-    if sr.status not in ("PENDING",):
-        raise HTTPException(
-            status_code=400,
-            detail="Can only edit pending requests",
-        )
+    if sr.status not in ("UNASSIGNED",):
+        raise HTTPException(status_code=400, detail="Can only edit pending requests")
 
     update_data = data.model_dump(
         mode="json",
@@ -859,11 +856,8 @@ async def cancel_service_request(
             detail="Service request not found",
         )
 
-    if sr.status not in ("PENDING",):
-        raise HTTPException(
-            status_code=400,
-            detail="Can only cancel pending requests",
-        )
+    if sr.status not in ("UNASSIGNED",):
+        raise HTTPException(status_code=400, detail="Can only cancel pending requests")
 
     sr.status = "CANCELLED"
 
@@ -1348,23 +1342,9 @@ async def get_customer_dashboard(
     )
 
     total = base.count()
-
-    pending = base.filter(
-        ServiceRequest.status == "PENDING"
-    ).count()
-
-    active = base.filter(
-        ServiceRequest.status.in_(
-            [
-                "ASSIGNED",
-                "IN_PROGRESS",
-            ]
-        )
-    ).count()
-
-    completed = base.filter(
-        ServiceRequest.status == "COMPLETED"
-    ).count()
+    pending = base.filter(ServiceRequest.status == "UNASSIGNED").count()
+    active = base.filter(ServiceRequest.status.in_(["ASSIGNED", "IN_PROGRESS"])).count()
+    completed = base.filter(ServiceRequest.status == "COMPLETED").count()
 
     return CustomerDashboardResponse(
         total_requests=total,

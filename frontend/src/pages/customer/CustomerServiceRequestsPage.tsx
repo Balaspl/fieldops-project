@@ -23,13 +23,14 @@ import api from "../../services/api";
 
 const badge = (status: string) => {
   const c: Record<string, string> = {
-    PENDING: "#DD6B20",
+    UNASSIGNED: "#DD6B20",
     ASSIGNED: "#1E40AF",
     EN_ROUTE: "#7C3AED",
     IN_PROGRESS: "#92400E",
     COMPLETED: "#065F46",
     CANCELLED: "#991B1B",
   };
+
   return {
     fontSize: "11px",
     fontWeight: 600,
@@ -118,7 +119,6 @@ export default function CustomerServiceRequestsPage({
     setError("");
   };
 
-  // Today's date in YYYY-MM-DD format
   const getTodayDate = () => {
     const today = new Date();
 
@@ -137,9 +137,7 @@ export default function CustomerServiceRequestsPage({
     const location = form.location.trim();
     const contactNumber = form.contact_number.trim();
 
-    // -----------------------------------------
     // TITLE VALIDATION
-    // -----------------------------------------
     if (!title) {
       setError("Title is required");
       return;
@@ -150,9 +148,7 @@ export default function CustomerServiceRequestsPage({
       return;
     }
 
-    // -----------------------------------------
     // DESCRIPTION VALIDATION
-    // -----------------------------------------
     if (!description) {
       setError("Description is required");
       return;
@@ -163,25 +159,19 @@ export default function CustomerServiceRequestsPage({
       return;
     }
 
-    // -----------------------------------------
     // SERVICE TYPE VALIDATION
-    // -----------------------------------------
     if (!form.service_type) {
       setError("Please select a service type");
       return;
     }
 
-    // -----------------------------------------
     // PRIORITY VALIDATION
-    // -----------------------------------------
     if (!form.priority || form.priority === "select priority") {
       setError("Please select a priority");
       return;
     }
 
-    // -----------------------------------------
     // PREFERRED DATE VALIDATION
-    // -----------------------------------------
     if (!form.preferred_visit_date) {
       setError("Preferred date is required");
       return;
@@ -192,9 +182,7 @@ export default function CustomerServiceRequestsPage({
       return;
     }
 
-    // -----------------------------------------
     // CONTACT NUMBER VALIDATION
-    // -----------------------------------------
     if (!contactNumber) {
       setError("Contact number is required");
       return;
@@ -210,9 +198,7 @@ export default function CustomerServiceRequestsPage({
       return;
     }
 
-    // -----------------------------------------
     // LOCATION VALIDATION
-    // -----------------------------------------
     if (!location) {
       setError("Location / Address is required");
       return;
@@ -329,12 +315,6 @@ export default function CustomerServiceRequestsPage({
     color: "#DC2626",
   };
 
-  /*
-   * ============================================================
-   * NEW REQUEST PAGE
-   * ============================================================
-   */
-
   if (createOnly) {
     return (
       <div
@@ -392,7 +372,6 @@ export default function CustomerServiceRequestsPage({
               gap: "18px",
             }}
           >
-            {/* Title */}
             <div>
               <label style={labelStyle}>
                 Title <span style={requiredStar}>*</span>
@@ -406,7 +385,6 @@ export default function CustomerServiceRequestsPage({
               />
             </div>
 
-            {/* Description */}
             <div>
               <label style={labelStyle}>
                 Description <span style={requiredStar}>*</span>
@@ -424,7 +402,6 @@ export default function CustomerServiceRequestsPage({
               />
             </div>
 
-            {/* Service Type + Priority */}
             <div
               style={{
                 display: "grid",
@@ -432,11 +409,11 @@ export default function CustomerServiceRequestsPage({
                 gap: "16px",
               }}
             >
-              {/* Service Type */}
               <div>
                 <label style={labelStyle}>
                   Service Type <span style={{ color: "red" }}>*</span>
                 </label>
+
                 <select
                   required
                   style={{
@@ -447,30 +424,21 @@ export default function CustomerServiceRequestsPage({
                   onChange={(e) => upd("service_type", e.target.value)}
                 >
                   <option value="">select service</option>
-
                   <option value="HVAC Repair">HVAC Repair</option>
-
                   <option value="Electrical">Electrical</option>
-
                   <option value="Plumbing">Plumbing</option>
-
                   <option value="Network Support">Network Support</option>
-
                   <option value="General Maintenance">
                     General Maintenance
                   </option>
-
                   <option value="Appliance Repair">Appliance Repair</option>
-
                   <option value="CCTV & Security">CCTV & Security</option>
-
                   <option value="Roofing & Carpentry">
                     Roofing & Carpentry
                   </option>
                 </select>
               </div>
 
-              {/* Priority */}
               <div>
                 <label style={labelStyle}>
                   Priority <span style={requiredStar}>*</span>
@@ -488,7 +456,6 @@ export default function CustomerServiceRequestsPage({
                   onChange={(e) => upd("priority", e.target.value)}
                 >
                   <option value="select priority">select priority</option>
-
                   <option value="LOW">LOW</option>
                   <option value="MEDIUM">MEDIUM</option>
                   <option value="HIGH">HIGH</option>
@@ -497,7 +464,6 @@ export default function CustomerServiceRequestsPage({
               </div>
             </div>
 
-            {/* Preferred Date + Contact Number */}
             <div
               style={{
                 display: "grid",
@@ -505,7 +471,6 @@ export default function CustomerServiceRequestsPage({
                 gap: "16px",
               }}
             >
-              {/* Preferred Date */}
               <div>
                 <label style={labelStyle}>
                   Preferred Date <span style={requiredStar}>*</span>
@@ -516,14 +481,17 @@ export default function CustomerServiceRequestsPage({
                   min={getTodayDate()}
                   style={{
                     ...inputStyle,
-                    color: form.preferred_visit_date ? "#111827" : "#9CA3AF",
+                    color: form.preferred_visit_date
+                      ? "#111827"
+                      : "#9CA3AF",
                   }}
                   value={form.preferred_visit_date}
-                  onChange={(e) => upd("preferred_visit_date", e.target.value)}
+                  onChange={(e) =>
+                    upd("preferred_visit_date", e.target.value)
+                  }
                 />
               </div>
 
-              {/* Contact Number */}
               <div>
                 <label style={labelStyle}>
                   Contact Number <span style={requiredStar}>*</span>
@@ -537,7 +505,6 @@ export default function CustomerServiceRequestsPage({
                   value={form.contact_number}
                   onChange={(e) => {
                     const value = e.target.value.replace(/\D/g, "");
-
                     upd("contact_number", value);
                   }}
                   placeholder="10 digit mobile number"
@@ -545,8 +512,6 @@ export default function CustomerServiceRequestsPage({
               </div>
             </div>
 
-            {/* Location */}
-            {/* Location */}
             <div>
               <div
                 style={{
@@ -672,7 +637,6 @@ export default function CustomerServiceRequestsPage({
               />
             </div>
 
-            {/* Buttons */}
             <div
               style={{
                 display: "flex",
@@ -718,7 +682,6 @@ export default function CustomerServiceRequestsPage({
                 }}
               >
                 <Send size={14} />
-
                 {saving ? "Submitting..." : "Submit"}
               </button>
             </div>
@@ -727,12 +690,6 @@ export default function CustomerServiceRequestsPage({
       </div>
     );
   }
-
-  /*
-   * ============================================================
-   * MY REQUESTS PAGE
-   * ============================================================
-   */
 
   return (
     <div
@@ -807,7 +764,6 @@ export default function CustomerServiceRequestsPage({
           }}
         >
           <CheckCircle size={16} />
-
           {success}
         </div>
       )}
@@ -834,141 +790,176 @@ export default function CustomerServiceRequestsPage({
           No service requests yet. Create your first one!
         </div>
       ) : (
-        requests.map((sr) => (
-          <div
-            key={sr.id}
-            style={{
-              background: "#fff",
-              borderRadius: "14px",
-              padding: "18px",
-              marginBottom: "12px",
-              boxShadow: "0 2px 8px rgba(0,0,0,0.05)",
-              border: "1px solid #E3ECE7",
-            }}
-          >
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, 1fr)",
+            gap: "12px",
+          }}
+        >
+          {requests.map((sr) => (
             <div
+              key={sr.id}
               style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "flex-start",
-                marginBottom: "8px",
+                background: "#fff",
+                borderRadius: "14px",
+                padding: "18px",
+                boxShadow: "0 2px 8px rgba(0,0,0,0.05)",
+                border: "1px solid #E3ECE7",
               }}
             >
-              <div>
-                <span
-                  style={{
-                    fontSize: "11px",
-                    color: "#9CA3AF",
-                  }}
-                >
-                  {sr.request_number}
-                </span>
-
-                <div
-                  style={{
-                    fontSize: "15px",
-                    fontWeight: 700,
-                    color: "#1F2933",
-                  }}
-                >
-                  {sr.title}
-                </div>
-              </div>
-
-              <span style={badge(sr.status) as any}>{sr.status}</span>
-            </div>
-
-            <div
-              style={{
-                fontSize: "13px",
-                color: "#6B7280",
-                marginBottom: "8px",
-                lineHeight: 1.5,
-              }}
-            >
-              {sr.description}
-            </div>
-
-            <div
-              style={{
-                display: "flex",
-                gap: "14px",
-                fontSize: "12px",
-                color: "#9CA3AF",
-                flexWrap: "wrap",
-              }}
-            >
-              {sr.service_type && <span>Type: {sr.service_type}</span>}
-
-              <span>Priority: {sr.priority}</span>
-
-              <span>
-                <Clock size={12} style={{ verticalAlign: "middle" }} />{" "}
-                {new Date(sr.created_at).toLocaleDateString()}
-              </span>
-
-              {sr.linked_job_id && <span>Linked Job: #{sr.linked_job_id}</span>}
-            </div>
-
-            {sr.status === "PENDING" && (
+              {/* Request Header */}
               <div
                 style={{
                   display: "flex",
-                  gap: "8px",
-                  marginTop: "12px",
-                  paddingTop: "10px",
-                  borderTop: "1px solid #F0F0F0",
+                  justifyContent: "space-between",
+                  alignItems: "flex-start",
+                  marginBottom: "8px",
+                  gap: "10px",
                 }}
               >
-                <button
-                  onClick={() => startEdit(sr)}
-                  style={{
-                    padding: "6px 14px",
-                    border: "1px solid #D1D5DB",
-                    borderRadius: "6px",
-                    background: "#fff",
-                    fontSize: "12px",
-                    fontWeight: 600,
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "4px",
-                    color: "#374151",
-                  }}
-                >
-                  <Edit3 size={12} />
-                  Edit
-                </button>
+                <div style={{ minWidth: 0 }}>
+                  <span
+                    style={{
+                      fontSize: "11px",
+                      color: "#9CA3AF",
+                    }}
+                  >
+                    {sr.request_number}
+                  </span>
 
-                <button
-                  onClick={() => handleCancel(sr.id)}
+                  <div
+                    style={{
+                      fontSize: "15px",
+                      fontWeight: 700,
+                      color: "#1F2933",
+                      marginTop: "2px",
+                      lineHeight: "20px",
+                    }}
+                  >
+                    {sr.title}
+                  </div>
+                </div>
+
+                <span style={badge(sr.status) as any}>
+                  {sr.status}
+                </span>
+              </div>
+
+              {/* Description */}
+              <div
+                style={{
+                  fontSize: "13px",
+                  color: "#6B7280",
+                  marginBottom: "10px",
+                  lineHeight: 1.5,
+                  display: "-webkit-box",
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: "vertical",
+                  overflow: "hidden",
+                }}
+              >
+                {sr.description}
+              </div>
+
+              {/* Metadata */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  columnGap: "12px",
+                  rowGap: "7px",
+                  fontSize: "12px",
+                  color: "#8A94A3",
+                }}
+              >
+                {sr.service_type && (
+                  <span>
+                    Type: {sr.service_type}
+                  </span>
+                )}
+
+                <span>
+                  Priority: {sr.priority}
+                </span>
+
+                <span
                   style={{
-                    padding: "6px 14px",
-                    border: "none",
-                    borderRadius: "6px",
-                    background: "#FEE2E2",
-                    fontSize: "12px",
-                    fontWeight: 600,
-                    cursor: "pointer",
                     display: "flex",
                     alignItems: "center",
                     gap: "4px",
-                    color: "#991B1B",
+                    whiteSpace: "nowrap",
                   }}
                 >
-                  <XCircle size={12} />
-                  Cancel
-                </button>
+                  <Clock size={12} />
+                  {new Date(sr.created_at).toLocaleDateString()}
+                </span>
+
+                {sr.linked_job_id && (
+                  <span>
+                    Linked Job: #{sr.linked_job_id}
+                  </span>
+                )}
               </div>
-            )}
-          </div>
-        ))
+
+              {/* Actions */}
+              {sr.status === "UNASSIGNED" && (
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "8px",
+                    marginTop: "12px",
+                    paddingTop: "10px",
+                    borderTop: "1px solid #F0F0F0",
+                  }}
+                >
+                  <button
+                    onClick={() => startEdit(sr)}
+                    style={{
+                      padding: "6px 14px",
+                      border: "1px solid #D1D5DB",
+                      borderRadius: "6px",
+                      background: "#fff",
+                      fontSize: "12px",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px",
+                      color: "#374151",
+                    }}
+                  >
+                    <Edit3 size={12} />
+                    Edit
+                  </button>
+
+                  <button
+                    onClick={() => handleCancel(sr.id)}
+                    style={{
+                      padding: "6px 14px",
+                      border: "none",
+                      borderRadius: "6px",
+                      background: "#FEE2E2",
+                      fontSize: "12px",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px",
+                      color: "#991B1B",
+                    }}
+                  >
+                    <XCircle size={12} />
+                    Cancel
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       )}
 
-      {/* ========================================================
-          EDIT POPUP ONLY
-          ======================================================== */}
-
+      {/* EDIT POPUP */}
       {showCreate && editId !== null && (
         <div
           style={{
@@ -981,7 +972,6 @@ export default function CustomerServiceRequestsPage({
             padding: "20px",
           }}
         >
-          {/* Background */}
           <div
             style={{
               position: "absolute",
@@ -991,7 +981,6 @@ export default function CustomerServiceRequestsPage({
             onClick={reset}
           />
 
-          {/* Popup */}
           <div
             style={{
               position: "relative",
@@ -1005,7 +994,6 @@ export default function CustomerServiceRequestsPage({
               overflowY: "auto",
             }}
           >
-            {/* X */}
             <button
               onClick={reset}
               style={{
@@ -1047,7 +1035,6 @@ export default function CustomerServiceRequestsPage({
                 }}
               >
                 <AlertCircle size={14} />
-
                 {error}
               </div>
             )}
@@ -1059,7 +1046,6 @@ export default function CustomerServiceRequestsPage({
                 gap: "14px",
               }}
             >
-              {/* Title */}
               <div>
                 <label style={labelStyle}>
                   Title <span style={requiredStar}>*</span>
@@ -1073,7 +1059,6 @@ export default function CustomerServiceRequestsPage({
                 />
               </div>
 
-              {/* Description */}
               <div>
                 <label style={labelStyle}>
                   Description <span style={requiredStar}>*</span>
@@ -1091,7 +1076,6 @@ export default function CustomerServiceRequestsPage({
                 />
               </div>
 
-              {/* Service Type + Priority */}
               <div
                 style={{
                   display: "grid",
@@ -1099,46 +1083,47 @@ export default function CustomerServiceRequestsPage({
                   gap: "12px",
                 }}
               >
-                {/* Service Type */}
                 <div>
                   <label style={labelStyle}>
-                    Service Type <span style={{ color: "#dc2626" }}>*</span>
+                    Service Type{" "}
+                    <span style={{ color: "#dc2626" }}>*</span>
                   </label>
 
                   <select
                     required
                     style={{
                       ...inputStyle,
-                      color: form.service_type ? "#111827" : "#9CA3AF",
+                      color: form.service_type
+                        ? "#111827"
+                        : "#9CA3AF",
                     }}
                     value={form.service_type}
-                    onChange={(e) => upd("service_type", e.target.value)}
+                    onChange={(e) =>
+                      upd("service_type", e.target.value)
+                    }
                   >
                     <option value="">select service</option>
-
                     <option value="HVAC Repair">HVAC Repair</option>
-
                     <option value="Electrical">Electrical</option>
-
                     <option value="Plumbing">Plumbing</option>
-
-                    <option value="Network Support">Network Support</option>
-
+                    <option value="Network Support">
+                      Network Support
+                    </option>
                     <option value="General Maintenance">
                       General Maintenance
                     </option>
-
-                    <option value="Appliance Repair">Appliance Repair</option>
-
-                    <option value="CCTV & Security">CCTV & Security</option>
-
+                    <option value="Appliance Repair">
+                      Appliance Repair
+                    </option>
+                    <option value="CCTV & Security">
+                      CCTV & Security
+                    </option>
                     <option value="Roofing & Carpentry">
                       Roofing & Carpentry
                     </option>
                   </select>
                 </div>
 
-                {/* Priority */}
                 <div>
                   <label style={labelStyle}>
                     Priority <span style={requiredStar}>*</span>
@@ -1153,22 +1138,21 @@ export default function CustomerServiceRequestsPage({
                           : "#111827",
                     }}
                     value={form.priority}
-                    onChange={(e) => upd("priority", e.target.value)}
+                    onChange={(e) =>
+                      upd("priority", e.target.value)
+                    }
                   >
-                    <option value="select priority">select priority</option>
-
+                    <option value="select priority">
+                      select priority
+                    </option>
                     <option value="LOW">LOW</option>
-
                     <option value="MEDIUM">MEDIUM</option>
-
                     <option value="HIGH">HIGH</option>
-
                     <option value="CRITICAL">CRITICAL</option>
                   </select>
                 </div>
               </div>
 
-              {/* Preferred Date + Contact */}
               <div
                 style={{
                   display: "grid",
@@ -1176,10 +1160,10 @@ export default function CustomerServiceRequestsPage({
                   gap: "12px",
                 }}
               >
-                {/* Preferred Date */}
                 <div>
                   <label style={labelStyle}>
-                    Preferred Date <span style={requiredStar}>*</span>
+                    Preferred Date{" "}
+                    <span style={requiredStar}>*</span>
                   </label>
 
                   <input
@@ -1187,7 +1171,9 @@ export default function CustomerServiceRequestsPage({
                     min={getTodayDate()}
                     style={{
                       ...inputStyle,
-                      color: form.preferred_visit_date ? "#111827" : "#9CA3AF",
+                      color: form.preferred_visit_date
+                        ? "#111827"
+                        : "#9CA3AF",
                     }}
                     value={form.preferred_visit_date}
                     onChange={(e) =>
@@ -1196,10 +1182,10 @@ export default function CustomerServiceRequestsPage({
                   />
                 </div>
 
-                {/* Contact */}
                 <div>
                   <label style={labelStyle}>
-                    Contact Number <span style={requiredStar}>*</span>
+                    Contact Number{" "}
+                    <span style={requiredStar}>*</span>
                   </label>
 
                   <input
@@ -1210,7 +1196,6 @@ export default function CustomerServiceRequestsPage({
                     value={form.contact_number}
                     onChange={(e) => {
                       const value = e.target.value.replace(/\D/g, "");
-
                       upd("contact_number", value);
                     }}
                     placeholder="10 digit mobile number"
@@ -1218,20 +1203,21 @@ export default function CustomerServiceRequestsPage({
                 </div>
               </div>
 
-              {/* Location */}
               <div>
                 <label style={labelStyle}>
-                  Location / Address <span style={requiredStar}>*</span>
+                  Location / Address{" "}
+                  <span style={requiredStar}>*</span>
                 </label>
 
                 <input
                   style={inputStyle}
                   value={form.location}
-                  onChange={(e) => upd("location", e.target.value)}
+                  onChange={(e) =>
+                    upd("location", e.target.value)
+                  }
                 />
               </div>
 
-              {/* Edit Buttons */}
               <div
                 style={{
                   display: "flex",
@@ -1277,7 +1263,6 @@ export default function CustomerServiceRequestsPage({
                   }}
                 >
                   <Send size={14} />
-
                   {saving ? "Updating..." : "Update"}
                 </button>
               </div>

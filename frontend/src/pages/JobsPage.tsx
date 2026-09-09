@@ -448,7 +448,12 @@ function JobCreationForm() {
     try {
       setJobsLoading(true);
       await api.delete(`/jobs/${id}`);
-      setPopup({ show: true, title: "Job Deleted", message: "The job has been removed successfully.", jobId: id });
+      setPopup({
+        show: true,
+        title: "Job Deleted",
+        message: "The job has been removed successfully.",
+        jobId: String(id),
+      });
       fetchJobs();
       fetchServiceTypes();
     } catch (error) {
@@ -556,14 +561,6 @@ function JobCreationForm() {
                 title="Refresh"
               >
                 ⟳ Refresh
-              </button>
-              <button
-                style={hoveredBtn === 'add' ? { ...styles.addJobBtn, background: "#5C9470" } : styles.addJobBtn}
-                onMouseEnter={() => setHoveredBtn('add')}
-                onMouseLeave={() => setHoveredBtn(null)}
-                onClick={handleCreateNew}
-              >
-                + Create Job
               </button>
             </div>
           </div>
@@ -688,16 +685,7 @@ function JobCreationForm() {
                     >
                       Clear Filters
                     </button>
-                  ) : (
-                    <button
-                      style={hoveredBtn === 'emptyAdd' ? { ...styles.addJobBtn, background: '#5C9470' } : styles.addJobBtn}
-                      onMouseEnter={() => setHoveredBtn('emptyAdd')}
-                      onMouseLeave={() => setHoveredBtn(null)}
-                      onClick={handleCreateNew}
-                    >
-                      + Create Job
-                    </button>
-                  )
+                  ) : null
                 }
               />
             ) : (
@@ -1246,11 +1234,6 @@ const styles = {
     fontWeight: 800,
     margin: "0 auto 14px",
   } as React.CSSProperties,
-  jobIdCell: {
-    display: "flex",
-    alignItems: "center",
-    gap: "6px",
-  } as React.CSSProperties,
   jobIdBox: {
     background: "#F6FAF8",
     borderRadius: "6px",
@@ -1410,6 +1393,9 @@ const styles = {
     verticalAlign: "middle",
   } as React.CSSProperties,
   jobIdCell: {
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
     fontWeight: 700,
     color: "#5C9470",
   } as React.CSSProperties,

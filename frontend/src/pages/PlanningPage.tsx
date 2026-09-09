@@ -101,6 +101,7 @@ interface PlannedAssignment {
   customer: string;
   location?: string;
   priority?: string;
+  status?: string;
   current_jobs: number;
   max_jobs: number;
 }
@@ -1100,9 +1101,9 @@ function PlanningDashboard() {
       return "No re-dispatched jobs found";
     }
     if (activeMetricFilter === "pending") {
-      return "No pending jobs found";
+      return "No unassigned jobs found";
     }
-    return searchQuery.trim() ? "No jobs match your search" : "No pending jobs";
+    return searchQuery.trim() ? "No jobs match your search" : "No unassigned jobs";
   };
 
   const getMetricEmptyDescription = () => {
@@ -1139,7 +1140,7 @@ function PlanningDashboard() {
       const totalHeader = res.headers["x-total-count"] || res.headers["X-Total-Count"];
       setTotalPendingCount(totalHeader ? parseInt(totalHeader, 10) : res.data.length);
     } catch {
-      setError("Failed to load pending jobs. Please try again.");
+      setError("Failed to load unassigned jobs. Please try again.");
     } finally {
       setJobsLoading(false);
     }
@@ -1344,7 +1345,7 @@ function PlanningDashboard() {
       if (res && res.ranked_technicians && res.ranked_technicians.length > 0) {
         const mapped: RankedTechnician[] = res.ranked_technicians.map((rt: any) => {
           const matched = techs.find(
-            (t) => t.tech_id === rt.tech_id || String(t.technician_id) === String(rt.tech_id)
+            (t) => t.technician_id === rt.tech_id || String(t.technician_id) === String(rt.tech_id)
           );
           return {
             technician_id: matched ? matched.technician_id : (parseInt(String(rt.tech_id).replace(/\D/g, ''), 10) || 1),
@@ -1651,7 +1652,7 @@ function PlanningDashboard() {
                 boxShadow: "0 0 0 2px rgba(239,68,68,0.15)",
               }}
             />
-            <span>Pending Jobs</span>
+            <span>Unassigned Jobs</span>
             <span style={{
               ...styles.planningTabCount,
               ...(activeTab === 'pending' ? styles.planningTabCountActive : {})
@@ -1765,7 +1766,7 @@ function PlanningDashboard() {
 
       {/* ── Tab Content ── */}
 
-      {/* PENDING JOBS TAB */}
+      {/* UNASSIGNED JOBS TAB */}
       {activeTab === 'pending' && (
         <section style={styles.dashboardSection}>
 
@@ -1779,7 +1780,7 @@ function PlanningDashboard() {
                   </div>
                   <div style={styles.metricFilterTextWrap}>
                     <p style={styles.metricFilterLabel}>Active metric filter</p>
-                    <h4 style={styles.metricFilterValue}>{activeMetricFilter}</h4>
+                    <h4 style={styles.metricFilterValue}>{activeMetricFilter === "pending" ? "unassigned" : activeMetricFilter}</h4>
                   </div>
                 </div>
                 <button

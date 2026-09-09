@@ -68,132 +68,136 @@ export default function CustomerServiceHistoryPage() {
         </div>
       ) : (
         /* History Cards */
-        history.map((sr) => {
-          const isCompleted = sr.status === "COMPLETED";
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, 1fr)",
+            gap: "12px",
+          }}
+        >
+          {history.map((sr) => {
+            const isCompleted = sr.status === "COMPLETED";
 
-          return (
-            <div
-              key={sr.id}
-              style={{
-                background: "#FFFFFF",
-                borderRadius: "14px",
-
-                // Reduced card height through compact padding
-                padding: "14px 18px",
-
-                marginBottom: "10px",
-
-                boxShadow: "0 2px 8px rgba(0,0,0,0.05)",
-                border: "1px solid #E3ECE7",
-              }}
-            >
-              {/* Top Row */}
+            return (
               <div
+                key={sr.id}
                 style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "flex-start",
-                  gap: "16px",
+                  background: "#FFFFFF",
+                  borderRadius: "14px",
+                  padding: "14px 18px",
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.05)",
+                  border: "1px solid #E3ECE7",
                 }}
               >
-                {/* Request Details */}
+                {/* Top Row */}
                 <div
                   style={{
-                    minWidth: 0,
-                    flex: 1,
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "flex-start",
+                    gap: "16px",
                   }}
                 >
-                  {/* Request Number */}
+                  {/* Request Details */}
                   <div
                     style={{
+                      minWidth: 0,
+                      flex: 1,
+                    }}
+                  >
+                    {/* Request Number */}
+                    <div
+                      style={{
+                        fontSize: "11px",
+                        fontWeight: 500,
+                        color: "#64748B",
+                        lineHeight: "16px",
+                        marginBottom: "2px",
+                      }}
+                    >
+                      {sr.request_number}
+                    </div>
+
+                    {/* Title */}
+                    <div
+                      style={{
+                        fontSize: "16px",
+                        fontWeight: 700,
+                        color: "#17212B",
+                        lineHeight: "21px",
+                        marginBottom: "5px",
+                      }}
+                    >
+                      {sr.title}
+                    </div>
+
+                    {/* Description */}
+                    <div
+                      style={{
+                        fontSize: "13px",
+                        fontWeight: 400,
+                        color: "#4B5563",
+                        lineHeight: "19px",
+                      }}
+                    >
+                      {sr.description}
+                    </div>
+                  </div>
+
+                  {/* Status */}
+                  <span
+                    style={{
+                      flexShrink: 0,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
                       fontSize: "11px",
-                      fontWeight: 500,
-                      color: "#64748B",
-                      lineHeight: "16px",
-                      marginBottom: "2px",
-                    }}
-                  >
-                    {sr.request_number}
-                  </div>
-
-                  {/* Title */}
-                  <div
-                    style={{
-                      fontSize: "16px",
                       fontWeight: 700,
-                      color: "#17212B",
-                      lineHeight: "21px",
-                      marginBottom: "5px",
+                      lineHeight: "16px",
+                      padding: "4px 11px",
+                      borderRadius: "20px",
+                      background: isCompleted ? "#D1FAE5" : "#FEE2E2",
+                      color: isCompleted ? "#065F46" : "#991B1B",
+                      whiteSpace: "nowrap",
                     }}
                   >
-                    {sr.title}
-                  </div>
+                    {isCompleted && (
+                      <CheckCircle
+                        size={12}
+                        style={{
+                          marginRight: "4px",
+                        }}
+                      />
+                    )}
 
-                  {/* Description */}
-                  <div
-                    style={{
-                      fontSize: "13px",
-                      fontWeight: 400,
-                      color: "#4B5563",
-                      lineHeight: "19px",
-                    }}
-                  >
-                    {sr.description}
-                  </div>
+                    {sr.status}
+                  </span>
                 </div>
 
-                {/* Status */}
-                <span
+                {/* Updated Date */}
+                <div
                   style={{
-                    flexShrink: 0,
-                    display: "inline-flex",
+                    display: "flex",
                     alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: "11px",
-                    fontWeight: 700,
+                    gap: "5px",
+                    marginTop: "8px",
+                    fontSize: "12px",
+                    fontWeight: 500,
+                    color: "#6B7280",
                     lineHeight: "16px",
-                    padding: "4px 11px",
-                    borderRadius: "20px",
-                    background: isCompleted ? "#D1FAE5" : "#FEE2E2",
-                    color: isCompleted ? "#065F46" : "#991B1B",
-                    whiteSpace: "nowrap",
                   }}
                 >
-                  {isCompleted && (
-                    <CheckCircle
-                      size={12}
-                      style={{
-                        marginRight: "4px",
-                      }}
-                    />
-                  )}
+                  <Clock size={13} color="#7C8794" />
 
-                  {sr.status}
-                </span>
+                  <span>
+                    Updated:{" "}
+                    {new Date(sr.updated_at).toLocaleDateString()}
+                  </span>
+                </div>
               </div>
-
-              {/* Updated Date */}
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "5px",
-                  marginTop: "8px",
-                  fontSize: "12px",
-                  fontWeight: 500,
-                  color: "#6B7280",
-                  lineHeight: "16px",
-                }}
-              >
-                <Clock size={13} color="#7C8794" />
-
-                <span>
-                  Updated: {new Date(sr.updated_at).toLocaleDateString()}
-                </span>
-              </div>
-            </div>
-          );
-        })
+            );
+          })}
+        </div>
       )}
     </div>
   );
