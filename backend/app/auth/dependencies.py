@@ -128,7 +128,7 @@ async def get_current_user(
 
     return AuthenticatedUser(
         user_id=claims["sub"],
-        tenant_id=claims["tenant_id"],
+        tenant_id=user.tenant_id,
         role=role,
         jti=claims.get("jti", ""),
     )

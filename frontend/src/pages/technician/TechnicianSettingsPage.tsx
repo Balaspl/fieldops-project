@@ -1,5 +1,14 @@
 import { useState, useEffect } from "react";
-import { User, Key, Save, AlertCircle, CheckCircle, Shield, Briefcase, MapPin } from "lucide-react";
+import {
+  User,
+  Key,
+  Save,
+  AlertCircle,
+  CheckCircle,
+  Shield,
+  Briefcase,
+  MapPin,
+} from "lucide-react";
 import {
   getTechnicianProfile,
   createTechnicianProfile,
@@ -119,10 +128,16 @@ export default function TechnicianSettingsPage() {
       const payload = {
         ...profileForm,
         skills: profileForm.skills
-          ? profileForm.skills.split(",").map((s) => s.trim()).filter(Boolean)
+          ? profileForm.skills
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean)
           : [],
         certifications: profileForm.certifications
-          ? profileForm.certifications.split(",").map((s) => s.trim()).filter(Boolean)
+          ? profileForm.certifications
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean)
           : [],
         date_of_birth: profileForm.date_of_birth || null,
       };
@@ -273,7 +288,8 @@ export default function TechnicianSettingsPage() {
                   color: "#2F4F3E",
                 }}
               >
-                {profileForm.full_name || `${user?.first_name} ${user?.last_name}`}
+                {profileForm.full_name ||
+                  `${user?.first_name} ${user?.last_name}`}
               </h1>
               <span
                 style={{
@@ -289,18 +305,29 @@ export default function TechnicianSettingsPage() {
                 TECHNICIAN
               </span>
             </div>
-            <span style={{ fontSize: "12px", color: "#5C9470", fontWeight: 500 }}>
+            <span
+              style={{ fontSize: "12px", color: "#5C9470", fontWeight: 500 }}
+            >
               {user?.email}
             </span>
           </div>
         </div>
 
         <div style={{ textAlign: "right" }}>
-          <span style={{ fontSize: "11px", color: "#5C9470", display: "block" }}>
-            Tenant ID
+          <span
+            style={{ fontSize: "11px", color: "#5C9470", display: "block" }}
+          >
+            Organization
           </span>
-          <span style={{ fontSize: "13px", fontWeight: 700, color: "#2F4F3E" }}>
-            {user?.tenant_id || "tenant-1"}
+
+          <span
+            style={{
+              fontSize: "13px",
+              fontWeight: 700,
+              color: "#2F4F3E",
+            }}
+          >
+            {user?.organization_name || user?.tenant_id}
           </span>
         </div>
       </div>
@@ -447,24 +474,28 @@ export default function TechnicianSettingsPage() {
               <div>
                 <label style={labelStyle}>Mobile Number *</label>
                 <input
-  style={inputStyle}
-  value={profileForm.mobile_number}
-  onChange={(e) => {
-    const value = e.target.value;
-    if (/^\d{0,10}$/.test(value)) {
-      updProf("mobile_number", value);
-    }
-  }}
-  maxLength={10}
-  inputMode="numeric"
-  placeholder="10-digit mobile number"
-/>
+                  style={inputStyle}
+                  value={profileForm.mobile_number}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (/^\d{0,10}$/.test(value)) {
+                      updProf("mobile_number", value);
+                    }
+                  }}
+                  maxLength={10}
+                  inputMode="numeric"
+                  placeholder="10-digit mobile number"
+                />
               </div>
 
               <div>
                 <label style={labelStyle}>Email Address</label>
                 <input
-                  style={{ ...inputStyle, background: "#F3F8F5", color: "#6B7280" }}
+                  style={{
+                    ...inputStyle,
+                    background: "#F3F8F5",
+                    color: "#6B7280",
+                  }}
                   value={user?.email || ""}
                   disabled
                 />
@@ -540,11 +571,13 @@ export default function TechnicianSettingsPage() {
               <div style={{ gridColumn: "1 / -1" }}>
                 <label style={labelStyle}>Street Address</label>
                 <textarea
-                  style={{
-                    ...inputStyle,
-                    minHeight: "70px",
-                    resize: "vertical",
-                  } as any}
+                  style={
+                    {
+                      ...inputStyle,
+                      minHeight: "70px",
+                      resize: "vertical",
+                    } as any
+                  }
                   value={profileForm.address}
                   onChange={(e) => updProf("address", e.target.value)}
                   placeholder="Street address or location details"
@@ -588,7 +621,9 @@ export default function TechnicianSettingsPage() {
                   <input
                     style={inputStyle}
                     value={profileForm.emergency_contact}
-                    onChange={(e) => updProf("emergency_contact", e.target.value)}
+                    onChange={(e) =>
+                      updProf("emergency_contact", e.target.value)
+                    }
                     maxLength={100}
                     placeholder="Contact name & phone"
                   />
@@ -640,7 +675,9 @@ export default function TechnicianSettingsPage() {
               </div>
 
               <div>
-                <label style={labelStyle}>Certifications (comma-separated)</label>
+                <label style={labelStyle}>
+                  Certifications (comma-separated)
+                </label>
                 <input
                   style={inputStyle}
                   value={profileForm.certifications}
@@ -680,8 +717,8 @@ export default function TechnicianSettingsPage() {
                 {profileSaving
                   ? "Saving..."
                   : isNewProfile
-                  ? "Save Profile"
-                  : "Update Profile"}
+                    ? "Save Profile"
+                    : "Update Profile"}
               </button>
             </div>
           </div>
@@ -742,7 +779,9 @@ export default function TechnicianSettingsPage() {
               </div>
             )}
 
-            <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+            <div
+              style={{ display: "flex", flexDirection: "column", gap: "14px" }}
+            >
               <div>
                 <label style={labelStyle}>Current Password</label>
                 <input

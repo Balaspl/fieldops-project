@@ -1,5 +1,20 @@
 import { useState, useEffect } from "react";
-import { User, Building2, UserPlus, Shield, Mail, CheckCircle, AlertCircle, RefreshCw, Server, X, Edit3, Key, Save, Lock } from "lucide-react";
+import {
+  User,
+  Building2,
+  UserPlus,
+  Shield,
+  Mail,
+  CheckCircle,
+  AlertCircle,
+  RefreshCw,
+  Server,
+  X,
+  Edit3,
+  Key,
+  Save,
+  Lock,
+} from "lucide-react";
 import useAuthStore from "../store/authStore";
 import api from "../services/api";
 
@@ -24,7 +39,9 @@ interface ToastNotice {
 
 export default function ProfilePage() {
   const { user, updateUser } = useAuthStore();
-  const [activeTab, setActiveTab] = useState<"profile" | "orgs" | "users">("profile");
+  const [activeTab, setActiveTab] = useState<"profile" | "orgs" | "users">(
+    "profile",
+  );
 
   // Toast notifications state
   const [toasts, setToasts] = useState<ToastNotice[]>([]);
@@ -61,7 +78,9 @@ export default function ProfilePage() {
   const [isSubmittingOrg, setIsSubmittingOrg] = useState(false);
 
   // State for User Creation
-  const [selectedOrgId, setSelectedOrgId] = useState(user?.tenant_id || "tenant-1");
+  const [selectedOrgId, setSelectedOrgId] = useState(
+    user?.tenant_id || "tenant-1",
+  );
   const [userEmail, setUserEmail] = useState("");
   const [userPassword, setUserPassword] = useState("");
   const [userFirstName, setUserFirstName] = useState("");
@@ -72,6 +91,7 @@ export default function ProfilePage() {
   // Organizations list
   const [orgs, setOrgs] = useState<OrganizationItem[]>([]);
   const [isLoadingOrgs, setIsLoadingOrgs] = useState(false);
+  const [organizationName, setOrganizationName] = useState("");
 
   const isSuperAdmin = user?.role === "super_admin";
   const isAdmin = user?.role === "admin" || isSuperAdmin;
@@ -98,12 +118,24 @@ export default function ProfilePage() {
       setIsLoadingOrgs(false);
     }
   };
+  const fetchCurrentOrganization = async () => {
+    if (!user?.tenant_id || user.tenant_id === "__platform__") return;
+
+    try {
+      const response = await api.get("/organizations/current");
+      setOrganizationName(response.data?.name || "");
+    } catch {
+      setOrganizationName("");
+    }
+  };
 
   useEffect(() => {
     if (isAdmin) {
       fetchOrganizations();
     }
-  }, [isAdmin]);
+
+    fetchCurrentOrganization();
+  }, [isAdmin, user?.tenant_id]);
 
   const handleUpdateName = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -126,7 +158,10 @@ export default function ProfilePage() {
 
       addPopToast("success", "Profile name updated successfully!");
     } catch (err: any) {
-      addPopToast("error", err.response?.data?.detail || "Failed to update profile name.");
+      addPopToast(
+        "error",
+        err.response?.data?.detail || "Failed to update profile name.",
+      );
     } finally {
       setIsUpdatingName(false);
     }
@@ -152,7 +187,12 @@ export default function ProfilePage() {
       setConfirmPassword("");
     } catch (err: any) {
       const detail = err.response?.data?.detail;
-      const msg = typeof detail === "string" ? detail : (detail?.errors ? detail.errors.join(", ") : "Failed to change password.");
+      const msg =
+        typeof detail === "string"
+          ? detail
+          : detail?.errors
+            ? detail.errors.join(", ")
+            : "Failed to change password.";
       addPopToast("error", msg);
     } finally {
       setIsChangingPassword(false);
@@ -172,12 +212,18 @@ export default function ProfilePage() {
         max_technicians: Number(maxTechs),
       });
 
-      addPopToast("success", `Organization "${response.data.name}" created successfully! (ID: ${response.data.id})`);
+      addPopToast(
+        "success",
+        `Organization "${response.data.name}" created successfully! (ID: ${response.data.id})`,
+      );
       setOrgName("");
       setOrgEmail("");
       fetchOrganizations();
     } catch (err: any) {
-      addPopToast("error", err.response?.data?.detail || "Failed to create organization.");
+      addPopToast(
+        "error",
+        err.response?.data?.detail || "Failed to create organization.",
+      );
     } finally {
       setIsSubmittingOrg(false);
     }
@@ -198,7 +244,10 @@ export default function ProfilePage() {
         role: userRole,
       });
 
-      addPopToast("success", `User "${response.data.email}" provisioned as ${userRole.toUpperCase()} under organization ${targetOrgId}`);
+      addPopToast(
+        "success",
+        `User "${response.data.email}" provisioned as ${userRole.toUpperCase()} under organization ${targetOrgId}`,
+      );
       setUserEmail("");
       setUserPassword("");
       setUserFirstName("");
@@ -206,7 +255,12 @@ export default function ProfilePage() {
       fetchOrganizations();
     } catch (err: any) {
       const detail = err.response?.data?.detail;
-      const msg = typeof detail === "string" ? detail : (detail?.errors ? detail.errors.join(", ") : "Failed to provision user account.");
+      const msg =
+        typeof detail === "string"
+          ? detail
+          : detail?.errors
+            ? detail.errors.join(", ")
+            : "Failed to provision user account.";
       addPopToast("error", msg);
     } finally {
       setIsSubmittingUser(false);
@@ -214,32 +268,36 @@ export default function ProfilePage() {
   };
 
   return (
-    <div style={{
-      height: "100%",
-      maxHeight: "100%",
-      width: "100%",
-      overflow: "hidden",
-      background: "#EEF4F1",
-      padding: "16px 24px",
-      boxSizing: "border-box",
-      fontFamily: "'Inter', sans-serif",
-      display: "flex",
-      flexDirection: "column",
-      gap: "14px",
-      position: "relative"
-    }}>
-      {/* Floating Pop-up Toast Container */}
-      <div style={{
-        position: "fixed",
-        top: "20px",
-        right: "20px",
-        zIndex: 99999,
+    <div
+      style={{
+        height: "100%",
+        maxHeight: "100%",
+        width: "100%",
+        overflow: "hidden",
+        background: "#EEF4F1",
+        padding: "16px 24px",
+        boxSizing: "border-box",
+        fontFamily: "'Inter', sans-serif",
         display: "flex",
         flexDirection: "column",
-        gap: "8px",
-        maxWidth: "400px",
-        pointerEvents: "none"
-      }}>
+        gap: "14px",
+        position: "relative",
+      }}
+    >
+      {/* Floating Pop-up Toast Container */}
+      <div
+        style={{
+          position: "fixed",
+          top: "20px",
+          right: "20px",
+          zIndex: 99999,
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
+          maxWidth: "400px",
+          pointerEvents: "none",
+        }}
+      >
         {toasts.map((toast) => (
           <div
             key={toast.id}
@@ -257,13 +315,21 @@ export default function ProfilePage() {
               fontSize: "12px",
               lineHeight: "1.4",
               fontWeight: 500,
-              animation: "slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1)"
+              animation: "slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1)",
             }}
           >
             {toast.type === "success" ? (
-              <CheckCircle size={16} color="#166534" style={{ flexShrink: 0, marginTop: 1 }} />
+              <CheckCircle
+                size={16}
+                color="#166534"
+                style={{ flexShrink: 0, marginTop: 1 }}
+              />
             ) : (
-              <AlertCircle size={16} color="#991B1B" style={{ flexShrink: 0, marginTop: 1 }} />
+              <AlertCircle
+                size={16}
+                color="#991B1B"
+                style={{ flexShrink: 0, marginTop: 1 }}
+              />
             )}
             <div style={{ flex: 1 }}>{toast.message}</div>
             <button
@@ -276,7 +342,7 @@ export default function ProfilePage() {
                 padding: "2px",
                 opacity: 0.6,
                 display: "flex",
-                alignItems: "center"
+                alignItems: "center",
               }}
             >
               <X size={14} />
@@ -299,73 +365,97 @@ export default function ProfilePage() {
       `}</style>
 
       {/* 1. Top Header Banner */}
-      <div style={{
-        background: "#FFFFFF",
-        borderRadius: "12px",
-        padding: "12px 20px",
-        border: "1px solid #E3ECE7",
-        boxShadow: "0 1px 4px rgba(47, 79, 62, 0.03)",
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        flexShrink: 0
-      }}>
+      <div
+        style={{
+          background: "#FFFFFF",
+          borderRadius: "12px",
+          padding: "12px 20px",
+          border: "1px solid #E3ECE7",
+          boxShadow: "0 1px 4px rgba(47, 79, 62, 0.03)",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexShrink: 0,
+        }}
+      >
         <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
-          <div style={{
-            width: "42px",
-            height: "42px",
-            borderRadius: "50%",
-            background: "#2F4F3E",
-            color: "#FFFFFF",
-            fontSize: "18px",
-            fontWeight: 700,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            boxShadow: "0 2px 8px rgba(47, 79, 62, 0.15)"
-          }}>
+          <div
+            style={{
+              width: "42px",
+              height: "42px",
+              borderRadius: "50%",
+              background: "#2F4F3E",
+              color: "#FFFFFF",
+              fontSize: "18px",
+              fontWeight: 700,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              boxShadow: "0 2px 8px rgba(47, 79, 62, 0.15)",
+            }}
+          >
             {user?.first_name ? user.first_name[0].toUpperCase() : "U"}
           </div>
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <h1 style={{ fontSize: "18px", fontWeight: 700, margin: 0, color: "#2F4F3E" }}>
+              <h1
+                style={{
+                  fontSize: "18px",
+                  fontWeight: 700,
+                  margin: 0,
+                  color: "#2F4F3E",
+                }}
+              >
                 {user?.first_name} {user?.last_name}
               </h1>
-              <span style={{
-                fontSize: "10px",
-                fontWeight: 700,
-                padding: "2px 6px",
-                borderRadius: "4px",
-                background: "#EAF4EE",
-                color: "#2F4F3E",
-                textTransform: "uppercase"
-              }}>
+              <span
+                style={{
+                  fontSize: "10px",
+                  fontWeight: 700,
+                  padding: "2px 6px",
+                  borderRadius: "4px",
+                  background: "#EAF4EE",
+                  color: "#2F4F3E",
+                  textTransform: "uppercase",
+                }}
+              >
                 {user?.role?.replace("_", " ")}
               </span>
             </div>
-            <span style={{ fontSize: "12px", color: "#5C9470", fontWeight: 500 }}>
+            <span
+              style={{ fontSize: "12px", color: "#5C9470", fontWeight: 500 }}
+            >
               {user?.email}
             </span>
           </div>
         </div>
 
         <div style={{ textAlign: "right" }}>
-          <span style={{ fontSize: "11px", color: "#5C9470", display: "block" }}>Active Tenant ID</span>
-          <span style={{ fontSize: "13px", fontWeight: 700, color: "#2F4F3E" }}>{user?.tenant_id}</span>
+          <span
+            style={{ fontSize: "11px", color: "#5C9470", display: "block" }}
+          >
+            Organization
+          </span>
+
+          <span style={{ fontSize: "13px", fontWeight: 700, color: "#2F4F3E" }}>
+            {organizationName}
+          </span>
         </div>
       </div>
 
       {/* 2. Compact Tabs Bar */}
-      <div style={{
-        display: "flex",
-        gap: "6px",
-        background: "#FFFFFF",
-        padding: "4px",
-        borderRadius: "10px",
-        border: "1px solid #E3ECE7",
-        width: "fit-content",
-        flexShrink: 0
-      }}>
+      <div
+        style={{
+          display: "flex",
+          gap: "6px",
+          background: "#FFFFFF",
+          padding: "4px",
+          borderRadius: "10px",
+          border: "1px solid #E3ECE7",
+          width: "fit-content",
+          flexShrink: 0,
+        }}
+      >
         <button
           onClick={() => setActiveTab("profile")}
           style={{
@@ -380,7 +470,7 @@ export default function ProfilePage() {
             display: "flex",
             alignItems: "center",
             gap: "6px",
-            transition: "all 0.2s ease"
+            transition: "all 0.2s ease",
           }}
         >
           <User size={14} /> Profile & Edit
@@ -401,7 +491,7 @@ export default function ProfilePage() {
               display: "flex",
               alignItems: "center",
               gap: "6px",
-              transition: "all 0.2s ease"
+              transition: "all 0.2s ease",
             }}
           >
             <Building2 size={14} /> Organizations ({orgs.length})
@@ -423,7 +513,7 @@ export default function ProfilePage() {
               display: "flex",
               alignItems: "center",
               gap: "6px",
-              transition: "all 0.2s ease"
+              transition: "all 0.2s ease",
             }}
           >
             <UserPlus size={14} /> User Provisioning
@@ -433,61 +523,186 @@ export default function ProfilePage() {
 
       {/* 3. Main Content View Area (Fits 100% height, No outer page scrollbar) */}
       {activeTab === "profile" && (
-        <div style={{
-          flex: 1,
-          display: "grid",
-          gridTemplateColumns: "1.1fr 1fr",
-          gap: "16px",
-          minHeight: 0,
-          overflow: "hidden"
-        }}>
+        <div
+          style={{
+            flex: 1,
+            display: "grid",
+            gridTemplateColumns: "1.1fr 1fr",
+            gap: "16px",
+            minHeight: 0,
+            overflow: "hidden",
+          }}
+        >
           {/* Left Column: Account Attributes & Edit Name */}
-          <div style={{ display: "flex", flexDirection: "column", gap: "14px", minHeight: 0 }}>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "14px",
+              minHeight: 0,
+            }}
+          >
             {/* Account Attributes */}
-            <div style={{
-              background: "#FFFFFF",
-              borderRadius: "12px",
-              border: "1px solid #E3ECE7",
-              padding: "16px 20px",
-              boxShadow: "0 1px 4px rgba(47, 79, 62, 0.02)"
-            }}>
-              <h2 style={{ fontSize: "14px", fontWeight: 700, color: "#2F4F3E", margin: "0 0 12px" }}>
+            <div
+              style={{
+                background: "#FFFFFF",
+                borderRadius: "12px",
+                border: "1px solid #E3ECE7",
+                padding: "16px 20px",
+                boxShadow: "0 1px 4px rgba(47, 79, 62, 0.02)",
+              }}
+            >
+              <h2
+                style={{
+                  fontSize: "14px",
+                  fontWeight: 700,
+                  color: "#2F4F3E",
+                  margin: "0 0 12px",
+                }}
+              >
                 Account Attributes
               </h2>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
-                <div style={{ padding: "10px 12px", background: "#F3F8F5", borderRadius: "8px", border: "1px solid #E3ECE7" }}>
-                  <span style={{ fontSize: "10px", color: "#5C9470", fontWeight: 600, display: "flex", alignItems: "center", gap: "5px" }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: "10px",
+                }}
+              >
+                <div
+                  style={{
+                    padding: "10px 12px",
+                    background: "#F3F8F5",
+                    borderRadius: "8px",
+                    border: "1px solid #E3ECE7",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: "10px",
+                      color: "#5C9470",
+                      fontWeight: 600,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "5px",
+                    }}
+                  >
                     <Mail size={12} /> Registered Email
                   </span>
-                  <span style={{ fontSize: "12px", fontWeight: 700, color: "#2F4F3E", display: "block", marginTop: "2px", wordBreak: "break-all" }}>
+                  <span
+                    style={{
+                      fontSize: "12px",
+                      fontWeight: 700,
+                      color: "#2F4F3E",
+                      display: "block",
+                      marginTop: "2px",
+                      wordBreak: "break-all",
+                    }}
+                  >
                     {user?.email}
                   </span>
                 </div>
 
-                <div style={{ padding: "10px 12px", background: "#F3F8F5", borderRadius: "8px", border: "1px solid #E3ECE7" }}>
-                  <span style={{ fontSize: "10px", color: "#5C9470", fontWeight: 600, display: "flex", alignItems: "center", gap: "5px" }}>
-                    <Building2 size={12} /> Organization ID
+                <div
+                  style={{
+                    padding: "10px 12px",
+                    background: "#F3F8F5",
+                    borderRadius: "8px",
+                    border: "1px solid #E3ECE7",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: "10px",
+                      color: "#5C9470",
+                      fontWeight: 600,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "5px",
+                    }}
+                  >
+                    <Building2 size={12} /> Organization
                   </span>
-                  <span style={{ fontSize: "12px", fontWeight: 700, color: "#2F4F3E", display: "block", marginTop: "2px", wordBreak: "break-all" }}>
-                    {user?.tenant_id}
+                  <span
+                    style={{
+                      fontSize: "12px",
+                      fontWeight: 700,
+                      color: "#2F4F3E",
+                      display: "block",
+                      marginTop: "2px",
+                      wordBreak: "break-all",
+                    }}
+                  >
+                    {organizationName}
                   </span>
                 </div>
 
-                <div style={{ padding: "10px 12px", background: "#F3F8F5", borderRadius: "8px", border: "1px solid #E3ECE7" }}>
-                  <span style={{ fontSize: "10px", color: "#5C9470", fontWeight: 600, display: "flex", alignItems: "center", gap: "5px" }}>
+                <div
+                  style={{
+                    padding: "10px 12px",
+                    background: "#F3F8F5",
+                    borderRadius: "8px",
+                    border: "1px solid #E3ECE7",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: "10px",
+                      color: "#5C9470",
+                      fontWeight: 600,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "5px",
+                    }}
+                  >
                     <Shield size={12} /> Assigned Role
                   </span>
-                  <span style={{ fontSize: "12px", fontWeight: 700, color: "#2F4F3E", display: "block", marginTop: "2px", textTransform: "capitalize" }}>
+                  <span
+                    style={{
+                      fontSize: "12px",
+                      fontWeight: 700,
+                      color: "#2F4F3E",
+                      display: "block",
+                      marginTop: "2px",
+                      textTransform: "capitalize",
+                    }}
+                  >
                     {user?.role?.replace("_", " ")}
                   </span>
                 </div>
 
-                <div style={{ padding: "10px 12px", background: "#F3F8F5", borderRadius: "8px", border: "1px solid #E3ECE7" }}>
-                  <span style={{ fontSize: "10px", color: "#5C9470", fontWeight: 600, display: "flex", alignItems: "center", gap: "5px" }}>
+                <div
+                  style={{
+                    padding: "10px 12px",
+                    background: "#F3F8F5",
+                    borderRadius: "8px",
+                    border: "1px solid #E3ECE7",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: "10px",
+                      color: "#5C9470",
+                      fontWeight: 600,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "5px",
+                    }}
+                  >
                     <Server size={12} /> Status
                   </span>
-                  <span style={{ fontSize: "12px", fontWeight: 700, color: "#2F4F3E", display: "flex", alignItems: "center", gap: "4px", marginTop: "2px" }}>
+                  <span
+                    style={{
+                      fontSize: "12px",
+                      fontWeight: 700,
+                      color: "#2F4F3E",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px",
+                      marginTop: "2px",
+                    }}
+                  >
                     <CheckCircle size={12} color="#2F4F3E" /> Signed in (JWT)
                   </span>
                 </div>
@@ -495,21 +710,54 @@ export default function ProfilePage() {
             </div>
 
             {/* Edit Profile Name */}
-            <div style={{
-              background: "#FFFFFF",
-              borderRadius: "12px",
-              border: "1px solid #E3ECE7",
-              padding: "16px 20px",
-              boxShadow: "0 1px 4px rgba(47, 79, 62, 0.02)"
-            }}>
-              <h2 style={{ fontSize: "14px", fontWeight: 700, color: "#2F4F3E", margin: "0 0 12px", display: "flex", alignItems: "center", gap: "6px" }}>
+            <div
+              style={{
+                background: "#FFFFFF",
+                borderRadius: "12px",
+                border: "1px solid #E3ECE7",
+                padding: "16px 20px",
+                boxShadow: "0 1px 4px rgba(47, 79, 62, 0.02)",
+              }}
+            >
+              <h2
+                style={{
+                  fontSize: "14px",
+                  fontWeight: 700,
+                  color: "#2F4F3E",
+                  margin: "0 0 12px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                }}
+              >
                 <Edit3 size={15} /> Edit Profile Name
               </h2>
 
-              <form onSubmit={handleUpdateName} style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+              <form
+                onSubmit={handleUpdateName}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "10px",
+                }}
+              >
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: "10px",
+                  }}
+                >
                   <div>
-                    <label style={{ fontSize: "11px", fontWeight: 700, color: "#2F4F3E", display: "block", marginBottom: "3px" }}>
+                    <label
+                      style={{
+                        fontSize: "11px",
+                        fontWeight: 700,
+                        color: "#2F4F3E",
+                        display: "block",
+                        marginBottom: "3px",
+                      }}
+                    >
                       First Name *
                     </label>
                     <input
@@ -526,13 +774,21 @@ export default function ProfilePage() {
                         background: "#F9FAF9",
                         color: "#2F4F3E",
                         outline: "none",
-                        boxSizing: "border-box"
+                        boxSizing: "border-box",
                       }}
                     />
                   </div>
 
                   <div>
-                    <label style={{ fontSize: "11px", fontWeight: 700, color: "#2F4F3E", display: "block", marginBottom: "3px" }}>
+                    <label
+                      style={{
+                        fontSize: "11px",
+                        fontWeight: 700,
+                        color: "#2F4F3E",
+                        display: "block",
+                        marginBottom: "3px",
+                      }}
+                    >
                       Last Name *
                     </label>
                     <input
@@ -549,7 +805,7 @@ export default function ProfilePage() {
                         background: "#F9FAF9",
                         color: "#2F4F3E",
                         outline: "none",
-                        boxSizing: "border-box"
+                        boxSizing: "border-box",
                       }}
                     />
                   </div>
@@ -572,7 +828,7 @@ export default function ProfilePage() {
                     gap: "6px",
                     width: "fit-content",
                     boxShadow: "0 2px 5px rgba(47, 79, 62, 0.12)",
-                    marginTop: "2px"
+                    marginTop: "2px",
                   }}
                 >
                   <Save size={13} />
@@ -583,23 +839,46 @@ export default function ProfilePage() {
           </div>
 
           {/* Right Column: Change Password */}
-          <div style={{
-            background: "#FFFFFF",
-            borderRadius: "12px",
-            border: "1px solid #E3ECE7",
-            padding: "16px 20px",
-            boxShadow: "0 1px 4px rgba(47, 79, 62, 0.02)",
-            display: "flex",
-            flexDirection: "column",
-            height: "fit-content"
-          }}>
-            <h2 style={{ fontSize: "14px", fontWeight: 700, color: "#2F4F3E", margin: "0 0 12px", display: "flex", alignItems: "center", gap: "6px" }}>
+          <div
+            style={{
+              background: "#FFFFFF",
+              borderRadius: "12px",
+              border: "1px solid #E3ECE7",
+              padding: "16px 20px",
+              boxShadow: "0 1px 4px rgba(47, 79, 62, 0.02)",
+              display: "flex",
+              flexDirection: "column",
+              height: "fit-content",
+            }}
+          >
+            <h2
+              style={{
+                fontSize: "14px",
+                fontWeight: 700,
+                color: "#2F4F3E",
+                margin: "0 0 12px",
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+              }}
+            >
               <Lock size={15} /> Change Password
             </h2>
 
-            <form onSubmit={handleChangePassword} style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+            <form
+              onSubmit={handleChangePassword}
+              style={{ display: "flex", flexDirection: "column", gap: "10px" }}
+            >
               <div>
-                <label style={{ fontSize: "11px", fontWeight: 700, color: "#2F4F3E", display: "block", marginBottom: "3px" }}>
+                <label
+                  style={{
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    color: "#2F4F3E",
+                    display: "block",
+                    marginBottom: "3px",
+                  }}
+                >
                   Current Password *
                 </label>
                 <input
@@ -617,14 +896,23 @@ export default function ProfilePage() {
                     background: "#F9FAF9",
                     color: "#2F4F3E",
                     outline: "none",
-                    boxSizing: "border-box"
+                    boxSizing: "border-box",
                   }}
                 />
               </div>
 
               <div>
-                <label style={{ fontSize: "11px", fontWeight: 700, color: "#2F4F3E", display: "block", marginBottom: "3px" }}>
-                  New Password * (min 8 chars, 1 upper, 1 lower, 1 digit, 1 special)
+                <label
+                  style={{
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    color: "#2F4F3E",
+                    display: "block",
+                    marginBottom: "3px",
+                  }}
+                >
+                  New Password * (min 8 chars, 1 upper, 1 lower, 1 digit, 1
+                  special)
                 </label>
                 <input
                   type="password"
@@ -641,13 +929,21 @@ export default function ProfilePage() {
                     background: "#F9FAF9",
                     color: "#2F4F3E",
                     outline: "none",
-                    boxSizing: "border-box"
+                    boxSizing: "border-box",
                   }}
                 />
               </div>
 
               <div>
-                <label style={{ fontSize: "11px", fontWeight: 700, color: "#2F4F3E", display: "block", marginBottom: "3px" }}>
+                <label
+                  style={{
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    color: "#2F4F3E",
+                    display: "block",
+                    marginBottom: "3px",
+                  }}
+                >
                   Confirm New Password *
                 </label>
                 <input
@@ -665,7 +961,7 @@ export default function ProfilePage() {
                     background: "#F9FAF9",
                     color: "#2F4F3E",
                     outline: "none",
-                    boxSizing: "border-box"
+                    boxSizing: "border-box",
                   }}
                 />
               </div>
@@ -687,11 +983,13 @@ export default function ProfilePage() {
                   justifyContent: "center",
                   gap: "6px",
                   marginTop: "4px",
-                  boxShadow: "0 2px 5px rgba(47, 79, 62, 0.12)"
+                  boxShadow: "0 2px 5px rgba(47, 79, 62, 0.12)",
                 }}
               >
                 <Key size={14} />
-                {isChangingPassword ? "Updating Password..." : "Update Password"}
+                {isChangingPassword
+                  ? "Updating Password..."
+                  : "Update Password"}
               </button>
             </form>
           </div>
@@ -700,31 +998,53 @@ export default function ProfilePage() {
 
       {/* Tab 2: Organizations Creation & List */}
       {activeTab === "orgs" && isAdmin && (
-        <div style={{
-          flex: 1,
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: "16px",
-          minHeight: 0,
-          overflow: "hidden"
-        }}>
+        <div
+          style={{
+            flex: 1,
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: "16px",
+            minHeight: 0,
+            overflow: "hidden",
+          }}
+        >
           {/* Create Form */}
-          <div style={{
-            background: "#FFFFFF",
-            borderRadius: "12px",
-            border: "1px solid #E3ECE7",
-            padding: "16px 20px",
-            boxShadow: "0 1px 4px rgba(47, 79, 62, 0.02)",
-            display: "flex",
-            flexDirection: "column"
-          }}>
-            <h2 style={{ fontSize: "14px", fontWeight: 700, color: "#2F4F3E", margin: "0 0 12px" }}>
+          <div
+            style={{
+              background: "#FFFFFF",
+              borderRadius: "12px",
+              border: "1px solid #E3ECE7",
+              padding: "16px 20px",
+              boxShadow: "0 1px 4px rgba(47, 79, 62, 0.02)",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <h2
+              style={{
+                fontSize: "14px",
+                fontWeight: 700,
+                color: "#2F4F3E",
+                margin: "0 0 12px",
+              }}
+            >
               Provision New Organization
             </h2>
 
-            <form onSubmit={handleCreateOrg} style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+            <form
+              onSubmit={handleCreateOrg}
+              style={{ display: "flex", flexDirection: "column", gap: "10px" }}
+            >
               <div>
-                <label style={{ fontSize: "11px", fontWeight: 700, color: "#2F4F3E", display: "block", marginBottom: "3px" }}>
+                <label
+                  style={{
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    color: "#2F4F3E",
+                    display: "block",
+                    marginBottom: "3px",
+                  }}
+                >
                   Organization Name *
                 </label>
                 <input
@@ -742,13 +1062,21 @@ export default function ProfilePage() {
                     background: "#F9FAF9",
                     color: "#2F4F3E",
                     outline: "none",
-                    boxSizing: "border-box"
+                    boxSizing: "border-box",
                   }}
                 />
               </div>
 
               <div>
-                <label style={{ fontSize: "11px", fontWeight: 700, color: "#2F4F3E", display: "block", marginBottom: "3px" }}>
+                <label
+                  style={{
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    color: "#2F4F3E",
+                    display: "block",
+                    marginBottom: "3px",
+                  }}
+                >
                   Contact Email
                 </label>
                 <input
@@ -765,14 +1093,28 @@ export default function ProfilePage() {
                     background: "#F9FAF9",
                     color: "#2F4F3E",
                     outline: "none",
-                    boxSizing: "border-box"
+                    boxSizing: "border-box",
                   }}
                 />
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: "10px",
+                }}
+              >
                 <div>
-                  <label style={{ fontSize: "11px", fontWeight: 700, color: "#2F4F3E", display: "block", marginBottom: "3px" }}>
+                  <label
+                    style={{
+                      fontSize: "11px",
+                      fontWeight: 700,
+                      color: "#2F4F3E",
+                      display: "block",
+                      marginBottom: "3px",
+                    }}
+                  >
                     Subscription Plan
                   </label>
                   <select
@@ -787,7 +1129,7 @@ export default function ProfilePage() {
                       background: "#F9FAF9",
                       color: "#2F4F3E",
                       outline: "none",
-                      boxSizing: "border-box"
+                      boxSizing: "border-box",
                     }}
                   >
                     <option value="FREE">FREE</option>
@@ -798,7 +1140,15 @@ export default function ProfilePage() {
                 </div>
 
                 <div>
-                  <label style={{ fontSize: "11px", fontWeight: 700, color: "#2F4F3E", display: "block", marginBottom: "3px" }}>
+                  <label
+                    style={{
+                      fontSize: "11px",
+                      fontWeight: 700,
+                      color: "#2F4F3E",
+                      display: "block",
+                      marginBottom: "3px",
+                    }}
+                  >
                     Max Users
                   </label>
                   <input
@@ -815,7 +1165,7 @@ export default function ProfilePage() {
                       background: "#F9FAF9",
                       color: "#2F4F3E",
                       outline: "none",
-                      boxSizing: "border-box"
+                      boxSizing: "border-box",
                     }}
                   />
                 </div>
@@ -834,7 +1184,7 @@ export default function ProfilePage() {
                   fontWeight: 700,
                   cursor: "pointer",
                   marginTop: "4px",
-                  boxShadow: "0 2px 5px rgba(47, 79, 62, 0.15)"
+                  boxShadow: "0 2px 5px rgba(47, 79, 62, 0.15)",
                 }}
               >
                 {isSubmittingOrg ? "Provisioning..." : "Provision Organization"}
@@ -843,56 +1193,115 @@ export default function ProfilePage() {
           </div>
 
           {/* Org List */}
-          <div style={{
-            background: "#FFFFFF",
-            borderRadius: "12px",
-            border: "1px solid #E3ECE7",
-            padding: "16px 20px",
-            boxShadow: "0 1px 4px rgba(47, 79, 62, 0.02)",
-            display: "flex",
-            flexDirection: "column",
-            minHeight: 0
-          }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
-              <h2 style={{ fontSize: "14px", fontWeight: 700, color: "#2F4F3E", margin: 0 }}>
+          <div
+            style={{
+              background: "#FFFFFF",
+              borderRadius: "12px",
+              border: "1px solid #E3ECE7",
+              padding: "16px 20px",
+              boxShadow: "0 1px 4px rgba(47, 79, 62, 0.02)",
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "12px",
+              }}
+            >
+              <h2
+                style={{
+                  fontSize: "14px",
+                  fontWeight: 700,
+                  color: "#2F4F3E",
+                  margin: 0,
+                }}
+              >
                 Organizations ({orgs.length})
               </h2>
               <button
                 onClick={fetchOrganizations}
-                style={{ background: "none", border: "none", color: "#5C9470", cursor: "pointer", display: "flex", alignItems: "center", gap: "4px", fontSize: "11px" }}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "#5C9470",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  fontSize: "11px",
+                }}
               >
                 <RefreshCw size={13} /> Refresh
               </button>
             </div>
 
             {isLoadingOrgs ? (
-              <p style={{ color: "#5C9470", fontSize: "12px" }}>Loading organizations...</p>
+              <p style={{ color: "#5C9470", fontSize: "12px" }}>
+                Loading organizations...
+              </p>
             ) : orgs.length === 0 ? (
-              <p style={{ color: "#5C9470", fontSize: "12px" }}>No organizations registered.</p>
+              <p style={{ color: "#5C9470", fontSize: "12px" }}>
+                No organizations registered.
+              </p>
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px", overflowY: "auto", flex: 1, paddingRight: "4px" }}>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "8px",
+                  overflowY: "auto",
+                  flex: 1,
+                  paddingRight: "4px",
+                }}
+              >
                 {orgs.map((o) => (
-                  <div key={o.id} style={{
-                    padding: "10px 12px",
-                    borderRadius: "8px",
-                    border: "1px solid #E3ECE7",
-                    background: "#F3F8F5",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center"
-                  }}>
+                  <div
+                    key={o.id}
+                    style={{
+                      padding: "10px 12px",
+                      borderRadius: "8px",
+                      border: "1px solid #E3ECE7",
+                      background: "#F3F8F5",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                    }}
+                  >
                     <div>
-                      <div style={{ fontWeight: 700, fontSize: "12px", color: "#2F4F3E" }}>{o.name}</div>
-                      <div style={{ fontSize: "10px", color: "#5C9470", marginTop: "1px" }}>ID: {o.id} | Slug: {o.slug}</div>
+                      <div
+                        style={{
+                          fontWeight: 700,
+                          fontSize: "12px",
+                          color: "#2F4F3E",
+                        }}
+                      >
+                        {o.name}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: "10px",
+                          color: "#5C9470",
+                          marginTop: "1px",
+                        }}
+                      >
+                        ID: {o.id} | Slug: {o.slug}
+                      </div>
                     </div>
-                    <span style={{
-                      padding: "2px 6px",
-                      borderRadius: "5px",
-                      background: "#EAF4EE",
-                      color: "#2F4F3E",
-                      fontSize: "10px",
-                      fontWeight: 700
-                    }}>
+                    <span
+                      style={{
+                        padding: "2px 6px",
+                        borderRadius: "5px",
+                        background: "#EAF4EE",
+                        color: "#2F4F3E",
+                        fontSize: "10px",
+                        fontWeight: 700,
+                      }}
+                    >
                       {o.subscription_plan}
                     </span>
                   </div>
@@ -905,21 +1314,41 @@ export default function ProfilePage() {
 
       {/* Tab 3: User Provisioning Form */}
       {activeTab === "users" && isAdmin && (
-        <div style={{
-          background: "#FFFFFF",
-          borderRadius: "12px",
-          border: "1px solid #E3ECE7",
-          padding: "16px 20px",
-          boxShadow: "0 1px 4px rgba(47, 79, 62, 0.02)",
-          maxWidth: "580px"
-        }}>
-          <h2 style={{ fontSize: "14px", fontWeight: 700, color: "#2F4F3E", margin: "0 0 12px" }}>
+        <div
+          style={{
+            background: "#FFFFFF",
+            borderRadius: "12px",
+            border: "1px solid #E3ECE7",
+            padding: "16px 20px",
+            boxShadow: "0 1px 4px rgba(47, 79, 62, 0.02)",
+            maxWidth: "580px",
+          }}
+        >
+          <h2
+            style={{
+              fontSize: "14px",
+              fontWeight: 700,
+              color: "#2F4F3E",
+              margin: "0 0 12px",
+            }}
+          >
             Provision User or Admin Account
           </h2>
 
-          <form onSubmit={handleCreateUser} style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+          <form
+            onSubmit={handleCreateUser}
+            style={{ display: "flex", flexDirection: "column", gap: "10px" }}
+          >
             <div>
-              <label style={{ fontSize: "11px", fontWeight: 700, color: "#2F4F3E", display: "block", marginBottom: "3px" }}>
+              <label
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  color: "#2F4F3E",
+                  display: "block",
+                  marginBottom: "3px",
+                }}
+              >
                 Target Organization *
               </label>
               <select
@@ -934,7 +1363,7 @@ export default function ProfilePage() {
                   background: "#F9FAF9",
                   color: "#2F4F3E",
                   outline: "none",
-                  boxSizing: "border-box"
+                  boxSizing: "border-box",
                 }}
               >
                 {orgs.length > 0 ? (
@@ -944,14 +1373,30 @@ export default function ProfilePage() {
                     </option>
                   ))
                 ) : (
-                  <option value={user?.tenant_id || "tenant-1"}>{user?.tenant_id || "tenant-1"}</option>
+                  <option value={user?.tenant_id || "tenant-1"}>
+                    {user?.tenant_id || "tenant-1"}
+                  </option>
                 )}
               </select>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: "10px",
+              }}
+            >
               <div>
-                <label style={{ fontSize: "11px", fontWeight: 700, color: "#2F4F3E", display: "block", marginBottom: "3px" }}>
+                <label
+                  style={{
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    color: "#2F4F3E",
+                    display: "block",
+                    marginBottom: "3px",
+                  }}
+                >
                   First Name *
                 </label>
                 <input
@@ -969,13 +1414,21 @@ export default function ProfilePage() {
                     background: "#F9FAF9",
                     color: "#2F4F3E",
                     outline: "none",
-                    boxSizing: "border-box"
+                    boxSizing: "border-box",
                   }}
                 />
               </div>
 
               <div>
-                <label style={{ fontSize: "11px", fontWeight: 700, color: "#2F4F3E", display: "block", marginBottom: "3px" }}>
+                <label
+                  style={{
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    color: "#2F4F3E",
+                    display: "block",
+                    marginBottom: "3px",
+                  }}
+                >
                   Last Name *
                 </label>
                 <input
@@ -993,14 +1446,22 @@ export default function ProfilePage() {
                     background: "#F9FAF9",
                     color: "#2F4F3E",
                     outline: "none",
-                    boxSizing: "border-box"
+                    boxSizing: "border-box",
                   }}
                 />
               </div>
             </div>
 
             <div>
-              <label style={{ fontSize: "11px", fontWeight: 700, color: "#2F4F3E", display: "block", marginBottom: "3px" }}>
+              <label
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  color: "#2F4F3E",
+                  display: "block",
+                  marginBottom: "3px",
+                }}
+              >
                 Email Address *
               </label>
               <input
@@ -1018,13 +1479,21 @@ export default function ProfilePage() {
                   background: "#F9FAF9",
                   color: "#2F4F3E",
                   outline: "none",
-                  boxSizing: "border-box"
+                  boxSizing: "border-box",
                 }}
               />
             </div>
 
             <div>
-              <label style={{ fontSize: "11px", fontWeight: 700, color: "#2F4F3E", display: "block", marginBottom: "3px" }}>
+              <label
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  color: "#2F4F3E",
+                  display: "block",
+                  marginBottom: "3px",
+                }}
+              >
                 Password * (min 8 chars, upper, lower, digit, special)
               </label>
               <input
@@ -1042,13 +1511,21 @@ export default function ProfilePage() {
                   background: "#F9FAF9",
                   color: "#2F4F3E",
                   outline: "none",
-                  boxSizing: "border-box"
+                  boxSizing: "border-box",
                 }}
               />
             </div>
 
             <div>
-              <label style={{ fontSize: "11px", fontWeight: 700, color: "#2F4F3E", display: "block", marginBottom: "3px" }}>
+              <label
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  color: "#2F4F3E",
+                  display: "block",
+                  marginBottom: "3px",
+                }}
+              >
                 Assigned Role *
               </label>
               <select
@@ -1063,7 +1540,7 @@ export default function ProfilePage() {
                   background: "#F9FAF9",
                   color: "#2F4F3E",
                   outline: "none",
-                  boxSizing: "border-box"
+                  boxSizing: "border-box",
                 }}
               >
                 <option value="dispatcher">Dispatcher</option>
@@ -1084,7 +1561,7 @@ export default function ProfilePage() {
                 fontWeight: 700,
                 cursor: "pointer",
                 marginTop: "4px",
-                boxShadow: "0 2px 5px rgba(47, 79, 62, 0.15)"
+                boxShadow: "0 2px 5px rgba(47, 79, 62, 0.15)",
               }}
             >
               {isSubmittingUser ? "Provisioning..." : "Provision User Account"}

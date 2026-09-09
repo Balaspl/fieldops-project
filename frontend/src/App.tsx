@@ -57,6 +57,7 @@ const OrganizationOnboardingPage = lazy(
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const JobsPage = lazy(() => import("./pages/JobsPage"));
 const TechDashboardPage = lazy(() => import("./pages/TechDashboardPage"));
+const DispatcherPage = lazy(() => import("./pages/dispatcher/DispatcherPage"));
 const PlanningPage = lazy(() => import("./pages/PlanningPage"));
 const TrackingDashboardPage = lazy(
   () => import("./pages/TrackingDashboardPage"),
@@ -637,6 +638,8 @@ function AppInner() {
   const userRole = (user?.role || "").toLowerCase();
   const isTechnician = userRole === "technician";
   const isCustomer = userRole === "customer";
+  const isDispatcher = userRole === "dispatcher";
+  const isSuperAdmin = userRole === "super_admin";
   const isAdminOrDispatcher = !isTechnician && !isCustomer;
 
   const [activeTab, setActiveTab] = useState(() => {
@@ -664,6 +667,8 @@ function AppInner() {
         return "Loading Jobs & Service Requests...";
       case "techboard":
         return "Loading Technician Dashboard...";
+      case "dispatchers":
+        return "Loading Dispatchers...";
       case "planning":
         return "Loading Planning Board...";
       case "profile":
@@ -1419,6 +1424,25 @@ function AppInner() {
                   Technicians
                 </span>
               </button>
+              {!isDispatcher && (
+                <button
+                  className="nav-item-style"
+                  style={getItemStyle("dispatchers")}
+                  onClick={() => handleTabChange("dispatchers")}
+                >
+                  <Users size={18} style={{ flexShrink: 0 }} />
+                  <span
+                    className="nav-text"
+                    style={
+                      isMobileLayout || sidebarCollapsed
+                        ? { display: "none" }
+                        : {}
+                    }
+                  >
+                    Dispatchers
+                  </span>
+                </button>
+              )}
 
               <button
                 className="nav-item-style"
@@ -1691,6 +1715,7 @@ function AppInner() {
               )}
               {activeTab === "jobs" && <JobsPage />}
               {activeTab === "techboard" && <TechDashboardPage />}
+              {activeTab === "dispatchers" && <DispatcherPage />}
               {activeTab === "planning" && <PlanningPage />}
               {activeTab === "tracking" && <TrackingDashboardPage />}
               {activeTab === "profile" && <ProfilePage />}
@@ -1764,7 +1789,7 @@ function AppContent() {
   }, [loadFromStorage]);
 
   useEffect(() => {
-    if(isAuthenticated) {
+    if (isAuthenticated) {
       setShowOnboarding(false);
     }
   }, [isAuthenticated]);

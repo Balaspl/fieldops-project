@@ -1,6 +1,6 @@
 /**
  * Authentication store (Zustand).
- * 
+ *
  * Manages user authentication state, JWT tokens, and login/logout flows.
  * Token refresh is handled automatically by the API interceptor.
  */
@@ -15,6 +15,7 @@ export interface AuthUser {
   last_name: string;
   role: "super_admin" | "admin" | "dispatcher" | "technician" | "customer";
   tenant_id: string;
+  organization_name: string | null;
 }
 
 interface AuthState {
@@ -34,7 +35,7 @@ interface AuthState {
   authenticateWithTokens: (
     accessToken: string,
     refreshToken: string,
-    user: AuthUser
+    user: AuthUser,
   ) => void;
   clearError: () => void;
   updateUser: (updatedFields: Partial<AuthUser>) => void;
@@ -83,16 +84,16 @@ const useAuthStore = create<AuthState>((set, get) => ({
         typeof detail === "string"
           ? detail
           : detail
-          ? JSON.stringify(detail)
-          : "Login failed. Please verify credentials or connection.";
+            ? JSON.stringify(detail)
+            : "Login failed. Please verify credentials or connection.";
       set({ isLoading: false, error: message, isAuthenticated: false });
       throw new Error(message);
     }
   },
-    authenticateWithTokens: (
+  authenticateWithTokens: (
     accessToken: string,
     refreshToken: string,
-    user: AuthUser
+    user: AuthUser,
   ) => {
     localStorage.setItem("access_token", accessToken);
     localStorage.setItem("refresh_token", refreshToken);
@@ -129,8 +130,7 @@ const useAuthStore = create<AuthState>((set, get) => ({
         error: null,
       });
     } catch (err: any) {
-      const message =
-        err.response?.data?.detail || "Registration failed.";
+      const message = err.response?.data?.detail || "Registration failed.";
       set({ isLoading: false, error: message });
       throw new Error(message);
     }

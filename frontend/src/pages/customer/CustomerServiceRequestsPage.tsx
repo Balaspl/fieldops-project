@@ -9,6 +9,7 @@ import {
   X,
   Clock,
   Send,
+  MapPin,
 } from "lucide-react";
 
 import {
@@ -17,6 +18,8 @@ import {
   updateServiceRequest,
   cancelServiceRequest,
 } from "../../services/customerPortalService";
+
+import api from "../../services/api";
 
 const badge = (status: string) => {
   const c: Record<string, string> = {
@@ -62,6 +65,9 @@ export default function CustomerServiceRequestsPage({
     location: "",
     contact_number: "",
   });
+  const [siteLatitude, setSiteLatitude] = useState<number | null>(null);
+  const [siteLongitude, setSiteLongitude] = useState<number | null>(null);
+  const [isGettingLocation, setIsGettingLocation] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -222,6 +228,8 @@ export default function CustomerServiceRequestsPage({
         location,
         contact_number: contactNumber,
         preferred_visit_date: form.preferred_visit_date || null,
+        site_latitude: siteLatitude,
+        site_longitude: siteLongitude,
       };
 
       if (editId) {
@@ -538,15 +546,129 @@ export default function CustomerServiceRequestsPage({
             </div>
 
             {/* Location */}
+            {/* Location */}
             <div>
-              <label style={labelStyle}>
-                Location / Address <span style={requiredStar}>*</span>
-              </label>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: "6px",
+                }}
+              >
+                <label style={labelStyle}>
+                  Location / Address <span style={requiredStar}>*</span>
+                </label>
+
+                <div
+                  onClick={() => {
+                    if (!navigator.geolocation) {
+                      setError("Geolocation is not supported by this browser.");
+                      return;
+                    }
+
+                    setError("");
+                    setIsGettingLocation(true);
+
+                    navigator.geolocation.getCurrentPosition(
+                      async (position) => {
+                        let latitude = position.coords.latitude;
+                        let longitude = position.coords.longitude;
+
+                        setSiteLatitude(latitude);
+                        setSiteLongitude(longitude);
+
+                        try {
+                          const response = await api.get(
+                            "/organizations/reverse-location",
+                            {
+                              params: {
+                                latitude,
+                                longitude,
+                              },
+                            },
+                          );
+
+                          if (
+                            response.data?.verified &&
+                            response.data?.address
+                          ) {
+                            upd("location", response.data.address);
+                            setError("");
+                          } else {
+                            setError(
+                              "Unable to determine address from your current location.",
+                            );
+                          }
+
+                          setIsGettingLocation(false);
+                        } catch (error) {
+                          console.error("Reverse geocoding failed:", error);
+
+                          setError(
+                            "Unable to determine address from your current location.",
+                          );
+                          setIsGettingLocation(false);
+                        }
+                      },
+                      (error) => {
+                        console.error("Geolocation error:", error);
+
+                        setError(
+                          "Unable to get your current location. Please allow location access.",
+                        );
+                        setIsGettingLocation(false);
+                      },
+                      {
+                        enableHighAccuracy: true,
+                        timeout: 15000,
+                        maximumAge: 0,
+                      },
+                    );
+                  }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "4px",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    color: "#5C9470",
+                    cursor: "pointer",
+                  }}
+                >
+                  {isGettingLocation ? (
+                    <>
+                      <span
+                        style={{
+                          width: "12px",
+                          height: "12px",
+                          border: "2px solid #5C9470",
+                          borderTopColor: "transparent",
+                          borderRadius: "50%",
+                          display: "inline-block",
+                          animation: "spin 0.8s linear infinite",
+                        }}
+                      />
+                      <span>Getting location...</span>
+                    </>
+                  ) : (
+                    <>
+                      <MapPin size={14} />
+                      <span>Use current location</span>
+                    </>
+                  )}
+                </div>
+              </div>
 
               <input
                 style={inputStyle}
                 value={form.location}
-                onChange={(e) => upd("location", e.target.value)}
+                onChange={(e) => {
+                  upd("location", e.target.value);
+                  setSiteLatitude(null);
+                  setSiteLongitude(null);
+                }}
+                placeholder="Enter service location"
               />
             </div>
 

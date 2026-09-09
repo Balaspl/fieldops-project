@@ -5,7 +5,7 @@ Temporary organization onboarding and OTP verification model.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String
 from sqlalchemy.sql import func
 
 from ..database import Base
@@ -47,6 +47,21 @@ class OrganizationOnboarding(Base):
         String(255),
         nullable=False,
         index=True,
+    )
+
+    address = Column(
+        String(500),
+        nullable=True,
+    )
+
+    site_latitude = Column(
+        Float,
+        nullable=True,
+    )
+
+    site_longitude = Column(
+        Float,
+        nullable=True,
     )
 
     # Store the hashed OTP, never the plain OTP.
