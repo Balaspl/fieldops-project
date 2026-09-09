@@ -183,6 +183,37 @@ class SMSDelivery(Base):
     status = Column(String(30), nullable=False, default="queued") # queued, sent, delivered, failed, undelivered
     cost = Column(Float, nullable=True)
     error_message = Column(Text, nullable=True)
+    sent_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    delivered_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    delivery_latency_ms = Column(
+        Integer,
+        nullable=True,
+    )
+
+    webhook_payload = Column(
+        JSON,
+        nullable=True,
+    )
+
+
+    status_history = Column(
+        JSON,
+        nullable=True,
+        default=list,
+    )
+
+    last_webhook_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
