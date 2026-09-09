@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block title %}
+{{ email_title | default("FieldOps Notification", true) }}
+{% endblock %}
+
+{% block heading %}
+{{ email_heading | default(email_title | default("FieldOps Notification", true), true) }}
+{% endblock %}
+
+{% block body %}
+<div class="email-text">
+    {{ email_body | default("", true) | safe }}
+</div>
+{% endblock %}

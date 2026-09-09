@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <meta name="supported-color-schemes" content="light dark">
+
+    <title>{% block title %}FieldOps{% endblock %}</title>
+
+    <style>
+        /* Email reset */
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        body {
+            background-color: #f4f6f8;
+            color: #1f2937;
+            font-family: Arial, Helvetica, sans-serif;
+            line-height: 1.6;
+        }
+
+        /* Hidden email preview / preheader */
+        .preheader {
+            display: none !important;
+            visibility: hidden;
+            opacity: 0;
+            color: transparent;
+            height: 0;
+            width: 0;
+            max-height: 0;
+            max-width: 0;
+            overflow: hidden;
+            mso-hide: all;
+            font-size: 1px;
+            line-height: 1px;
+        }
+
+        table {
+            border-collapse: collapse;
+            border-spacing: 0;
+        }
+
+        img {
+            border: 0;
+            display: block;
+            max-width: 100%;
+            height: auto;
+        }
+
+        a {
+            color: inherit;
+        }
+
+        /* Main container */
+        .email-wrapper {
+            width: 100%;
+            background-color: #f4f6f8;
+            padding: 32px 16px;
+        }
+
+        .email-container {
+            width: 100%;
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        /* Header */
+        .email-header {
+            background-color: #1f2937;
+            padding: 24px 32px;
+            text-align: center;
+        }
+
+        .brand-name {
+            margin: 0;
+            color: #ffffff;
+            font-size: 26px;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+        }
+
+        .brand-logo {
+            max-height: 48px;
+            margin: 0 auto 8px;
+        }
+
+        /* Content */
+        .email-content {
+            padding: 32px;
+        }
+
+        .email-title {
+            margin: 0 0 16px;
+            color: #111827;
+            font-size: 24px;
+            line-height: 1.3;
+        }
+
+        .email-text {
+            margin: 0 0 16px;
+            color: #4b5563;
+            font-size: 15px;
+        }
+
+        /* CTA */
+        .cta-section {
+            padding: 8px 0 24px;
+            text-align: center;
+        }
+
+        .cta-button {
+            display: inline-block;
+            padding: 12px 24px;
+            background-color: #2563eb;
+            color: #ffffff !important;
+            border-radius: 6px;
+            font-size: 15px;
+            font-weight: 700;
+            text-decoration: none;
+        }
+
+        .secondary-link {
+            color: #2563eb;
+            font-size: 14px;
+            text-decoration: underline;
+        }
+
+        /* Footer */
+        .email-footer {
+            padding: 24px 32px;
+            border-top: 1px solid #e5e7eb;
+            background-color: #f9fafb;
+            text-align: center;
+        }
+
+        .footer-text {
+            margin: 0 0 8px;
+            color: #6b7280;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .footer-link {
+            color: #4b5563;
+            font-size: 12px;
+            text-decoration: underline;
+        }
+
+        /* Mobile */
+        @media only screen and (max-width: 600px) {
+            .email-wrapper {
+                padding: 16px 8px;
+            }
+
+            .email-header {
+                padding: 20px 16px;
+            }
+
+            .email-content {
+                padding: 24px 20px;
+            }
+
+            .email-footer {
+                padding: 20px;
+            }
+
+            .email-title {
+                font-size: 21px;
+            }
+
+            .cta-button {
+                display: block;
+                width: auto;
+                padding: 13px 20px;
+            }
+        }
+
+        /* Dark mode */
+        @media (prefers-color-scheme: dark) {
+            body,
+            .email-wrapper {
+                background-color: #111827 !important;
+            }
+
+            .email-container {
+                background-color: #1f2937 !important;
+            }
+
+            .email-content {
+                background-color: #1f2937 !important;
+            }
+
+            .email-title {
+                color: #f9fafb !important;
+            }
+
+            .email-text {
+                color: #d1d5db !important;
+            }
+
+            .email-footer {
+                background-color: #111827 !important;
+                border-top-color: #374151 !important;
+            }
+
+            .footer-text,
+            .footer-link {
+                color: #9ca3af !important;
+            }
+        }
+    </style>
+
+    {% block extra_styles %}{% endblock %}
+</head>
+
+<body>
+
+    {% if preview_text %}
+    <div class="preheader">
+        {{ preview_text }}
+    </div>
+    {% endif %}
+
+    <table
+        role="presentation"
+        width="100%"
+        cellpadding="0"
+        cellspacing="0"
+        border="0"
+    >
+        <tr>
+            <td class="email-wrapper">
+
+                <table
+                    role="presentation"
+                    class="email-container"
+                    width="100%"
+                    cellpadding="0"
+                    cellspacing="0"
+                    border="0"
+                    align="center"
+                >
+
+                    <!-- Header -->
+                    <tr>
+                        <td
+                            class="email-header"
+                            role="banner"
+                        >
+
+                            {% block header %}
+
+                                {% if logo_url %}
+                                <img
+                                    src="{{ logo_url }}"
+                                    alt=""
+                                    aria-hidden="true"
+                                    class="brand-logo"
+                                >
+                                {% endif %}
+
+                                <p class="brand-name">
+                                    FieldOps
+                                </p>
+
+                            {% endblock %}
+
+                        </td>
+                    </tr>
+
+                    <!-- Main content -->
+                    <tr>
+                        <td class="email-content">
+
+                            <main>
+
+                                {% block content %}
+
+                                    <h1 class="email-title">
+                                        {% block heading %}
+                                            FieldOps Notification
+                                        {% endblock %}
+                                    </h1>
+
+                                    {% block body %}
+                                    <p class="email-text">
+                                        This is a FieldOps notification.
+                                    </p>
+                                    {% endblock %}
+
+                                {% endblock %}
+
+                                <!-- CTA -->
+                                {% block cta %}
+
+                                    {% if cta_url and cta_text %}
+                                    <div class="cta-section">
+
+                                        <a
+                                            href="{{ cta_url }}"
+                                            class="cta-button"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            aria-label="{{ cta_text }}"
+                                        >
+                                            {{ cta_text }}
+                                        </a>
+
+                                    </div>
+                                    {% endif %}
+
+                                {% endblock %}
+
+                            </main>
+
+                        </td>
+                    </tr>
+
+                    <!-- Footer -->
+                    <tr>
+                        <td
+                            class="email-footer"
+                            role="contentinfo"
+                        >
+
+                            {% block footer %}
+
+                                <p class="footer-text">
+                                    Generated by FieldOps
+                                </p>
+
+                                {% if support_email %}
+                                <p class="footer-text">
+                                    Need help?
+
+                                    <a
+                                        href="mailto:{{ support_email }}"
+                                        class="footer-link"
+                                        aria-label="Contact FieldOps support"
+                                    >
+                                        Contact support
+                                    </a>
+                                </p>
+                                {% endif %}
+
+                                {% if unsubscribe_url %}
+                                <p class="footer-text">
+                                    <a
+                                        href="{{ unsubscribe_url }}"
+                                        class="footer-link"
+                                        aria-label="Unsubscribe from FieldOps emails"
+                                    >
+                                        Unsubscribe
+                                    </a>
+                                </p>
+                                {% endif %}
+
+                            {% endblock %}
+
+                        </td>
+                    </tr>
+
+                </table>
+
+            </td>
+        </tr>
+    </table>
+
+    {% block extra_body %}{% endblock %}
+
+</body>
+</html>
