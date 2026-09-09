@@ -3,7 +3,6 @@ import { getAllTechnicians, updateTechnicianAvailability, createTechnician, upda
 import usePageVisibility from "../hooks/usePageVisibility";
 import useInterval from "../hooks/useInterval";
 import StatusBadge from "../components/ui/StatusBadge";
-import LoadingSpinner from "../components/ui/LoadingSpinner";
 import { Eye, Pencil, Trash2, ChevronDown } from "lucide-react";
 import EmptyState from "../components/ui/EmptyState";
 import { SkillComboSelect } from "../components/ui/SkillComboSelect";
@@ -211,6 +210,17 @@ const styles = {
     padding: "0 2px",
     flexWrap: "wrap",
   } as React.CSSProperties,
+
+  tldLiveDot: {
+  width: "8px",
+  height: "8px",
+  borderRadius: "50%",
+  background: "#22C55E",
+  boxShadow: "0 0 0 0 rgba(34, 197, 94, 0.45)",
+  animation: "tldLivePulse 1.5s ease-in-out infinite",
+  cursor: "pointer",
+  flexShrink: 0,
+},
 
   tldRefreshSpinner: {
     width: "13px",
@@ -992,6 +1002,16 @@ const localCss = `
     0%, 100% { opacity: 1; }
     50% { opacity: 0.35; }
   }
+  .tld-live-loading-dot {
+  width: 10px;
+  height: 10px;
+  display: inline-block;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #16A34A;
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.12);
+  animation: tld-pulse 2.2s ease-in-out infinite;
+  } 
 
   @media (max-width: 768px) {
     .tld-header-responsive {
@@ -1460,7 +1480,9 @@ export default function TechnicianListPage() {
           <div style={styles.successPopup}>
             <div style={styles.successIcon}>✓</div>
             <h3 style={{ margin: "0 0 10px 0", color: "#2F4F3E", fontSize: "18px", fontWeight: 700 }}>{popup.title}</h3>
-            {popup.name && <div style={styles.techNameBox}>Technician: <strong>{popup.name}</strong></div>}
+            {popup.name && (
+            <div style={styles.techNameBox}>Technician: <strong>{popup.name}</strong>
+            </div>)}
             <p style={{ margin: "0 0 20px 0", color: "#6B7280", fontSize: "13px" }}>{popup.message}</p>
             <button
               type="button"
@@ -1522,20 +1544,29 @@ export default function TechnicianListPage() {
             }}>
               {/* Refresh indicator */}
               <div style={styles.tldRefreshBar}>
-                {fetching
-                  ? <><div style={styles.tldRefreshSpinner} /><span style={styles.tldRefreshFetching}>Refreshing…</span></>
-                  : !isTabActive
-                    ? <span style={styles.tldRefreshPaused}>Paused</span>
-                    : <span style={styles.tldRefreshLast}>Updated {formatAgo(lastSuccessAt)}</span>
-                }
-                {isStale && !fetching && <span style={styles.tldStaleWarning}>Data may be outdated</span>}
+                <div
+                  className="tld-live-loading-dot"
+                  title={
+                    fetching
+                      ? "Refreshing…"
+                      : !isTabActive
+                        ? "Paused"
+                        : `Updated ${formatAgo(lastSuccessAt)}`
+                  }
+                />
 
                 {/* Metrics popover */}
                 <div style={styles.tldMetricsWrap} ref={metricsRef}>
-                  <button className="tld-metrics-trigger-style" style={styles.tldMetricsTrigger} onClick={() => setShowMetrics(v => !v)}>
+                  <button
+                    className="tld-metrics-trigger-style"
+                    style={styles.tldMetricsTrigger}
+                    onClick={() => setShowMetrics(v => !v)}
+                  >
                     Metrics
                   </button>
-                  {showMetrics && <MetricsPanel metrics={metrics} lastSuccessAt={lastSuccessAt} />}
+                  {showMetrics && (
+                    <MetricsPanel metrics={metrics} lastSuccessAt={lastSuccessAt} />
+                  )}
                 </div>
               </div>
 
@@ -1551,32 +1582,9 @@ export default function TechnicianListPage() {
                   : <>Refresh</>
                 }
               </button>
-              <button className="tld-add-btn-style" style={styles.tldAddBtn} onClick={openAddForm}>
-                + Add Technician
-              </button>
-            </div>
-
-            {/* Bottom row: Expanded countdown progress bar spanning the width of the header controls */}
-            {!loading && technicians.length > 0 && !fetching && isTabActive && (
-              <div style={{
-                width: "100%",
-                maxWidth: "380px", // Expanded size to span under the buttons block
-                height: "3px",
-                background: "#E3ECE7",
-                borderRadius: "2px",
-                overflow: "hidden",
-                marginTop: "2px", // a little bit down
-              }}>
-                <div
-                  className="tld-countdown-fill"
-                  style={{
-                    ...styles.tldCountdownFill,
-                    width: `${countdown}%`,
-                    height: "100%"
-                  }}
-                />
               </div>
-            )}
+
+
           </div>
         </div>
 
@@ -1680,18 +1688,19 @@ export default function TechnicianListPage() {
               {loading && (
                 <tr>
                   <td colSpan={7} style={styles.tldStateCell}>
-                    <div style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      minHeight: "180px",
-                    }}>
-                      <LoadingSpinner message="Loading technician dashboard..." />
-                    </div>
-                  </td>
-                </tr>
-              )}
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        minHeight: "180px",
+                      }}
+                    >
+        <span className="tld-live-loading-dot" />
+      </div>
+    </td>
+  </tr>
+)}
 
               {!loading && initError && (
                 <tr>
@@ -1716,11 +1725,7 @@ export default function TechnicianListPage() {
                       action={
                         hasFilters ? (
                           <button className="tld-retry-btn-style" style={styles.tldRetryBtn} onClick={clearFilters}>Clear Filters</button>
-                        ) : (
-                          <button className="tld-add-btn-style" style={{ ...styles.tldAddBtn, margin: "12px auto 0" }} onClick={openAddForm}>
-                            + Add Technician
-                          </button>
-                        )
+                        ) : null
                       }
                     />
                   </td>

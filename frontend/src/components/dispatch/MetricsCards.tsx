@@ -28,7 +28,7 @@ const mapMetricsResponse = (
     },
     {
       key: "pending",
-      label: "Jobs Pending",
+      label: "Unassigned Jobs",
       value: data.jobs_pending,
       yesterday: data.trends.pending.yesterday,
       changePct: data.trends.pending.change_pct,

@@ -1369,7 +1369,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewTab, unreadCount, isBellAni
               <AlertCircle size={16} color="#FFFFFF" />
             </div>
             <div style={styles.metricDetailsNew}>
-              <span style={styles.metricLabelNew}>PENDING</span>
+              <span style={styles.metricLabelNew}>UNASSIGNED</span>
               <h2 style={styles.metricValNew}>{pendingCount}</h2>
               <span style={styles.metricSubtextNew}>{pendingPct}% of total</span>
             </div>
@@ -1409,7 +1409,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewTab, unreadCount, isBellAni
                 <span style={styles.overviewNum}>{inProgressCount}</span>
                 <span style={styles.overviewPct}>({inProgressPct}%)</span>
               </div>
-              <div style={{ ...styles.indicatorRow, ...styles.overviewRow }}>
+              <div style={{ ...styles.overviewRow, ...styles.overviewRow }}>
                 <span style={{ ...styles.indicatorBadge, background: "#3B82F6" }}><Check size={14} strokeWidth={3} /></span>
                 <span style={styles.overviewLbl}>Completed</span>
                 <span style={styles.overviewNum}>{completedCount}</span>
@@ -1417,7 +1417,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewTab, unreadCount, isBellAni
               </div>
               <div style={styles.overviewRow}>
                 <span style={{ ...styles.indicatorBadge, background: "#64748B" }}><Clock size={14} strokeWidth={2.5} /></span>
-                <span style={styles.overviewLbl}>Pending</span>
+                <span style={styles.overviewLbl}>Unassigned</span>
                 <span style={styles.overviewNum}>{pendingCount}</span>
                 <span style={styles.overviewPct}>({pendingPct}%)</span>
               </div>
@@ -1553,7 +1553,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewTab, unreadCount, isBellAni
                 <span style={styles.footerStatSecondary}>ready to assign</span>
               </div>
             </div>
-            <button className="footer-link-btn-style" style={{ ...styles.footerLinkBtn, color: "#2563EB" }} onClick={() => onViewTab("technicians")}>
+            <button className="footer-link-btn-style" style={{ ...styles.footerLinkBtn, color: "#2563EB" }} onClick={() => onViewTab("techboard")}>
               View Report →
             </button>
           </div>
@@ -1685,7 +1685,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewTab, unreadCount, isBellAni
                   <td colSpan={7} style={styles.recentJobsTableTd}>
                     <EmptyState
                       title="No recent jobs found"
-                      description="All clear! There are currently no new or pending jobs."
+                      description="All clear! There are currently no new or unassigned jobs."
                     />
                   </td>
                 </tr>

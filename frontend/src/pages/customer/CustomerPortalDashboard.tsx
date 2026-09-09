@@ -39,7 +39,7 @@ export default function CustomerPortalDashboard({
       color: "#2E7D32",
     },
     {
-      label: "Pending",
+      label: "UNASSIGNED",
       value: stats?.pending_requests ?? 0,
       icon: <Clock size={20} />,
       bg: "#FFF8E1",
@@ -62,7 +62,7 @@ export default function CustomerPortalDashboard({
   ];
 
   const statusColor: Record<string, string> = {
-    PENDING: "#DD6B20",
+    UNASSIGNED: "#DD6B20",
     ASSIGNED: "#1E40AF",
     EN_ROUTE: "#7C3AED",
     IN_PROGRESS: "#92400E",
