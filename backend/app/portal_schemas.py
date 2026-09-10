@@ -350,6 +350,7 @@ class TechnicianDashboardResponse(BaseModel):
     completed_today: int = 0
     pending_acceptance: int = 0
     total_completed: int = 0
+    rejected_jobs: int = 0
 
 
 class CustomerDashboardResponse(BaseModel):

@@ -1189,7 +1189,9 @@ async def get_technician_dashboard(
 
     total_assigned = base.count()
     active = base.filter(
-        ~func.lower(Job.status).in_(["completed", "closed", "cancelled", "rejected_by_technician"])
+    func.lower(Job.status).in_(
+        ["accepted", "en_route", "in_progress", "paused"]
+    )
     ).count()
     completed_today = base.filter(
         Job.status == "COMPLETED",
@@ -1198,14 +1200,20 @@ async def get_technician_dashboard(
     pending = base.filter(
         func.lower(Job.status).in_(["assigned", "active"])
     ).count()
+    rejected_jobs = db.query(Job).filter(
+    Job.rejected_by_tech_id == (tech.tech_id or str(tech.technician_id)),
+    func.lower(Job.status) == "rejected_by_technician",
+    ).count()
     total_completed = base.filter(
         func.lower(Job.status).in_(["completed", "closed"])
     ).count()
 
+
     return TechnicianDashboardResponse(
-        total_assigned=total_assigned,
-        active_jobs=active,
-        completed_today=completed_today,
-        pending_acceptance=pending,
-        total_completed=total_completed,
-    )
+    total_assigned=total_assigned,
+    active_jobs=active,
+    completed_today=completed_today,
+    pending_acceptance=pending,
+    total_completed=total_completed,
+    rejected_jobs=rejected_jobs,
+)
