@@ -1,28 +1,102 @@
 import { useState, useEffect } from "react";
-import { Briefcase, CheckCircle, Clock, AlertTriangle, Activity, ArrowRight } from "lucide-react";
-import { getTechnicianDashboard, getTechnicianJobs } from "../../services/technicianPortalService";
+import {
+  Briefcase,
+  CheckCircle,
+  Clock,
+  AlertTriangle,
+  Activity,
+  ArrowRight,
+} from "lucide-react";
+import {
+  getTechnicianDashboard,
+  getTechnicianJobs,
+} from "../../services/technicianPortalService";
 
 const s = {
-  page: { padding: "24px", height: "100%", overflowY: "auto" as const, background: "#EEF4F1", fontFamily: "'Inter', sans-serif" },
+  page: {
+    padding: "24px",
+    height: "100%",
+    overflowY: "auto" as const,
+    background: "#EEF4F1",
+    fontFamily: "'Inter', sans-serif",
+  },
   header: { marginBottom: "24px" },
   title: { fontSize: "24px", fontWeight: 700, color: "#1F2933", margin: 0 },
   subtitle: { fontSize: "14px", color: "#6B7280", marginTop: "4px" },
-  grid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "16px", marginBottom: "28px" },
-  card: { background: "#fff", borderRadius: "14px", padding: "20px", boxShadow: "0 2px 8px rgba(0,0,0,0.06)", border: "1px solid #E3ECE7", display: "flex", flexDirection: "column" as const, gap: "8px" },
-  cardIcon: { width: "40px", height: "40px", borderRadius: "10px", display: "flex", alignItems: "center", justifyContent: "center" },
+  grid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+    gap: "16px",
+    marginBottom: "28px",
+  },
+  card: {
+    background: "#fff",
+    borderRadius: "14px",
+    padding: "20px",
+    boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+    border: "1px solid #E3ECE7",
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: "8px",
+  },
+  cardIcon: {
+    width: "40px",
+    height: "40px",
+    borderRadius: "10px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   cardLabel: { fontSize: "12px", color: "#6B7280", fontWeight: 500 },
   cardValue: { fontSize: "28px", fontWeight: 700, color: "#1F2933" },
-  section: { background: "#fff", borderRadius: "14px", padding: "20px", boxShadow: "0 2px 8px rgba(0,0,0,0.06)", border: "1px solid #E3ECE7" },
-  sectionTitle: { fontSize: "16px", fontWeight: 700, color: "#1F2933", marginBottom: "16px", display: "flex", alignItems: "center", gap: "8px" },
-  jobRow: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderBottom: "1px solid #f0f0f0" },
+  section: {
+    background: "#fff",
+    borderRadius: "14px",
+    padding: "20px",
+    boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+    border: "1px solid #E3ECE7",
+  },
+  sectionTitle: {
+    fontSize: "16px",
+    fontWeight: 700,
+    color: "#1F2933",
+    marginBottom: "16px",
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+  },
+  jobRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: "12px 0",
+    borderBottom: "1px solid #f0f0f0",
+  },
   jobInfo: { display: "flex", flexDirection: "column" as const, gap: "2px" },
   jobTitle: { fontSize: "14px", fontWeight: 600, color: "#1F2933" },
   jobMeta: { fontSize: "12px", color: "#6B7280" },
-  badge: (color: string) => ({ fontSize: "11px", fontWeight: 600, padding: "3px 10px", borderRadius: "20px", background: color + "18", color, display: "inline-block" }),
-  empty: { textAlign: "center" as const, color: "#9CA3AF", padding: "32px", fontSize: "14px" },
+  badge: (color: string) => ({
+    fontSize: "11px",
+    fontWeight: 600,
+    padding: "3px 10px",
+    borderRadius: "20px",
+    background: color + "18",
+    color,
+    display: "inline-block",
+  }),
+  empty: {
+    textAlign: "center" as const,
+    color: "#9CA3AF",
+    padding: "32px",
+    fontSize: "14px",
+  },
 };
 
-export default function TechnicianPortalDashboard({ onNavigate }: { onNavigate: (tab: string) => void }) {
+export default function TechnicianPortalDashboard({
+  onNavigate,
+}: {
+  onNavigate: (tab: string) => void;
+}) {
   const [stats, setStats] = useState<any>(null);
   const [recentJobs, setRecentJobs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,15 +112,49 @@ export default function TechnicianPortalDashboard({ onNavigate }: { onNavigate: 
   }, []);
 
   const cards = [
-    { label: "Active Jobs", value: stats?.active_jobs ?? 0, icon: <Activity size={20} />, bg: "#E8F5E9", color: "#2E7D32" },
-    { label: "Pending Acceptance", value: stats?.pending_acceptance ?? 0, icon: <Clock size={20} />, bg: "#FFF8E1", color: "#F57F17" },
-    { label: "Completed Today", value: stats?.completed_today ?? 0, icon: <CheckCircle size={20} />, bg: "#E3F2FD", color: "#1565C0" },
-    { label: "Total Completed", value: stats?.total_completed ?? 0, icon: <Briefcase size={20} />, bg: "#F3E5F5", color: "#7B1FA2" },
+    {
+      label: "Active Jobs",
+      value: stats?.active_jobs ?? 0,
+      icon: <Activity size={20} />,
+      bg: "#E8F5E9",
+      color: "#2E7D32",
+    },
+    {
+      label: "Pending Acceptance",
+      value: stats?.pending_acceptance ?? 0,
+      icon: <Clock size={20} />,
+      bg: "#FFF8E1",
+      color: "#F57F17",
+    },
+    {
+      label: "Rejected Jobs",
+      value: stats?.rejected_jobs ?? 0,
+      icon: <AlertTriangle size={20} />,
+      bg: "#FDECEC",
+      color: "#D32F2F",
+    },
+    {
+      label: "Total Completed",
+      value: stats?.total_completed ?? 0,
+      icon: <Briefcase size={20} />,
+      bg: "#F3E5F5",
+      color: "#7B1FA2",
+    },
   ];
 
-  const priorityColor: Record<string, string> = { HIGH: "#E53E3E", CRITICAL: "#E53E3E", MEDIUM: "#DD6B20", LOW: "#38A169" };
+  const priorityColor: Record<string, string> = {
+    HIGH: "#E53E3E",
+    CRITICAL: "#E53E3E",
+    MEDIUM: "#DD6B20",
+    LOW: "#38A169",
+  };
 
-  if (loading) return <div style={s.page}><div style={s.empty}>Loading dashboard...</div></div>;
+  if (loading)
+    return (
+      <div style={s.page}>
+        <div style={s.empty}>Loading dashboard...</div>
+      </div>
+    );
 
   return (
     <div style={s.page}>
@@ -57,32 +165,64 @@ export default function TechnicianPortalDashboard({ onNavigate }: { onNavigate: 
       <div style={s.grid}>
         {cards.map((c, i) => (
           <div key={i} style={s.card}>
-            <div style={{ ...s.cardIcon, background: c.bg, color: c.color }}>{c.icon}</div>
+            <div style={{ ...s.cardIcon, background: c.bg, color: c.color }}>
+              {c.icon}
+            </div>
             <span style={s.cardLabel}>{c.label}</span>
             <span style={s.cardValue}>{c.value}</span>
           </div>
         ))}
       </div>
       <div style={s.section}>
-        <div style={s.sectionTitle}><Briefcase size={18} color="#7AAE8A" /> Recent Assigned Jobs</div>
+        <div style={s.sectionTitle}>
+          <Briefcase size={18} color="#7AAE8A" /> Recent Assigned Jobs
+        </div>
         {recentJobs.length === 0 ? (
           <div style={s.empty}>No active jobs at the moment</div>
         ) : (
           recentJobs.map((job: any) => (
             <div key={job.id} style={s.jobRow}>
               <div style={s.jobInfo}>
-                <span style={s.jobTitle}>#{job.id} — {job.service_type || "Service"}</span>
-                <span style={s.jobMeta}>{job.customer_name} • {job.location}</span>
+                <span style={s.jobTitle}>
+                  #{job.id} — {job.service_type || "Service"}
+                </span>
+                <span style={s.jobMeta}>
+                  {job.customer_name} • {job.location}
+                </span>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                <span style={s.badge(priorityColor[job.priority] || "#6B7280")}>{job.priority}</span>
-                <span style={s.badge(job.status === "ASSIGNED" ? "#DD6B20" : "#38A169")}>{job.status}</span>
+              <div
+                style={{ display: "flex", alignItems: "center", gap: "10px" }}
+              >
+                <span style={s.badge(priorityColor[job.priority] || "#6B7280")}>
+                  {job.priority}
+                </span>
+                <span
+                  style={s.badge(
+                    job.status === "ASSIGNED" ? "#DD6B20" : "#38A169",
+                  )}
+                >
+                  {job.status}
+                </span>
               </div>
             </div>
           ))
         )}
         {recentJobs.length > 0 && (
-          <button onClick={() => onNavigate("tech_jobs")} style={{ marginTop: "12px", background: "none", border: "none", color: "#7AAE8A", fontSize: "13px", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: "4px" }}>
+          <button
+            onClick={() => onNavigate("tech_jobs")}
+            style={{
+              marginTop: "12px",
+              background: "none",
+              border: "none",
+              color: "#7AAE8A",
+              fontSize: "13px",
+              fontWeight: 600,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "4px",
+            }}
+          >
             View All Jobs <ArrowRight size={14} />
           </button>
         )}
