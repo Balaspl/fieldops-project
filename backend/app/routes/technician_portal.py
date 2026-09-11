@@ -33,6 +33,7 @@ from ..portal_schemas import (
     TechnicianJobResponse, TechnicianJobRejectRequest, TechnicianJobCompleteRequest,
     TechnicianDashboardResponse, ChangePasswordRequest,
 )
+from ..schemas import TechnicianAvailabilityUpdate
 from ..services.enterprise_audit import audit_log, AuditAction
 
 logger = logging.getLogger(__name__)
@@ -53,10 +54,15 @@ def _get_tech_for_user(
     tenant_id: str,
     #current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
 ) -> Optional[Technician]:
+    logger.warning(
+    "TECH LOOKUP: user_id=%s tenant_id=%s",
+    user_id,
+    tenant_id,
+)
     """Find the technician record belonging to this user and organization."""
 
     query = db.query(Technician).filter(
-        Technician.tenant_id == tenant_id
+        Technician.tech_id == user_id
     )
 
     # 1. Direct match by tech_id or integer technician_id
@@ -275,6 +281,7 @@ async def create_technician_profile(
             )
             db.add(tech)
         else:
+            tech.tech_id = str(current_user.user_id)
             tech.technician_name = profile.full_name
             if profile.mobile_number:
                 tech.phone_number = profile.mobile_number
@@ -1232,6 +1239,50 @@ async def mark_all_notifications_read(
         "message": "All notifications marked as read",
         "updated": updated_count,
     }
+# ──────────────────────────────────────────────────
+# Technician Status
+# ──────────────────────────────────────────────────
+
+@router.put("/status")
+async def update_my_technician_status(
+    data: TechnicianAvailabilityUpdate,
+    current_user: AuthenticatedUser = Depends(
+        require_role(UserRole.TECHNICIAN)
+    ),
+    db: Session = Depends(get_db),
+):
+    profile = db.query(TechnicianProfile).filter(
+    TechnicianProfile.user_id == current_user.user_id,
+    TechnicianProfile.tenant_id == current_user.tenant_id,
+).first()
+
+    if not profile or not profile.profile_completed:
+        raise HTTPException(
+            status_code=403,
+            detail="Please complete your profile to change technician status.",
+        )
+
+    tech = _get_tech_for_user(
+        db,
+        current_user.user_id,
+        current_user.tenant_id,
+    )
+
+    if not tech:
+        raise HTTPException(
+            status_code=404,
+            detail="Technician record not found",
+        )
+
+    tech.technician_status = data.technician_status
+
+    db.commit()
+    db.refresh(tech)
+
+    return {
+        "technician_id": tech.technician_id,
+        "technician_status": tech.technician_status,
+    }
 
 
 # ──────────────────────────────────────────────────
@@ -1388,13 +1439,33 @@ async def download_billing_report_pdf(
 
 @router.get("/dashboard", response_model=TechnicianDashboardResponse)
 async def get_technician_dashboard(
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    current_user: AuthenticatedUser = Depends(
+        require_role(UserRole.TECHNICIAN)
+    ),
     db: Session = Depends(get_db),
 ):
     """Get technician dashboard statistics."""
-    tech = _get_tech_for_user(db, current_user.user_id, current_user.tenant_id)
+
+    tech = _get_tech_for_user(
+        db,
+        current_user.user_id,
+        current_user.tenant_id,
+    )
+
+    profile = db.query(TechnicianProfile).filter(
+        TechnicianProfile.user_id == current_user.user_id,
+        TechnicianProfile.tenant_id == current_user.tenant_id,
+    ).first()
+
+    profile_completed = bool(
+        profile and profile.profile_completed
+    )
+
     if not tech:
-        return TechnicianDashboardResponse()
+        return TechnicianDashboardResponse(
+            profile_completed=profile_completed,
+            technician_status=None,
+        )
 
     base = db.query(Job).filter(
         Job.assigned_technician_id == tech.technician_id,
@@ -1403,18 +1474,35 @@ async def get_technician_dashboard(
     today = datetime.now(timezone.utc).date()
 
     total_assigned = base.count()
+
     active = base.filter(
-        ~func.lower(Job.status).in_(["completed", "closed", "cancelled", "rejected_by_technician"])
+        func.lower(Job.status).in_(
+            ["accepted", "en_route", "in_progress", "paused"]
+        )
     ).count()
+
     completed_today = base.filter(
         Job.status == "COMPLETED",
         func.date(Job.completed_at) == today,
     ).count()
+
     pending = base.filter(
-        func.lower(Job.status).in_(["assigned", "active"])
+        func.lower(Job.status).in_(
+            ["assigned", "active"]
+        )
     ).count()
+
+    rejected_jobs = db.query(Job).filter(
+        Job.rejected_by_tech_id
+        == (tech.tech_id or str(tech.technician_id)),
+        func.lower(Job.status)
+        == "rejected_by_technician",
+    ).count()
+
     total_completed = base.filter(
-        func.lower(Job.status).in_(["completed", "closed"])
+        func.lower(Job.status).in_(
+            ["completed", "closed"]
+        )
     ).count()
 
     return TechnicianDashboardResponse(
@@ -1423,4 +1511,7 @@ async def get_technician_dashboard(
         completed_today=completed_today,
         pending_acceptance=pending,
         total_completed=total_completed,
+        rejected_jobs=rejected_jobs,
+        technician_status=tech.technician_status,
+        profile_completed=profile_completed,
     )

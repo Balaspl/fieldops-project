@@ -10,7 +10,39 @@ import {
 import {
   getTechnicianDashboard,
   getTechnicianJobs,
+  updateTechnicianStatus,
 } from "../../services/technicianPortalService";
+
+const TECHNICIAN_STATUSES = [
+  "Available",
+  "Busy",
+  "Assigned",
+  "Offline",
+  "En Route",
+  "On Site",
+  "On Break",
+  "Suspended",
+];
+
+const normalizeTechnicianStatus = (status?: string) => {
+  const value = (status || "").toLowerCase().trim();
+
+  const map: Record<string, string> = {
+    available: "Available",
+    busy: "Busy",
+    assigned: "Assigned",
+    offline: "Offline",
+    "en route": "En Route",
+    en_route: "En Route",
+    "on site": "On Site",
+    on_site: "On Site",
+    "on break": "On Break",
+    on_break: "On Break",
+    suspended: "Suspended",
+  };
+
+  return map[value] || "Available";
+};
 
 const s = {
   page: {
@@ -111,6 +143,10 @@ export default function TechnicianPortalDashboard({
   const [stats, setStats] = useState<any>(null);
   const [recentJobs, setRecentJobs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [technicianStatus, setTechnicianStatus] = useState("Not Available");
+  const [savingStatus, setSavingStatus] = useState(false);
+  const [profileCompleted, setProfileCompleted] = useState(false);
+  const [showProfileMessage, setShowProfileMessage] = useState(false);
 
   const loadDashboard = async () => {
     try {
@@ -129,14 +165,62 @@ export default function TechnicianPortalDashboard({
   };
 
   useEffect(() => {
+    const loadDashboard = async () => {
+      try {
+        const [dashRes, jobsRes] = await Promise.all([
+          getTechnicianDashboard(),
+          getTechnicianJobs(),
+        ]);
+
+        setStats(dashRes.data);
+
+        const isProfileCompleted = Boolean(dashRes.data?.profile_completed);
+
+        setProfileCompleted(isProfileCompleted);
+
+        setTechnicianStatus(
+          isProfileCompleted
+            ? normalizeTechnicianStatus(dashRes.data?.technician_status)
+            : "Not Available",
+        );
+
+        setRecentJobs((jobsRes.data || []).slice(0, 5));
+      } catch (error) {
+        console.error("Failed to load dashboard:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
     loadDashboard();
 
-    // Refresh the technician dashboard so the displayed job status
-    // reflects the latest technician action.
-    const interval = setInterval(loadDashboard, 5000);
+    const timer = setInterval(loadDashboard, 5000);
 
-    return () => clearInterval(interval);
+    return () => clearInterval(timer);
   }, []);
+  const handleStatusChange = async (newStatus: string) => {
+    const previousStatus = technicianStatus;
+
+    setTechnicianStatus(newStatus);
+
+    try {
+      setSavingStatus(true);
+
+      const response = await updateTechnicianStatus(newStatus);
+
+      setTechnicianStatus(
+        normalizeTechnicianStatus(
+          response.data?.technician_status || newStatus,
+        ),
+      );
+    } catch (error) {
+      console.error("Failed to update technician status:", error);
+
+      setTechnicianStatus(previousStatus);
+    } finally {
+      setSavingStatus(false);
+    }
+  };
 
   const cards = [
     {
@@ -239,9 +323,97 @@ export default function TechnicianPortalDashboard({
 
   return (
     <div style={s.page}>
-      <div style={s.header}>
-        <h1 style={s.title}>Technician Dashboard</h1>
-        <p style={s.subtitle}>Your work overview at a glance</p>
+      <div
+        style={{
+          ...s.header,
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+        }}
+      >
+        <div>
+          <h1 style={s.title}>Technician Dashboard</h1>
+          <p style={s.subtitle}>Your work overview at a glance</p>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+          }}
+        >
+          <span
+            style={{
+              fontSize: "13px",
+              fontWeight: 600,
+              color: "#6B7280",
+            }}
+          >
+            Status
+          </span>
+
+          <select
+            value={profileCompleted ? technicianStatus : "Not Available"}
+            disabled={savingStatus || !profileCompleted}
+            onChange={(e) => {
+              if (!profileCompleted) {
+                setShowProfileMessage(true);
+                return;
+              }
+
+              handleStatusChange(e.target.value);
+            }}
+            style={{
+              minWidth: "185px",
+              height: "40px",
+              padding: "0 12px",
+              border: "1px solid #D7E5DE",
+              borderRadius: "8px",
+              background: "#FFFFFF",
+              color: "#1F2933",
+              fontSize: "14px",
+              fontWeight: 600,
+              cursor: savingStatus ? "wait" : "pointer",
+              opacity: savingStatus ? 0.7 : 1,
+            }}
+          >
+            <option value="" disabled>
+              Select Status
+            </option>
+            {TECHNICIAN_STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </select>
+
+          {showProfileMessage && !profileCompleted && (
+            <div
+              style={{
+                marginTop: "8px",
+                fontSize: "13px",
+                color: "#B45309",
+              }}
+            >
+              Please complete your profile to change technician status.
+              <button
+                type="button"
+                onClick={() => onNavigate("/technician/profile")}
+                style={{
+                  marginLeft: "8px",
+                  border: "none",
+                  background: "none",
+                  textDecoration: "underline",
+                  cursor: "pointer",
+                  fontWeight: 600,
+                }}
+              >
+                Complete Profile
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       <div style={s.grid}>
@@ -285,17 +457,11 @@ export default function TechnicianPortalDashboard({
                   gap: "10px",
                 }}
               >
-                <span
-                  style={s.badge(
-                    priorityColor[job.priority] || "#6B7280",
-                  )}
-                >
+                <span style={s.badge(priorityColor[job.priority] || "#6B7280")}>
                   {job.priority}
                 </span>
 
-                <span
-                  style={s.badge(getStatusColor(job.status))}
-                >
+                <span style={s.badge(getStatusColor(job.status))}>
                   {getStatusLabel(job.status)}
                 </span>
               </div>

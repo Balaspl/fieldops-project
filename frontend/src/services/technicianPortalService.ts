@@ -6,16 +6,22 @@ import api from "./api";
 
 // Profile
 export const getTechnicianProfile = () => api.get("/api/technician/profile");
-export const createTechnicianProfile = (data: any) => api.post("/api/technician/profile", data);
-export const updateTechnicianProfile = (data: any) => api.put("/api/technician/profile", data);
-export const changeTechnicianPassword = (data: any) => api.post("/api/technician/change-password", data);
+export const createTechnicianProfile = (data: any) =>
+  api.post("/api/technician/profile", data);
+export const updateTechnicianProfile = (data: any) =>
+  api.put("/api/technician/profile", data);
+export const changeTechnicianPassword = (data: any) =>
+  api.post("/api/technician/change-password", data);
 
 // Jobs
 export const getTechnicianJobs = (status?: string) =>
   api.get("/api/technician/jobs", { params: status ? { status } : {} });
-export const getTechnicianJobHistory = () => api.get("/api/technician/jobs/history");
-export const getTechnicianJobDetail = (jobId: number) => api.get(`/api/technician/jobs/${jobId}`);
-export const acceptTechnicianJob = (jobId: number) => api.post(`/api/technician/jobs/${jobId}/accept`);
+export const getTechnicianJobHistory = () =>
+  api.get("/api/technician/jobs/history");
+export const getTechnicianJobDetail = (jobId: number) =>
+  api.get(`/api/technician/jobs/${jobId}`);
+export const acceptTechnicianJob = (jobId: number) =>
+  api.post(`/api/technician/jobs/${jobId}/accept`);
 export const rejectTechnicianJob = (jobId: number, reason: string) =>
   api.post(`/api/technician/jobs/${jobId}/reject`, { reason });
 export const startTechnicianJob = (jobId: number) => api.post(`/api/technician/jobs/${jobId}/start`);
@@ -26,7 +32,8 @@ export const completeTechnicianJob = (jobId: number, data: any) =>
   api.post(`/api/technician/jobs/${jobId}/complete`, data);
 
 // Notifications
-export const getTechnicianNotifications = () => api.get("/api/technician/notifications");
+export const getTechnicianNotifications = () =>
+  api.get("/api/technician/notifications");
 export const markTechnicianNotificationRead = (id: string) =>
   api.put(`/api/technician/notifications/${id}/read`);
 export const markAllTechnicianNotificationsRead = () =>
@@ -44,3 +51,6 @@ export const downloadTechnicianBillingReport = (closureId: number) =>
   api.get(`/api/technician/billing-reports/${closureId}/pdf`, {
     responseType: "blob",
   });
+
+export const updateTechnicianStatus = (technician_status: string) =>
+  api.put("/api/technician/status", { technician_status });

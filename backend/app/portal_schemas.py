@@ -351,6 +351,8 @@ class TechnicianDashboardResponse(BaseModel):
     pending_acceptance: int = 0
     total_completed: int = 0
     rejected_jobs: int = 0
+    technician_status: Optional[str] = None
+    profile_completed: bool = False
 
 
 class CustomerDashboardResponse(BaseModel):
