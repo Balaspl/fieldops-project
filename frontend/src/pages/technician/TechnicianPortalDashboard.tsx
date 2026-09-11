@@ -52,8 +52,14 @@ const s = {
     background: "#EEF4F1",
     fontFamily: "'Inter', sans-serif",
   },
-  header: { marginBottom: "24px" },
-  title: { fontSize: "24px", fontWeight: 700, color: "#1F2933", margin: 0 },
+header: {
+  background: "#fff",
+  borderRadius: "14px",
+  padding: "24px",
+  marginBottom: "24px",
+  boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+  border: "1px solid #E3ECE7",
+},  title: { fontSize: "24px", fontWeight: 700, color: "#1F2933", margin: 0 },
   subtitle: { fontSize: "14px", color: "#6B7280", marginTop: "4px" },
   grid: {
     display: "grid",
