@@ -19,6 +19,7 @@ import StatusBadge from "../components/ui/StatusBadge";
 import { Eye, Pencil, Trash2, ChevronDown } from "lucide-react";
 import EmptyState from "../components/ui/EmptyState";
 import { SkillComboSelect } from "../components/ui/SkillComboSelect";
+import LoadingSpinner from "../components/ui/LoadingSpinner";
 
 const PAGE_SIZE = 8;
 const REFRESH_MS = 5_000;
@@ -2065,22 +2066,12 @@ export default function TechnicianListPage() {
             </thead>
             <tbody key={safePage} className="tld-table-body">
               {loading && (
-                <tr>
-                  <td colSpan={7} style={styles.tldStateCell}>
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        minHeight: "180px",
-                      }}
-                    >
-                      <span className="tld-live-loading-dot" />
-                    </div>
-                  </td>
-                </tr>
-              )}
-
+  <tr>
+    <td colSpan={7} style={styles.tldStateCell}>
+      <LoadingSpinner message="Loading technicians..." />
+    </td>
+  </tr>
+)}
               {!loading && initError && (
                 <tr>
                   <td colSpan={7}>
