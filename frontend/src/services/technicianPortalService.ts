@@ -19,6 +19,7 @@ export const acceptTechnicianJob = (jobId: number) => api.post(`/api/technician/
 export const rejectTechnicianJob = (jobId: number, reason: string) =>
   api.post(`/api/technician/jobs/${jobId}/reject`, { reason });
 export const startTechnicianJob = (jobId: number) => api.post(`/api/technician/jobs/${jobId}/start`);
+export const onSiteTechnicianJob = (jobId: number) => api.post(`/api/technician/jobs/${jobId}/on-site`);
 export const pauseTechnicianJob = (jobId: number) => api.post(`/api/technician/jobs/${jobId}/pause`);
 export const resumeTechnicianJob = (jobId: number) => api.post(`/api/technician/jobs/${jobId}/resume`);
 export const completeTechnicianJob = (jobId: number, data: any) =>
@@ -33,3 +34,13 @@ export const markAllTechnicianNotificationsRead = () =>
 
 // Dashboard
 export const getTechnicianDashboard = () => api.get("/api/technician/dashboard");
+
+
+// Billing Reports
+export const getTechnicianBillingReports = () =>
+  api.get("/api/technician/billing-reports");
+
+export const downloadTechnicianBillingReport = (closureId: number) =>
+  api.get(`/api/technician/billing-reports/${closureId}/pdf`, {
+    responseType: "blob",
+  });

@@ -9,8 +9,10 @@ and their own notifications.
 import uuid
 import logging
 from datetime import datetime, timezone, date
+from io import BytesIO
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import Optional
@@ -25,6 +27,7 @@ from ..models import (
 )
 from ..models.user import User
 from ..models import ServiceRequest
+from ..models.job_closure import JobClosure
 from ..portal_schemas import (
     TechnicianProfileCreate, TechnicianProfileUpdate, TechnicianProfileResponse,
     TechnicianJobResponse, TechnicianJobRejectRequest, TechnicianJobCompleteRequest,
@@ -556,7 +559,7 @@ async def accept_job(
     current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
     db: Session = Depends(get_db),
 ):
-    """Accept an assigned job and move technician status to EN_ROUTE automatically."""
+    """Accept an assigned job without starting the journey."""
     tech = _get_tech_for_user(db, current_user.user_id, current_user.tenant_id)
     if not tech:
         raise HTTPException(status_code=403, detail="Technician record not found")
@@ -569,7 +572,7 @@ async def accept_job(
     if not job:
         raise HTTPException(status_code=403, detail="Job not found or not assigned to you")
 
-    job.status = "EN_ROUTE"
+    job.status = "ACCEPTED"
 
     # Keep the customer's service request status in sync with the job status
     service_request = db.query(ServiceRequest).filter(
@@ -578,7 +581,7 @@ async def accept_job(
     ).first()
 
     if service_request:
-        service_request.status = "EN_ROUTE"
+        service_request.status = "ACCEPTED"
 
     recipient_ids = _get_notification_recipient_ids(
         current_user.user_id,
@@ -608,12 +611,12 @@ async def accept_job(
         role=current_user.role.value,
         entity_type="job",
         entity_id=str(job_id),
-        new_value={"status": "EN_ROUTE"},
+        new_value={"status": "ACCEPTED"},
         request=request,
     )
 
     db.commit()
-    return {"message": "Job accepted and en-route", "job_id": job_id, "status": "EN_ROUTE"}
+    return {"message": "Job accepted", "job_id": job_id, "status": "ACCEPTED"}
 
 
 @router.post("/jobs/{job_id}/reject")
@@ -713,7 +716,7 @@ async def start_job(
         raise HTTPException(status_code=403, detail="Job not found or not assigned to you")
 
     old_status = job.status
-    job.status = "IN_PROGRESS"
+    job.status = "EN_ROUTE"
 
     # Keep the customer's service request status in sync
     service_request = db.query(ServiceRequest).filter(
@@ -722,20 +725,84 @@ async def start_job(
     ).first()
 
     if service_request:
-        service_request.status = "IN_PROGRESS"
+        service_request.status = "EN_ROUTE"
 
-    job.on_site_at = datetime.now(timezone.utc)
-    job.on_site_by = current_user.user_id
 
     audit_log(
         db, action=AuditAction.JOB_STARTED,
         tenant_id=current_user.tenant_id, user_id=current_user.user_id,
         role=current_user.role.value, entity_type="job", entity_id=str(job_id),
-        old_value={"status": old_status}, new_value={"status": "IN_PROGRESS"},
+        old_value={"status": old_status}, new_value={"status": "EN_ROUTE"},
         request=request,
     )
     db.commit()
-    return {"message": "Job started", "job_id": job_id, "status": "IN_PROGRESS"}
+    return {"message": "Job started and en-route", "job_id": job_id, "status": "EN_ROUTE"}
+
+
+@router.post("/jobs/{job_id}/on-site")
+async def on_site_job(
+    job_id: int,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    db: Session = Depends(get_db),
+):
+    """Mark an en-route job as on-site.
+
+    The persisted job state becomes ON_SITE. The technician portal displays
+    this stage as "In Progress" and exposes the Complete action.
+    """
+    tech = _get_tech_for_user(db, current_user.user_id, current_user.tenant_id)
+    if not tech:
+        raise HTTPException(status_code=403, detail="Technician record not found")
+
+    job = db.query(Job).filter(
+        Job.id == job_id,
+        Job.assigned_technician_id == tech.technician_id,
+    ).first()
+
+    if not job:
+        raise HTTPException(status_code=403, detail="Job not found or not assigned to you")
+
+    if job.status != "EN_ROUTE":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job must be EN_ROUTE before going on-site. Current status: {job.status}",
+        )
+
+    old_status = job.status
+    job.status = "ON_SITE"
+    job.on_site_at = datetime.now(timezone.utc)
+    job.on_site_by = current_user.user_id
+
+    service_request = db.query(ServiceRequest).filter(
+        ServiceRequest.linked_job_id == job.id,
+        ServiceRequest.tenant_id == job.tenant_id,
+    ).first()
+
+    if service_request:
+        service_request.status = "IN_PROGRESS"
+
+    audit_log(
+        db,
+        action=AuditAction.JOB_UPDATED,
+        tenant_id=current_user.tenant_id,
+        user_id=current_user.user_id,
+        role=current_user.role.value,
+        entity_type="job",
+        entity_id=str(job_id),
+        old_value={"status": old_status},
+        new_value={"status": "ON_SITE"},
+        request=request,
+    )
+
+    db.commit()
+    db.refresh(job)
+
+    return {
+        "message": "Technician is now on site",
+        "job_id": job_id,
+        "status": "ON_SITE",
+    }
 
 
 @router.post("/jobs/{job_id}/pause")
@@ -1171,6 +1238,154 @@ async def mark_all_notifications_read(
 # Dashboard
 # ──────────────────────────────────────────────────
 
+@router.get("/billing-reports")
+async def get_billing_reports(
+    current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    db: Session = Depends(get_db),
+):
+    """Return billing reports submitted by the authenticated technician."""
+    tech = _get_tech_for_user(db, current_user.user_id, current_user.tenant_id)
+    if not tech:
+        raise HTTPException(status_code=403, detail="Technician record not found")
+
+    rows = (
+        db.query(JobClosure, Job)
+        .join(Job, Job.id == JobClosure.job_id)
+        .filter(
+            JobClosure.tenant_id == current_user.tenant_id,
+            Job.assigned_technician_id == tech.technician_id,
+        )
+        .order_by(JobClosure.completed_at.desc())
+        .all()
+    )
+
+    reports = []
+    for closure, job in rows:
+        subtotal = round(float(closure.subtotal or 0), 2)
+        gst = round(subtotal * 0.05, 2)
+        total = round(subtotal + gst, 2)
+        reports.append({
+            "id": closure.id,
+            "job_id": job.id,
+            "customer_name": job.customer_name or "N/A",
+            "service_type": job.service_type or "Service",
+            "location": job.location or job.site_address or "N/A",
+            "work_summary": closure.work_summary,
+            "labour_cost": float(closure.labour_cost or 0),
+            "material_cost": float(closure.material_cost or 0),
+            "subtotal": subtotal,
+            "gst_rate": 5,
+            "gst_amount": gst,
+            "total_amount": total,
+            "completed_at": _json_safe(closure.completed_at),
+            "created_at": _json_safe(closure.created_at),
+        })
+
+    return {"reports": reports, "count": len(reports)}
+
+
+@router.get("/billing-reports/{closure_id}/pdf")
+async def download_billing_report_pdf(
+    closure_id: int,
+    current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    db: Session = Depends(get_db),
+):
+    """Generate and download a PDF billing report for one submitted closure."""
+    tech = _get_tech_for_user(db, current_user.user_id, current_user.tenant_id)
+    if not tech:
+        raise HTTPException(status_code=403, detail="Technician record not found")
+
+    row = (
+        db.query(JobClosure, Job)
+        .join(Job, Job.id == JobClosure.job_id)
+        .filter(
+            JobClosure.id == closure_id,
+            JobClosure.tenant_id == current_user.tenant_id,
+            Job.assigned_technician_id == tech.technician_id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Billing report not found")
+
+    closure, job = row
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    subtotal = round(float(closure.subtotal or 0), 2)
+    gst = round(subtotal * 0.05, 2)
+    total = round(subtotal + gst, 2)
+
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    pdf.setTitle(f"Billing Report - Job #{job.id}")
+    pdf.setFont("Helvetica-Bold", 18)
+    pdf.drawString(50, height - 55, "FieldOps - Billing Report")
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(50, height - 75, f"Report #{closure.id}  |  Job #{job.id}")
+
+    y = height - 115
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(50, y, "Job Details")
+    y -= 22
+    pdf.setFont("Helvetica", 10)
+    details = [
+        ("Customer", job.customer_name or "N/A"),
+        ("Service", job.service_type or "N/A"),
+        ("Location", job.location or job.site_address or "N/A"),
+        ("Technician", tech.technician_name or "N/A"),
+        ("Completed", str(closure.completed_at or "N/A")),
+    ]
+    for label, value in details:
+        pdf.drawString(50, y, f"{label}: {value}")
+        y -= 18
+
+    y -= 8
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(50, y, "Work Summary")
+    y -= 20
+    pdf.setFont("Helvetica", 10)
+    words = (closure.work_summary or "").replace("\n", " ").split()
+    line = ""
+    for word in words:
+        test = f"{line} {word}".strip()
+        if len(test) > 90:
+            pdf.drawString(50, y, line)
+            y -= 15
+            line = word
+        else:
+            line = test
+    if line:
+        pdf.drawString(50, y, line)
+        y -= 25
+
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(50, y, "Cost Details")
+    y -= 22
+    pdf.setFont("Helvetica", 10)
+    for label, amount in [
+        ("Service / Labour Cost", closure.labour_cost or 0),
+        ("Material Cost", closure.material_cost or 0),
+        ("Subtotal", subtotal),
+        ("GST (5%)", gst),
+        ("Total Amount", total),
+    ]:
+        pdf.drawString(50, y, label)
+        pdf.drawRightString(width - 50, y, f"INR {float(amount):,.2f}")
+        y -= 20
+
+    pdf.setFont("Helvetica-Oblique", 9)
+    pdf.drawString(50, 45, "Generated from the FieldOps technician billing report.")
+    pdf.save()
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="billing_report_job_{job.id}.pdf"'},
+    )
+
+
 @router.get("/dashboard", response_model=TechnicianDashboardResponse)
 async def get_technician_dashboard(
     current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
@@ -1189,9 +1404,7 @@ async def get_technician_dashboard(
 
     total_assigned = base.count()
     active = base.filter(
-    func.lower(Job.status).in_(
-        ["accepted", "en_route", "in_progress", "paused"]
-    )
+        ~func.lower(Job.status).in_(["completed", "closed", "cancelled", "rejected_by_technician"])
     ).count()
     completed_today = base.filter(
         Job.status == "COMPLETED",
@@ -1200,20 +1413,14 @@ async def get_technician_dashboard(
     pending = base.filter(
         func.lower(Job.status).in_(["assigned", "active"])
     ).count()
-    rejected_jobs = db.query(Job).filter(
-    Job.rejected_by_tech_id == (tech.tech_id or str(tech.technician_id)),
-    func.lower(Job.status) == "rejected_by_technician",
-    ).count()
     total_completed = base.filter(
         func.lower(Job.status).in_(["completed", "closed"])
     ).count()
 
-
     return TechnicianDashboardResponse(
-    total_assigned=total_assigned,
-    active_jobs=active,
-    completed_today=completed_today,
-    pending_acceptance=pending,
-    total_completed=total_completed,
-    rejected_jobs=rejected_jobs,
-)
+        total_assigned=total_assigned,
+        active_jobs=active,
+        completed_today=completed_today,
+        pending_acceptance=pending,
+        total_completed=total_completed,
+    )

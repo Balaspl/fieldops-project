@@ -20,6 +20,7 @@ import {
   acceptTechnicianJob,
   rejectTechnicianJob,
   startTechnicianJob,
+  onSiteTechnicianJob,
   pauseTechnicianJob,
   resumeTechnicianJob,
   completeTechnicianJob,
@@ -168,8 +169,9 @@ const priorityStyle: Record<string, { bg: string; fg: string }> = {
 
 const statusStyle: Record<string, { bg: string; fg: string }> = {
   ASSIGNED: { bg: "#DBEAFE", fg: "#1E40AF" },
-  ACCEPTED: { bg: "#D1FAE5", fg: "#065F46" },
-  IN_PROGRESS: { bg: "#FEF3C7", fg: "#92400E" },
+  ACCEPTED: { bg: "#D1FAE5", fg: "#16A34A" },
+  ON_SITE: { bg: "#FFEDD5", fg: "#C2410C" },
+  IN_PROGRESS: { bg: "#FFEDD5", fg: "#C2410C" },
   PAUSED: { bg: "#E5E7EB", fg: "#374151" },
   EN_ROUTE: { bg: "#EDE9FE", fg: "#5B21B6" },
 };
@@ -319,7 +321,7 @@ export default function TechnicianJobsPage() {
         </button>,
       );
     }
-    if (["ACCEPTED", "EN_ROUTE"].includes(st)) {
+    if (st === "ACCEPTED") {
       btns.push(
         <button
           key="start"
@@ -330,7 +332,14 @@ export default function TechnicianJobsPage() {
         </button>,
       );
     }
-    if (["IN_PROGRESS", "PAUSED"].includes(st)) {
+    if (st === "EN_ROUTE") {
+      btns.push(
+        <button key="on-site" style={s.btn("#E0F2FE", "#0369A1")} onClick={() => doAction(job.id, () => onSiteTechnicianJob(job.id))}>
+          <MapPin size={14} /> On Site
+        </button>
+      );
+    }
+    if (["ON_SITE", "PAUSED"].includes(st)) {
       btns.push(
         <button
           key="complete"
@@ -438,12 +447,22 @@ export default function TechnicianJobsPage() {
                   color:
                     job.status === "COMPLETED"
                       ? "#059669"
-                      : job.status === "IN_PROGRESS"
-                        ? "#D97706"
-                        : "#5B21B6",
+                      : job.status === "ACCEPTED"
+                        ? "#16A34A"
+                        : job.status === "EN_ROUTE"
+                          ? "#5B21B6"
+                          : ["ON_SITE", "IN_PROGRESS"].includes(
+                              (job.status || "").toUpperCase()
+                            )
+                            ? "#EA580C"
+                            : "#374151",
                 }}
               >
-                {job.status === "COMPLETED" ? "✓ COMPLETED" : job.status}
+                {job.status === "COMPLETED"
+                  ? "✓ COMPLETED"
+                  : job.status === "ON_SITE"
+                    ? "IN PROGRESS"
+                    : job.status}
               </span>
 
               <div style={{ display: "flex", gap: "8px" }}>

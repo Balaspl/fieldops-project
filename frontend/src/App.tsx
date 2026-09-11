@@ -77,6 +77,9 @@ const TechnicianJobsPage = lazy(
 const TechnicianJobHistoryPage = lazy(
   () => import("./pages/technician/TechnicianJobHistoryPage"),
 );
+const TechnicianBillingReportPage = lazy(
+  () => import("./pages/technician/TechnicianBillingReportPage"),
+);
 const TechnicianNotificationsPage = lazy(
   () => import("./pages/technician/TechnicianNotificationsPage"),
 );
@@ -156,27 +159,27 @@ const styles = {
     minWidth: "60px",
   } as React.CSSProperties,
 
-  sidebarMobile: {
-    width: "100%",
-    minWidth: 0,
-    height: "64px",
-    position: "fixed",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    top: "auto",
-    display: "flex",
-    flexDirection: "row",
-    alignItems: "center",
-    borderRight: "none",
-    borderTop: "1px solid #E3ECE7",
-    padding: "4px 6px",
-    overflow: "hidden",
-    boxShadow: "0 -2px 8px rgba(47, 79, 62, 0.06)",
-    zIndex: 9999,
-    background: "#F3F8F5",
-    boxSizing: "border-box",
-  } as React.CSSProperties,
+ sidebarMobile: {
+  width: "100%",
+  minWidth: 0,
+  height: "64px",
+  position: "fixed",
+  left: 0,
+  right: 0,
+  bottom: 0,
+  top: "auto",
+  display: "flex",
+  flexDirection: "row",
+  alignItems: "center",
+  borderRight: "none",
+  borderTop: "1px solid #E3ECE7",
+  padding: "4px 6px",
+  overflow: "hidden",
+  boxShadow: "0 -2px 8px rgba(47, 79, 62, 0.06)",
+  zIndex: 9999,
+  background: "#F3F8F5",
+  boxSizing: "border-box",
+} as React.CSSProperties,
 
   sidebarContent: {
     display: "flex",
@@ -194,17 +197,17 @@ const styles = {
   } as React.CSSProperties,
 
   sidebarContentMobile: {
-    display: "flex",
-    flexDirection: "row",
-    height: "100%",
-    padding: 0,
-    overflowX: "auto",
-    overflowY: "hidden",
-    alignItems: "center",
-    width: "100%",
-    minWidth: 0,
-    boxSizing: "border-box",
-  } as React.CSSProperties,
+  display: "flex",
+  flexDirection: "row",
+  height: "100%",
+  padding: 0,
+  overflowX: "auto",
+  overflowY: "hidden",
+  alignItems: "center",
+  width: "100%",
+  minWidth: 0,
+  boxSizing: "border-box",
+} as React.CSSProperties,
 
   sidebarBrand: {
     display: "flex",
@@ -237,17 +240,17 @@ const styles = {
   } as React.CSSProperties,
 
   sidebarNavMobile: {
-    display: "flex",
-    flexDirection: "row",
-    justifyContent: "space-around",
-    alignItems: "center",
-    width: "100%",
-    minWidth: 0,
-    height: "100%",
-    marginTop: 0,
-    gap: 0,
-    flex: 1,
-  } as React.CSSProperties,
+  display: "flex",
+  flexDirection: "row",
+  justifyContent: "space-around",
+  alignItems: "center",
+  width: "100%",
+  minWidth: 0,
+  height: "100%",
+  marginTop: 0,
+  gap: 0,
+  flex: 1,
+} as React.CSSProperties,
 
   navGroupLabel: {
     fontSize: "10px",
@@ -280,22 +283,22 @@ const styles = {
   } as React.CSSProperties,
 
   navItemMobile: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: "2px",
-    fontSize: "8px",
-    padding: "3px 2px",
-    borderRadius: "6px",
-    width: "auto",
-    minWidth: 0,
-    height: "56px",
-    flex: "1 1 0",
-    textAlign: "center",
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-  } as React.CSSProperties,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "2px",
+  fontSize: "8px",
+  padding: "3px 2px",
+  borderRadius: "6px",
+  width: "auto",
+  minWidth: 0,
+  height: "56px",
+  flex: "1 1 0",
+  textAlign: "center",
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+} as React.CSSProperties,
 
   navItemCollapsed: {
     justifyContent: "center",
@@ -585,11 +588,11 @@ const styles = {
   } as React.CSSProperties,
 
   mainAreaMobile: {
-    marginLeft: 0,
-    marginBottom: "64px",
-    height: "calc(100vh - 64px)",
-    width: "100%",
-  } as React.CSSProperties,
+  marginLeft: 0,
+  marginBottom: "64px",
+  height: "calc(100vh - 64px)",
+  width: "100%",
+} as React.CSSProperties,
 
   pageWrap: {
     flex: 1,
@@ -643,7 +646,6 @@ function AppInner() {
   const isAdminOrDispatcher = !isTechnician && !isCustomer;
 
   const [activeTab, setActiveTab] = useState(() => {
-    // if (isTechnician) return "tech_jobs";
     if (isTechnician) return "tech_dashboard";
     if (isCustomer) return "cust_dashboard";
     return "dashboard";
@@ -1145,7 +1147,7 @@ function AppInner() {
             >
               <span
                 style={
-                  isMobileLayout || sidebarCollapsed
+                 isMobileLayout || sidebarCollapsed
                     ? { display: "none" }
                     : styles.navGroupLabel
                 }
@@ -1173,7 +1175,11 @@ function AppInner() {
                 <Briefcase size={18} style={{ flexShrink: 0 }} />
                 <span
                   className="nav-text"
-                  style={sidebarCollapsed ? { display: "none" } : {}}
+                  style={
+                     sidebarCollapsed
+                      ? { display: "none" }
+                      : {}
+                  }
                 >
                   Assigned Jobs
                 </span>
@@ -1186,9 +1192,26 @@ function AppInner() {
                 <History size={18} style={{ flexShrink: 0 }} />
                 <span
                   className="nav-text"
-                  style={sidebarCollapsed ? { display: "none" } : {}}
+                  style={
+                     sidebarCollapsed
+                      ? { display: "none" }
+                      : {}
+                  }
                 >
                   Job History
+                </span>
+              </button>
+              <button
+                className="nav-item-style"
+                style={getItemStyle("tech_billing_reports")}
+                onClick={() => handleTabChange("tech_billing_reports")}
+              >
+                <FileText size={18} style={{ flexShrink: 0 }} />
+                <span
+                  className="nav-text"
+                  style={sidebarCollapsed ? { display: "none" } : {}}
+                >
+                  Billing Report
                 </span>
               </button>
               <button
@@ -1199,7 +1222,11 @@ function AppInner() {
                 <BellRing size={18} style={{ flexShrink: 0 }} />
                 <span
                   className="nav-text"
-                  style={sidebarCollapsed ? { display: "none" } : {}}
+                  style={
+                    sidebarCollapsed
+                      ? { display: "none" }
+                      : {}
+                  }
                 >
                   Notifications
                 </span>
@@ -1729,6 +1756,9 @@ function AppInner() {
               {activeTab === "tech_profile" && <TechnicianProfilePage />}
               {activeTab === "tech_jobs" && <TechnicianJobsPage />}
               {activeTab === "tech_history" && <TechnicianJobHistoryPage />}
+              {activeTab === "tech_billing_reports" && (
+                <TechnicianBillingReportPage />
+              )}
               {activeTab === "tech_notifications" && (
                 <TechnicianNotificationsPage />
               )}
