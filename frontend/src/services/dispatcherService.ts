@@ -26,8 +26,36 @@ export const getDispatchers = async (): Promise<Dispatcher[]> => {
   return response.data;
 };
 
+/**
+ * Request body for provisioning a technician.
+ *
+ * Tenant/organization and role are NOT sent from the frontend.
+ * Backend should derive them from the authenticated dispatcher.
+ */
+export interface ProvisionTechnicianRequest {
+  first_name: string;
+  last_name: string;
+  email: string;
+  password: string;
+}
+
+/**
+ * Provision a new technician account.
+ */
+export const provisionTechnician = async (
+  data: ProvisionTechnicianRequest
+) => {
+  const response = await api.post(
+    "/dispatchers/provision-technician",
+    data
+  );
+
+  return response.data;
+};
+
 const dispatcherService = {
   getDispatchers,
+  provisionTechnician,
 };
 
 export default dispatcherService;

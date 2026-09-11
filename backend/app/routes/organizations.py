@@ -611,7 +611,7 @@ async def list_organizations(
     limit: int = Query(20, ge=1, le=100),
     all_tenants: bool = Query(False, description="Platform admin only: view all tenants"),
 current_user: AuthenticatedUser = Depends(
-    require_role(UserRole.SUPER_ADMIN)
+    require_role(UserRole.SUPER_ADMIN, UserRole.DISPATCHER)
 ),
      db: Session = Depends(get_db),
 ):
@@ -957,16 +957,24 @@ async def create_org_admin(
     org_id: str,
     payload: OrgAdminCreateRequest,
     request: Request,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.SUPER_ADMIN)),
+    current_user: AuthenticatedUser = Depends(require_role(UserRole.SUPER_ADMIN,  UserRole.DISPATCHER)),
     db: Session = Depends(get_db),
 ):
     """Create an admin or user for an organization. Super Admin or Org Admin."""
-    if current_user.tenant_id != "__platform__" and current_user.tenant_id != org_id:
-        raise HTTPException(status_code=403, detail="Access denied to this organization")
+    # Dispatcher can only provision Technician in their own organization
+    if current_user.role == UserRole.DISPATCHER:
+        org_id = current_user.tenant_id
+        requested_role = UserRole.TECHNICIAN.value
 
-    # Prevent creation of Super Admin accounts via user provisioning
-    requested_role = (payload.role or "admin").lower().strip()
+    else:
+        # Super Admin keeps existing organization selection behavior
+        if current_user.tenant_id != "__platform__" and current_user.tenant_id != org_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied to this organization",
+            )
 
+        requested_role = (payload.role or "admin").lower().strip()
     if requested_role in ["super_admin", "superadmin", "super admin"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

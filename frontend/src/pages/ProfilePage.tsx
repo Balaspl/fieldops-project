@@ -95,6 +95,7 @@ export default function ProfilePage() {
 
   const isSuperAdmin = user?.role === "super_admin";
   const isAdmin = user?.role === "admin" || isSuperAdmin;
+  const isDispatcher = user?.role === "dispatcher";
 
   useEffect(() => {
     if (user) {
@@ -498,7 +499,7 @@ export default function ProfilePage() {
           </button>
         )}
 
-        {isAdmin && (
+        {(isAdmin || isDispatcher) && (
           <button
             onClick={() => setActiveTab("users")}
             style={{
@@ -1313,7 +1314,7 @@ export default function ProfilePage() {
       )}
 
       {/* Tab 3: User Provisioning Form */}
-      {activeTab === "users" && isAdmin && (
+      {activeTab === "users" && (isAdmin || isDispatcher) && (
         <div
           style={{
             background: "#FFFFFF",
@@ -1332,7 +1333,9 @@ export default function ProfilePage() {
               margin: "0 0 12px",
             }}
           >
-            Provision User or Admin Account
+            {isDispatcher
+            ? "Provision Technician Account"
+              : "Provision User or Admin Account"}
           </h2>
 
           <form
@@ -1528,6 +1531,24 @@ export default function ProfilePage() {
               >
                 Assigned Role *
               </label>
+              {isDispatcher ? (
+              <input
+                type="text"
+                value="Technician"
+                readOnly
+                style={{
+                  width: "100%",
+                  padding: "7px 10px",
+                  border: "1px solid #E3ECE7",
+                  borderRadius: "7px",
+                  fontSize: "12px",
+                  background: "#F3F8F5",
+                  color: "#2F4F3E",
+                  outline: "none",
+                  boxSizing: "border-box",
+                }}
+              />
+            ) : (
               <select
                 value={userRole}
                 onChange={(e) => setUserRole(e.target.value)}
@@ -1546,6 +1567,7 @@ export default function ProfilePage() {
                 <option value="dispatcher">Dispatcher</option>
                 <option value="technician">Technician</option>
               </select>
+            )}
             </div>
 
             <button
