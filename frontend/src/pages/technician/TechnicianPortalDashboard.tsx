@@ -72,9 +72,20 @@ const s = {
     padding: "12px 0",
     borderBottom: "1px solid #f0f0f0",
   },
-  jobInfo: { display: "flex", flexDirection: "column" as const, gap: "2px" },
-  jobTitle: { fontSize: "14px", fontWeight: 600, color: "#1F2933" },
-  jobMeta: { fontSize: "12px", color: "#6B7280" },
+  jobInfo: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: "2px",
+  },
+  jobTitle: {
+    fontSize: "14px",
+    fontWeight: 600,
+    color: "#1F2933",
+  },
+  jobMeta: {
+    fontSize: "12px",
+    color: "#6B7280",
+  },
   badge: (color: string) => ({
     fontSize: "11px",
     fontWeight: 600,
@@ -101,14 +112,30 @@ export default function TechnicianPortalDashboard({
   const [recentJobs, setRecentJobs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const loadDashboard = async () => {
+    try {
+      const [dashRes, jobsRes] = await Promise.all([
+        getTechnicianDashboard(),
+        getTechnicianJobs(),
+      ]);
+
+      setStats(dashRes.data);
+      setRecentJobs((jobsRes.data || []).slice(0, 5));
+    } catch {
+      // Keep existing dashboard behaviour on API failure.
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    Promise.all([getTechnicianDashboard(), getTechnicianJobs()])
-      .then(([dashRes, jobsRes]) => {
-        setStats(dashRes.data);
-        setRecentJobs((jobsRes.data || []).slice(0, 5));
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    loadDashboard();
+
+    // Refresh the technician dashboard so the displayed job status
+    // reflects the latest technician action.
+    const interval = setInterval(loadDashboard, 5000);
+
+    return () => clearInterval(interval);
   }, []);
 
   const cards = [
@@ -149,6 +176,60 @@ export default function TechnicianPortalDashboard({
     LOW: "#38A169",
   };
 
+  const getStatusLabel = (status: string) => {
+    const normalizedStatus = (status || "").toUpperCase();
+
+    switch (normalizedStatus) {
+      case "ASSIGNED":
+        return "AWAITING ACCEPTANCE";
+
+      case "ACCEPTED":
+        return "ACCEPTED";
+
+      case "EN_ROUTE":
+        return "EN ROUTE";
+
+      case "ON_SITE":
+      case "IN_PROGRESS":
+      case "PAUSED":
+        return "IN PROGRESS";
+
+      case "COMPLETED":
+      case "CLOSED":
+        return "COMPLETED";
+
+      default:
+        return status || "UNKNOWN";
+    }
+  };
+
+  const getStatusColor = (status: string) => {
+    const normalizedStatus = (status || "").toUpperCase();
+
+    switch (normalizedStatus) {
+      case "ASSIGNED":
+        return "#DD6B20";
+
+      case "ACCEPTED":
+        return "#16A34A";
+
+      case "EN_ROUTE":
+        return "#5B21B6";
+
+      case "ON_SITE":
+      case "IN_PROGRESS":
+      case "PAUSED":
+        return "#EA580C";
+
+      case "COMPLETED":
+      case "CLOSED":
+        return "#059669";
+
+      default:
+        return "#6B7280";
+    }
+  };
+
   if (loading)
     return (
       <div style={s.page}>
@@ -162,21 +243,26 @@ export default function TechnicianPortalDashboard({
         <h1 style={s.title}>Technician Dashboard</h1>
         <p style={s.subtitle}>Your work overview at a glance</p>
       </div>
+
       <div style={s.grid}>
         {cards.map((c, i) => (
           <div key={i} style={s.card}>
             <div style={{ ...s.cardIcon, background: c.bg, color: c.color }}>
               {c.icon}
             </div>
+
             <span style={s.cardLabel}>{c.label}</span>
+
             <span style={s.cardValue}>{c.value}</span>
           </div>
         ))}
       </div>
+
       <div style={s.section}>
         <div style={s.sectionTitle}>
           <Briefcase size={18} color="#7AAE8A" /> Recent Assigned Jobs
         </div>
+
         {recentJobs.length === 0 ? (
           <div style={s.empty}>No active jobs at the moment</div>
         ) : (
@@ -186,27 +272,37 @@ export default function TechnicianPortalDashboard({
                 <span style={s.jobTitle}>
                   #{job.id} — {job.service_type || "Service"}
                 </span>
+
                 <span style={s.jobMeta}>
                   {job.customer_name} • {job.location}
                 </span>
               </div>
+
               <div
-                style={{ display: "flex", alignItems: "center", gap: "10px" }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "10px",
+                }}
               >
-                <span style={s.badge(priorityColor[job.priority] || "#6B7280")}>
-                  {job.priority}
-                </span>
                 <span
                   style={s.badge(
-                    job.status === "ASSIGNED" ? "#DD6B20" : "#38A169",
+                    priorityColor[job.priority] || "#6B7280",
                   )}
                 >
-                  {job.status}
+                  {job.priority}
+                </span>
+
+                <span
+                  style={s.badge(getStatusColor(job.status))}
+                >
+                  {getStatusLabel(job.status)}
                 </span>
               </div>
             </div>
           ))
         )}
+
         {recentJobs.length > 0 && (
           <button
             onClick={() => onNavigate("tech_jobs")}

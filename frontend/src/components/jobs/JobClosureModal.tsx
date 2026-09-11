@@ -162,9 +162,11 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
         before_images: filteredBeforeImages,
         after_images: filteredAfterImages,
 
-        // Labour is included inside Service Charge.
-        // Keep 0 here only for backend compatibility.
-        labour_cost: 0,
+        // Service Charge is stored as labour/service cost for billing reports.
+        labour_cost: Math.max(
+          0,
+          Number(serviceCharge) || 0
+        ),
 
         material_cost: Math.max(
           0,
