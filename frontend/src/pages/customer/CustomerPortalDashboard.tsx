@@ -39,7 +39,7 @@ export default function CustomerPortalDashboard({
       color: "#2E7D32",
     },
     {
-      label: "UNASSIGNED",
+      label: "Unassigned",
       value: stats?.pending_requests ?? 0,
       icon: <Clock size={20} />,
       bg: "#FFF8E1",
@@ -98,56 +98,56 @@ export default function CustomerPortalDashboard({
       }}
     >
       <div
-  style={{
-    marginBottom: "24px",
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-  }}
->
-  <div>
-    <h1
-      style={{
-        fontSize: "24px",
-        fontWeight: 700,
-        color: "#1F2933",
-        margin: 0,
-      }}
-    >
-      Customer Dashboard
-    </h1>
+        style={{
+          marginBottom: "24px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <div>
+          <h1
+            style={{
+              fontSize: "24px",
+              fontWeight: 700,
+              color: "#1F2933",
+              margin: 0,
+            }}
+          >
+            Customer Dashboard
+          </h1>
 
-    <p
-      style={{
-        fontSize: "14px",
-        color: "#6B7280",
-        marginTop: "4px",
-      }}
-    >
-      Track your service requests and jobs
-    </p>
-  </div>
+          <p
+            style={{
+              fontSize: "14px",
+              color: "#6B7280",
+              marginTop: "4px",
+            }}
+          >
+            Track your service requests and jobs
+          </p>
+        </div>
 
-  <button
-    onClick={() => onNavigate("cust_create_request")}
-    style={{
-      padding: "12px 20px",
-      border: "none",
-      borderRadius: "10px",
-      background: "#7AB38A",
-      color: "#fff",
-      fontSize: "14px",
-      fontWeight: 700,
-      cursor: "pointer",
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-    }}
-  >
-    <PlusCircle size={18} />
-    New Request
-  </button>
-</div>
+        <button
+          onClick={() => onNavigate("cust_create_request")}
+          style={{
+            padding: "12px 20px",
+            border: "none",
+            borderRadius: "10px",
+            background: "#7AB38A",
+            color: "#fff",
+            fontSize: "14px",
+            fontWeight: 700,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+          }}
+        >
+          <PlusCircle size={18} />
+          New Request
+        </button>
+      </div>
 
       <div
         style={{

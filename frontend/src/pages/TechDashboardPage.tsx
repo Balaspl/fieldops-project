@@ -1,5 +1,18 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { getAllTechnicians, updateTechnicianAvailability, createTechnician, updateTechnician, deleteTechnician, getUniqueZones } from "../services/technicianService";
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useMemo,
+} from "react";
+import {
+  getAllTechnicians,
+  updateTechnicianAvailability,
+  createTechnician,
+  updateTechnician,
+  deleteTechnician,
+  getUniqueZones,
+} from "../services/technicianService";
 import usePageVisibility from "../hooks/usePageVisibility";
 import useInterval from "../hooks/useInterval";
 import StatusBadge from "../components/ui/StatusBadge";
@@ -8,9 +21,15 @@ import EmptyState from "../components/ui/EmptyState";
 import { SkillComboSelect } from "../components/ui/SkillComboSelect";
 
 const PAGE_SIZE = 8;
-const REFRESH_MS = 60_000;
+const REFRESH_MS = 5_000;
 const STALE_MS = 120_000;
-const SKILLS = ["HVAC Repair", "Electrical", "Plumbing", "Network Support", "General Maintenance"];
+const SKILLS = [
+  "HVAC Repair",
+  "Electrical",
+  "Plumbing",
+  "Network Support",
+  "General Maintenance",
+];
 
 interface NormalizedTech {
   id: number | string;
@@ -50,7 +69,14 @@ function normalizeStatus(s: string) {
   return s || "Unknown";
 }
 
-function getInitials(n = "") { return n.trim().split(/\s+/).map(w => w[0]?.toUpperCase() || "").slice(0, 2).join(""); }
+function getInitials(n = "") {
+  return n
+    .trim()
+    .split(/\s+/)
+    .map((w) => w[0]?.toUpperCase() || "")
+    .slice(0, 2)
+    .join("");
+}
 function formatAgo(ts: string | number | Date | null) {
   if (!ts) return "—";
   try {
@@ -60,7 +86,9 @@ function formatAgo(ts: string | number | Date | null) {
     const h = Math.round(diff / 60);
     if (h < 24) return `${h}h ago`;
     return new Date(ts).toLocaleDateString();
-  } catch { return String(ts); }
+  } catch {
+    return String(ts);
+  }
 }
 function normTech(t: any): NormalizedTech {
   return {
@@ -75,8 +103,12 @@ function normTech(t: any): NormalizedTech {
     phone: t.phone_number ?? t.phone ?? "—",
   };
 }
-function wPct(cur: number, max: number) { return max > 0 ? Math.min(Math.round((cur / max) * 100), 100) : 0; }
-function wColor(p: number) { return p >= 90 ? "high" : p >= 60 ? "mid" : "low"; }
+function wPct(cur: number, max: number) {
+  return max > 0 ? Math.min(Math.round((cur / max) * 100), 100) : 0;
+}
+function wColor(p: number) {
+  return p >= 90 ? "high" : p >= 60 ? "mid" : "low";
+}
 
 const styles = {
   tldPage: {
@@ -212,15 +244,15 @@ const styles = {
   } as React.CSSProperties,
 
   tldLiveDot: {
-  width: "8px",
-  height: "8px",
-  borderRadius: "50%",
-  background: "#22C55E",
-  boxShadow: "0 0 0 0 rgba(34, 197, 94, 0.45)",
-  animation: "tldLivePulse 1.5s ease-in-out infinite",
-  cursor: "pointer",
-  flexShrink: 0,
-},
+    width: "8px",
+    height: "8px",
+    borderRadius: "50%",
+    background: "#22C55E",
+    boxShadow: "0 0 0 0 rgba(34, 197, 94, 0.45)",
+    animation: "tldLivePulse 1.5s ease-in-out infinite",
+    cursor: "pointer",
+    flexShrink: 0,
+  },
 
   tldRefreshSpinner: {
     width: "13px",
@@ -1110,31 +1142,71 @@ const localCss = `
 const getStatusSelectStyle = (status: string): React.CSSProperties => {
   const s = (status || "").toLowerCase().trim();
   const base: React.CSSProperties = {
-    ...styles.tldStatusSelect
+    ...styles.tldStatusSelect,
   };
   if (s === "available") {
-    return { ...base, background: "#DDEEE5", color: "#2F4F3E", borderColor: "#B0D4BC" };
+    return {
+      ...base,
+      background: "#DDEEE5",
+      color: "#2F4F3E",
+      borderColor: "#B0D4BC",
+    };
   }
   if (s === "busy") {
-    return { ...base, background: "#FEF0D6", color: "#7A5120", borderColor: "#F0D09A" };
+    return {
+      ...base,
+      background: "#FEF0D6",
+      color: "#7A5120",
+      borderColor: "#F0D09A",
+    };
   }
   if (s === "offline") {
-    return { ...base, background: "#F0F4F2", color: "#6B7280", borderColor: "#D0DCD4" };
+    return {
+      ...base,
+      background: "#F0F4F2",
+      color: "#6B7280",
+      borderColor: "#D0DCD4",
+    };
   }
   if (s === "assigned") {
-    return { ...base, background: "#E0F2FE", color: "#0369A1", borderColor: "#7DD3FC" };
+    return {
+      ...base,
+      background: "#E0F2FE",
+      color: "#0369A1",
+      borderColor: "#7DD3FC",
+    };
   }
   if (s === "en route" || s === "en_route") {
-    return { ...base, background: "#FEF9C3", color: "#854D0E", borderColor: "#FDE68A" };
+    return {
+      ...base,
+      background: "#FEF9C3",
+      color: "#854D0E",
+      borderColor: "#FDE68A",
+    };
   }
   if (s === "on site" || s === "on_site") {
-    return { ...base, background: "#EDE9FE", color: "#6D28D9", borderColor: "#DDD6FE" };
+    return {
+      ...base,
+      background: "#EDE9FE",
+      color: "#6D28D9",
+      borderColor: "#DDD6FE",
+    };
   }
   if (s === "on break" || s === "on_break") {
-    return { ...base, background: "#FEF0D6", color: "#92400E", borderColor: "#FCD29A" };
+    return {
+      ...base,
+      background: "#FEF0D6",
+      color: "#92400E",
+      borderColor: "#FCD29A",
+    };
   }
   if (s === "suspended") {
-    return { ...base, background: "#FEE2E2", color: "#991B1B", borderColor: "#FECACA" };
+    return {
+      ...base,
+      background: "#FEE2E2",
+      color: "#991B1B",
+      borderColor: "#FECACA",
+    };
   }
   return base;
 };
@@ -1144,11 +1216,33 @@ function SkeletonRows({ n = 8 }) {
     <>
       {Array.from({ length: n }, (_, i) => (
         <tr key={i} className="tld-skeleton-row">
-          <td style={styles.tldTableTd}><div className="tld-name-cell"><div className="tld-skeleton-avatar-style" /><div className="tld-skeleton-name-wrap"><div className="tld-skeleton-bar-style" style={{ width: 120 }} /><div className="tld-skeleton-bar-style" style={{ width: 80, marginTop: 4, height: 10 }} /></div></div></td>
-          <td style={styles.tldTableTd}><div className="tld-skeleton-bar-style" style={{ width: 70 }} /></td>
-          <td style={styles.tldTableTd}><div className="tld-skeleton-bar-style" style={{ width: 90 }} /></td>
-          <td style={styles.tldTableTd}><div className="tld-skeleton-bar-style" style={{ width: 60 }} /></td>
-          <td style={styles.tldTableTd}><div className="tld-skeleton-bar-style" style={{ width: 100 }} /></td>
+          <td style={styles.tldTableTd}>
+            <div className="tld-name-cell">
+              <div className="tld-skeleton-avatar-style" />
+              <div className="tld-skeleton-name-wrap">
+                <div
+                  className="tld-skeleton-bar-style"
+                  style={{ width: 120 }}
+                />
+                <div
+                  className="tld-skeleton-bar-style"
+                  style={{ width: 80, marginTop: 4, height: 10 }}
+                />
+              </div>
+            </div>
+          </td>
+          <td style={styles.tldTableTd}>
+            <div className="tld-skeleton-bar-style" style={{ width: 70 }} />
+          </td>
+          <td style={styles.tldTableTd}>
+            <div className="tld-skeleton-bar-style" style={{ width: 90 }} />
+          </td>
+          <td style={styles.tldTableTd}>
+            <div className="tld-skeleton-bar-style" style={{ width: 60 }} />
+          </td>
+          <td style={styles.tldTableTd}>
+            <div className="tld-skeleton-bar-style" style={{ width: 100 }} />
+          </td>
         </tr>
       ))}
     </>
@@ -1163,7 +1257,9 @@ interface SortIconProps {
 
 function SortIcon({ col, sortKey, sortDir }: SortIconProps) {
   if (sortKey !== col) return <span className="sort-icon">⇅</span>;
-  return <span className="sort-icon active">{sortDir === "asc" ? "↑" : "↓"}</span>;
+  return (
+    <span className="sort-icon active">{sortDir === "asc" ? "↑" : "↓"}</span>
+  );
 }
 
 interface MetricsPanelProps {
@@ -1172,17 +1268,47 @@ interface MetricsPanelProps {
 }
 
 function MetricsPanel({ metrics, lastSuccessAt }: MetricsPanelProps) {
-  const rate = metrics.successCount + metrics.failureCount === 0
-    ? "—"
-    : `${Math.round((metrics.successCount / (metrics.successCount + metrics.failureCount)) * 100)}%`;
+  const rate =
+    metrics.successCount + metrics.failureCount === 0
+      ? "—"
+      : `${Math.round((metrics.successCount / (metrics.successCount + metrics.failureCount)) * 100)}%`;
   return (
-    <div className="tld-metrics-panel-responsive" style={styles.tldMetricsPanel}>
+    <div
+      className="tld-metrics-panel-responsive"
+      style={styles.tldMetricsPanel}
+    >
       <p style={styles.tldMetricsTitle}>Refresh Metrics</p>
-      <div style={styles.tldMetricsRow}><span style={styles.tldMetricsLabel}>Success</span><span style={{ ...styles.tldMetricsValue, color: "#2F7A3A" }}>{metrics.successCount}</span></div>
-      <div style={styles.tldMetricsRow}><span style={styles.tldMetricsLabel}>Failures</span><span style={{ ...styles.tldMetricsValue, color: metrics.failureCount > 0 ? "#9B3A3A" : "#2F7A3A" }}>{metrics.failureCount}</span></div>
-      <div style={styles.tldMetricsRow}><span style={styles.tldMetricsLabel}>Success rate</span><span style={styles.tldMetricsValue}>{rate}</span></div>
-      <div style={styles.tldMetricsRow}><span style={styles.tldMetricsLabel}>Last latency</span><span style={styles.tldMetricsValue}>{metrics.lastLatencyMs != null ? `${metrics.lastLatencyMs}ms` : "—"}</span></div>
-      <div style={styles.tldMetricsRow}><span style={styles.tldMetricsLabel}>Last success</span><span style={styles.tldMetricsValue}>{formatAgo(lastSuccessAt)}</span></div>
+      <div style={styles.tldMetricsRow}>
+        <span style={styles.tldMetricsLabel}>Success</span>
+        <span style={{ ...styles.tldMetricsValue, color: "#2F7A3A" }}>
+          {metrics.successCount}
+        </span>
+      </div>
+      <div style={styles.tldMetricsRow}>
+        <span style={styles.tldMetricsLabel}>Failures</span>
+        <span
+          style={{
+            ...styles.tldMetricsValue,
+            color: metrics.failureCount > 0 ? "#9B3A3A" : "#2F7A3A",
+          }}
+        >
+          {metrics.failureCount}
+        </span>
+      </div>
+      <div style={styles.tldMetricsRow}>
+        <span style={styles.tldMetricsLabel}>Success rate</span>
+        <span style={styles.tldMetricsValue}>{rate}</span>
+      </div>
+      <div style={styles.tldMetricsRow}>
+        <span style={styles.tldMetricsLabel}>Last latency</span>
+        <span style={styles.tldMetricsValue}>
+          {metrics.lastLatencyMs != null ? `${metrics.lastLatencyMs}ms` : "—"}
+        </span>
+      </div>
+      <div style={styles.tldMetricsRow}>
+        <span style={styles.tldMetricsLabel}>Last success</span>
+        <span style={styles.tldMetricsValue}>{formatAgo(lastSuccessAt)}</span>
+      </div>
     </div>
   );
 }
@@ -1212,9 +1338,13 @@ export default function TechnicianListPage() {
 
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
-  const [editingTechId, setEditingTechId] = useState<number | string | null>(null);
+  const [editingTechId, setEditingTechId] = useState<number | string | null>(
+    null,
+  );
   const [formLoading, setFormLoading] = useState(false);
-  const [formErrors, setFormErrors] = useState<Partial<Record<keyof TechFormData, string>>>({});
+  const [formErrors, setFormErrors] = useState<
+    Partial<Record<keyof TechFormData, string>>
+  >({});
   const [techFormData, setTechFormData] = useState<TechFormData>({
     technician_name: "",
     technician_skill: "",
@@ -1252,17 +1382,22 @@ export default function TechnicianListPage() {
     setIsFormOpen(false);
   };
 
-  const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+  const handleFormChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>,
+  ) => {
     const { name, value } = e.target;
-    setTechFormData(prev => ({ ...prev, [name]: value }));
-    setFormErrors(prev => ({ ...prev, [name]: "" }));
+    setTechFormData((prev) => ({ ...prev, [name]: value }));
+    setFormErrors((prev) => ({ ...prev, [name]: "" }));
   };
 
   const validateForm = () => {
     const errors: Partial<Record<keyof TechFormData, string>> = {};
-    if (!techFormData.technician_name.trim()) errors.technician_name = "Name is required";
-    if (!techFormData.technician_skill.trim()) errors.technician_skill = "Skill is required";
-    if (!techFormData.technician_location.trim()) errors.technician_location = "Location is required";
+    if (!techFormData.technician_name.trim())
+      errors.technician_name = "Name is required";
+    if (!techFormData.technician_skill.trim())
+      errors.technician_skill = "Skill is required";
+    if (!techFormData.technician_location.trim())
+      errors.technician_location = "Location is required";
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -1278,7 +1413,7 @@ export default function TechnicianListPage() {
           show: true,
           title: "Technician Updated Successfully",
           message: "The technician details have been updated successfully.",
-          name: techFormData.technician_name
+          name: techFormData.technician_name,
         });
       } else {
         await createTechnician(techFormData);
@@ -1286,27 +1421,35 @@ export default function TechnicianListPage() {
           show: true,
           title: "Technician Created Successfully",
           message: "Your new technician has been registered successfully.",
-          name: techFormData.technician_name
+          name: techFormData.technician_name,
         });
       }
       setIsFormOpen(false);
       fetchData(technicians.length > 0);
     } catch (err: any) {
-      const msg = err.response?.data?.error || err.response?.data?.detail || "Failed to save technician.";
+      const msg =
+        err.response?.data?.error ||
+        err.response?.data?.detail ||
+        "Failed to save technician.";
       showToast(msg, "error");
     } finally {
       setFormLoading(false);
     }
   };
 
-  const [popup, setPopup] = useState<{ show: boolean; title: string; message: string; name?: string }>({
+  const [popup, setPopup] = useState<{
+    show: boolean;
+    title: string;
+    message: string;
+    name?: string;
+  }>({
     show: false,
     title: "",
     message: "",
     name: "",
   });
   const [hoveredBtn, setHoveredBtn] = useState<string | null>(null);
-  const closePopup = () => setPopup(prev => ({ ...prev, show: false }));
+  const closePopup = () => setPopup((prev) => ({ ...prev, show: false }));
 
   const [toast, setToast] = useState({ msg: "", type: "" });
   const toastTimer = useRef<any>(null);
@@ -1314,66 +1457,114 @@ export default function TechnicianListPage() {
   const [lastSuccessAt, setLastSuccessAt] = useState<number | null>(null);
   const [countdown, setCountdown] = useState(100);
   const [showMetrics, setShowMetrics] = useState(false);
-  const [metrics, setMetrics] = useState<RefreshMetrics>({ successCount: 0, failureCount: 0, lastLatencyMs: null });
+  const [metrics, setMetrics] = useState<RefreshMetrics>({
+    successCount: 0,
+    failureCount: 0,
+    lastLatencyMs: null,
+  });
 
   const isTabActive = usePageVisibility();
   const metricsRef = useRef<HTMLDivElement>(null);
 
-  const isStale = lastSuccessAt && (Date.now() - lastSuccessAt) > STALE_MS;
+  const isStale = lastSuccessAt && Date.now() - lastSuccessAt > STALE_MS;
 
-  useEffect(() => { const t = setTimeout(() => setDebSearch(search), 300); return () => clearTimeout(t); }, [search]);
-  useEffect(() => setPage(1), [debSearch, statusFilter, skillFilter, zoneFilter]);
+  useEffect(() => {
+    const t = setTimeout(() => setDebSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+  useEffect(
+    () => setPage(1),
+    [debSearch, statusFilter, skillFilter, zoneFilter],
+  );
 
-  const fetchData = useCallback(async (silent = false) => {
-    if (silent) { setFetching(true); setBgError(""); }
-    else { setLoading(true); setInitError(""); }
-    const t0 = Date.now();
-    try {
-      const fetchPromise = getAllTechnicians({
-        search: debSearch || undefined,
-        status: statusFilter !== "ALL" ? statusFilter : undefined,
-        zone: zoneFilter !== "ALL" ? zoneFilter : undefined,
-        skill: skillFilter !== "ALL" ? skillFilter : undefined,
-        page: page,
-        limit: PAGE_SIZE,
-      });
-      const delayPromise = silent ? Promise.resolve() : new Promise(resolve => setTimeout(resolve, 1000));
-      const [res] = await Promise.all([fetchPromise, delayPromise]);
-      setTechnicians((res.data || []).map(normTech));
-      const totalHeader = res.headers["x-total-count"] || res.headers["X-Total-Count"];
-      setTotalTechCount(totalHeader ? parseInt(totalHeader, 10) : (res.data || []).length);
+  const fetchData = useCallback(
+    async (silent = false) => {
+      if (silent) {
+        setFetching(true);
+        setBgError("");
+      } else {
+        setLoading(true);
+        setInitError("");
+      }
+      const t0 = Date.now();
+      try {
+        const fetchPromise = getAllTechnicians({
+          search: debSearch || undefined,
+          status: statusFilter !== "ALL" ? statusFilter : undefined,
+          zone: zoneFilter !== "ALL" ? zoneFilter : undefined,
+          skill: skillFilter !== "ALL" ? skillFilter : undefined,
+          page: page,
+          limit: PAGE_SIZE,
+        });
+        const delayPromise = silent
+          ? Promise.resolve()
+          : new Promise((resolve) => setTimeout(resolve, 1000));
+        const [res] = await Promise.all([fetchPromise, delayPromise]);
+        setTechnicians((res.data || []).map(normTech));
+        const totalHeader =
+          res.headers["x-total-count"] || res.headers["X-Total-Count"];
+        setTotalTechCount(
+          totalHeader ? parseInt(totalHeader, 10) : (res.data || []).length,
+        );
 
-      const zonesRes = await getUniqueZones();
-      setUniqueZones(zonesRes.data || []);
+        const zonesRes = await getUniqueZones();
+        setUniqueZones(zonesRes.data || []);
 
-      const latency = Date.now() - t0;
-      setLastSuccessAt(Date.now());
-      setMetrics(m => ({ ...m, successCount: m.successCount + 1, lastLatencyMs: latency }));
-      setBgError("");
-    } catch (err: any) {
-      const msg = err.response?.data?.error || err.response?.data?.detail || "Unable to reach backend.";
-      if (silent) { setBgError(msg); setMetrics(m => ({ ...m, failureCount: m.failureCount + 1 })); }
-      else { setInitError(msg); }
-    } finally {
-      if (silent) setFetching(false);
-      else setLoading(false);
-    }
-  }, [debSearch, statusFilter, zoneFilter, skillFilter, page]);
+        const latency = Date.now() - t0;
+        setLastSuccessAt(Date.now());
+        setMetrics((m) => ({
+          ...m,
+          successCount: m.successCount + 1,
+          lastLatencyMs: latency,
+        }));
+        setBgError("");
+      } catch (err: any) {
+        const msg =
+          err.response?.data?.error ||
+          err.response?.data?.detail ||
+          "Unable to reach backend.";
+        if (silent) {
+          setBgError(msg);
+          setMetrics((m) => ({ ...m, failureCount: m.failureCount + 1 }));
+        } else {
+          setInitError(msg);
+        }
+      } finally {
+        if (silent) setFetching(false);
+        else setLoading(false);
+      }
+    },
+    [debSearch, statusFilter, zoneFilter, skillFilter, page],
+  );
 
-  useEffect(() => { fetchData(false); }, [fetchData]);
+  useEffect(() => {
+    fetchData(false);
+  }, [fetchData]);
 
   useInterval(() => {
     if (!lastSuccessAt || !isTabActive) return;
     const elapsed = Date.now() - lastSuccessAt;
-    const pct = Math.max(0, Math.min(100, Math.round((elapsed / REFRESH_MS) * 100)));
+    const pct = Math.max(
+      0,
+      Math.min(100, Math.round((elapsed / REFRESH_MS) * 100)),
+    );
     setCountdown(pct);
   }, 1000);
 
-  useInterval(() => { fetchData(true); setCountdown(0); }, isTabActive ? REFRESH_MS : null);
+  useInterval(
+    () => {
+      fetchData(true);
+      setCountdown(0);
+    },
+    isTabActive ? REFRESH_MS : null,
+  );
 
   useEffect(() => {
     if (!showMetrics) return;
-    const handler = (e: MouseEvent) => { if (metricsRef.current && !metricsRef.current.contains(e.target as Node)) setShowMetrics(false); };
+    const handler = (e: MouseEvent) => {
+      if (metricsRef.current && !metricsRef.current.contains(e.target as Node))
+        setShowMetrics(false);
+    };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [showMetrics]);
@@ -1381,11 +1572,22 @@ export default function TechnicianListPage() {
   const filtered = useMemo(() => {
     return [...technicians].sort((a, b) => {
       let av: any, bv: any;
-      if (sortKey === "name") { av = a.name.toLowerCase(); bv = b.name.toLowerCase(); }
-      else if (sortKey === "status") { av = normalizeStatus(a.status); bv = normalizeStatus(b.status); }
-      else if (sortKey === "jobs") { av = a.currentJobs; bv = b.currentJobs; }
-      else if (sortKey === "ping") { av = a.lastPing ? new Date(a.lastPing).getTime() : 0; bv = b.lastPing ? new Date(b.lastPing).getTime() : 0; }
-      else { av = a.id; bv = b.id; }
+      if (sortKey === "name") {
+        av = a.name.toLowerCase();
+        bv = b.name.toLowerCase();
+      } else if (sortKey === "status") {
+        av = normalizeStatus(a.status);
+        bv = normalizeStatus(b.status);
+      } else if (sortKey === "jobs") {
+        av = a.currentJobs;
+        bv = b.currentJobs;
+      } else if (sortKey === "ping") {
+        av = a.lastPing ? new Date(a.lastPing).getTime() : 0;
+        bv = b.lastPing ? new Date(b.lastPing).getTime() : 0;
+      } else {
+        av = a.id;
+        bv = b.id;
+      }
       if (av < bv) return sortDir === "asc" ? -1 : 1;
       if (av > bv) return sortDir === "asc" ? 1 : -1;
       return 0;
@@ -1403,8 +1605,22 @@ export default function TechnicianListPage() {
   const safePage = Math.min(page, totalPages);
   const pageSlice = filtered;
 
-  function handleSort(key: string) { if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortKey(key); setSortDir("asc"); } setPage(1); }
-  function showToast(msg: string, type = "success") { clearTimeout(toastTimer.current); setToast({ msg, type }); toastTimer.current = setTimeout(() => setToast({ msg: "", type: "" }), 3500); }
+  function handleSort(key: string) {
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+    setPage(1);
+  }
+  function showToast(msg: string, type = "success") {
+    clearTimeout(toastTimer.current);
+    setToast({ msg, type });
+    toastTimer.current = setTimeout(
+      () => setToast({ msg: "", type: "" }),
+      3500,
+    );
+  }
   function openSidebar(tech: NormalizedTech) {
     setSelected(tech);
     setNewStatus(normalizeStatus(tech.status));
@@ -1412,22 +1628,39 @@ export default function TechnicianListPage() {
   }
   function closeSidebar() {
     setSelected(null);
-    if (window.location.hash.startsWith('#/technicians/')) {
-      window.location.hash = '';
+    if (window.location.hash.startsWith("#/technicians/")) {
+      window.location.hash = "";
     }
   }
-  function clearFilters() { setSearch(""); setStatusFilter("ALL"); setSkillFilter("ALL"); setZoneFilter("ALL"); setPage(1); }
-  const hasFilters = search || statusFilter !== "ALL" || skillFilter !== "ALL" || zoneFilter !== "ALL";
+  function clearFilters() {
+    setSearch("");
+    setStatusFilter("ALL");
+    setSkillFilter("ALL");
+    setZoneFilter("ALL");
+    setPage(1);
+  }
+  const hasFilters =
+    search ||
+    statusFilter !== "ALL" ||
+    skillFilter !== "ALL" ||
+    zoneFilter !== "ALL";
 
   async function handleInlineStatusChange(techId: string | number, ns: string) {
     setUpdatingId(techId);
     try {
       await updateTechnicianAvailability(techId, ns);
-      setTechnicians(prev => prev.map(t => t.id === techId ? { ...t, status: ns } : t));
-      const tech = technicians.find(t => t.id === techId);
-      showToast(`${tech?.name || 'Technician'} set to ${ns}`);
+      setTechnicians((prev) =>
+        prev.map((t) => (t.id === techId ? { ...t, status: ns } : t)),
+      );
+      const tech = technicians.find((t) => t.id === techId);
+      showToast(`${tech?.name || "Technician"} set to ${ns}`);
     } catch (err: any) {
-      showToast(err.response?.data?.error || err.response?.data?.detail || "Failed to update status", "error");
+      showToast(
+        err.response?.data?.error ||
+          err.response?.data?.detail ||
+          "Failed to update status",
+        "error",
+      );
     } finally {
       setUpdatingId(null);
     }
@@ -1438,24 +1671,42 @@ export default function TechnicianListPage() {
     setSaving(true);
     try {
       await updateTechnicianAvailability(selected.id, newStatus);
-      setTechnicians(prev => prev.map(t => t.id === selected.id ? { ...t, status: newStatus } : t));
+      setTechnicians((prev) =>
+        prev.map((t) =>
+          t.id === selected.id ? { ...t, status: newStatus } : t,
+        ),
+      );
       showToast(`${selected.name} set to ${newStatus}`);
       closeSidebar();
     } catch (err: any) {
-      showToast(err.response?.data?.error || err.response?.data?.detail || "Failed to update status", "error");
-    } finally { setSaving(false); }
+      showToast(
+        err.response?.data?.error ||
+          err.response?.data?.detail ||
+          "Failed to update status",
+        "error",
+      );
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function handleManualRefresh() { fetchData(technicians.length > 0); setCountdown(0); }
+  function handleManualRefresh() {
+    fetchData(technicians.length > 0);
+    setCountdown(0);
+  }
 
   async function handleDeleteTech(tech: NormalizedTech) {
-    if (!window.confirm(`Are you sure you want to delete "${tech.name}"?`)) return;
+    if (!window.confirm(`Are you sure you want to delete "${tech.name}"?`))
+      return;
     try {
       await deleteTechnician(tech.id);
       showToast(`${tech.name} deleted successfully`);
       fetchData(technicians.length > 0);
     } catch (err: any) {
-      const msg = err.response?.data?.error || err.response?.data?.detail || "Failed to delete technician.";
+      const msg =
+        err.response?.data?.error ||
+        err.response?.data?.detail ||
+        "Failed to delete technician.";
       showToast(msg, "error");
     }
   }
@@ -1465,8 +1716,14 @@ export default function TechnicianListPage() {
   }
 
   function getPageNums() {
-    const nums: number[] = []; const delta = 2;
-    for (let i = Math.max(1, safePage - delta); i <= Math.min(totalPages, safePage + delta); i++) nums.push(i);
+    const nums: number[] = [];
+    const delta = 2;
+    for (
+      let i = Math.max(1, safePage - delta);
+      i <= Math.min(totalPages, safePage + delta);
+      i++
+    )
+      nums.push(i);
     return nums;
   }
 
@@ -1479,15 +1736,38 @@ export default function TechnicianListPage() {
         <div style={styles.popupOverlay}>
           <div style={styles.successPopup}>
             <div style={styles.successIcon}>✓</div>
-            <h3 style={{ margin: "0 0 10px 0", color: "#2F4F3E", fontSize: "18px", fontWeight: 700 }}>{popup.title}</h3>
+            <h3
+              style={{
+                margin: "0 0 10px 0",
+                color: "#2F4F3E",
+                fontSize: "18px",
+                fontWeight: 700,
+              }}
+            >
+              {popup.title}
+            </h3>
             {popup.name && (
-            <div style={styles.techNameBox}>Technician: <strong>{popup.name}</strong>
-            </div>)}
-            <p style={{ margin: "0 0 20px 0", color: "#6B7280", fontSize: "13px" }}>{popup.message}</p>
+              <div style={styles.techNameBox}>
+                Technician: <strong>{popup.name}</strong>
+              </div>
+            )}
+            <p
+              style={{
+                margin: "0 0 20px 0",
+                color: "#6B7280",
+                fontSize: "13px",
+              }}
+            >
+              {popup.message}
+            </p>
             <button
               type="button"
-              style={hoveredBtn === 'popupClose' ? { ...styles.popupCloseBtn, background: '#5C9470' } : styles.popupCloseBtn}
-              onMouseEnter={() => setHoveredBtn('popupClose')}
+              style={
+                hoveredBtn === "popupClose"
+                  ? { ...styles.popupCloseBtn, background: "#5C9470" }
+                  : styles.popupCloseBtn
+              }
+              onMouseEnter={() => setHoveredBtn("popupClose")}
               onMouseLeave={() => setHoveredBtn(null)}
               onClick={closePopup}
             >
@@ -1505,7 +1785,10 @@ export default function TechnicianListPage() {
             ...styles.tldToast,
             background: toast.type === "success" ? "#DDEEE5" : "#FDF2F2",
             color: toast.type === "success" ? "#2F4F3E" : "#9B3A3A",
-            border: toast.type === "success" ? "1px solid #C3DDC9" : "1px solid #F5C6C6"
+            border:
+              toast.type === "success"
+                ? "1px solid #C3DDC9"
+                : "1px solid #F5C6C6",
           }}
         >
           {toast.msg}
@@ -1517,8 +1800,15 @@ export default function TechnicianListPage() {
       {/* Background error banner */}
       {bgError && (
         <div style={styles.tldBgErrorBanner}>
-          <strong>Refresh failed.</strong> Showing last available data. — {bgError}
-          <button className="tld-bg-error-retry" onClick={handleManualRefresh} style={styles.tldBgErrorRetry}>Retry</button>
+          <strong>Refresh failed.</strong> Showing last available data. —{" "}
+          {bgError}
+          <button
+            className="tld-bg-error-retry"
+            onClick={handleManualRefresh}
+            style={styles.tldBgErrorRetry}
+          >
+            Retry
+          </button>
         </div>
       )}
 
@@ -1527,21 +1817,29 @@ export default function TechnicianListPage() {
         <div className="tld-header-responsive" style={styles.tldCardHeader}>
           <div>
             <span style={styles.tldSectionBadge}>Dashboard</span>
-            <p style={styles.tldCardSubtitle}>Monitor registered technicians, real-time workload, and latency metrics</p>
+            <p style={styles.tldCardSubtitle}>
+              Monitor registered technicians, real-time workload, and latency
+              metrics
+            </p>
           </div>
-          <div className="tld-header-right-responsive" style={{
-            ...styles.tldHeaderRight,
-            flexDirection: "column",
-            alignItems: "flex-end",
-            gap: "6px",
-          }}>
+          <div
+            className="tld-header-right-responsive"
+            style={{
+              ...styles.tldHeaderRight,
+              flexDirection: "column",
+              alignItems: "flex-end",
+              gap: "6px",
+            }}
+          >
             {/* Top row containing refresh indicator, Metrics, Refresh button and Add button */}
-            <div style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              flexWrap: "wrap",
-            }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                flexWrap: "wrap",
+              }}
+            >
               {/* Refresh indicator */}
               <div style={styles.tldRefreshBar}>
                 <div
@@ -1560,12 +1858,15 @@ export default function TechnicianListPage() {
                   <button
                     className="tld-metrics-trigger-style"
                     style={styles.tldMetricsTrigger}
-                    onClick={() => setShowMetrics(v => !v)}
+                    onClick={() => setShowMetrics((v) => !v)}
                   >
                     Metrics
                   </button>
                   {showMetrics && (
-                    <MetricsPanel metrics={metrics} lastSuccessAt={lastSuccessAt} />
+                    <MetricsPanel
+                      metrics={metrics}
+                      lastSuccessAt={lastSuccessAt}
+                    />
                   )}
                 </div>
               </div>
@@ -1577,23 +1878,40 @@ export default function TechnicianListPage() {
                 disabled={fetching || loading}
                 title="Refresh now"
               >
-                {fetching || loading
-                  ? <><div style={styles.tldRefreshBtnSpinner} />Refreshing…</>
-                  : <>Refresh</>
-                }
+                {fetching || loading ? (
+                  <>
+                    <div style={styles.tldRefreshBtnSpinner} />
+                    Refreshing…
+                  </>
+                ) : (
+                  <>Refresh</>
+                )}
               </button>
-              </div>
-
-
+            </div>
           </div>
         </div>
 
         {/* Filter Bar */}
         <div className="tld-filter-bar-responsive" style={styles.tldFilterBar}>
-          <div className="tld-filter-group-responsive" style={{ ...styles.tldFilterGroup, ...styles.tldFilterGroupSearch }}>
+          <div
+            className="tld-filter-group-responsive"
+            style={{ ...styles.tldFilterGroup, ...styles.tldFilterGroupSearch }}
+          >
             <label style={styles.tldFilterGroupLabel}>Search</label>
             <div style={styles.tldSearchWrap}>
-              <span style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", color: "#A0B5A8", fontSize: "13px", pointerEvents: "none" }}>🔍</span>
+              <span
+                style={{
+                  position: "absolute",
+                  left: "10px",
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  color: "#A0B5A8",
+                  fontSize: "13px",
+                  pointerEvents: "none",
+                }}
+              >
+                🔍
+              </span>
               <input
                 id="tech-search"
                 type="text"
@@ -1601,18 +1919,21 @@ export default function TechnicianListPage() {
                 style={styles.tldSearchInput}
                 placeholder="Name, skill, location…"
                 value={search}
-                onChange={e => setSearch(e.target.value)}
+                onChange={(e) => setSearch(e.target.value)}
               />
             </div>
           </div>
-          <div className="tld-filter-group-responsive" style={styles.tldFilterGroup}>
+          <div
+            className="tld-filter-group-responsive"
+            style={styles.tldFilterGroup}
+          >
             <label style={styles.tldFilterGroupLabel}>Status</label>
             <select
               id="tech-status-filter"
               className="tld-select-style"
               style={styles.tldSelect}
               value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value)}
+              onChange={(e) => setStatusFilter(e.target.value)}
             >
               <option value="ALL">All Statuses</option>
               <option value="Available">Available</option>
@@ -1625,61 +1946,119 @@ export default function TechnicianListPage() {
               <option value="Suspended">Suspended</option>
             </select>
           </div>
-          <div className="tld-filter-group-responsive" style={styles.tldFilterGroup}>
+          <div
+            className="tld-filter-group-responsive"
+            style={styles.tldFilterGroup}
+          >
             <label style={styles.tldFilterGroupLabel}>Zone</label>
             <select
               id="tech-zone-filter"
               className="tld-select-style"
               style={styles.tldSelect}
               value={zoneFilter}
-              onChange={e => setZoneFilter(e.target.value)}
+              onChange={(e) => setZoneFilter(e.target.value)}
             >
               <option value="ALL">All Zones</option>
-              {uniqueZones.map(z => <option key={z} value={z}>{z}</option>)}
+              {uniqueZones.map((z) => (
+                <option key={z} value={z}>
+                  {z}
+                </option>
+              ))}
             </select>
           </div>
-          <div className="tld-filter-group-responsive" style={styles.tldFilterGroup}>
+          <div
+            className="tld-filter-group-responsive"
+            style={styles.tldFilterGroup}
+          >
             <label style={styles.tldFilterGroupLabel}>Skill</label>
             <select
               id="tech-skill-filter"
               className="tld-select-style"
               style={styles.tldSelect}
               value={skillFilter}
-              onChange={e => setSkillFilter(e.target.value)}
+              onChange={(e) => setSkillFilter(e.target.value)}
             >
               <option value="ALL">All Skills</option>
-              {SKILLS.map(s => <option key={s} value={s}>{s}</option>)}
+              {SKILLS.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
             </select>
           </div>
-          {hasFilters && <button className="tld-filter-clear-style" style={styles.tldFilterClear} onClick={clearFilters}>Clear</button>}
+          {hasFilters && (
+            <button
+              className="tld-filter-clear-style"
+              style={styles.tldFilterClear}
+              onClick={clearFilters}
+            >
+              Clear
+            </button>
+          )}
         </div>
 
         <div style={styles.tldTableMeta}>
           <p style={styles.tldResultsCount}>
-            Showing <strong>{pageSlice.length}</strong> of <strong>{totalTechCount}</strong> technician{totalTechCount !== 1 ? "s" : ""}
+            Showing <strong>{pageSlice.length}</strong> of{" "}
+            <strong>{totalTechCount}</strong> technician
+            {totalTechCount !== 1 ? "s" : ""}
           </p>
         </div>
         <div className="tld-table-wrap-responsive" style={styles.tldTableWrap}>
           <table className="tld-table-responsive" style={styles.tldTable}>
             <thead>
               <tr>
-                <th className={`sortable-style ${sortKey === "name" ? "sort-active" : ""}`} style={styles.tldTableTh} onClick={() => handleSort("name")}>
-                  Technician Name <SortIcon col="name" sortKey={sortKey} sortDir={sortDir} />
+                <th
+                  className={`sortable-style ${sortKey === "name" ? "sort-active" : ""}`}
+                  style={styles.tldTableTh}
+                  onClick={() => handleSort("name")}
+                >
+                  Technician Name{" "}
+                  <SortIcon col="name" sortKey={sortKey} sortDir={sortDir} />
                 </th>
-                <th className={`sortable-style ${sortKey === "skill" ? "sort-active" : ""}`} style={styles.tldTableTh} onClick={() => handleSort("skill")}>
-                  Skill <SortIcon col="skill" sortKey={sortKey} sortDir={sortDir} />
+                <th
+                  className={`sortable-style ${sortKey === "skill" ? "sort-active" : ""}`}
+                  style={styles.tldTableTh}
+                  onClick={() => handleSort("skill")}
+                >
+                  Skill{" "}
+                  <SortIcon col="skill" sortKey={sortKey} sortDir={sortDir} />
                 </th>
-                <th className={`sortable-style ${sortKey === "location" ? "sort-active" : ""}`} style={styles.tldTableTh} onClick={() => handleSort("location")}>
-                  Location <SortIcon col="location" sortKey={sortKey} sortDir={sortDir} />
+                <th
+                  className={`sortable-style ${sortKey === "location" ? "sort-active" : ""}`}
+                  style={styles.tldTableTh}
+                  onClick={() => handleSort("location")}
+                >
+                  Location{" "}
+                  <SortIcon
+                    col="location"
+                    sortKey={sortKey}
+                    sortDir={sortDir}
+                  />
                 </th>
-                <th className={`sortable-style ${sortKey === "status" ? "sort-active" : ""}`} style={{ ...styles.tldTableTh, textAlign: "center" }} onClick={() => handleSort("status")}>
-                  Status <SortIcon col="status" sortKey={sortKey} sortDir={sortDir} />
+                <th
+                  className={`sortable-style ${sortKey === "status" ? "sort-active" : ""}`}
+                  style={{ ...styles.tldTableTh, textAlign: "center" }}
+                  onClick={() => handleSort("status")}
+                >
+                  Status{" "}
+                  <SortIcon col="status" sortKey={sortKey} sortDir={sortDir} />
                 </th>
-                <th className={`sortable-style ${sortKey === "jobs" ? "sort-active" : ""}`} style={styles.tldTableTh} onClick={() => handleSort("jobs")}>
-                  Workload <SortIcon col="jobs" sortKey={sortKey} sortDir={sortDir} />
+                <th
+                  className={`sortable-style ${sortKey === "jobs" ? "sort-active" : ""}`}
+                  style={styles.tldTableTh}
+                  onClick={() => handleSort("jobs")}
+                >
+                  Workload{" "}
+                  <SortIcon col="jobs" sortKey={sortKey} sortDir={sortDir} />
                 </th>
-                <th className={`sortable-style ${sortKey === "ping" ? "sort-active" : ""}`} style={styles.tldTableTh} onClick={() => handleSort("ping")}>
-                  Last Ping <SortIcon col="ping" sortKey={sortKey} sortDir={sortDir} />
+                <th
+                  className={`sortable-style ${sortKey === "ping" ? "sort-active" : ""}`}
+                  style={styles.tldTableTh}
+                  onClick={() => handleSort("ping")}
+                >
+                  Last Ping{" "}
+                  <SortIcon col="ping" sortKey={sortKey} sortDir={sortDir} />
                 </th>
                 <th style={styles.tldTableTh}>Actions</th>
               </tr>
@@ -1696,11 +2075,11 @@ export default function TechnicianListPage() {
                         minHeight: "180px",
                       }}
                     >
-        <span className="tld-live-loading-dot" />
-      </div>
-    </td>
-  </tr>
-)}
+                      <span className="tld-live-loading-dot" />
+                    </div>
+                  </td>
+                </tr>
+              )}
 
               {!loading && initError && (
                 <tr>
@@ -1709,7 +2088,13 @@ export default function TechnicianListPage() {
                       title="Failed to load technicians"
                       description={initError}
                       action={
-                        <button className="tld-retry-btn-style" style={styles.tldRetryBtn} onClick={() => fetchData(false)}>Retry</button>
+                        <button
+                          className="tld-retry-btn-style"
+                          style={styles.tldRetryBtn}
+                          onClick={() => fetchData(false)}
+                        >
+                          Retry
+                        </button>
                       }
                     />
                   </td>
@@ -1720,11 +2105,25 @@ export default function TechnicianListPage() {
                 <tr>
                   <td colSpan={7}>
                     <EmptyState
-                      title={hasFilters ? "No technicians match your filters" : "No technicians found"}
-                      description={hasFilters ? "Try adjusting filters." : "Add technicians to get started."}
+                      title={
+                        hasFilters
+                          ? "No technicians match your filters"
+                          : "No technicians found"
+                      }
+                      description={
+                        hasFilters
+                          ? "Try adjusting filters."
+                          : "Add technicians to get started."
+                      }
                       action={
                         hasFilters ? (
-                          <button className="tld-retry-btn-style" style={styles.tldRetryBtn} onClick={clearFilters}>Clear Filters</button>
+                          <button
+                            className="tld-retry-btn-style"
+                            style={styles.tldRetryBtn}
+                            onClick={clearFilters}
+                          >
+                            Clear Filters
+                          </button>
                         ) : null
                       }
                     />
@@ -1732,106 +2131,171 @@ export default function TechnicianListPage() {
                 </tr>
               )}
 
-              {!loading && !initError && pageSlice.map(tech => {
-                const pct = wPct(tech.currentJobs, tech.maxJobs);
-                return (
-                  <tr key={tech.id} className="tld-row-style" onClick={() => openSidebar(tech)} title={`View ${tech.name}`}>
-                    <td data-label="Name" style={styles.tldTableTd}>
-                      <div style={styles.tldNameCell}>
-                        <div style={styles.tldAvatar}>{getInitials(tech.name)}</div>
-                        <div style={styles.tldNameInfo}>
-                          <span style={styles.tldNamePrimary}>{tech.name}</span>
+              {!loading &&
+                !initError &&
+                pageSlice.map((tech) => {
+                  const pct = wPct(tech.currentJobs, tech.maxJobs);
+                  return (
+                    <tr
+                      key={tech.id}
+                      className="tld-row-style"
+                      onClick={() => openSidebar(tech)}
+                      title={`View ${tech.name}`}
+                    >
+                      <td data-label="Name" style={styles.tldTableTd}>
+                        <div style={styles.tldNameCell}>
+                          <div style={styles.tldAvatar}>
+                            {getInitials(tech.name)}
+                          </div>
+                          <div style={styles.tldNameInfo}>
+                            <span style={styles.tldNamePrimary}>
+                              {tech.name}
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                    </td>
-                    <td data-label="Skill" style={styles.tldTableTd}>
-                      <span style={{ color: "#475569", fontWeight: 500 }}>{tech.skill}</span>
-                    </td>
-                    <td data-label="Location" style={styles.tldTableTd}>
-                      <span style={{ color: "#6B7280" }}>{tech.location}</span>
-                    </td>
-                    <td data-label="Status" style={{ ...styles.tldTableTd, textAlign: "center", position: "relative" }}>
-                      <div style={{ display: "inline-block", position: "relative", minWidth: "110px" }} onClick={e => e.stopPropagation()}>
-                        <select
-                          value={normalizeStatus(tech.status)}
-                          onChange={e => handleInlineStatusChange(tech.id, e.target.value)}
-                          disabled={updatingId === tech.id}
-                          className="tld-status-select-style"
+                      </td>
+                      <td data-label="Skill" style={styles.tldTableTd}>
+                        <span style={{ color: "#475569", fontWeight: 500 }}>
+                          {tech.skill}
+                        </span>
+                      </td>
+                      <td data-label="Location" style={styles.tldTableTd}>
+                        <span style={{ color: "#6B7280" }}>
+                          {tech.location}
+                        </span>
+                      </td>
+                      <td
+                        data-label="Status"
+                        style={{
+                          ...styles.tldTableTd,
+                          textAlign: "center",
+                          position: "relative",
+                        }}
+                      >
+                        <div
                           style={{
-                            ...getStatusSelectStyle(tech.status),
-                            width: "100%",
-                            padding: "4px 20px 4px 8px",
-                            fontSize: "10px",
-                            borderRadius: "6px",
-                            appearance: "none",
-                            opacity: updatingId === tech.id ? 0.6 : 1,
-                            fontWeight: 600
+                            display: "inline-block",
+                            position: "relative",
+                            minWidth: "110px",
                           }}
+                          onClick={(e) => e.stopPropagation()}
                         >
-                          <option value="Available">Available</option>
-                          <option value="Busy">Busy</option>
-                          <option value="Assigned">Assigned</option>
-                          <option value="Offline">Offline</option>
-                          <option value="En Route">En Route</option>
-                          <option value="On Site">On Site</option>
-                          <option value="On Break">On Break</option>
-                          <option value="Suspended">Suspended</option>
-                        </select>
-                        <div style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: getStatusSelectStyle(tech.status).color as string, opacity: 0.8 }}>
-                          <ChevronDown size={11} />
-                        </div>
-                      </div>
-                    </td>
-                    <td data-label="Workload" style={styles.tldTableTd}>
-                      <div style={styles.tldWorkloadCell}>
-                        <div style={styles.tldWorkloadNumbers}>{tech.currentJobs} / {tech.maxJobs}</div>
-                        <div style={styles.tldWorkloadTrack}>
-                          <div
-                            className={`tld-workload-fill ${wColor(pct)}`}
+                          <select
+                            value={normalizeStatus(tech.status)}
+                            onChange={(e) =>
+                              handleInlineStatusChange(tech.id, e.target.value)
+                            }
+                            disabled={updatingId === tech.id}
+                            className="tld-status-select-style"
                             style={{
-                              ...styles.tldWorkloadFill,
-                              width: `${pct}%`,
-                              background: pct >= 90 ? "#D96C6C" : pct >= 60 ? "#D9A441" : "#6FAF7A"
+                              ...getStatusSelectStyle(tech.status),
+                              width: "100%",
+                              padding: "4px 20px 4px 8px",
+                              fontSize: "10px",
+                              borderRadius: "6px",
+                              appearance: "none",
+                              opacity: updatingId === tech.id ? 0.6 : 1,
+                              fontWeight: 600,
                             }}
-                          />
+                          >
+                            <option value="Available">Available</option>
+                            <option value="Busy">Busy</option>
+                            <option value="Assigned">Assigned</option>
+                            <option value="Offline">Offline</option>
+                            <option value="En Route">En Route</option>
+                            <option value="On Site">On Site</option>
+                            <option value="On Break">On Break</option>
+                            <option value="Suspended">Suspended</option>
+                          </select>
+                          <div
+                            style={{
+                              position: "absolute",
+                              right: "8px",
+                              top: "50%",
+                              transform: "translateY(-50%)",
+                              pointerEvents: "none",
+                              color: getStatusSelectStyle(tech.status)
+                                .color as string,
+                              opacity: 0.8,
+                            }}
+                          >
+                            <ChevronDown size={11} />
+                          </div>
                         </div>
-                      </div>
-                    </td>
-                    <td data-label="Last Ping" style={styles.tldTableTd}><span style={styles.tldPing}>{formatAgo(tech.lastPing)}</span></td>
-                    <td data-label="Actions" style={styles.tldTableTd}>
-                      <div style={styles.tldActions} onClick={e => e.stopPropagation()}>
-                        <button
-                          className="icon-action-btn-style"
-                          style={{ ...styles.iconActionBtn, color: '#16a34a' }}
-                          onClick={() => openSidebar(tech)}
-                          title="View technician"
-                          aria-label="View technician"
+                      </td>
+                      <td data-label="Workload" style={styles.tldTableTd}>
+                        <div style={styles.tldWorkloadCell}>
+                          <div style={styles.tldWorkloadNumbers}>
+                            {tech.currentJobs} / {tech.maxJobs}
+                          </div>
+                          <div style={styles.tldWorkloadTrack}>
+                            <div
+                              className={`tld-workload-fill ${wColor(pct)}`}
+                              style={{
+                                ...styles.tldWorkloadFill,
+                                width: `${pct}%`,
+                                background:
+                                  pct >= 90
+                                    ? "#D96C6C"
+                                    : pct >= 60
+                                      ? "#D9A441"
+                                      : "#6FAF7A",
+                              }}
+                            />
+                          </div>
+                        </div>
+                      </td>
+                      <td data-label="Last Ping" style={styles.tldTableTd}>
+                        <span style={styles.tldPing}>
+                          {formatAgo(tech.lastPing)}
+                        </span>
+                      </td>
+                      <td data-label="Actions" style={styles.tldTableTd}>
+                        <div
+                          style={styles.tldActions}
+                          onClick={(e) => e.stopPropagation()}
                         >
-                          <Eye size={15} />
-                        </button>
-                        <button
-                          className="icon-action-btn-style"
-                          style={{ ...styles.iconActionBtn, color: '#ca8a04' }}
-                          onClick={() => handleEditTech(tech)}
-                          title="Edit technician"
-                          aria-label="Edit technician"
-                        >
-                          <Pencil size={15} />
-                        </button>
-                        <button
-                          className="icon-action-btn-style"
-                          style={{ ...styles.iconActionBtn, color: '#dc2626' }}
-                          onClick={() => handleDeleteTech(tech)}
-                          title="Delete technician"
-                          aria-label="Delete technician"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
+                          <button
+                            className="icon-action-btn-style"
+                            style={{
+                              ...styles.iconActionBtn,
+                              color: "#16a34a",
+                            }}
+                            onClick={() => openSidebar(tech)}
+                            title="View technician"
+                            aria-label="View technician"
+                          >
+                            <Eye size={15} />
+                          </button>
+                          <button
+                            className="icon-action-btn-style"
+                            style={{
+                              ...styles.iconActionBtn,
+                              color: "#ca8a04",
+                            }}
+                            onClick={() => handleEditTech(tech)}
+                            title="Edit technician"
+                            aria-label="Edit technician"
+                          >
+                            <Pencil size={15} />
+                          </button>
+                          <button
+                            className="icon-action-btn-style"
+                            style={{
+                              ...styles.iconActionBtn,
+                              color: "#dc2626",
+                            }}
+                            onClick={() => handleDeleteTech(tech)}
+                            title="Delete technician"
+                            aria-label="Delete technician"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
             </tbody>
           </table>
         </div>
@@ -1839,40 +2303,95 @@ export default function TechnicianListPage() {
         {/* Pagination */}
         {!loading && !initError && (
           <div style={styles.tldPagination}>
-            <span style={styles.tldPageInfo}>Page <strong>{safePage}</strong> of <strong>{totalPages}</strong> · {totalTechCount} results</span>
+            <span style={styles.tldPageInfo}>
+              Page <strong>{safePage}</strong> of <strong>{totalPages}</strong>{" "}
+              · {totalTechCount} results
+            </span>
             <div style={styles.tldPageControls}>
-              <button className="tld-page-btn" style={styles.tldPageBtn} onClick={() => setPage(1)} disabled={safePage === 1}>«</button>
-              <button className="tld-page-btn" style={styles.tldPageBtn} onClick={() => setPage(p => Math.max(1, p - 1))} disabled={safePage === 1}>‹ Prev</button>
+              <button
+                className="tld-page-btn"
+                style={styles.tldPageBtn}
+                onClick={() => setPage(1)}
+                disabled={safePage === 1}
+              >
+                «
+              </button>
+              <button
+                className="tld-page-btn"
+                style={styles.tldPageBtn}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={safePage === 1}
+              >
+                ‹ Prev
+              </button>
               <div style={styles.tldPageNumbers}>
-                {getPageNums().map(n => <button key={n} className={`tld-page-num${n === safePage ? " active" : ""}`} style={{ ...styles.tldPageNum, ...(n === safePage ? styles.tldPageNumActive : {}) }} onClick={() => setPage(n)}>{n}</button>)}
+                {getPageNums().map((n) => (
+                  <button
+                    key={n}
+                    className={`tld-page-num${n === safePage ? " active" : ""}`}
+                    style={{
+                      ...styles.tldPageNum,
+                      ...(n === safePage ? styles.tldPageNumActive : {}),
+                    }}
+                    onClick={() => setPage(n)}
+                  >
+                    {n}
+                  </button>
+                ))}
               </div>
-              <button className="tld-page-btn" style={styles.tldPageBtn} onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}>Next ›</button>
-              <button className="tld-page-btn" style={styles.tldPageBtn} onClick={() => setPage(totalPages)} disabled={safePage === totalPages}>»</button>
+              <button
+                className="tld-page-btn"
+                style={styles.tldPageBtn}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={safePage === totalPages}
+              >
+                Next ›
+              </button>
+              <button
+                className="tld-page-btn"
+                style={styles.tldPageBtn}
+                onClick={() => setPage(totalPages)}
+                disabled={safePage === totalPages}
+              >
+                »
+              </button>
             </div>
           </div>
         )}
       </div>
 
       {/* Detail Sidebar */}
-      {selected && <div style={styles.tldSidebarOverlay} onClick={closeSidebar} />}
+      {selected && (
+        <div style={styles.tldSidebarOverlay} onClick={closeSidebar} />
+      )}
       <div
         className="tld-sidebar-responsive"
         style={{
           ...styles.tldSidebar,
-          right: selected ? "0" : "-440px"
+          right: selected ? "0" : "-440px",
         }}
       >
         <div style={styles.tldSidebarHead}>
           <h3 style={styles.tldSidebarHeadH3}>Technician Details</h3>
-          <button className="tld-sidebar-close-style" style={styles.tldSidebarClose} onClick={closeSidebar}>×</button>
+          <button
+            className="tld-sidebar-close-style"
+            style={styles.tldSidebarClose}
+            onClick={closeSidebar}
+          >
+            ×
+          </button>
         </div>
         {selected && (
           <div style={styles.tldSidebarBody}>
             <div style={styles.tldDetailHero}>
-              <div style={styles.tldDetailAvatar}>{getInitials(selected.name)}</div>
+              <div style={styles.tldDetailAvatar}>
+                {getInitials(selected.name)}
+              </div>
               <div>
                 <div style={styles.tldDetailName}>{selected.name}</div>
-                <div style={styles.tldDetailMeta}><StatusBadge status={selected.status as any} /></div>
+                <div style={styles.tldDetailMeta}>
+                  <StatusBadge status={selected.status as any} />
+                </div>
               </div>
             </div>
             <p style={styles.tldDetailSectionTitle}>Technician Info</p>
@@ -1890,8 +2409,15 @@ export default function TechnicianListPage() {
               </div>
             ))}
             <div style={styles.tldStatusSelectWrap}>
-              <label style={styles.tldStatusSelectWrapLabel}>Update Availability Status</label>
-              <select className="tld-status-select-style" style={styles.tldStatusSelect} value={newStatus} onChange={e => setNewStatus(e.target.value)}>
+              <label style={styles.tldStatusSelectWrapLabel}>
+                Update Availability Status
+              </label>
+              <select
+                className="tld-status-select-style"
+                style={styles.tldStatusSelect}
+                value={newStatus}
+                onChange={(e) => setNewStatus(e.target.value)}
+              >
                 <option value="Available">Available</option>
                 <option value="Busy">Busy</option>
                 <option value="Assigned">Assigned</option>
@@ -1901,8 +2427,14 @@ export default function TechnicianListPage() {
                 <option value="On Break">On Break</option>
                 <option value="Suspended">Suspended</option>
               </select>
-              <button className="tld-save-btn-style" style={styles.tldSaveBtn} onClick={handleSaveStatus}
-                disabled={saving || newStatus === normalizeStatus(selected.status)}>
+              <button
+                className="tld-save-btn-style"
+                style={styles.tldSaveBtn}
+                onClick={handleSaveStatus}
+                disabled={
+                  saving || newStatus === normalizeStatus(selected.status)
+                }
+              >
                 {saving ? "Saving…" : "Save Status"}
               </button>
             </div>
@@ -1911,29 +2443,87 @@ export default function TechnicianListPage() {
       </div>
 
       {/* Form Sidebar for Add/Edit */}
-      {isFormOpen && <div style={styles.tldSidebarOverlay} onClick={closeForm} />}
+      {isFormOpen && (
+        <div style={styles.tldSidebarOverlay} onClick={closeForm} />
+      )}
       <div
         className="tld-sidebar-responsive"
         style={{
           ...styles.tldSidebar,
-          right: isFormOpen ? "0" : "-440px"
+          right: isFormOpen ? "0" : "-440px",
         }}
       >
         <div style={styles.tldSidebarHead}>
-          <h3 style={styles.tldSidebarHeadH3}>{isEditing ? "Edit Technician" : "Add New Technician"}</h3>
-          <button className="tld-sidebar-close-style" style={styles.tldSidebarClose} onClick={closeForm}>×</button>
+          <h3 style={styles.tldSidebarHeadH3}>
+            {isEditing ? "Edit Technician" : "Add New Technician"}
+          </h3>
+          <button
+            className="tld-sidebar-close-style"
+            style={styles.tldSidebarClose}
+            onClick={closeForm}
+          >
+            ×
+          </button>
         </div>
         <form style={styles.tldSidebarBody} onSubmit={handleFormSubmit}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#475569', textTransform: 'uppercase' }}>Technician ID</label>
-            <div style={{ padding: '8px 12px', background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '6px', fontSize: '13px', fontWeight: 700, color: '#0F172A', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span>{isEditing ? (editingTechId ? `TECH-${editingTechId}` : "TECH-101") : `TECH-${(technicians.length + 101)}`}</span>
-              <span style={{ fontSize: '10px', background: '#DCFCE7', color: '#15803D', padding: '2px 8px', borderRadius: '10px', fontWeight: 800 }}>AUTO-ASSIGNED</span>
+          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            <label
+              style={{
+                fontSize: "11px",
+                fontWeight: "bold",
+                color: "#475569",
+                textTransform: "uppercase",
+              }}
+            >
+              Technician ID
+            </label>
+            <div
+              style={{
+                padding: "8px 12px",
+                background: "#F8FAFC",
+                border: "1px solid #E2E8F0",
+                borderRadius: "6px",
+                fontSize: "13px",
+                fontWeight: 700,
+                color: "#0F172A",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <span>
+                {isEditing
+                  ? editingTechId
+                    ? `TECH-${editingTechId}`
+                    : "TECH-101"
+                  : `TECH-${technicians.length + 101}`}
+              </span>
+              <span
+                style={{
+                  fontSize: "10px",
+                  background: "#DCFCE7",
+                  color: "#15803D",
+                  padding: "2px 8px",
+                  borderRadius: "10px",
+                  fontWeight: 800,
+                }}
+              >
+                AUTO-ASSIGNED
+              </span>
             </div>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#475569', textTransform: 'uppercase' }}>Full Name <span style={{ color: '#ef4444' }}>*</span></label>
+          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            <label
+              style={{
+                fontSize: "11px",
+                fontWeight: "bold",
+                color: "#475569",
+                textTransform: "uppercase",
+              }}
+            >
+              Full Name <span style={{ color: "#ef4444" }}>*</span>
+            </label>
             <input
               type="text"
               name="technician_name"
@@ -1941,13 +2531,41 @@ export default function TechnicianListPage() {
               onChange={handleFormChange}
               placeholder="e.g. Rajesh Kumar"
               className="tld-search-input-style"
-              style={{ width: '100%', padding: '8px 12px', border: formErrors.technician_name ? '1px solid #f87171' : '1px solid #e2e8f0', borderRadius: '6px', fontSize: '13px', boxSizing: "border-box" }}
+              style={{
+                width: "100%",
+                padding: "8px 12px",
+                border: formErrors.technician_name
+                  ? "1px solid #f87171"
+                  : "1px solid #e2e8f0",
+                borderRadius: "6px",
+                fontSize: "13px",
+                boxSizing: "border-box",
+              }}
             />
-            {formErrors.technician_name && <span style={{ fontSize: '11px', color: '#ef4444', fontWeight: 'bold' }}>{formErrors.technician_name}</span>}
+            {formErrors.technician_name && (
+              <span
+                style={{
+                  fontSize: "11px",
+                  color: "#ef4444",
+                  fontWeight: "bold",
+                }}
+              >
+                {formErrors.technician_name}
+              </span>
+            )}
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#475569', textTransform: 'uppercase' }}>Skill <span style={{ color: '#ef4444' }}>*</span></label>
+          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            <label
+              style={{
+                fontSize: "11px",
+                fontWeight: "bold",
+                color: "#475569",
+                textTransform: "uppercase",
+              }}
+            >
+              Skill <span style={{ color: "#ef4444" }}>*</span>
+            </label>
             <SkillComboSelect
               name="technician_skill"
               value={techFormData.technician_skill}
@@ -1960,13 +2578,41 @@ export default function TechnicianListPage() {
               placeholder="e.g. Electrical, HVAC"
               className="tld-search-input-style"
               hasError={!!formErrors.technician_skill}
-              inputStyle={{ width: '100%', padding: '8px 12px', border: formErrors.technician_skill ? '1px solid #f87171' : '1px solid #e2e8f0', borderRadius: '6px', fontSize: '13px', boxSizing: "border-box" }}
+              inputStyle={{
+                width: "100%",
+                padding: "8px 12px",
+                border: formErrors.technician_skill
+                  ? "1px solid #f87171"
+                  : "1px solid #e2e8f0",
+                borderRadius: "6px",
+                fontSize: "13px",
+                boxSizing: "border-box",
+              }}
             />
-            {formErrors.technician_skill && <span style={{ fontSize: '11px', color: '#ef4444', fontWeight: 'bold' }}>{formErrors.technician_skill}</span>}
+            {formErrors.technician_skill && (
+              <span
+                style={{
+                  fontSize: "11px",
+                  color: "#ef4444",
+                  fontWeight: "bold",
+                }}
+              >
+                {formErrors.technician_skill}
+              </span>
+            )}
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#475569', textTransform: 'uppercase' }}>Location / Zone <span style={{ color: '#ef4444' }}>*</span></label>
+          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            <label
+              style={{
+                fontSize: "11px",
+                fontWeight: "bold",
+                color: "#475569",
+                textTransform: "uppercase",
+              }}
+            >
+              Location / Zone <span style={{ color: "#ef4444" }}>*</span>
+            </label>
             <input
               type="text"
               name="technician_location"
@@ -1974,19 +2620,55 @@ export default function TechnicianListPage() {
               onChange={handleFormChange}
               placeholder="e.g. 13.0827,80.2707"
               className="tld-search-input-style"
-              style={{ width: '100%', padding: '8px 12px', border: formErrors.technician_location ? '1px solid #f87171' : '1px solid #e2e8f0', borderRadius: '6px', fontSize: '13px', boxSizing: "border-box" }}
+              style={{
+                width: "100%",
+                padding: "8px 12px",
+                border: formErrors.technician_location
+                  ? "1px solid #f87171"
+                  : "1px solid #e2e8f0",
+                borderRadius: "6px",
+                fontSize: "13px",
+                boxSizing: "border-box",
+              }}
             />
-            {formErrors.technician_location && <span style={{ fontSize: '11px', color: '#ef4444', fontWeight: 'bold' }}>{formErrors.technician_location}</span>}
+            {formErrors.technician_location && (
+              <span
+                style={{
+                  fontSize: "11px",
+                  color: "#ef4444",
+                  fontWeight: "bold",
+                }}
+              >
+                {formErrors.technician_location}
+              </span>
+            )}
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#475569', textTransform: 'uppercase' }}>{isEditing ? "Status" : "Initial Status"}</label>
+          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            <label
+              style={{
+                fontSize: "11px",
+                fontWeight: "bold",
+                color: "#475569",
+                textTransform: "uppercase",
+              }}
+            >
+              {isEditing ? "Status" : "Initial Status"}
+            </label>
             <select
               name="technician_status"
               value={techFormData.technician_status}
               onChange={handleFormChange}
               className="tld-select-style"
-              style={{ width: '100%', padding: '8px 12px', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '13px', background: '#fff', boxSizing: "border-box" }}
+              style={{
+                width: "100%",
+                padding: "8px 12px",
+                border: "1px solid #e2e8f0",
+                borderRadius: "6px",
+                fontSize: "13px",
+                background: "#fff",
+                boxSizing: "border-box",
+              }}
             >
               <option value="Available">Available</option>
               <option value="Busy">Busy</option>
@@ -1999,20 +2681,43 @@ export default function TechnicianListPage() {
             </select>
           </div>
 
-          <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+          <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
             <button
               type="submit"
               className="btn-primary-style"
               disabled={formLoading}
-              style={{ flex: 1, padding: '10px', background: '#2F4F3E', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer' }}
+              style={{
+                flex: 1,
+                padding: "10px",
+                background: "#2F4F3E",
+                color: "#fff",
+                border: "none",
+                borderRadius: "6px",
+                fontSize: "13px",
+                fontWeight: "bold",
+                cursor: "pointer",
+              }}
             >
-              {formLoading ? "Saving..." : isEditing ? "Update Technician" : "Add Technician"}
+              {formLoading
+                ? "Saving..."
+                : isEditing
+                  ? "Update Technician"
+                  : "Add Technician"}
             </button>
             <button
               type="button"
               className="btn-secondary-style"
               onClick={closeForm}
-              style={{ padding: '10px 16px', background: '#fff', color: '#475569', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer' }}
+              style={{
+                padding: "10px 16px",
+                background: "#fff",
+                color: "#475569",
+                border: "1px solid #cbd5e1",
+                borderRadius: "6px",
+                fontSize: "13px",
+                fontWeight: "bold",
+                cursor: "pointer",
+              }}
             >
               Cancel
             </button>
