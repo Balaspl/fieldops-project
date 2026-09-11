@@ -13,6 +13,7 @@ import dispatcherService, {
 const PAGE_SIZE = 8;
 const REFRESH_MS = 60_000;
 
+
 const styles = {
   page: {
     fontFamily: "'Inter', sans-serif",
