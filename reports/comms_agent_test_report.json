@@ -5,1111 +5,1111 @@
   "skipped": 0,
   "tests": [
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_base_agent.py::test_base_agent_cannot_be_instantiated_directly",
+      "nodeid": "tests/agents/test_base_agent.py::test_base_agent_cannot_be_instantiated_directly",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_base_agent.py::test_incomplete_subclass_cannot_be_instantiated",
+      "nodeid": "tests/agents/test_base_agent.py::test_incomplete_subclass_cannot_be_instantiated",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_base_agent.py::test_initial_state",
+      "nodeid": "tests/agents/test_base_agent.py::test_initial_state",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_base_agent.py::test_setup_succeeds",
+      "nodeid": "tests/agents/test_base_agent.py::test_setup_succeeds",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_base_agent.py::test_execute_checks_tenant_context",
+      "nodeid": "tests/agents/test_base_agent.py::test_execute_checks_tenant_context",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_base_agent.py::test_execute_calls_run_once",
+      "nodeid": "tests/agents/test_base_agent.py::test_execute_calls_run_once",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_base_agent.py::test_execute_exception_safe_state",
+      "nodeid": "tests/agents/test_base_agent.py::test_execute_exception_safe_state",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_base_agent.py::test_teardown_prevents_reuse",
+      "nodeid": "tests/agents/test_base_agent.py::test_teardown_prevents_reuse",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_bus.py::test_subscribe_and_broadcast",
+      "nodeid": "tests/agents/test_bus.py::test_subscribe_and_broadcast",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_bus.py::test_targeted_routing",
+      "nodeid": "tests/agents/test_bus.py::test_targeted_routing",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_bus.py::test_cross_tenant_routing_isolation",
+      "nodeid": "tests/agents/test_bus.py::test_cross_tenant_routing_isolation",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_bus.py::test_topic_isolation",
+      "nodeid": "tests/agents/test_bus.py::test_topic_isolation",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_bus.py::test_handler_failure_isolation",
+      "nodeid": "tests/agents/test_bus.py::test_handler_failure_isolation",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_bus.py::test_handler_timeout_isolation",
+      "nodeid": "tests/agents/test_bus.py::test_handler_timeout_isolation",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_bus.py::test_sync_handler_non_blocking",
+      "nodeid": "tests/agents/test_bus.py::test_sync_handler_non_blocking",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_bus.py::test_deep_copy_payload_isolation",
+      "nodeid": "tests/agents/test_bus.py::test_deep_copy_payload_isolation",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_bus.py::test_unsubscribe_prevents_delivery",
+      "nodeid": "tests/agents/test_bus.py::test_unsubscribe_prevents_delivery",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_bus.py::test_publish_performance_sla",
+      "nodeid": "tests/agents/test_bus.py::test_publish_performance_sla",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_urgency_score_explicit_value",
+      "nodeid": "tests/agents/test_channel_selector.py::test_urgency_score_explicit_value",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_urgency_score_is_clamped",
+      "nodeid": "tests/agents/test_channel_selector.py::test_urgency_score_is_clamped",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_urgency_score_invalid_value_defaults_to_three",
+      "nodeid": "tests/agents/test_channel_selector.py::test_urgency_score_invalid_value_defaults_to_three",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[ETA-5]",
+      "nodeid": "tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[ETA-5]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[ETA_ALERT-5]",
+      "nodeid": "tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[ETA_ALERT-5]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[EMERGENCY-5]",
+      "nodeid": "tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[EMERGENCY-5]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[CRITICAL-5]",
+      "nodeid": "tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[CRITICAL-5]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[URGENT-4]",
+      "nodeid": "tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[URGENT-4]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[JOB_DELAY-4]",
+      "nodeid": "tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[JOB_DELAY-4]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[DELAY-4]",
+      "nodeid": "tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[DELAY-4]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[STATUS_UPDATE-3]",
+      "nodeid": "tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[STATUS_UPDATE-3]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[JOB_STATUS-3]",
+      "nodeid": "tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[JOB_STATUS-3]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[ENROUTE-3]",
+      "nodeid": "tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[ENROUTE-3]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[ONSITE-3]",
+      "nodeid": "tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[ONSITE-3]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[COMPLETED-3]",
+      "nodeid": "tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[COMPLETED-3]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[REMINDER-2]",
+      "nodeid": "tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[REMINDER-2]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[FOLLOW_UP-2]",
+      "nodeid": "tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[FOLLOW_UP-2]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[UNKNOWN-1]",
+      "nodeid": "tests/agents/test_channel_selector.py::test_urgency_score_by_notification_type[UNKNOWN-1]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_quiet_hours_at_10pm",
+      "nodeid": "tests/agents/test_channel_selector.py::test_quiet_hours_at_10pm",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_quiet_hours_before_7am",
+      "nodeid": "tests/agents/test_channel_selector.py::test_quiet_hours_before_7am",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_quiet_hours_at_7am",
+      "nodeid": "tests/agents/test_channel_selector.py::test_quiet_hours_at_7am",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_quiet_hours_outside_window",
+      "nodeid": "tests/agents/test_channel_selector.py::test_quiet_hours_outside_window",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_quiet_hours_requires_timezone_aware_datetime",
+      "nodeid": "tests/agents/test_channel_selector.py::test_quiet_hours_requires_timezone_aware_datetime",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_quiet_hours_rejects_unknown_timezone",
+      "nodeid": "tests/agents/test_channel_selector.py::test_quiet_hours_rejects_unknown_timezone",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_preferred_channel_is_used_first",
+      "nodeid": "tests/agents/test_channel_selector.py::test_preferred_channel_is_used_first",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_in_app_preference_is_normalized_to_portal",
+      "nodeid": "tests/agents/test_channel_selector.py::test_in_app_preference_is_normalized_to_portal",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_urgent_message_prefers_sms",
+      "nodeid": "tests/agents/test_channel_selector.py::test_urgent_message_prefers_sms",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_opted_out_sms_is_skipped",
+      "nodeid": "tests/agents/test_channel_selector.py::test_opted_out_sms_is_skipped",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_unhealthy_sms_is_skipped",
+      "nodeid": "tests/agents/test_channel_selector.py::test_unhealthy_sms_is_skipped",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_health_checker_exception_marks_channel_unhealthy",
+      "nodeid": "tests/agents/test_channel_selector.py::test_health_checker_exception_marks_channel_unhealthy",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_configuration_can_block_sms",
+      "nodeid": "tests/agents/test_channel_selector.py::test_configuration_can_block_sms",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_configuration_is_checked_for_sms_and_email",
+      "nodeid": "tests/agents/test_channel_selector.py::test_configuration_is_checked_for_sms_and_email",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_push_and_portal_do_not_require_configuration_service",
+      "nodeid": "tests/agents/test_channel_selector.py::test_push_and_portal_do_not_require_configuration_service",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_configuration_exception_fails_closed",
+      "nodeid": "tests/agents/test_channel_selector.py::test_configuration_exception_fails_closed",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_sms_is_deferred_during_quiet_hours",
+      "nodeid": "tests/agents/test_channel_selector.py::test_sms_is_deferred_during_quiet_hours",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_urgent_sms_bypasses_quiet_hours",
+      "nodeid": "tests/agents/test_channel_selector.py::test_urgent_sms_bypasses_quiet_hours",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_timezone_aware_quiet_hours",
+      "nodeid": "tests/agents/test_channel_selector.py::test_timezone_aware_quiet_hours",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_fallback_chain_uses_secondary_channel",
+      "nodeid": "tests/agents/test_channel_selector.py::test_fallback_chain_uses_secondary_channel",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_fallback_chain_uses_fallback_channel",
+      "nodeid": "tests/agents/test_channel_selector.py::test_fallback_chain_uses_fallback_channel",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_no_available_channel_returns_none",
+      "nodeid": "tests/agents/test_channel_selector.py::test_no_available_channel_returns_none",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_invalid_current_time_type",
+      "nodeid": "tests/agents/test_channel_selector.py::test_invalid_current_time_type",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_health_checker_false_skips_channel",
+      "nodeid": "tests/agents/test_channel_selector.py::test_health_checker_false_skips_channel",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_preference_service_is_used_for_customer_preference",
+      "nodeid": "tests/agents/test_channel_selector.py::test_preference_service_is_used_for_customer_preference",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_preference_service_exception_is_not_silently_ignored",
+      "nodeid": "tests/agents/test_channel_selector.py::test_preference_service_exception_is_not_silently_ignored",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_channel_order_for_urgent_message",
+      "nodeid": "tests/agents/test_channel_selector.py::test_channel_order_for_urgent_message",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_channel_order_for_normal_message",
+      "nodeid": "tests/agents/test_channel_selector.py::test_channel_order_for_normal_message",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_preferred_channel_moves_to_primary_position",
+      "nodeid": "tests/agents/test_channel_selector.py::test_preferred_channel_moves_to_primary_position",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_invalid_preferred_channel_returns_none",
+      "nodeid": "tests/agents/test_channel_selector.py::test_invalid_preferred_channel_returns_none",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_missing_current_time_uses_utc_now",
+      "nodeid": "tests/agents/test_channel_selector.py::test_missing_current_time_uses_utc_now",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_configuration_blocked_channel_is_skipped",
+      "nodeid": "tests/agents/test_channel_selector.py::test_configuration_blocked_channel_is_skipped",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_channel_selector.py::test_non_sms_email_channel_skips_configuration_check",
+      "nodeid": "tests/agents/test_channel_selector.py::test_non_sms_email_channel_skips_configuration_check",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-SMS-job_assigned]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-SMS-job_assigned]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-SMS-technician_en_route]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-SMS-technician_en_route]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-SMS-technician_on_site]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-SMS-technician_on_site]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-SMS-work_in_progress]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-SMS-work_in_progress]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-SMS-job_completed]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-SMS-job_completed]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-SMS-job_cancelled]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-SMS-job_cancelled]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-EMAIL-job_assigned]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-EMAIL-job_assigned]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-EMAIL-technician_en_route]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-EMAIL-technician_en_route]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-EMAIL-technician_on_site]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-EMAIL-technician_on_site]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-EMAIL-work_in_progress]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-EMAIL-work_in_progress]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-EMAIL-job_completed]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-EMAIL-job_completed]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-EMAIL-job_cancelled]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-EMAIL-job_cancelled]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-PUSH-job_assigned]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-PUSH-job_assigned]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-PUSH-technician_en_route]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-PUSH-technician_en_route]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-PUSH-technician_on_site]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-PUSH-technician_on_site]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-PUSH-work_in_progress]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-PUSH-work_in_progress]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-PUSH-job_completed]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-PUSH-job_completed]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-PUSH-job_cancelled]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-PUSH-job_cancelled]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-IN_APP-job_assigned]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-IN_APP-job_assigned]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-IN_APP-technician_en_route]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-IN_APP-technician_en_route]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-IN_APP-technician_on_site]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-IN_APP-technician_on_site]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-IN_APP-work_in_progress]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-IN_APP-work_in_progress]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-IN_APP-job_completed]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-IN_APP-job_completed]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[en-IN_APP-job_cancelled]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[en-IN_APP-job_cancelled]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-SMS-job_assigned]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-SMS-job_assigned]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-SMS-technician_en_route]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-SMS-technician_en_route]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-SMS-technician_on_site]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-SMS-technician_on_site]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-SMS-work_in_progress]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-SMS-work_in_progress]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-SMS-job_completed]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-SMS-job_completed]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-SMS-job_cancelled]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-SMS-job_cancelled]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-EMAIL-job_assigned]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-EMAIL-job_assigned]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-EMAIL-technician_en_route]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-EMAIL-technician_en_route]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-EMAIL-technician_on_site]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-EMAIL-technician_on_site]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-EMAIL-work_in_progress]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-EMAIL-work_in_progress]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-EMAIL-job_completed]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-EMAIL-job_completed]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-EMAIL-job_cancelled]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-EMAIL-job_cancelled]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-PUSH-job_assigned]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-PUSH-job_assigned]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-PUSH-technician_en_route]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-PUSH-technician_en_route]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-PUSH-technician_on_site]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-PUSH-technician_on_site]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-PUSH-work_in_progress]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-PUSH-work_in_progress]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-PUSH-job_completed]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-PUSH-job_completed]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-PUSH-job_cancelled]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-PUSH-job_cancelled]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-IN_APP-job_assigned]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-IN_APP-job_assigned]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-IN_APP-technician_en_route]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-IN_APP-technician_en_route]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-IN_APP-technician_on_site]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-IN_APP-technician_on_site]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-IN_APP-work_in_progress]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-IN_APP-work_in_progress]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-IN_APP-job_completed]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-IN_APP-job_completed]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[es-IN_APP-job_cancelled]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[es-IN_APP-job_cancelled]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-SMS-job_assigned]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-SMS-job_assigned]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-SMS-technician_en_route]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-SMS-technician_en_route]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-SMS-technician_on_site]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-SMS-technician_on_site]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-SMS-work_in_progress]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-SMS-work_in_progress]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-SMS-job_completed]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-SMS-job_completed]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-SMS-job_cancelled]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-SMS-job_cancelled]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-EMAIL-job_assigned]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-EMAIL-job_assigned]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-EMAIL-technician_en_route]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-EMAIL-technician_en_route]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-EMAIL-technician_on_site]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-EMAIL-technician_on_site]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-EMAIL-work_in_progress]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-EMAIL-work_in_progress]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-EMAIL-job_completed]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-EMAIL-job_completed]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-EMAIL-job_cancelled]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-EMAIL-job_cancelled]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-PUSH-job_assigned]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-PUSH-job_assigned]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-PUSH-technician_en_route]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-PUSH-technician_en_route]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-PUSH-technician_on_site]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-PUSH-technician_on_site]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-PUSH-work_in_progress]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-PUSH-work_in_progress]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-PUSH-job_completed]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-PUSH-job_completed]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-PUSH-job_cancelled]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-PUSH-job_cancelled]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-IN_APP-job_assigned]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-IN_APP-job_assigned]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-IN_APP-technician_en_route]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-IN_APP-technician_en_route]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-IN_APP-technician_on_site]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-IN_APP-technician_on_site]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-IN_APP-work_in_progress]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-IN_APP-work_in_progress]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-IN_APP-job_completed]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-IN_APP-job_completed]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-IN_APP-job_cancelled]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[ta-IN_APP-job_cancelled]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-SMS-job_assigned]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-SMS-job_assigned]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-SMS-technician_en_route]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-SMS-technician_en_route]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-SMS-technician_on_site]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-SMS-technician_on_site]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-SMS-work_in_progress]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-SMS-work_in_progress]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-SMS-job_completed]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-SMS-job_completed]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-SMS-job_cancelled]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-SMS-job_cancelled]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-EMAIL-job_assigned]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-EMAIL-job_assigned]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-EMAIL-technician_en_route]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-EMAIL-technician_en_route]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-EMAIL-technician_on_site]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-EMAIL-technician_on_site]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-EMAIL-work_in_progress]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-EMAIL-work_in_progress]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-EMAIL-job_completed]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-EMAIL-job_completed]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-EMAIL-job_cancelled]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-EMAIL-job_cancelled]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-PUSH-job_assigned]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-PUSH-job_assigned]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-PUSH-technician_en_route]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-PUSH-technician_en_route]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-PUSH-technician_on_site]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-PUSH-technician_on_site]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-PUSH-work_in_progress]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-PUSH-work_in_progress]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-PUSH-job_completed]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-PUSH-job_completed]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-PUSH-job_cancelled]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-PUSH-job_cancelled]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-IN_APP-job_assigned]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-IN_APP-job_assigned]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-IN_APP-technician_en_route]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-IN_APP-technician_en_route]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-IN_APP-technician_on_site]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-IN_APP-technician_on_site]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-IN_APP-work_in_progress]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-IN_APP-work_in_progress]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-IN_APP-job_completed]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-IN_APP-job_completed]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-IN_APP-job_cancelled]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_core_generation_matrix[hi-IN_APP-job_cancelled]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_fastapi_testclient_generation",
+      "nodeid": "tests/agents/test_comms_agent.py::test_fastapi_testclient_generation",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_groq_api_is_mocked_with_aioresponses",
+      "nodeid": "tests/agents/test_comms_agent.py::test_groq_api_is_mocked_with_aioresponses",
       "outcome": "failed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_groq_429_is_mocked_with_aioresponses",
+      "nodeid": "tests/agents/test_comms_agent.py::test_groq_429_is_mocked_with_aioresponses",
       "outcome": "failed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_groq_401_is_mocked_with_aioresponses",
+      "nodeid": "tests/agents/test_comms_agent.py::test_groq_401_is_mocked_with_aioresponses",
       "outcome": "failed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_groq_500_is_mocked_with_aioresponses",
+      "nodeid": "tests/agents/test_comms_agent.py::test_groq_500_is_mocked_with_aioresponses",
       "outcome": "failed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_failure_timeout_triggers_fallback",
+      "nodeid": "tests/agents/test_comms_agent.py::test_failure_timeout_triggers_fallback",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_failure_429_propagates",
+      "nodeid": "tests/agents/test_comms_agent.py::test_failure_429_propagates",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_failure_401_propagates",
+      "nodeid": "tests/agents/test_comms_agent.py::test_failure_401_propagates",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_failure_500_propagates",
+      "nodeid": "tests/agents/test_comms_agent.py::test_failure_500_propagates",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_failure_budget_exceeded",
+      "nodeid": "tests/agents/test_comms_agent.py::test_failure_budget_exceeded",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_failure_guardrail_violation_fallback",
+      "nodeid": "tests/agents/test_comms_agent.py::test_failure_guardrail_violation_fallback",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_failure_guardrail_requires_fallback_without_db",
+      "nodeid": "tests/agents/test_comms_agent.py::test_failure_guardrail_requires_fallback_without_db",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_failure_guardrail_block",
+      "nodeid": "tests/agents/test_comms_agent.py::test_failure_guardrail_block",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_failure_fallback_template_error",
+      "nodeid": "tests/agents/test_comms_agent.py::test_failure_fallback_template_error",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_failure_fallback_validation",
+      "nodeid": "tests/agents/test_comms_agent.py::test_failure_fallback_validation",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_failure_ai_wrong_return_type",
+      "nodeid": "tests/agents/test_comms_agent.py::test_failure_ai_wrong_return_type",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_failure_invalid_context",
+      "nodeid": "tests/agents/test_comms_agent.py::test_failure_invalid_context",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_validation_sms_length_passes",
+      "nodeid": "tests/agents/test_comms_agent.py::test_validation_sms_length_passes",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_validation_sms_length_fails",
+      "nodeid": "tests/agents/test_comms_agent.py::test_validation_sms_length_fails",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_validation_email_subject_fails",
+      "nodeid": "tests/agents/test_comms_agent.py::test_validation_email_subject_fails",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_validation_push_title_fails",
+      "nodeid": "tests/agents/test_comms_agent.py::test_validation_push_title_fails",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_validation_invalid_url",
+      "nodeid": "tests/agents/test_comms_agent.py::test_validation_invalid_url",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_validation_invalid_phone",
+      "nodeid": "tests/agents/test_comms_agent.py::test_validation_invalid_phone",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_validation_encoding",
+      "nodeid": "tests/agents/test_comms_agent.py::test_validation_encoding",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_validation_full_pipeline",
+      "nodeid": "tests/agents/test_comms_agent.py::test_validation_full_pipeline",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_escalation_human_request",
+      "nodeid": "tests/agents/test_comms_agent.py::test_escalation_human_request",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_escalation_vip_customer",
+      "nodeid": "tests/agents/test_comms_agent.py::test_escalation_vip_customer",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_escalation_negative_sentiment",
+      "nodeid": "tests/agents/test_comms_agent.py::test_escalation_negative_sentiment",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_escalation_urgent_job",
+      "nodeid": "tests/agents/test_comms_agent.py::test_escalation_urgent_job",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_terminated_agent_cannot_generate",
+      "nodeid": "tests/agents/test_comms_agent.py::test_terminated_agent_cannot_generate",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_channel_override_portal",
+      "nodeid": "tests/agents/test_comms_agent.py::test_channel_override_portal",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_channel_override_case_insensitive",
+      "nodeid": "tests/agents/test_comms_agent.py::test_channel_override_case_insensitive",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_unsupported_channel_rejected",
+      "nodeid": "tests/agents/test_comms_agent.py::test_unsupported_channel_rejected",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_template_key_overrides_notification_type",
+      "nodeid": "tests/agents/test_comms_agent.py::test_template_key_overrides_notification_type",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_empty_template_key_rejected",
+      "nodeid": "tests/agents/test_comms_agent.py::test_empty_template_key_rejected",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_ai_generation_under_5_seconds",
+      "nodeid": "tests/agents/test_comms_agent.py::test_ai_generation_under_5_seconds",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_fallback_under_50ms",
+      "nodeid": "tests/agents/test_comms_agent.py::test_fallback_under_50ms",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_validation_under_100ms",
+      "nodeid": "tests/agents/test_comms_agent.py::test_validation_under_100ms",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_channel_output_schema[SMS]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_channel_output_schema[SMS]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_channel_output_schema[EMAIL]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_channel_output_schema[EMAIL]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_channel_output_schema[PUSH]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_channel_output_schema[PUSH]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_channel_output_schema[IN_APP]",
+      "nodeid": "tests/agents/test_comms_agent.py::test_channel_output_schema[IN_APP]",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_no_real_groq_api_call",
+      "nodeid": "tests/agents/test_comms_agent.py::test_no_real_groq_api_call",
       "outcome": "failed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_suite_configuration",
+      "nodeid": "tests/agents/test_comms_agent.py::test_suite_configuration",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_agent_parses_real_provider_success_response",
+      "nodeid": "tests/agents/test_comms_agent.py::test_agent_parses_real_provider_success_response",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_agent_handles_real_provider_429",
+      "nodeid": "tests/agents/test_comms_agent.py::test_agent_handles_real_provider_429",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_agent_handles_real_provider_401",
+      "nodeid": "tests/agents/test_comms_agent.py::test_agent_handles_real_provider_401",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_agent_handles_real_provider_500_with_fallback",
+      "nodeid": "tests/agents/test_comms_agent.py::test_agent_handles_real_provider_500_with_fallback",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_validation_brand_compliance_fails",
+      "nodeid": "tests/agents/test_comms_agent.py::test_validation_brand_compliance_fails",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_comms_agent.py::test_validation_brand_compliance_passes",
+      "nodeid": "tests/agents/test_comms_agent.py::test_validation_brand_compliance_passes",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_config.py::test_valid_config_accepted",
+      "nodeid": "tests/agents/test_config.py::test_valid_config_accepted",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_config.py::test_blank_tenant_rejected",
+      "nodeid": "tests/agents/test_config.py::test_blank_tenant_rejected",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_config.py::test_invalid_timeout_rejected",
+      "nodeid": "tests/agents/test_config.py::test_invalid_timeout_rejected",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_config.py::test_invalid_retry_count_rejected",
+      "nodeid": "tests/agents/test_config.py::test_invalid_retry_count_rejected",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_config.py::test_extra_field_rejected",
+      "nodeid": "tests/agents/test_config.py::test_extra_field_rejected",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_config.py::test_default_config_resolves_correctly",
+      "nodeid": "tests/agents/test_config.py::test_default_config_resolves_correctly",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_config.py::test_tenant_override_applied",
+      "nodeid": "tests/agents/test_config.py::test_tenant_override_applied",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_config.py::test_override_isolation",
+      "nodeid": "tests/agents/test_config.py::test_override_isolation",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_health.py::test_first_heartbeat_creates_record",
+      "nodeid": "tests/agents/test_health.py::test_first_heartbeat_creates_record",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_health.py::test_cross_tenant_health_isolation",
+      "nodeid": "tests/agents/test_health.py::test_cross_tenant_health_isolation",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_health.py::test_heartbeat_counters",
+      "nodeid": "tests/agents/test_health.py::test_heartbeat_counters",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_health.py::test_duplicate_and_stale_heartbeat_ignored",
+      "nodeid": "tests/agents/test_health.py::test_duplicate_and_stale_heartbeat_ignored",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_health.py::test_metadata_discarded_from_monitor",
+      "nodeid": "tests/agents/test_health.py::test_metadata_discarded_from_monitor",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_health.py::test_missing_heartbeat_becomes_unhealthy",
+      "nodeid": "tests/agents/test_health.py::test_missing_heartbeat_becomes_unhealthy",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_health.py::test_empty_monitor_summary_is_unknown",
+      "nodeid": "tests/agents/test_health.py::test_empty_monitor_summary_is_unknown",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_health.py::test_health_lookup_performance_sla",
+      "nodeid": "tests/agents/test_health.py::test_health_lookup_performance_sla",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_integration.py::test_registry_creates_agent_from_config",
+      "nodeid": "tests/agents/test_integration.py::test_registry_creates_agent_from_config",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_integration.py::test_lifecycle_initializes_registry_created_agent",
+      "nodeid": "tests/agents/test_integration.py::test_lifecycle_initializes_registry_created_agent",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_integration.py::test_initialized_agent_in_pool",
+      "nodeid": "tests/agents/test_integration.py::test_initialized_agent_in_pool",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_integration.py::test_lifecycle_init_persists_state",
+      "nodeid": "tests/agents/test_integration.py::test_lifecycle_init_persists_state",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_integration.py::test_lifecycle_init_records_health",
+      "nodeid": "tests/agents/test_integration.py::test_lifecycle_init_records_health",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_integration.py::test_successful_execution_updates_state_and_health",
+      "nodeid": "tests/agents/test_integration.py::test_successful_execution_updates_state_and_health",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_integration.py::test_failed_execution_updates_state_and_health",
+      "nodeid": "tests/agents/test_integration.py::test_failed_execution_updates_state_and_health",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_integration.py::test_timed_out_execution_updates_state_and_health",
+      "nodeid": "tests/agents/test_integration.py::test_timed_out_execution_updates_state_and_health",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_integration.py::test_targeted_bus_delivery_integration",
+      "nodeid": "tests/agents/test_integration.py::test_targeted_bus_delivery_integration",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_integration.py::test_three_agent_communication_chain",
+      "nodeid": "tests/agents/test_integration.py::test_three_agent_communication_chain",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_integration.py::test_cross_tenant_message_isolation_integration",
+      "nodeid": "tests/agents/test_integration.py::test_cross_tenant_message_isolation_integration",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_integration.py::test_simulated_process_crash_recovery_integration",
+      "nodeid": "tests/agents/test_integration.py::test_simulated_process_crash_recovery_integration",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_integration.py::test_teardown_removes_from_pool_and_records_terminated_health",
+      "nodeid": "tests/agents/test_integration.py::test_teardown_removes_from_pool_and_records_terminated_health",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_integration.py::test_lifecycle_initialization_performance_sla",
+      "nodeid": "tests/agents/test_integration.py::test_lifecycle_initialization_performance_sla",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_lifecycle.py::test_initialize_registers_in_pool",
+      "nodeid": "tests/agents/test_lifecycle.py::test_initialize_registers_in_pool",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_lifecycle.py::test_initialize_is_idempotent",
+      "nodeid": "tests/agents/test_lifecycle.py::test_initialize_is_idempotent",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_lifecycle.py::test_execution_state_flow",
+      "nodeid": "tests/agents/test_lifecycle.py::test_execution_state_flow",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_lifecycle.py::test_execute_before_initialize_rejected",
+      "nodeid": "tests/agents/test_lifecycle.py::test_execute_before_initialize_rejected",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_lifecycle.py::test_execute_returns_success_status",
+      "nodeid": "tests/agents/test_lifecycle.py::test_execute_returns_success_status",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_lifecycle.py::test_agent_crash_returns_failed_result",
+      "nodeid": "tests/agents/test_lifecycle.py::test_agent_crash_returns_failed_result",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_lifecycle.py::test_execution_timeout_returns_timeout",
+      "nodeid": "tests/agents/test_lifecycle.py::test_execution_timeout_returns_timeout",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_lifecycle.py::test_pause_and_resume",
+      "nodeid": "tests/agents/test_lifecycle.py::test_pause_and_resume",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_lifecycle.py::test_error_to_running_rejected",
+      "nodeid": "tests/agents/test_lifecycle.py::test_error_to_running_rejected",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_lifecycle.py::test_teardown_unregisters_agent",
+      "nodeid": "tests/agents/test_lifecycle.py::test_teardown_unregisters_agent",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_lifecycle.py::test_persistence_failure_log_and_continue",
+      "nodeid": "tests/agents/test_lifecycle.py::test_persistence_failure_log_and_continue",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_lifecycle.py::test_health_monitor_failure_log_and_continue",
+      "nodeid": "tests/agents/test_lifecycle.py::test_health_monitor_failure_log_and_continue",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_registry.py::test_register_adds_definition",
+      "nodeid": "tests/agents/test_registry.py::test_register_adds_definition",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_registry.py::test_contains_becomes_true",
+      "nodeid": "tests/agents/test_registry.py::test_contains_becomes_true",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_registry.py::test_list_registrations",
+      "nodeid": "tests/agents/test_registry.py::test_list_registrations",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_registry.py::test_get_returns_registration",
+      "nodeid": "tests/agents/test_registry.py::test_get_returns_registration",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_registry.py::test_duplicate_registration_rejected",
+      "nodeid": "tests/agents/test_registry.py::test_duplicate_registration_rejected",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_registry.py::test_unregister_removes_registration",
+      "nodeid": "tests/agents/test_registry.py::test_unregister_removes_registration",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_registry.py::test_unregister_missing_returns_false",
+      "nodeid": "tests/agents/test_registry.py::test_unregister_missing_returns_false",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_registry.py::test_disabled_registration_cannot_create",
+      "nodeid": "tests/agents/test_registry.py::test_disabled_registration_cannot_create",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_registry.py::test_create_returns_fresh_agent",
+      "nodeid": "tests/agents/test_registry.py::test_create_returns_fresh_agent",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_registry.py::test_factory_validation_checks",
+      "nodeid": "tests/agents/test_registry.py::test_factory_validation_checks",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_state.py::test_save_current_agent_snapshot",
+      "nodeid": "tests/agents/test_state.py::test_save_current_agent_snapshot",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_state.py::test_load_saved_snapshot",
+      "nodeid": "tests/agents/test_state.py::test_load_saved_snapshot",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_state.py::test_unknown_snapshot_returns_none",
+      "nodeid": "tests/agents/test_state.py::test_unknown_snapshot_returns_none",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_state.py::test_cross_tenant_load_isolation",
+      "nodeid": "tests/agents/test_state.py::test_cross_tenant_load_isolation",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_state.py::test_saving_again_updates_snapshot",
+      "nodeid": "tests/agents/test_state.py::test_saving_again_updates_snapshot",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_state.py::test_delete_existing_snapshot",
+      "nodeid": "tests/agents/test_state.py::test_delete_existing_snapshot",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_state.py::test_delete_missing_snapshot",
+      "nodeid": "tests/agents/test_state.py::test_delete_missing_snapshot",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_state.py::test_metadata_is_copied",
+      "nodeid": "tests/agents/test_state.py::test_metadata_is_copied",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_state.py::test_repository_failure_does_not_interrupt_lifecycle",
+      "nodeid": "tests/agents/test_state.py::test_repository_failure_does_not_interrupt_lifecycle",
       "outcome": "passed"
     },
     {
-      "nodeid": "fieldops-project/backend/tests/agents/test_state.py::test_simulated_crash_recovery",
+      "nodeid": "tests/agents/test_state.py::test_simulated_crash_recovery",
       "outcome": "passed"
     }
   ]
