@@ -10,10 +10,11 @@ import {
 import { getCustomerJobs } from "../../services/customerPortalService";
 
 const statusStyle: Record<string, { bg: string; fg: string }> = {
+  UNASSIGNED: { bg: "#FEF3C7", fg: "#DD6B20" },
+  "AWAITING ACCEPTANCE": { bg: "#DBEAFE", fg: "#1E40AF" },
   ASSIGNED: { bg: "#DBEAFE", fg: "#1E40AF" },
-  ACCEPTED: { bg: "#D1FAE5", fg: "#065F46" },
+  "EN ROUTE": { bg: "#EDE9FE", fg: "#5B21B6" },
   IN_PROGRESS: { bg: "#FEF3C7", fg: "#92400E" },
-  EN_ROUTE: { bg: "#EDE9FE", fg: "#5B21B6" },
   COMPLETED: { bg: "#D1FAE5", fg: "#065F46" },
   CLOSED: { bg: "#E5E7EB", fg: "#374151" },
 };
@@ -156,12 +157,44 @@ export default function CustomerJobTrackingPage() {
                     padding: "4px 12px",
                     borderRadius: "20px",
                     background:
-                      statusStyle[job.status]?.bg || "#E5E7EB",
+                      statusStyle[
+                        job.status === "CREATED"
+                          ? "UNASSIGNED"
+                          : job.status === "ASSIGNED"
+                          ? "AWAITING ACCEPTANCE"
+                          : job.status === "ACCEPTED"
+                          ? "ASSIGNED"
+                          : job.status === "EN_ROUTE"
+                          ? "EN ROUTE"
+                          : job.status === "IN_PROGRESS"
+                          ? "IN_PROGRESS"
+                          : job.status
+                      ]?.bg || "#E5E7EB",
                     color:
-                      statusStyle[job.status]?.fg || "#374151",
+                      statusStyle[
+                        job.status === "CREATED"
+                          ? "UNASSIGNED"
+                          : job.status === "ASSIGNED"
+                          ? "AWAITING ACCEPTANCE"
+                          : job.status === "ACCEPTED"
+                          ? "ASSIGNED"
+                          : job.status === "EN_ROUTE"
+                          ? "EN ROUTE"
+                          : job.status === "IN_PROGRESS"
+                          ?"IN_PROGRESS"                          : job.status
+                      ]?.fg || "#374151",
                   }}
                 >
-                  {job.status}
+                  {job.status === "CREATED"
+                    ? "UNASSIGNED"
+                    : job.status === "ASSIGNED"
+                    ? "AWAITING ACCEPTANCE"
+                    : job.status === "ACCEPTED"
+                    ? "ASSIGNED"
+                    : job.status === "EN_ROUTE"
+                    ? "EN ROUTE"
+                    : job.status === "IN_PROGRESS"
+                    ?"IN_PROGRESS"                    : job.status}
                 </span>
               </div>
 

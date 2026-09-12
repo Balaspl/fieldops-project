@@ -6,7 +6,6 @@ from sqlalchemy import Column, Integer, String, Text, Float, JSON, DateTime, For
 from sqlalchemy.orm import relationship
 from ..models_legacy import Base
 
-
 class JobClosure(Base):
     __tablename__ = "job_closures"
 

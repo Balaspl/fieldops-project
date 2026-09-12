@@ -339,7 +339,7 @@ export default function TechnicianJobsPage() {
         </button>
       );
     }
-    if (["ON_SITE", "PAUSED"].includes(st)) {
+    if (["IN_PROGRESS", "PAUSED"].includes(st)) {
       btns.push(
         <button
           key="complete"

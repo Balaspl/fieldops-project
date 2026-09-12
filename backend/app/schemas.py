@@ -771,8 +771,8 @@ class JobClosureCreate(BaseModel):
     work_summary: str
     before_images: Optional[list[str]] = Field(default_factory=list)
     after_images: list[str] = Field(..., min_length=1)
-    labour_cost: float = Field(default=0.0, ge=0.0)
-    material_cost: float = Field(default=0.0, ge=0.0)
+    labour_cost: float = Field(..., ge=0.0)
+    material_cost: float = Field(..., ge=0.0)
 
     @field_validator("work_summary")
     @classmethod

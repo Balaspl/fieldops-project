@@ -24,23 +24,38 @@ import api from "../../services/api";
 const badge = (status: string) => {
   const c: Record<string, string> = {
     UNASSIGNED: "#DD6B20",
+    "AWAITING ACCEPTANCE": "#1E40AF",
     ASSIGNED: "#1E40AF",
-    EN_ROUTE: "#7C3AED",
-    IN_PROGRESS: "#92400E",
+    "EN ROUTE": "#7C3AED",
+    "IN_PROGRESS": "#92400E",
     COMPLETED: "#065F46",
     CANCELLED: "#991B1B",
   };
+
+  const displayStatus =
+    status === "CREATED"
+      ? "UNASSIGNED"
+      : status === "ASSIGNED"
+      ? "AWAITING ACCEPTANCE"
+      : status === "ACCEPTED"
+      ? "ASSIGNED"
+      : status === "EN_ROUTE"
+      ? "EN ROUTE"
+      : status === "IN_PROGRESS"
+      ? "IN_PROGRESS"
+      : status;
 
   return {
     fontSize: "11px",
     fontWeight: 600,
     padding: "3px 10px",
     borderRadius: "20px",
-    background: (c[status] || "#6B7280") + "18",
-    color: c[status] || "#6B7280",
+    background: (c[displayStatus] || "#6B7280") + "18",
+    color: c[displayStatus] || "#6B7280",
     display: "inline-block",
   };
 };
+
 
 interface CustomerServiceRequestsPageProps {
   createOnly?: boolean;
@@ -842,7 +857,17 @@ export default function CustomerServiceRequestsPage({
                 </div>
 
                 <span style={badge(sr.status) as any}>
-                  {sr.status}
+                  {sr.status === "CREATED"
+                    ? "UNASSIGNED"
+                    : sr.status === "ASSIGNED"
+                    ? "AWAITING ACCEPTANCE"
+                    : sr.status === "ACCEPTED"
+                    ? "ASSIGNED"
+                    : sr.status === "EN_ROUTE"
+                    ? "EN ROUTE"
+                    : sr.status === "IN_PROGRESS"
+                    ? "IN_PROGRESS"
+                    : sr.status}
                 </span>
               </div>
 

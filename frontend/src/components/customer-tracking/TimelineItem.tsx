@@ -27,7 +27,7 @@ interface TimelineItemProps {
 export const getStatusColor = (status: string): string => {
   switch (status.toUpperCase()) {
     case 'CREATED':
-      return '#9CA3AF'; // Gray
+      return '#F59E0B'; // Orange
     case 'ASSIGNED':
       return '#3B82F6'; // Blue
     case 'EN_ROUTE':
@@ -105,7 +105,7 @@ export const TimelineItem: React.FC<TimelineItemProps> = ({ item, isCurrent, isL
                 className="text-[10px] font-black tracking-widest uppercase px-2 py-0.5 rounded-full text-white"
                 style={{ backgroundColor: statusColor }}
               >
-                {item.to_status}
+                {item.to_status === 'CREATED' ? 'UNASSIGNED' : item.to_status}
               </span>
               <span className="text-[10px] text-slate-400 font-medium">
                 {formattedTime}
