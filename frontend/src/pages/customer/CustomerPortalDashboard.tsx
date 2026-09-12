@@ -63,9 +63,10 @@ export default function CustomerPortalDashboard({
 
   const statusColor: Record<string, string> = {
     UNASSIGNED: "#DD6B20",
+    "AWAITING ACCEPTANCE": "#1E40AF",
     ASSIGNED: "#1E40AF",
-    EN_ROUTE: "#7C3AED",
-    IN_PROGRESS: "#92400E",
+    "EN ROUTE": "#7C3AED",
+    "IN_PROGRESS": "#92400E",
     COMPLETED: "#065F46",
     CANCELLED: "#991B1B",
   };
@@ -197,12 +198,6 @@ export default function CustomerPortalDashboard({
         ))}
       </div>
 
-      {/* <div style={{ display: "flex", gap: "16px", marginBottom: "28px" }}>
-        <button onClick={() => onNavigate("cust_create_request")} style={{ padding: "14px 28px", border: "none", borderRadius: "12px", background: "#7AAE8A", color: "#fff", fontSize: "14px", fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: "8px", boxShadow: "0 4px 12px rgba(122,174,138,0.3)" }}>
-          <PlusCircle size={18} /> Create Service Request
-        </button>
-      </div> */}
-
       <div
         style={{
           background: "#fff",
@@ -225,6 +220,7 @@ export default function CustomerPortalDashboard({
         >
           <FileText size={18} color="#7AAE8A" /> Recent Requests
         </div>
+
         {recent.length === 0 ? (
           <div
             style={{
@@ -263,21 +259,59 @@ export default function CustomerPortalDashboard({
                   {new Date(sr.created_at).toLocaleDateString()}
                 </div>
               </div>
+
               <span
                 style={{
                   fontSize: "11px",
                   fontWeight: 600,
                   padding: "3px 10px",
                   borderRadius: "20px",
-                  background: (statusColor[sr.status] || "#6B7280") + "18",
-                  color: statusColor[sr.status] || "#6B7280",
+                  background:
+                    (statusColor[
+                      sr.status === "CREATED"
+                        ? "UNASSIGNED"
+                        : sr.status === "ASSIGNED"
+                        ? "AWAITING ACCEPTANCE"
+                        : sr.status === "ACCEPTED"
+                        ? "ASSIGNED"
+                        : sr.status === "EN_ROUTE"
+                        ? "EN ROUTE"
+                        : sr.status === "IN_PROGRESS"
+                        ? "IN_PROGRESS"
+                        : sr.status
+                    ] || "#6B7280") + "18",
+                  color:
+                    statusColor[
+                      sr.status === "CREATED"
+                        ? "UNASSIGNED"
+                        : sr.status === "ASSIGNED"
+                        ? "AWAITING ACCEPTANCE"
+                        : sr.status === "ACCEPTED"
+                        ? "ASSIGNED"
+                        : sr.status === "EN_ROUTE"
+                        ? "EN ROUTE"
+                        : sr.status === "IN_PROGRESS"
+                        ? "IN_PROGRESS"
+                        : sr.status
+                    ] || "#6B7280",
                 }}
               >
-                {sr.status}
+                {sr.status === "CREATED"
+                  ? "UNASSIGNED"
+                  : sr.status === "ASSIGNED"
+                  ? "AWAITING ACCEPTANCE"
+                  : sr.status === "ACCEPTED"
+                  ? "ASSIGNED"
+                  : sr.status === "EN_ROUTE"
+                  ? "EN ROUTE"
+                  : sr.status === "IN_PROGRESS"
+                  ? "IN_PROGRESS"
+                  : sr.status}
               </span>
             </div>
           ))
         )}
+
         {recent.length > 0 && (
           <button
             onClick={() => onNavigate("cust_requests")}

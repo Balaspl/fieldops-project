@@ -584,7 +584,6 @@ async def accept_job(
     # Keep the customer's service request status in sync with the job status
     service_request = db.query(ServiceRequest).filter(
         ServiceRequest.linked_job_id == job.id,
-        ServiceRequest.tenant_id == job.tenant_id,
     ).first()
 
     if service_request:
@@ -777,13 +776,12 @@ async def on_site_job(
         )
 
     old_status = job.status
-    job.status = "ON_SITE"
+    job.status = "IN_PROGRESS"
     job.on_site_at = datetime.now(timezone.utc)
     job.on_site_by = current_user.user_id
 
     service_request = db.query(ServiceRequest).filter(
         ServiceRequest.linked_job_id == job.id,
-        ServiceRequest.tenant_id == job.tenant_id,
     ).first()
 
     if service_request:
@@ -798,7 +796,7 @@ async def on_site_job(
         entity_type="job",
         entity_id=str(job_id),
         old_value={"status": old_status},
-        new_value={"status": "ON_SITE"},
+        new_value={"status": "IN_PROGRESS"},
         request=request,
     )
 
@@ -806,10 +804,10 @@ async def on_site_job(
     db.refresh(job)
 
     return {
-        "message": "Technician is now on site",
-        "job_id": job_id,
-        "status": "ON_SITE",
-    }
+    "message": "Technician is now on site",
+    "job_id": job_id,
+    "status": "IN_PROGRESS",
+}
 
 
 @router.post("/jobs/{job_id}/pause")

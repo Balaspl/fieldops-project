@@ -141,6 +141,13 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
       return;
     }
 
+
+    if (serviceCharge.trim() === "" || materialCost.trim() === "") {
+      setError("Service Charge and Material Cost are required.");
+      return;
+    }
+
+
     const filteredAfterImages = afterImages
       .map((img) => img.trim())
       .filter(Boolean);
@@ -404,6 +411,7 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
                 type="number"
                 step="0.01"
                 min="0"
+                required
                 style={styles.input}
                 value={serviceCharge}
                 onChange={(e) => {
@@ -428,6 +436,7 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
                 type="number"
                 step="0.01"
                 min="0"
+                required
                 style={styles.input}
                 value={materialCost}
                 onChange={(e) => {

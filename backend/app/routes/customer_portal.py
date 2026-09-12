@@ -439,9 +439,22 @@ async def list_service_requests(
             != "cancelled"
         )
 
-    return query.order_by(
+    requests = query.order_by(
         ServiceRequest.created_at.desc()
     ).all()
+
+    # Use the linked Job status as the source of truth
+    # once a ServiceRequest has been converted into a Job.
+    for service_request in requests:
+        if service_request.linked_job_id:
+            job = db.query(Job).filter(
+                Job.id == service_request.linked_job_id
+            ).first()
+
+            if job:
+                service_request.status = job.status
+
+    return requests
 
 
 @router.post(
