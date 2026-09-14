@@ -110,13 +110,24 @@ export const getDashboardStats = async (timeRange?: string): Promise<any> => {
 /**
  * Fetch all jobs.
  */
-export const getJobs = async (): Promise<any> => {
+export const getJobs = async (params?: {
+  search?: string;
+  status?: string;
+  priority?: string;
+  service_type?: string;
+  sla?: string;
+  page?: number;
+  limit?: number;
+}): Promise<any> => {
   try {
-    return await api.get("/jobs");
+    return await api.get("/jobs", {
+      params,
+    });
   } catch (error) {
     handleApiError(error);
   }
 };
+
 
 export const manualAssign = async (jobId: string | number, technicianId: string | number): Promise<any> => {
   try {
@@ -263,4 +274,13 @@ export const getJobClosure = async (jobId: string | number): Promise<any> => {
 };
 
 
-
+/**
+ * Fetch SLA state for a job.
+ */
+export const getJobSla = async (jobId: string | number): Promise<any> => {
+  try {
+    return await api.get(`/jobs/${jobId}/sla`);
+  } catch (error) {
+    handleApiError(error);
+  }
+};
