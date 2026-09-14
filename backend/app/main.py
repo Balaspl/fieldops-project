@@ -26,6 +26,8 @@ from .routes.tracking import redis_gps_listener
 from .runtime.metrics import runtime_metrics_collector
 from .services.default_template import seed_default_templates
 from app.sentiment.dashboard import router as sentiment_dashboard_router
+from .routes import oauth2
+
 scheduler = None
 redis_async_client = None
 redis_pubsub_client = None
@@ -310,6 +312,9 @@ app.include_router(message_preview.router)
 
 #----------Sentiment Dashboard---------------
 app.include_router(sentiment_dashboard_router)
+
+app.include_router(oauth2.router)
+
 
 # Lifespan events handled via asynccontextmanager lifespan handler
 

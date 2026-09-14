@@ -13,6 +13,10 @@ from typing import Optional
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
+from fastapi.security import OAuth2PasswordBearer
+
+
+
 
 from ..database import get_db
 from .jwt_handler import verify_access_token
@@ -25,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 security = HTTPBearer(auto_error=False)
 
-
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/oauth2/token", auto_error=False)
 class AuthenticatedUser:
     """
     Represents the currently authenticated user derived from JWT claims.
@@ -98,17 +102,27 @@ async def get_current_user(
     # Parse role from JWT
     role_str = claims.get("role", "")
     try:
-        role = UserRole(role_str)
+        token_role = UserRole(role_str)
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid role in token",
+            headers={"WWW-Authenticate": "Bearer"},
         )
+    subject = claims.get("sub")
+
+    if not subject:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token subject is missing",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
 
     # Verify user still exists and is active
     from ..models.user import User
     user = db.query(User).filter(
-        User.id == claims["sub"],
+        User.id == subject,
         User.is_active == True,
         User.deleted_at.is_(None),
     ).first()
@@ -125,13 +139,46 @@ async def get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is temporarily locked due to too many failed login attempts",
         )
+    # Server-side role is authoritative.
+    try:
+        db_role = UserRole(user.role)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid user role",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    if token_role != db_role:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token role is no longer valid",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token_tenant_id = str(claims.get("tenant_id", ""))
+    database_tenant_id = str(user.tenant_id)
 
+    if token_tenant_id != database_tenant_id:
+        logger.warning(
+            "Tenant claim mismatch: user=%s token_tenant=%s db_tenant=%s",
+            user.id,
+            token_tenant_id,
+            database_tenant_id,
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token tenant is no longer valid",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    
     return AuthenticatedUser(
-        user_id=claims["sub"],
-        tenant_id=user.tenant_id,
-        role=role,
-        jti=claims.get("jti", ""),
-    )
+            user_id=claims["sub"],
+            tenant_id=user.tenant_id,
+            role=db_role,
+            jti=claims.get("jti", ""),
+        )
 
 
 async def get_current_active_user(
@@ -271,19 +318,24 @@ async def get_current_user_or_tenant(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db),
-) -> tuple[Optional[AuthenticatedUser], str]:
-    """
-    Extract current AuthenticatedUser from JWT if provided, falling back
-    to the X-Tenant-ID header if no token is sent.
-    
-    Returns tuple of (user: Optional[AuthenticatedUser], effective_tenant_id: str).
-    """
-    if credentials:
-        try:
-            user = await get_current_user(request, credentials, db)
-            return user, user.tenant_id
-        except HTTPException:
-            pass
-            
-    header_tenant = request.headers.get("X-Tenant-ID", "tenant-1")
-    return None, header_tenant
+) -> tuple[AuthenticatedUser, str]:
+
+    # OAuth2/Bearer token is required for authenticated routes.
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # IMPORTANT:
+    # Do NOT catch the authentication error and fall back to X-Tenant-ID.
+    user = await get_current_user(
+        request=request,
+        credentials=credentials,
+        db=db,
+    )
+
+    # Tenant comes from the authenticated server-side identity,
+    # never from X-Tenant-ID.
+    return user, user.tenant_id

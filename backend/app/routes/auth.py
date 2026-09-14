@@ -35,6 +35,7 @@ from ..auth.dependencies import (
 )
 from ..models.user import User, RefreshToken
 from ..models.organization import Organization
+from .oauth2 import _password_grant, _refresh_token_grant, GrantError
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +54,7 @@ class RegisterRequest(BaseModel):
     password: str = Field(..., min_length=8, max_length=128)
     first_name: str = Field(..., min_length=1, max_length=100)
     last_name: str = Field(..., min_length=1, max_length=100)
-    role: str = Field(default="customer")
-    tenant_id: Optional[str] = None  # Required for non-customer roles
+    tenant_id: str = Field(..., min_length=1, max_length=100)
     phone_number: Optional[str] = None
 
 class OrganizationOnboardRequest(BaseModel):
@@ -105,6 +105,12 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str = Field(..., min_length=8, max_length=128)
+
+class OAuth2ContractResponse(BaseModel):
+    status: str
+    auth_protocol: str
+    token_type: str
+    tenant_claim: str
 
 
 # ──────────────────────────────────────────────────
@@ -197,21 +203,8 @@ async def register(
       with proper authentication.
     """
     # Validate role
-    try:
-        role = UserRole(payload.role.lower())
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid role: {payload.role}. Valid roles: {', '.join(r.value for r in UserRole)}",
-        )
-
-    # Super admin creation is blocked via API
-    if role == UserRole.SUPER_ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Super admin accounts cannot be created via the API",
-        )
-
+    # Public self-registration is customer-only.
+    role = UserRole.CUSTOMER
     # Validate password strength
     try:
         validate_password_strength(payload.password)
@@ -287,84 +280,44 @@ async def login(
     db: Session = Depends(get_db),
 ):
     """
-    Authenticate with email + password.
-
-    Returns access and refresh tokens on success.
-    Implements account lockout after 5 failed attempts.
+    Legacy JSON-body login. Delegates credential checking and token
+    issuance to _password_grant() so there is one code path shared
+    with /oauth2/token.
     """
-    email = payload.email.lower().strip()
-
-    # Find user (check all tenants — email alone identifies during login)
-    user = db.query(User).filter(
-        User.email == email,
-        User.deleted_at.is_(None),
-    ).first()
-
-    if user is None:
-        # Log failed attempt but don't reveal whether email exists
+    try:
+        user, access_token, refresh_token_str, _granted_scope = _password_grant(
+            db, request, payload.email, payload.password,
+        )
+    except GrantError:
         _log_audit(db, "FAILED_LOGIN", "unknown", "unknown", request,
-                   severity="WARNING", details={"email": email, "reason": "user_not_found"})
+                   severity="WARNING", details={"email": payload.email.lower().strip()})
         db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
         )
 
-    # Check account lock
-    if user.is_locked:
-        _log_audit(db, "FAILED_LOGIN", user.id, user.tenant_id, request,
-                   severity="WARNING", details={"reason": "account_locked"})
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is temporarily locked. Please try again later.",
-        )
-
-    # Check if account is active
-    if not user.is_active:
-        _log_audit(db, "FAILED_LOGIN", user.id, user.tenant_id, request,
-                   severity="WARNING", details={"reason": "account_inactive"})
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is deactivated. Contact your administrator.",
-        )
-
-    # Check if organization is active
-    org = db.query(Organization).filter(
-        Organization.id == user.tenant_id,
-        Organization.status == "ACTIVE",
-    ).first()
-
-    if org is None and user.role != UserRole.SUPER_ADMIN.value:
-        _log_audit(db, "FAILED_LOGIN", user.id, user.tenant_id, request,
-                   severity="WARNING", details={"reason": "org_inactive"})
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Your organization is suspended or deleted. Contact support.",
-        )
-
-    # Verify password
-    if not verify_password(payload.password, user.password_hash):
-        user.record_failed_login()
-        _log_audit(db, "FAILED_LOGIN", user.id, user.tenant_id, request,
-                   severity="WARNING", details={"reason": "wrong_password",
-                                                "attempts": user.failed_login_attempts})
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
-        )
-
-    # Success
-    user.record_successful_login()
+    org = db.query(Organization).filter(Organization.id == user.tenant_id).first()
     _log_audit(db, "LOGIN", user.id, user.tenant_id, request)
+    db.commit()
 
-    response = _build_token_response(user, request, db)
-    
     logger.info("User logged in: email=%s role=%s tenant=%s", user.email, user.role, user.tenant_id)
-    return response
+
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token_str,
+        token_type="bearer",
+        expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        user={
+            "id": user.id,
+            "email": user.email,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "role": user.role,
+            "tenant_id": user.tenant_id,
+            "organization_name": org.name if org else None,
+        },
+    )
 
 
 @router.post("/refresh", response_model=TokenResponse)
@@ -374,52 +327,37 @@ async def refresh_tokens(
     db: Session = Depends(get_db),
 ):
     """
-    Rotate refresh token and issue new access + refresh tokens.
-
-    The old refresh token is revoked. Each refresh token can only be used once.
+    Legacy JSON-body refresh. Delegates to _refresh_token_grant() so
+    rotation logic is shared with /oauth2/token.
     """
     try:
-        claims = verify_refresh_token(payload.refresh_token)
-    except Exception:
+        user, access_token, new_refresh_token, _granted_scope = _refresh_token_grant(
+            db, request, payload.refresh_token,
+        )
+    except GrantError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired refresh token",
         )
 
-    # Find the stored refresh token
-    token_hash = hashlib.sha256(payload.refresh_token.encode()).hexdigest()
-    stored_token = db.query(RefreshToken).filter(
-        RefreshToken.token_hash == token_hash,
-        RefreshToken.revoked_at.is_(None),
-    ).first()
-
-    if stored_token is None or not stored_token.is_valid:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Refresh token not found or already used",
-        )
-
-    # Revoke old token
-    stored_token.revoked_at = datetime.now(timezone.utc)
-
-    # Load user
-    user = db.query(User).filter(
-        User.id == claims["sub"],
-        User.is_active == True,
-        User.deleted_at.is_(None),
-    ).first()
-
-    if user is None:
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User account not found or deactivated",
-        )
-
-    response = _build_token_response(user, request, db)
-    
+    org = db.query(Organization).filter(Organization.id == user.tenant_id).first()
     logger.info("Tokens refreshed for user: %s", user.email)
-    return response
+
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=new_refresh_token,
+        token_type="bearer",
+        expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        user={
+            "id": user.id,
+            "email": user.email,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "role": user.role,
+            "tenant_id": user.tenant_id,
+            "organization_name": org.name if org else None,
+        },
+    )
 
 
 @router.post("/logout", status_code=status.HTTP_200_OK)
@@ -601,3 +539,15 @@ async def reset_password(
     # TODO: Validate reset token and find user
     # For now, return a placeholder
     return {"message": "Password reset functionality requires email integration. Token validation stub."}
+
+@router.get(
+    "/oauth2/contract",
+    response_model=OAuth2ContractResponse,
+)
+async def get_oauth2_contract():
+    return OAuth2ContractResponse(
+        status="SUPPORTED",
+        auth_protocol="oauth2",
+        token_type="bearer",
+        tenant_claim="server_derived",
+    )

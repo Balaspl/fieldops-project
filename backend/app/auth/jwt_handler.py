@@ -2,28 +2,59 @@
 JWT token creation, verification, and management.
 
 Security properties:
-- Algorithm pinned to HS256 (no algorithm confusion attacks)
-- Access tokens are short-lived (configurable, default 30 min)
-- Refresh tokens are long-lived (configurable, default 7 days)
-- Token blacklisting via Redis for immediate revocation
-- JWT contains only: user_id, tenant_id, role, exp (minimal claims)
+- HS256 algorithm is pinned.
+- Access and refresh tokens have different token types.
+- Required claims are enforced.
+- Access-token scopes are included in the token.
+- Refresh tokens can be blacklisted.
 """
 
 import os
 import uuid
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Optional, Iterable
 
 import jwt
 
 from ..redis_client import get_redis_client
 
 
-# Configuration from environment
-JWT_SECRET = os.getenv("JWT_SECRET", "CHANGE-ME-IN-PRODUCTION-fieldops-secret-key-2026")
-JWT_ALGORITHM = "HS256"  # Pinned — never trust from env/request
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
-REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "7"))
+JWT_SECRET = os.getenv(
+    "JWT_SECRET",
+    "CHANGE-ME-IN-PRODUCTION-fieldops-secret-key-2026",
+)
+
+JWT_ALGORITHM = "HS256"
+
+ACCESS_TOKEN_EXPIRE_MINUTES = int(
+    os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30")
+)
+
+REFRESH_TOKEN_EXPIRE_DAYS = int(
+    os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "7")
+)
+
+
+REQUIRED_CLAIMS = [
+    "exp",
+    "sub",
+    "tenant_id",
+    "role",
+    "iat",
+    "jti",
+    "type",
+]
+
+
+def _normalise_scopes(scopes: Optional[Iterable[str]]) -> list[str]:
+    if not scopes:
+        return []
+
+    return sorted({
+        str(scope).strip()
+        for scope in scopes
+        if str(scope).strip()
+    })
 
 
 def create_access_token(
@@ -31,32 +62,36 @@ def create_access_token(
     tenant_id: str,
     role: str,
     expires_delta: Optional[timedelta] = None,
+    scopes: Optional[Iterable[str]] = None,
 ) -> str:
     """
-    Create a signed JWT access token.
+    Create a signed access JWT.
 
-    Claims:
-    - sub: user_id
-    - tenant_id: tenant_id
-    - role: role name
-    - exp: expiration timestamp
-    - iat: issued at timestamp
-    - jti: unique token identifier (for blacklisting)
+    Tenant and role are issued from the server-side User record.
     """
+
     now = datetime.now(timezone.utc)
-    expire = now + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    expire = now + (
+        expires_delta
+        or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
 
     payload = {
         "sub": str(user_id),
         "tenant_id": str(tenant_id),
-        "role": role,
+        "role": str(role),
         "exp": expire,
         "iat": now,
         "jti": str(uuid.uuid4()),
         "type": "access",
+        "scope": " ".join(_normalise_scopes(scopes)),
     }
 
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode(
+        payload,
+        JWT_SECRET,
+        algorithm=JWT_ALGORITHM,
+    )
 
 
 def create_refresh_token(
@@ -66,72 +101,90 @@ def create_refresh_token(
     expires_delta: Optional[timedelta] = None,
 ) -> str:
     """
-    Create a signed JWT refresh token.
+    Create a signed refresh JWT.
 
-    Refresh tokens have a longer TTL and are used to obtain new
-    access tokens without re-authentication.
+    Refresh tokens do not carry authorization scopes.
     """
+
     now = datetime.now(timezone.utc)
-    expire = now + (expires_delta or timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS))
+    expire = now + (
+        expires_delta
+        or timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    )
 
     payload = {
         "sub": str(user_id),
         "tenant_id": str(tenant_id),
-        "role": role,
+        "role": str(role),
         "exp": expire,
         "iat": now,
         "jti": str(uuid.uuid4()),
         "type": "refresh",
     }
 
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode(
+        payload,
+        JWT_SECRET,
+        algorithm=JWT_ALGORITHM,
+    )
 
 
 def decode_token(token: str) -> dict:
     """
-    Decode and verify a JWT token.
+    Decode and cryptographically verify a JWT.
 
-    Raises:
-    - jwt.ExpiredSignatureError: token has expired
-    - jwt.InvalidTokenError: token is malformed or signature invalid
-
-    Returns the decoded claims dict.
+    The algorithm is explicitly pinned to HS256.
     """
+
     return jwt.decode(
         token,
         JWT_SECRET,
         algorithms=[JWT_ALGORITHM],
-        options={"require": ["exp", "sub", "tenant_id", "role"]},
+        options={
+            "require": REQUIRED_CLAIMS,
+        },
     )
 
 
 def is_token_blacklisted(jti: str) -> bool:
-    """Check if a token JTI has been blacklisted (revoked)."""
+    """Return True when the token JTI is revoked."""
+
+    if not jti:
+        return True
+
     redis = get_redis_client()
-    if redis:
-        return bool(redis.get(f"token:blacklist:{jti}"))
-    return False
+
+    if redis is None:
+        # Current project policy: Redis unavailable means no blacklist
+        # lookup can be performed. This can be changed to fail-closed
+        # in production if required.
+        return False
+
+    return bool(redis.get(f"token:blacklist:{jti}"))
 
 
-def blacklist_token(jti: str, expires_in_seconds: int) -> None:
-    """
-    Add a token JTI to the blacklist.
+def blacklist_token(
+    jti: str,
+    expires_in_seconds: int,
+) -> None:
+    """Blacklist a token until its natural expiration."""
 
-    The blacklist entry automatically expires when the token would have
-    expired, so Redis doesn't accumulate stale entries.
-    """
+    if not jti:
+        return
+
     redis = get_redis_client()
-    if redis:
-        redis.setex(f"token:blacklist:{jti}", expires_in_seconds, "1")
+
+    if redis is not None:
+        redis.setex(
+            f"token:blacklist:{jti}",
+            max(1, int(expires_in_seconds)),
+            "1",
+        )
 
 
 def verify_access_token(token: str) -> dict:
-    """
-    Verify an access token is valid, not expired, and not blacklisted.
+    """Verify a valid, non-revoked access token."""
 
-    Returns the decoded claims.
-    Raises jwt.InvalidTokenError on any verification failure.
-    """
     claims = decode_token(token)
 
     if claims.get("type") != "access":
@@ -144,12 +197,8 @@ def verify_access_token(token: str) -> dict:
 
 
 def verify_refresh_token(token: str) -> dict:
-    """
-    Verify a refresh token is valid, not expired, and not blacklisted.
+    """Verify a valid, non-revoked refresh token."""
 
-    Returns the decoded claims.
-    Raises jwt.InvalidTokenError on any verification failure.
-    """
     claims = decode_token(token)
 
     if claims.get("type") != "refresh":
