@@ -25,11 +25,6 @@ api.interceptors.request.use(
     }
 
     // Tenant ID from JWT-derived storage (set during login)
-    const tenantId = localStorage.getItem("tenant_id") || import.meta.env.VITE_TENANT_ID;
-    if (tenantId && config.headers) {
-      config.headers["X-Tenant-ID"] = tenantId;
-    }
-
     return config;
   },
   (error) => Promise.reject(error)

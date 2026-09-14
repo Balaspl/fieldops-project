@@ -989,6 +989,12 @@ async def create_org_admin(
             detail=f"Invalid role: {requested_role}. Valid roles: "
                 f"{', '.join(r.value for r in UserRole)}",
         )
+    # Enforce RBAC role hierarchy.
+    if not current_user.can_manage(role):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"{current_user.role.value} cannot create {role.value} users.",
+        )
 
     org = db.query(Organization).filter(
         Organization.id == org_id,

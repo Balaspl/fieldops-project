@@ -1,0 +1,421 @@
+"""
+OAuth2 token endpoint — RFC 6749-shaped boundary over the existing
+JWT issuance and verification logic.
+
+Supported grant types:
+- password
+- refresh_token
+
+Unsupported grant types:
+- client_credentials
+- authorization_code
+"""
+
+import hashlib
+import logging
+import uuid
+
+from datetime import datetime, timezone, timedelta
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from sqlalchemy.orm import Session
+
+from ..database import get_db
+from ..auth.password import verify_password
+from ..auth.jwt_handler import (
+    create_access_token,
+    create_refresh_token,
+    verify_refresh_token,
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    REFRESH_TOKEN_EXPIRE_DAYS,
+)
+from ..auth.oauth2_scope import (
+    validate_requested_scope,
+    default_scope_for_role,
+)
+from ..models.user import User, RefreshToken
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/oauth2", tags=["OAuth2"])
+
+SUPPORTED_GRANT_TYPES = {
+    "password",
+    "refresh_token",
+}
+
+
+class GrantError(Exception):
+    def __init__(
+        self,
+        error: str,
+        description: str,
+        status_code: int = 400,
+    ):
+        self.error = error
+        self.description = description
+        self.status_code = status_code
+        super().__init__(description)
+
+
+def _oauth_error(
+    error: str,
+    description: str,
+    status_code: int = 400,
+):
+    raise HTTPException(
+        status_code=status_code,
+        detail={
+            "error": error,
+            "error_description": description,
+        },
+    )
+
+
+def _persist_refresh_token(
+    db: Session,
+    user: User,
+    refresh_token_str: str,
+    request: Request,
+) -> None:
+    token_hash = hashlib.sha256(
+        refresh_token_str.encode("utf-8")
+    ).hexdigest()
+
+    record = RefreshToken(
+        id=str(uuid.uuid4()),
+        user_id=user.id,
+        token_hash=token_hash,
+        expires_at=(
+            datetime.now(timezone.utc)
+            + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+        ),
+        device_info=request.headers.get(
+            "User-Agent",
+            "unknown",
+        )[:255],
+        ip_address=(
+            request.client.host
+            if request.client
+            else "unknown"
+        ),
+    )
+
+    db.add(record)
+
+
+def _validate_scope(
+    user: User,
+    requested_scope: Optional[str],
+) -> str:
+    """
+    Validate scope using the role stored in the database.
+    """
+
+    from ..auth.rbac import UserRole
+
+    try:
+        role = UserRole(user.role)
+    except ValueError:
+        raise GrantError(
+            "invalid_grant",
+            "User role is invalid",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    try:
+        if requested_scope:
+            return validate_requested_scope(
+                role,
+                requested_scope,
+            )
+
+        return default_scope_for_role(role)
+
+    except (ValueError, PermissionError) as exc:
+        raise GrantError(
+            "invalid_scope",
+            str(exc),
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+
+def _password_grant(
+    db: Session,
+    request: Request,
+    username: str,
+    password: str,
+    requested_scope: Optional[str] = None,
+) -> tuple[User, str, str, str]:
+    """
+    Single source of truth for password authentication.
+
+    Returns:
+        user, access_token, refresh_token, granted_scope
+    """
+
+    normalized_username = username.lower().strip()
+
+    user = db.query(User).filter(
+        User.email == normalized_username,
+        User.deleted_at.is_(None),
+    ).first()
+
+    if user is None or user.is_locked or not user.is_active:
+        raise GrantError(
+            "invalid_grant",
+            "Invalid credentials",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if not verify_password(password, user.password_hash):
+        user.record_failed_login()
+        db.commit()
+
+        raise GrantError(
+            "invalid_grant",
+            "Invalid credentials",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    user.record_successful_login()
+
+    granted_scope = _validate_scope(
+        user,
+        requested_scope,
+    )
+
+    scopes = granted_scope.split() if granted_scope else []
+
+    access = create_access_token(
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+        role=user.role,
+        scopes=scopes,
+    )
+
+    refresh = create_refresh_token(
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+        role=user.role,
+    )
+
+    _persist_refresh_token(
+        db,
+        user,
+        refresh,
+        request,
+    )
+
+    db.commit()
+
+    return user, access, refresh, granted_scope
+
+
+def _refresh_token_grant(
+    db: Session,
+    request: Request,
+    refresh_token: str,
+    requested_scope: Optional[str] = None,
+) -> tuple[User, str, str, str]:
+    """
+    Single source of truth for refresh-token rotation.
+    """
+
+    try:
+        claims = verify_refresh_token(refresh_token)
+    except Exception:
+        raise GrantError(
+            "invalid_grant",
+            "Refresh token is invalid or expired",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    token_hash = hashlib.sha256(
+        refresh_token.encode("utf-8")
+    ).hexdigest()
+
+    stored = (
+        db.query(RefreshToken)
+        .filter(
+            RefreshToken.token_hash == token_hash,
+            RefreshToken.revoked_at.is_(None),
+        )
+        .with_for_update()
+        .first()
+    )
+
+    if stored is None:
+        raise GrantError(
+            "invalid_grant",
+            "Refresh token not found or already used",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if not stored.is_valid:
+        raise GrantError(
+            "invalid_grant",
+            "Refresh token expired or already used",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    # Prevent a database token from being used with a JWT belonging
+    # to another user.
+    if str(stored.user_id) != str(claims.get("sub")):
+        raise GrantError(
+            "invalid_grant",
+            "Refresh token ownership validation failed",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    user = db.query(User).filter(
+        User.id == claims.get("sub"),
+        User.is_active.is_(True),
+        User.deleted_at.is_(None),
+    ).first()
+
+    if user is None:
+        stored.revoked_at = datetime.now(timezone.utc)
+        db.commit()
+
+        raise GrantError(
+            "invalid_grant",
+            "User account not found or deactivated",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    # The database identity is authoritative.
+    if str(claims.get("tenant_id")) != str(user.tenant_id):
+        raise GrantError(
+            "invalid_grant",
+            "Refresh token tenant validation failed",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if str(claims.get("role")) != str(user.role):
+        raise GrantError(
+            "invalid_grant",
+            "Refresh token role validation failed",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    granted_scope = _validate_scope(
+        user,
+        requested_scope,
+    )
+
+    stored.revoked_at = datetime.now(timezone.utc)
+
+    scopes = granted_scope.split() if granted_scope else []
+
+    access = create_access_token(
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+        role=user.role,
+        scopes=scopes,
+    )
+
+    new_refresh = create_refresh_token(
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+        role=user.role,
+    )
+
+    _persist_refresh_token(
+        db,
+        user,
+        new_refresh,
+        request,
+    )
+
+    db.commit()
+
+    return user, access, new_refresh, granted_scope
+
+
+@router.post("/token")
+async def token(
+    request: Request,
+    grant_type: str = Form(...),
+    username: Optional[str] = Form(None),
+    password: Optional[str] = Form(None),
+    refresh_token: Optional[str] = Form(None),
+    scope: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """
+    OAuth2-shaped token endpoint.
+    """
+
+    if grant_type not in SUPPORTED_GRANT_TYPES:
+        _oauth_error(
+            "unsupported_grant_type",
+            "Supported grant types: password, refresh_token",
+        )
+
+    if grant_type == "password":
+        if not username or not password:
+            _oauth_error(
+                "invalid_request",
+                "username and password are required",
+            )
+
+        try:
+            _, access, refresh, granted_scope = _password_grant(
+                db,
+                request,
+                username,
+                password,
+                scope,
+            )
+        except GrantError as exc:
+            _oauth_error(
+                exc.error,
+                exc.description,
+                exc.status_code,
+            )
+
+        return {
+            "access_token": access,
+            "refresh_token": refresh,
+            "token_type": "bearer",
+            "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            "scope": granted_scope,
+        }
+
+    if grant_type == "refresh_token":
+        if not refresh_token:
+            _oauth_error(
+                "invalid_request",
+                "refresh_token is required",
+            )
+
+        try:
+            _, access, new_refresh, granted_scope = (
+                _refresh_token_grant(
+                    db,
+                    request,
+                    refresh_token,
+                    scope,
+                )
+            )
+        except GrantError as exc:
+            _oauth_error(
+                exc.error,
+                exc.description,
+                exc.status_code,
+            )
+
+        return {
+            "access_token": access,
+            "refresh_token": new_refresh,
+            "token_type": "bearer",
+            "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            "scope": granted_scope,
+        }
+
+    _oauth_error(
+        "unsupported_grant_type",
+        "Unsupported grant type",
+    )
