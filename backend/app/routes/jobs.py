@@ -2001,11 +2001,9 @@ def close_job_endpoint(
     Close a job assigned to the authenticated technician.
     """
 
-    technician = get_technician_for_current_user(
-        db,
-        current_user,
-    )
-
+    # Resolve the job inside the authenticated tenant before looking up the
+    # technician. This preserves the endpoint contract: unknown/cross-tenant
+    # jobs are always 404 and do not leak technician lookup details.
     job = db.query(Job).filter(
         Job.id == job_id,
         Job.tenant_id == current_user.tenant_id,
@@ -2016,6 +2014,11 @@ def close_job_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Job not found",
         )
+
+    technician = get_technician_for_current_user(
+        db,
+        current_user,
+    )
 
     if (
         job.assigned_technician_id
@@ -2052,10 +2055,9 @@ def close_job_endpoint(
         db=db,
         job_id=job.id,
         closure_data=payload,
-        technician_identifier=str(
-            technician.technician_id
-        ),
-        user_role=current_user.role.value.upper(),
+        technician_identifier=str(technician.tech_id),
+        tenant_id=str(current_user.tenant_id),
+        user_role=current_user.role.value,
     )
 
 
