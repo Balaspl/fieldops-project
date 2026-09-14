@@ -91,6 +91,7 @@ def test_successful_job_closure(setup_db):
         job_id=job.id,
         closure_data=payload,
         technician_identifier=str(tech.technician_id),
+        tenant_id=tech.tenant_id,
         user_role="TECHNICIAN"
     )
 
@@ -126,6 +127,7 @@ def test_subtotal_calculated(setup_db):
         job_id=job.id,
         closure_data=payload,
         technician_identifier=str(tech.technician_id),
+        tenant_id=tech.tenant_id,
         user_role="TECHNICIAN"
     )
 
@@ -149,6 +151,7 @@ def test_completed_at_and_by_stored(setup_db):
         job_id=job.id,
         closure_data=payload,
         technician_identifier="tech-100",
+        tenant_id=tech.tenant_id,
         user_role="TECHNICIAN"
     )
 
@@ -176,6 +179,7 @@ def test_duplicate_completion_rejected(setup_db):
         job_id=job.id,
         closure_data=payload,
         technician_identifier=str(tech.technician_id),
+        tenant_id=tech.tenant_id,
         user_role="TECHNICIAN"
     )
 
@@ -186,6 +190,7 @@ def test_duplicate_completion_rejected(setup_db):
             job_id=job.id,
             closure_data=payload,
             technician_identifier=str(tech.technician_id),
+            tenant_id=tech.tenant_id,
             user_role="TECHNICIAN"
         )
     assert exc_info.value.status_code == 400
@@ -210,6 +215,7 @@ def test_unauthorized_user_rejected(setup_db):
             job_id=job.id,
             closure_data=payload,
             technician_identifier=str(tech.technician_id),
+            tenant_id=tech.tenant_id,
             user_role="DISPATCHER"
         )
     assert exc_info.value.status_code == 403
@@ -232,6 +238,7 @@ def test_invalid_job(setup_db):
             job_id=99999,
             closure_data=payload,
             technician_identifier="tech-100",
+            tenant_id="tenant-1",
             user_role="TECHNICIAN"
         )
     assert exc_info.value.status_code == 404
@@ -285,6 +292,7 @@ def test_rollback_on_failure(setup_db):
                 job_id=job.id,
                 closure_data=payload,
                 technician_identifier=str(tech.technician_id),
+                tenant_id=tech.tenant_id,
                 user_role="TECHNICIAN"
             )
         assert exc_info.value.status_code == 500
@@ -312,6 +320,7 @@ def test_get_job_closure_api(setup_db):
         job_id=job.id,
         closure_data=payload,
         technician_identifier=str(tech.technician_id),
+        tenant_id=tech.tenant_id,
         user_role="TECHNICIAN"
     )
 
