@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import api from "../services/api";
 import { Eye, Pencil, Trash2, ExternalLink, Copy, Check, Share2, Loader2, CheckCircle2 } from "lucide-react";
 import LoadingSpinner from "../components/ui/LoadingSpinner";
 import EmptyState from "../components/ui/EmptyState";
 import JobStatusTimeline from "../components/customer-tracking/JobStatusTimeline";
 import useAuthStore from "../store/authStore";
-import { getJobClosure } from "../services/planningService";
+import { getJobClosure, getJobs, getJobSla } from "../services/planningService";
 import { JobClosureModal } from "../components/jobs/JobClosureModal";
 
 const JOBS_PAGE_SIZE = 8;
@@ -24,6 +24,24 @@ interface JobFormData {
   sla_deadline?: string;
   attempt_count?: number;
 }
+
+
+type JobFilterKey = "status" | "priority" | "service_type" | "sla";
+
+interface JobListFilters {
+  status: string;
+  priority: string;
+  service_type: string;
+  sla: string;
+}
+
+const DEFAULT_JOB_LIST_FILTERS: JobListFilters = {
+  status: "ALL",
+  priority: "ALL",
+  service_type: "ALL",
+  sla: "ALL",
+};
+
 
 const getActiveTenantId = () => {
   if (typeof window !== "undefined") {
@@ -63,12 +81,17 @@ interface Job {
 }
 
 
-const priorities = [
+const PRIORITY_FILTER_OPTIONS = [
+  { label: "All Priorities", value: "ALL" },
   { label: "Critical", value: "CRITICAL" },
   { label: "High", value: "HIGH" },
   { label: "Medium", value: "MEDIUM" },
   { label: "Low", value: "LOW" },
 ];
+
+const priorities = PRIORITY_FILTER_OPTIONS.filter(
+  (priority) => priority.value !== "ALL"
+);
 
 const serviceTypes = [
   { label: "HVAC Repair", value: "HVAC_REPAIR" },
@@ -191,23 +214,40 @@ function JobCreationForm() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [debSearchTerm, setDebSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState("ALL");
-  const [priorityFilter, setPriorityFilter] = useState("ALL");
-  const [serviceFilter, setServiceFilter] = useState("ALL");
+  const [jobsError, setJobsError] = useState("");
+  const jobsRequestIdRef = useRef(0);
+  const [jobFilters, setJobFilters] =
+    useState<JobListFilters>(DEFAULT_JOB_LIST_FILTERS);
+
+  const updateJobFilter = (
+    key: JobFilterKey,
+    value: string
+  ) => {
+    setJobFilters((prev) => ({
+      ...prev,
+      [key]: value,
+    }));
+  };
+
+  const clearJobFilters = () => {
+    setJobFilters({ ...DEFAULT_JOB_LIST_FILTERS });
+  };
   const [serviceTypesList, setServiceTypesList] = useState<Array<{ value: string; label: string }>>([]);
+  const [slaByJobId, setSlaByJobId] = useState<Record<string, any>>({});
   const [jobsPage, setJobsPage] = useState(1);
   const [totalJobsCount, setTotalJobsCount] = useState(0);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebSearchTerm(searchTerm);
+    const timer = window.setTimeout(() => {
+      setDebSearchTerm(searchTerm.trim());
     }, 300);
-    return () => clearTimeout(timer);
+
+    return () => window.clearTimeout(timer);
   }, [searchTerm]);
 
   useEffect(() => {
     setJobsPage(1);
-  }, [debSearchTerm, statusFilter, priorityFilter, serviceFilter]);
+  }, [debSearchTerm, jobFilters]);
 
 
 
@@ -280,39 +320,74 @@ function JobCreationForm() {
   };
 
   const fetchJobs = async () => {
-    try {
-      setJobsLoading(true);
-      const params: any = {
-        page: jobsPage,
-        limit: JOBS_PAGE_SIZE
-      };
-      if (debSearchTerm) params.search = debSearchTerm;
-      if (statusFilter && statusFilter !== "ALL") params.status = statusFilter;
-      if (priorityFilter && priorityFilter !== "ALL") params.priority = priorityFilter;
-      if (serviceFilter && serviceFilter !== "ALL") params.service_type = serviceFilter;
+    const requestId = ++jobsRequestIdRef.current;
 
-      const [response] = await Promise.all([
-        api.get("/jobs", { params }),
-        new Promise(resolve => setTimeout(resolve, 1000))
-      ]);
+    setJobsLoading(true);
+    setJobsError("");
+
+    try {
+      const response = await getJobs({
+        page: jobsPage,
+        limit: JOBS_PAGE_SIZE,
+        search: debSearchTerm || undefined,
+        status:
+          jobFilters.status !== "ALL"
+            ? jobFilters.status
+            : undefined,
+        priority:
+          jobFilters.priority !== "ALL"
+            ? jobFilters.priority
+            : undefined,
+        service_type:
+          jobFilters.service_type !== "ALL"
+            ? jobFilters.service_type
+            : undefined,
+        sla:
+          jobFilters.sla !== "ALL"
+            ? jobFilters.sla
+            : undefined,
+      });
+
+      // Ignore stale responses when a newer search/filter request
+      // has already been started.
+      if (requestId !== jobsRequestIdRef.current) {
+        return;
+      }
+
       setJobs(response.data);
-      const totalHeader = response.headers["x-total-count"] || response.headers["X-Total-Count"];
-      setTotalJobsCount(totalHeader ? parseInt(totalHeader, 10) : response.data.length);
+
+      const totalHeader =
+        response.headers["x-total-count"] ??
+        response.headers["X-Total-Count"];
+
+      const parsedTotal = totalHeader
+        ? Number.parseInt(String(totalHeader), 10)
+        : NaN;
+
+      setTotalJobsCount(
+        Number.isFinite(parsedTotal)
+          ? parsedTotal
+          : response.data.length
+      );
     } catch (error) {
-      console.error(error);
-      setApiError("Unable to fetch jobs. Please check backend API.");
+      // Ignore errors from stale requests.
+      if (requestId !== jobsRequestIdRef.current) {
+        return;
+      }
+
+      console.error("Failed to fetch jobs:", error);
+
+      setJobs([]);
+      setTotalJobsCount(0);
+      setJobsError(
+        "Unable to load jobs. Please try again."
+      );
     } finally {
-      setJobsLoading(false);
+      if (requestId === jobsRequestIdRef.current) {
+        setJobsLoading(false);
+      }
     }
   };
-
-  useEffect(() => {
-    fetchServiceTypes();
-  }, []);
-
-  useEffect(() => {
-    fetchJobs();
-  }, [debSearchTerm, statusFilter, priorityFilter, serviceFilter, jobsPage]);
 
   const validateForm = () => {
     const newErrors: Partial<Record<keyof JobFormData, string>> = {};
@@ -410,10 +485,18 @@ function JobCreationForm() {
         setJobsPage(1);
         setSearchTerm("");
         setDebSearchTerm("");
-        setStatusFilter("ALL");
-        setPriorityFilter("ALL");
-        setServiceFilter("ALL");
-        if (debSearchTerm === "" && statusFilter === "ALL" && priorityFilter === "ALL" && serviceFilter === "ALL") {
+        setJobFilters({
+          status: "ALL",
+          priority: "ALL",
+          service_type: "ALL",
+          sla: "ALL",
+        });
+        
+        
+        if (debSearchTerm === "" &&
+          jobFilters.status === "ALL" &&
+          jobFilters.priority === "ALL" &&
+          jobFilters.service_type === "ALL") {
           fetchJobs();
         }
       }
@@ -571,38 +654,53 @@ function JobCreationForm() {
               <label style={styles.filterLabel}>Search</label>
               <input
                 type="text"
+                aria-label="Search jobs"
                 placeholder="Search name, location..."
                 value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
-                onFocus={() => setFocusedInput('search')}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                onFocus={() => setFocusedInput("search")}
                 onBlur={() => setFocusedInput(null)}
-                style={focusedInput === 'search' ? { ...styles.filterInput, ...styles.filterInputFocus } : styles.filterInput}
+                style={
+                  focusedInput === "search"
+                    ? { ...styles.filterInput, ...styles.filterInputFocus }
+                    : styles.filterInput
+                }
               />
             </div>
             <div style={styles.filterGroup}>
               <label style={styles.filterLabel}>Priority</label>
               <select
-                value={priorityFilter}
-                onChange={e => setPriorityFilter(e.target.value)}
-                onFocus={() => setFocusedInput('priorityFilter')}
+                value={jobFilters.priority}
+                onChange={(e) =>
+                  updateJobFilter("priority", e.target.value)
+                }
+                aria-label="Filter jobs by priority"
+                onFocus={() => setFocusedInput("priority")}
                 onBlur={() => setFocusedInput(null)}
-                style={focusedInput === 'priorityFilter' ? { ...styles.filterInput, ...styles.filterInputFocus } : styles.filterInput}
+                style={
+                  focusedInput === "priority"
+                    ? { ...styles.filterInput, ...styles.filterInputFocus }
+                    : styles.filterInput
+                }
               >
-                <option value="ALL">All Priorities</option>
-                <option value="CRITICAL">Critical</option>
-                <option value="HIGH">High</option>
-                <option value="MEDIUM">Medium</option>
-                <option value="LOW">Low</option>
+                {PRIORITY_FILTER_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
               </select>
             </div>
             <div style={styles.filterGroup}>
               <label style={styles.filterLabel}>Service</label>
               <select
-                value={serviceFilter}
-                onChange={e => setServiceFilter(e.target.value)}
-                onFocus={() => setFocusedInput('serviceFilter')}
+                value={jobFilters.service_type}
+                onChange={(e) =>
+                  updateJobFilter("service_type", e.target.value)
+                }
+                aria-label="Filter jobs by service type"
+                onFocus={() => setFocusedInput('service')}
                 onBlur={() => setFocusedInput(null)}
-                style={focusedInput === 'serviceFilter' ? { ...styles.filterInput, ...styles.filterInputFocus } : styles.filterInput}
+                style={focusedInput === 'service' ? { ...styles.filterInput, ...styles.filterInputFocus } : styles.filterInput}
               >
                 <option value="ALL">All Services</option>
                 {serviceTypesList.map(st => (
@@ -615,11 +713,14 @@ function JobCreationForm() {
             <div style={styles.filterGroup}>
               <label style={styles.filterLabel}>Status</label>
               <select
-                value={statusFilter}
-                onChange={e => setStatusFilter(e.target.value)}
-                onFocus={() => setFocusedInput('statusFilter')}
+                value={jobFilters.status}
+                onChange={(e) =>
+                  updateJobFilter("status", e.target.value)
+                }
+                aria-label="Filter jobs by status"
+                onFocus={() => setFocusedInput('status')}
                 onBlur={() => setFocusedInput(null)}
-                style={focusedInput === 'statusFilter' ? { ...styles.filterInput, ...styles.filterInputFocus } : styles.filterInput}
+                style={focusedInput === 'status' ? { ...styles.filterInput, ...styles.filterInputFocus } : styles.filterInput}
               >
                 <option value="ALL">All Statuses</option>
                 <option value="active">Active (Unassigned)</option>
@@ -634,7 +735,30 @@ function JobCreationForm() {
               </select>
             </div>
           </div>
+          
 
+          <div style={styles.filterGroup}>
+            <label style={styles.filterLabel}>SLA</label>
+            <select
+              value={jobFilters.sla}
+              onChange={(e) =>
+                updateJobFilter("sla", e.target.value)
+              }
+              aria-label="Filter jobs by SLA"
+              onFocus={() => setFocusedInput("sla")}
+              onBlur={() => setFocusedInput(null)}
+              style={
+                focusedInput === "sla"
+                  ? { ...styles.filterInput, ...styles.filterInputFocus }
+                  : styles.filterInput
+              }
+            >
+              <option value="ALL">All SLA</option>
+              <option value="WITHIN_SLA">Within SLA</option>
+              <option value="APPROACHING_BREACH">Approaching Breach</option>
+              <option value="BREACHED">Breached</option>
+            </select>
+          </div>
           {/* Jobs Count */}
           <p style={styles.resultsCount}>
             Showing <strong>{totalJobsCount === 0 ? 0 : (safeJobsPage - 1) * JOBS_PAGE_SIZE + 1}–{Math.min(safeJobsPage * JOBS_PAGE_SIZE, totalJobsCount)}</strong> of <strong>{totalJobsCount}</strong> job{totalJobsCount !== 1 ? "s" : ""} found
@@ -649,38 +773,91 @@ function JobCreationForm() {
           }}>
             {jobsLoading ? (
               <LoadingSpinner message="Loading jobs..." />
+            ) : jobsError ? (
+              <div
+                style={{
+                  minHeight: "350px",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "12px",
+                  padding: "24px",
+                  textAlign: "center",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: "15px",
+                    fontWeight: 600,
+                    color: "#7A2020",
+                  }}
+                >
+                  {jobsError}
+                </div>
+
+                <div
+                  style={{
+                    fontSize: "13px",
+                    color: "#6B7280",
+                  }}
+                >
+                  Your search or filters could not be loaded.
+                </div>
+
+                <button
+                  type="button"
+                  style={
+                    hoveredBtn === "retryJobs"
+                      ? {
+                          ...styles.refreshIconBtn,
+                          background: "#F6FAF8",
+                          borderColor: "#7AAE8A",
+                        }
+                      : styles.refreshIconBtn
+                  }
+                  onMouseEnter={() => setHoveredBtn("retryJobs")}
+                  onMouseLeave={() => setHoveredBtn(null)}
+                  onClick={fetchJobs}
+                >
+                  Retry
+                </button>
+              </div>
             ) : filteredJobs.length === 0 ? (
               <EmptyState
                 title={
                   (searchTerm && searchTerm.trim()) ||
-                    statusFilter !== "ALL" ||
-                    priorityFilter !== "ALL" ||
-                    serviceFilter !== "ALL"
+                    jobFilters.status !== "ALL" ||
+                    jobFilters.priority !== "ALL" ||
+                    jobFilters.service_type !== "ALL" ||
+                    jobFilters.sla !== "ALL"
                     ? "No jobs match your filters"
                     : "No jobs found"
                 }
                 description={
                   (searchTerm && searchTerm.trim()) ||
-                    statusFilter !== "ALL" ||
-                    priorityFilter !== "ALL" ||
-                    serviceFilter !== "ALL"
+                    jobFilters.status !== "ALL" ||
+                    jobFilters.priority !== "ALL" ||
+                    jobFilters.service_type !== "ALL" ||
+                    jobFilters.sla !== "ALL"
                     ? "Try adjusting your search terms or filters."
                     : "Get started by creating your first job request."
                 }
                 action={
                   ((searchTerm && searchTerm.trim()) ||
-                    statusFilter !== "ALL" ||
-                    priorityFilter !== "ALL" ||
-                    serviceFilter !== "ALL") ? (
+                    jobFilters.status !== "ALL" ||
+                    jobFilters.priority !== "ALL" ||
+                    jobFilters.service_type !== "ALL" ||
+                    jobFilters.sla !== "ALL") ? (
                     <button
                       style={hoveredBtn === 'clearFilters' ? { ...styles.refreshIconBtn, background: '#F6FAF8', borderColor: '#7AAE8A' } : styles.refreshIconBtn}
                       onMouseEnter={() => setHoveredBtn('clearFilters')}
                       onMouseLeave={() => setHoveredBtn(null)}
                       onClick={() => {
                         setSearchTerm("");
-                        setStatusFilter("ALL");
-                        setPriorityFilter("ALL");
-                        setServiceFilter("ALL");
+                        
+                        clearJobFilters();
+                        
                       }}
                     >
                       Clear Filters

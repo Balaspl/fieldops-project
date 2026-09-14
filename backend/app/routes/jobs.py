@@ -24,6 +24,7 @@ from app.services.distance import DistanceScoringService
 from app.services.cooldown_service import CooldownService
 from app.services.exclusion_service import ExclusionService
 from app.services.skill import SkillScoringService
+from app.services.sla_service import SLAService
 from app.services.workload import WorkloadScoringService
 from app.services.composite import CompositeScoringService
 from app.utils import map_service_type_to_skill, is_skill_matching
@@ -219,6 +220,7 @@ def get_jobs(
     status: Optional[str] = None,
     priority: Optional[str] = None,
     service_type: Optional[str] = None,
+    sla: Optional[str] = None,
     page: Optional[int] = Query(None, ge=1),
     limit: Optional[int] = Query(None, ge=1),
     user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(get_current_user_or_tenant),
@@ -226,6 +228,7 @@ def get_jobs(
 ):
     user, tenant_id = user_tenant
     try:
+        sla_service = SLAService()
         query = db.query(Job)
         query = query.filter(Job.tenant_id == tenant_id)
         
@@ -262,6 +265,36 @@ def get_jobs(
         if service_type and service_type.upper() != "ALL":
             normalized_service = service_type.replace("_", " ").strip().lower()
             query = query.filter(func.lower(func.replace(Job.service_type, "_", " ")) == normalized_service)
+
+        if sla and sla.upper() != "ALL":
+            sla = sla.upper().strip()
+
+            if sla not in {"WITHIN_SLA", "APPROACHING_BREACH", "BREACHED"}:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid SLA filter"
+                )
+
+            matching_job_ids = []
+
+            for job in query.all():
+                state = sla_service.get_sla_state(str(job.id))
+
+                if not state:
+                    continue
+
+                remaining_seconds = state["remaining_seconds"]
+
+                if sla == "BREACHED" and remaining_seconds <= 0:
+                    matching_job_ids.append(job.id)
+
+                elif sla == "APPROACHING_BREACH" and 0 < remaining_seconds < 900:
+                    matching_job_ids.append(job.id)
+
+                elif sla == "WITHIN_SLA" and remaining_seconds >= 900:
+                    matching_job_ids.append(job.id)
+
+            query = query.filter(Job.id.in_(matching_job_ids))
             
         total_count = query.count()
         response.headers["X-Total-Count"] = str(total_count)
@@ -272,6 +305,8 @@ def get_jobs(
             query = query.offset((page - 1) * limit).limit(limit)
             
         return query.all()
+    except HTTPException:
+        raise
     except Exception as error:
         raise HTTPException(
             status_code=500,
