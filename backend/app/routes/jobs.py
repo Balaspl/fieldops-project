@@ -82,10 +82,27 @@ def get_jobs_stats(
         total_jobs = query.count()
 
         # Jobs counts by status
-        completed_count = query.filter(func.lower(Job.status) == "completed").count()
-        in_progress_count = query.filter(func.lower(Job.status) == "in progress").count()
-        active_count = query.filter(func.lower(Job.status) == "active", Job.assigned_technician_id.isnot(None)).count()
-        pending_count = query.filter(func.lower(Job.status) == "active", Job.assigned_technician_id.is_(None)).count()
+        completed_count = query.filter(
+            func.lower(Job.status) == "completed"
+        ).count()
+
+        cancelled_count = query.filter(
+            func.lower(Job.status).in_(["cancelled", "canceled"])
+        ).count()
+
+        in_progress_count = query.filter(
+            func.lower(Job.status) == "in progress"
+        ).count()
+
+        active_count = query.filter(
+            func.lower(Job.status) == "active",
+            Job.assigned_technician_id.isnot(None)
+        ).count()
+
+        pending_count = query.filter(
+            func.lower(Job.status) == "active",
+            Job.assigned_technician_id.is_(None)
+        ).count()
 
         # Technician availability counts with tenant isolation
         tech_query = db.query(Technician).filter(
@@ -111,6 +128,7 @@ def get_jobs_stats(
                 "active": active_count,
                 "in_progress": in_progress_count,
                 "completed": completed_count,
+                "cancelled": cancelled_count,
                 "pending": pending_count
             },
             "technicians": {
@@ -221,6 +239,8 @@ def get_jobs(
     priority: Optional[str] = None,
     service_type: Optional[str] = None,
     sla: Optional[str] = None,
+    location: Optional[str] = None,
+    technician_id: Optional[int] = Query(None, ge=1),
     page: Optional[int] = Query(None, ge=1),
     limit: Optional[int] = Query(None, ge=1),
     user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(get_current_user_or_tenant),
@@ -265,6 +285,18 @@ def get_jobs(
         if service_type and service_type.upper() != "ALL":
             normalized_service = service_type.replace("_", " ").strip().lower()
             query = query.filter(func.lower(func.replace(Job.service_type, "_", " ")) == normalized_service)
+
+        if location and location.strip():
+            location_pattern = f"%{location.strip()}%"
+            query = query.filter(
+                Job.location.ilike(location_pattern)
+            )
+
+        if technician_id is not None:
+            query = query.filter(
+                Job.assigned_technician_id == technician_id
+            )
+
 
         if sla and sla.upper() != "ALL":
             sla = sla.upper().strip()
