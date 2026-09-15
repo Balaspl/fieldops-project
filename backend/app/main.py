@@ -25,6 +25,7 @@ from .services.broadcast_scheduler import BroadcastScheduler
 from .routes.tracking import redis_gps_listener
 from .runtime.metrics import runtime_metrics_collector
 from .services.default_template import seed_default_templates
+from .services.kafka.producer import KafkaProducer
 from app.sentiment.dashboard import router as sentiment_dashboard_router
 from .routes import oauth2
 
@@ -32,13 +33,21 @@ scheduler = None
 redis_async_client = None
 redis_pubsub_client = None
 listener_task = None
+kafka_producer = None
 from dotenv import load_dotenv
 
 load_dotenv()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global scheduler, redis_async_client, redis_pubsub_client, listener_task
+    global scheduler, redis_async_client, redis_pubsub_client, listener_task, kafka_producer
     start_scheduler()
+    try:
+        kafka_producer = KafkaProducer()
+        await kafka_producer.start()
+        logger.info("Kafka producer connected successfully.")
+    except Exception:
+        kafka_producer = None
+        logger.warning("Kafka unavailable. Kafka publishing is disabled.")
     await runtime_metrics_collector.start()
 
     # Ensure all tables & missing columns exist
@@ -63,21 +72,21 @@ async def lifespan(app: FastAPI):
             conn.commit()
     except Exception as e:
         logger.warning(f"Could not auto-create tables or columns: {e}")
-    
+
     redis_host = os.getenv("REDIS_HOST", "localhost")
     redis_port = int(os.getenv("REDIS_PORT", 6379))
-    
+
     try:
         redis_async_client = aioredis.Redis(host=redis_host, port=redis_port, decode_responses=True)
         # Test the connection before proceeding
         await redis_async_client.ping()
-        
+
         # Pubsub listener needs decode_responses=False since GPS payloads are MsgPack binary
         redis_pubsub_client = aioredis.Redis(host=redis_host, port=redis_port, decode_responses=False)
         await redis_pubsub_client.ping()
-        
+
         listener_task = asyncio.create_task(redis_gps_listener(redis_pubsub_client))
-        
+
         scheduler = BroadcastScheduler(
             db_factory=SessionLocal,
             redis_async=redis_async_client,
@@ -91,7 +100,7 @@ async def lifespan(app: FastAPI):
         redis_pubsub_client = None
         listener_task = None
         scheduler = None
-        
+
     # Seed default notification templates, organizations, and users
     db = SessionLocal()
     try:
@@ -118,6 +127,10 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        if kafka_producer:
+            await kafka_producer.stop()
+            kafka_producer = None
+
         await runtime_metrics_collector.stop()
         try:
             from app.services.ai.FieldOpsAI.runtime.orchestrator import ai_orchestrator
@@ -228,26 +241,26 @@ async def justification_validation_exception_handler(request: Request, exc: Just
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     errors = exc.errors()
-    
+
     sanitized_errors = []
     for err in errors:
         loc = err.get("loc", [])
         is_priority = "priority" in loc
         msg = err.get("msg", "")
-        
+
         if is_priority or "Invalid priority value" in msg:
             return JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 content={"error": "Invalid priority value"}
             )
-            
+
         if "Field cannot be empty" in msg:
              field = loc[-1] if loc else "field"
              return JSONResponse(
                  status_code=status.HTTP_400_BAD_REQUEST,
                  content={"error": f"{str(field).replace('_', ' ').capitalize()} cannot be empty"}
               )
-              
+
         sanitized_errors.append({
             "loc": err.get("loc"),
             "msg": err.get("msg"),
