@@ -37,6 +37,13 @@ from ..models.user import User, RefreshToken
 from ..models.organization import Organization
 from .oauth2 import _password_grant, _refresh_token_grant, GrantError
 
+
+from ..auth.oidc import (
+    OIDCValidationError,
+    validate_google_id_token,
+)
+from ..models.oidc_identity import OIDCIdentity
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
@@ -112,6 +119,9 @@ class OAuth2ContractResponse(BaseModel):
     token_type: str
     tenant_claim: str
 
+class OIDCLoginRequest(BaseModel):
+    id_token: str = Field(..., min_length=1)
+
 
 # ──────────────────────────────────────────────────
 # Helpers
@@ -167,10 +177,58 @@ def _build_token_response(user: User, request: Request, db: Session) -> TokenRes
     )
 
 
-def _log_audit(db: Session, action: str, user_id: str, tenant_id: str,
-               request: Request, severity: str = "INFO", details: dict = None):
-    """Log an authentication event to the enterprise audit trail."""
+def _log_audit(
+    db: Session,
+    action: str,
+    user_id: Optional[str],
+    tenant_id: Optional[str],
+    request: Request,
+    severity: str = "INFO",
+    details: Optional[dict] = None,
+):
+    """
+    Log an authentication event to the enterprise audit trail.
+
+    Important:
+    - enterprise_audit_logs.tenant_id is NOT NULL.
+    - tenant_id is also a foreign key to organizations.id.
+    - Unauthenticated requests do not have a valid tenant.
+    - Such events are written to the application log instead of
+      enterprise_audit_logs.
+    """
+
     from ..models.enterprise_audit import EnterpriseAuditLog
+
+    # Unauthenticated events cannot safely use a fake tenant such
+    # as "unknown" because tenant_id references organizations.id.
+    if not tenant_id:
+        logger.warning(
+            "Authentication audit event without tenant: "
+            "action=%s user_id=%s details=%s",
+            action,
+            user_id,
+            details,
+        )
+        return
+
+    # Verify that the tenant exists before inserting the audit record.
+    organization_exists = (
+        db.query(Organization.id)
+        .filter(Organization.id == tenant_id)
+        .first()
+    )
+
+    if organization_exists is None:
+        logger.warning(
+            "Authentication audit event skipped because tenant "
+            "does not exist: action=%s tenant_id=%s user_id=%s details=%s",
+            action,
+            tenant_id,
+            user_id,
+            details,
+        )
+        return
+
     audit = EnterpriseAuditLog(
         id=str(uuid.uuid4()),
         user_id=user_id,
@@ -182,8 +240,8 @@ def _log_audit(db: Session, action: str, user_id: str, tenant_id: str,
         details=details,
         correlation_id=request.headers.get("X-Correlation-ID"),
     )
-    db.add(audit)
 
+    db.add(audit)
 
 # ──────────────────────────────────────────────────
 # Routes
@@ -274,35 +332,50 @@ async def register(
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(
-    payload: LoginRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    """
-    Legacy JSON-body login. Delegates credential checking and token
-    issuance to _password_grant() so there is one code path shared
-    with /oauth2/token.
-    """
+async def login(payload: LoginRequest,request: Request,db: Session = Depends(get_db),):
+   
     try:
         user, access_token, refresh_token_str, _granted_scope = _password_grant(
-            db, request, payload.email, payload.password,
+            db,
+            request,
+            payload.email,
+            payload.password,
         )
     except GrantError:
-        _log_audit(db, "FAILED_LOGIN", "unknown", "unknown", request,
-                   severity="WARNING", details={"email": payload.email.lower().strip()})
+        _log_audit(
+            db=db,
+            action="FAILED_LOGIN",
+            user_id=None,
+            tenant_id=None,
+            request=request,
+            severity="WARNING",
+            details={
+                "reason": "invalid_email_or_password",
+            },
+        )
         db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
         )
-
-    org = db.query(Organization).filter(Organization.id == user.tenant_id).first()
-    _log_audit(db, "LOGIN", user.id, user.tenant_id, request)
+    # Successful login
+    org = db.query(Organization).filter(
+        Organization.id == user.tenant_id
+    ).first()
+    _log_audit(
+        db,
+        "LOGIN",
+        user.id,
+        user.tenant_id,
+        request,
+    )
     db.commit()
-
-    logger.info("User logged in: email=%s role=%s tenant=%s", user.email, user.role, user.tenant_id)
-
+    logger.info(
+        "User logged in: email=%s role=%s tenant=%s",
+        user.email,
+        user.role,
+        user.tenant_id,
+    )
     return TokenResponse(
         access_token=access_token,
         refresh_token=refresh_token_str,
@@ -318,7 +391,215 @@ async def login(
             "organization_name": org.name if org else None,
         },
     )
+@router.post("/oidc/google", response_model=TokenResponse)
+async def google_oidc_login(
+    payload: OIDCLoginRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    Authenticate using a previously linked Google OIDC identity.
 
+    Google authenticates the external identity.
+    FieldOps determines which existing User owns that identity.
+
+    No new FieldOps users are created here.
+    """
+
+    # --------------------------------------------------
+    # 1. Validate the Google ID token
+    # --------------------------------------------------
+    try:
+        claims = await validate_google_id_token(
+            payload.id_token,
+        )
+
+    except OIDCValidationError:
+        _log_audit(
+            db=db,
+            action="FAILED_OIDC_LOGIN",
+            user_id=None,
+            tenant_id=None,
+            request=request,
+            severity="WARNING",
+            details={
+                "provider": "google",
+                "reason": "invalid_oidc_identity",
+            },
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid OIDC identity",
+        )
+
+    # --------------------------------------------------
+    # 2. Extract the trusted Google identity
+    # --------------------------------------------------
+    issuer = str(claims["iss"]).rstrip("/")
+    subject = str(claims["sub"])
+
+    # --------------------------------------------------
+    # 3. Find the linked Google identity
+    # --------------------------------------------------
+    identity = (
+        db.query(OIDCIdentity)
+        .filter(
+            OIDCIdentity.issuer == issuer,
+            OIDCIdentity.subject == subject,
+            OIDCIdentity.provider == "google",
+        )
+        .first()
+    )
+
+    # --------------------------------------------------
+    # 4. Reject unlinked Google accounts
+    # --------------------------------------------------
+    if identity is None:
+        _log_audit(
+            db=db,
+            action="FAILED_OIDC_LOGIN_UNKNOWN_IDENTITY",
+            user_id=None,
+            tenant_id=None,
+            request=request,
+            severity="WARNING",
+            details={
+                "provider": "google",
+                "reason": "identity_not_linked",
+                "issuer": issuer,
+                "subject": subject,
+            },
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Google account is not linked to a FieldOps account",
+        )
+
+    # --------------------------------------------------
+    # 5. Resolve the existing FieldOps user
+    # --------------------------------------------------
+    user = (
+        db.query(User)
+        .filter(
+            User.id == identity.user_id,
+            User.deleted_at.is_(None),
+        )
+        .first()
+    )
+
+    if user is None:
+        _log_audit(
+            db=db,
+            action="FAILED_OIDC_LOGIN_MISSING_USER",
+            user_id=None,
+            tenant_id=None,
+            request=request,
+            severity="WARNING",
+            details={
+                "provider": "google",
+                "reason": "linked_fieldops_user_not_found",
+                "identity_id": identity.id,
+            },
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="FieldOps account not found",
+        )
+
+    # --------------------------------------------------
+    # 6. Check whether the FieldOps user is active
+    # --------------------------------------------------
+    if not user.is_active:
+        _log_audit(
+            db=db,
+            action="FAILED_OIDC_LOGIN_DISABLED_USER",
+            user_id=user.id,
+            tenant_id=user.tenant_id,
+            request=request,
+            severity="WARNING",
+            details={
+                "provider": "google",
+                "reason": "fieldops_account_disabled",
+            },
+        )
+
+        db.commit()
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="FieldOps account is disabled",
+        )
+
+    # --------------------------------------------------
+    # 7. Check whether the organization is active
+    # --------------------------------------------------
+    organization = (
+        db.query(Organization)
+        .filter(
+            Organization.id == user.tenant_id,
+            Organization.status == "ACTIVE",
+            Organization.deleted_at.is_(None),
+        )
+        .first()
+    )
+
+    if organization is None:
+        _log_audit(
+            db=db,
+            action="FAILED_OIDC_LOGIN_INACTIVE_ORGANIZATION",
+            user_id=user.id,
+            tenant_id=user.tenant_id,
+            request=request,
+            severity="WARNING",
+            details={
+                "provider": "google",
+                "reason": "organization_inactive_or_deleted",
+            },
+        )
+
+        db.commit()
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organization is inactive",
+        )
+
+    # --------------------------------------------------
+    # 8. Create FieldOps access and refresh tokens
+    # --------------------------------------------------
+    # Tenant and role are taken from the FieldOps database.
+    # Google claims are never used for tenant or role assignment.
+    response = _build_token_response(
+        user=user,
+        request=request,
+        db=db,
+    )
+
+    # --------------------------------------------------
+    # 9. Audit successful OIDC login
+    # --------------------------------------------------
+    _log_audit(
+        db=db,
+        action="OIDC_LOGIN",
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+        request=request,
+        severity="INFO",
+        details={
+            "provider": "google",
+        },
+    )
+
+    db.commit()
+
+    logger.info(
+        "OIDC login successful: user_id=%s provider=google",
+        user.id,
+    )
+
+    return response
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_tokens(
@@ -551,3 +832,137 @@ async def get_oauth2_contract():
         token_type="bearer",
         tenant_claim="server_derived",
     )
+
+@router.post("/oidc/google/link")
+async def link_google_account(
+    payload: OIDCLoginRequest,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Link one Google identity to the currently authenticated
+    FieldOps user.
+
+    Rules:
+    1. One FieldOps user can have only one Google identity.
+    2. One Google identity can belong to only one FieldOps user.
+    """
+
+    user = (
+        db.query(User)
+        .filter(
+            User.id == current_user.user_id,
+            User.deleted_at.is_(None),
+        )
+        .first()
+    )
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="FieldOps user not found",
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="FieldOps account is disabled",
+        )
+
+    try:
+        claims = await validate_google_id_token(
+            payload.id_token,
+        )
+    except OIDCValidationError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Google identity",
+        )
+
+    issuer = str(claims["iss"]).rstrip("/")
+    subject = str(claims["sub"])
+
+    # ---------------------------------------------------------
+    # Rule 1:
+    # One FieldOps user can have only ONE Google account.
+    # ---------------------------------------------------------
+    existing_user_identity = (
+        db.query(OIDCIdentity)
+        .filter(
+            OIDCIdentity.user_id == user.id,
+        )
+        .first()
+    )
+
+    if existing_user_identity is not None:
+        # The same Google account is already linked.
+        if (
+            existing_user_identity.issuer == issuer
+            and existing_user_identity.subject == subject
+        ):
+            return {
+                "status": "ALREADY_LINKED",
+                "provider": "google",
+            }
+
+        # A different Google account is already linked.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A Google account is already linked to this FieldOps account.",
+        )
+
+    # ---------------------------------------------------------
+    # Rule 2:
+    # One Google account can belong to only ONE FieldOps user.
+    # ---------------------------------------------------------
+    existing = (
+        db.query(OIDCIdentity)
+        .filter(
+            OIDCIdentity.issuer == issuer,
+            OIDCIdentity.subject == subject,
+        )
+        .first()
+    )
+
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This Google account is already linked to another FieldOps account",
+        )
+
+    # ---------------------------------------------------------
+    # Create the Google identity link.
+    # ---------------------------------------------------------
+    identity = OIDCIdentity(
+        id=str(uuid.uuid4()),
+        user_id=user.id,
+        provider="google",
+        issuer=issuer,
+        subject=subject,
+    )
+
+    db.add(identity)
+
+    _log_audit(
+        db,
+        "OIDC_ACCOUNT_LINKED",
+        user.id,
+        user.tenant_id,
+        request,
+        details={
+            "provider": "google",
+        },
+    )
+
+    db.commit()
+
+    logger.info(
+        "Google OIDC identity linked: user_id=%s provider=google",
+        user.id,
+    )
+
+    return {
+        "status": "LINKED",
+        "provider": "google",
+    }

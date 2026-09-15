@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   User,
   Key,
@@ -16,18 +16,56 @@ import {
   changeTechnicianPassword,
 } from "../../services/technicianPortalService";
 import useAuthStore from "../../store/authStore";
+import api from "../../services/api";
 import { SkillComboSelect } from "../../components/ui/SkillComboSelect";
+
+declare global {
+  interface Window {
+    google?: {
+      accounts: {
+        id: {
+          initialize: (config: {
+            client_id: string;
+            callback: (response: { credential: string }) => void;
+          }) => void;
+
+          renderButton: (
+            parent: HTMLElement,
+            options: {
+              theme?: "outline" | "filled_blue" | "filled_black";
+              size?: "large" | "medium" | "small";
+              text?:
+                | "signin_with"
+                | "signup_with"
+                | "continue_with"
+                | "signin";
+              shape?: "rectangular" | "pill" | "circle" | "square";
+              width?: number;
+            }
+          ) => void;
+        };
+      };
+    };
+  }
+}
 
 export default function TechnicianSettingsPage() {
   const { user } = useAuthStore();
-  const [activeTab, setActiveTab] = useState<"profile" | "security">("profile");
 
-  // Profile State
+  const [activeTab, setActiveTab] = useState<"profile" | "security">(
+    "profile"
+  );
+
+  // =========================================================
+  // PROFILE STATE
+  // =========================================================
+
   const [isNewProfile, setIsNewProfile] = useState(true);
   const [profileLoading, setProfileLoading] = useState(true);
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileError, setProfileError] = useState("");
   const [profileSuccess, setProfileSuccess] = useState("");
+
   const [profileForm, setProfileForm] = useState({
     full_name: "",
     mobile_number: "",
@@ -43,22 +81,43 @@ export default function TechnicianSettingsPage() {
     certifications: "",
     profile_photo: "",
   });
+
   const [age, setAge] = useState<number | null>(null);
 
-  // Password State
+  // =========================================================
+  // PASSWORD STATE
+  // =========================================================
+
   const [currentPw, setCurrentPw] = useState("");
   const [newPw, setNewPw] = useState("");
   const [confirmPw, setConfirmPw] = useState("");
+
   const [pwSaving, setPwSaving] = useState(false);
   const [pwError, setPwError] = useState("");
   const [pwSuccess, setPwSuccess] = useState("");
+
+  // =========================================================
+  // GOOGLE OIDC STATE
+  // =========================================================
+
+  const googleButtonRef = useRef<HTMLDivElement | null>(null);
+
+  const [linkingGoogle, setLinkingGoogle] = useState(false);
+  const [googleSuccess, setGoogleSuccess] = useState("");
+  const [googleError, setGoogleError] = useState("");
+
+  // =========================================================
+  // LOAD TECHNICIAN PROFILE
+  // =========================================================
 
   useEffect(() => {
     getTechnicianProfile()
       .then((res) => {
         const p = res.data;
+
         if (p.profile_completed) {
           setIsNewProfile(false);
+
           setProfileForm({
             full_name: p.full_name || "",
             mobile_number: p.mobile_number || "",
@@ -74,11 +133,16 @@ export default function TechnicianSettingsPage() {
             certifications: (p.certifications || []).join(", "),
             profile_photo: p.profile_photo || "",
           });
-          if (p.age) setAge(p.age);
+
+          if (p.age) {
+            setAge(p.age);
+          }
         } else {
           setProfileForm((f) => ({
             ...f,
-            full_name: user ? `${user.first_name} ${user.last_name}` : "",
+            full_name: user
+              ? `${user.first_name} ${user.last_name}`
+              : "",
           }));
         }
       })
@@ -86,108 +150,301 @@ export default function TechnicianSettingsPage() {
       .finally(() => setProfileLoading(false));
   }, []);
 
+  // =========================================================
+  // CALCULATE AGE
+  // =========================================================
+
   const calcAge = (dob: string) => {
     if (!dob) return null;
+
     const d = new Date(dob);
     const t = new Date();
+
     let a = t.getFullYear() - d.getFullYear();
+
     if (
       t.getMonth() < d.getMonth() ||
-      (t.getMonth() === d.getMonth() && t.getDate() < d.getDate())
-    )
+      (t.getMonth() === d.getMonth() &&
+        t.getDate() < d.getDate())
+    ) {
       a--;
+    }
+
     return a;
   };
 
+  // =========================================================
+  // DATE OF BIRTH
+  // =========================================================
+
   const handleDobChange = (val: string) => {
-    setProfileForm((f) => ({ ...f, date_of_birth: val }));
+    setProfileForm((f) => ({
+      ...f,
+      date_of_birth: val,
+    }));
+
     setAge(calcAge(val));
   };
+
+  // =========================================================
+  // SAVE PROFILE
+  // =========================================================
 
   const handleSaveProfile = async () => {
     setProfileError("");
     setProfileSuccess("");
     setProfileSaving(true);
+
     try {
       if (age !== null && age < 18) {
-        setProfileError("Technician must be at least 18 years old");
+        setProfileError(
+          "Technician must be at least 18 years old"
+        );
+
         setProfileSaving(false);
         return;
       }
+
       if (!profileForm.full_name.trim()) {
         setProfileError("Full name is required");
+
         setProfileSaving(false);
         return;
       }
+
       if (!profileForm.mobile_number.trim()) {
         setProfileError("Mobile number is required");
+
         setProfileSaving(false);
         return;
       }
 
       const payload = {
         ...profileForm,
+
         skills: profileForm.skills
           ? profileForm.skills
               .split(",")
               .map((s) => s.trim())
               .filter(Boolean)
           : [],
+
         certifications: profileForm.certifications
           ? profileForm.certifications
               .split(",")
               .map((s) => s.trim())
               .filter(Boolean)
           : [],
+
         date_of_birth: profileForm.date_of_birth || null,
       };
 
       if (isNewProfile) {
         await createTechnicianProfile(payload);
+
         setIsNewProfile(false);
         setProfileSuccess("Profile created successfully!");
       } else {
         await updateTechnicianProfile(payload);
+
         setProfileSuccess("Profile updated successfully!");
       }
     } catch (err: any) {
-      setProfileError(err.response?.data?.detail || "Failed to save profile");
+      setProfileError(
+        err.response?.data?.detail ||
+          "Failed to save profile"
+      );
     } finally {
       setProfileSaving(false);
     }
   };
 
+  // =========================================================
+  // CHANGE PASSWORD
+  // =========================================================
+
   const handleChangePassword = async () => {
     setPwError("");
     setPwSuccess("");
+
     if (newPw.length < 8) {
-      setPwError("New password must be at least 8 characters");
+      setPwError(
+        "New password must be at least 8 characters"
+      );
+
       return;
     }
+
     if (newPw !== confirmPw) {
       setPwError("Passwords do not match");
+
       return;
     }
+
     setPwSaving(true);
+
     try {
       await changeTechnicianPassword({
         current_password: currentPw,
         new_password: newPw,
         confirm_password: confirmPw,
       });
+
       setPwSuccess("Password changed successfully");
+
       setCurrentPw("");
       setNewPw("");
       setConfirmPw("");
     } catch (e: any) {
-      setPwError(e.response?.data?.detail || "Failed to change password");
+      setPwError(
+        e.response?.data?.detail ||
+          "Failed to change password"
+      );
     } finally {
       setPwSaving(false);
     }
   };
 
-  const updProf = (key: string, val: string) =>
-    setProfileForm((f) => ({ ...f, [key]: val }));
+  // =========================================================
+  // GOOGLE OIDC LINK CALLBACK
+  // =========================================================
+
+  const handleGoogleCredential = async (
+    response: { credential: string }
+  ) => {
+    setGoogleError("");
+    setGoogleSuccess("");
+
+    if (!response.credential) {
+      setGoogleError(
+        "Google did not return an ID token."
+      );
+
+      return;
+    }
+
+    setLinkingGoogle(true);
+
+    try {
+      const result = await api.post("/auth/oidc/google/link", {
+        id_token: response.credential,
+      });
+    
+      if (result.data.status === "ALREADY_LINKED") {
+        setGoogleSuccess("Google account is already linked.");
+      } else {
+        setGoogleSuccess(
+          "Google account linked successfully."
+        );
+      }
+    } catch (err: any) {
+      const status = err.response?.status;
+      const detail = err.response?.data?.detail;
+
+      if (status === 409) {
+        setGoogleError(
+          typeof detail === "string"
+            ? detail
+            : "This Google account is already linked to another FieldOps account."
+        );
+      } else if (status === 401) {
+        setGoogleError(
+          typeof detail === "string"
+            ? detail
+            : "Your FieldOps session has expired. Please log in again."
+        );
+      } else {
+        setGoogleError(
+          typeof detail === "string"
+            ? detail
+            : "Failed to link Google account."
+        );
+      }
+    } finally {
+      setLinkingGoogle(false);
+    }
+  };
+
+  // =========================================================
+  // INITIALIZE GOOGLE IDENTITY SERVICES
+  // =========================================================
+
+  useEffect(() => {
+    if (activeTab !== "security") {
+      return;
+    }
+
+    const clientId =
+      import.meta.env.VITE_GOOGLE_CLIENT_ID;
+
+    if (!clientId) {
+      setGoogleError(
+        "Google Client ID is not configured."
+      );
+
+      return;
+    }
+
+    let attempts = 0;
+
+    const maxAttempts = 20;
+
+    const initializeGoogle = () => {
+      attempts += 1;
+
+      if (
+        !window.google?.accounts?.id ||
+        !googleButtonRef.current
+      ) {
+        if (attempts < maxAttempts) {
+          setTimeout(initializeGoogle, 250);
+        } else {
+          setGoogleError(
+            "Google authentication could not be loaded. Please refresh the page."
+          );
+        }
+
+        return;
+      }
+
+      googleButtonRef.current.innerHTML = "";
+
+      window.google.accounts.id.initialize({
+        client_id: clientId,
+        callback: handleGoogleCredential,
+      });
+
+      window.google.accounts.id.renderButton(
+        googleButtonRef.current,
+        {
+          theme: "outline",
+          size: "large",
+          text: "continue_with",
+          shape: "rectangular",
+          width: 280,
+        }
+      );
+    };
+
+    initializeGoogle();
+  }, [activeTab]);
+
+  // =========================================================
+  // PROFILE FIELD UPDATE
+  // =========================================================
+
+  const updProf = (
+    key: string,
+    val: string
+  ) =>
+    setProfileForm((f) => ({
+      ...f,
+      [key]: val,
+    }));
+
+  // =========================================================
+  // LOADING
+  // =========================================================
 
   if (profileLoading) {
     return (
@@ -207,6 +464,10 @@ export default function TechnicianSettingsPage() {
       </div>
     );
   }
+
+  // =========================================================
+  // COMMON STYLES
+  // =========================================================
 
   const inputStyle: React.CSSProperties = {
     width: "100%",
@@ -232,6 +493,10 @@ export default function TechnicianSettingsPage() {
     letterSpacing: "0.03em",
   };
 
+  // =========================================================
+  // PAGE
+  // =========================================================
+
   return (
     <div
       style={{
@@ -246,21 +511,31 @@ export default function TechnicianSettingsPage() {
         boxSizing: "border-box",
       }}
     >
-      {/* 1. Unified Top Header Banner */}
+      {/* =====================================================
+          HEADER
+      ===================================================== */}
+
       <div
         style={{
           background: "#FFFFFF",
           borderRadius: "12px",
           padding: "14px 20px",
           border: "1px solid #E3ECE7",
-          boxShadow: "0 1px 4px rgba(47, 79, 62, 0.03)",
+          boxShadow:
+            "0 1px 4px rgba(47, 79, 62, 0.03)",
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
           flexShrink: 0,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "14px",
+          }}
+        >
           <div
             style={{
               width: "44px",
@@ -273,13 +548,23 @@ export default function TechnicianSettingsPage() {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              boxShadow: "0 2px 8px rgba(47, 79, 62, 0.15)",
+              boxShadow:
+                "0 2px 8px rgba(47, 79, 62, 0.15)",
             }}
           >
-            {user?.first_name ? user.first_name[0].toUpperCase() : "T"}
+            {user?.first_name
+              ? user.first_name[0].toUpperCase()
+              : "T"}
           </div>
+
           <div>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+              }}
+            >
               <h1
                 style={{
                   fontSize: "18px",
@@ -291,6 +576,7 @@ export default function TechnicianSettingsPage() {
                 {profileForm.full_name ||
                   `${user?.first_name} ${user?.last_name}`}
               </h1>
+
               <span
                 style={{
                   fontSize: "10px",
@@ -305,8 +591,13 @@ export default function TechnicianSettingsPage() {
                 TECHNICIAN
               </span>
             </div>
+
             <span
-              style={{ fontSize: "12px", color: "#5C9470", fontWeight: 500 }}
+              style={{
+                fontSize: "12px",
+                color: "#5C9470",
+                fontWeight: 500,
+              }}
             >
               {user?.email}
             </span>
@@ -315,7 +606,11 @@ export default function TechnicianSettingsPage() {
 
         <div style={{ textAlign: "right" }}>
           <span
-            style={{ fontSize: "11px", color: "#5C9470", display: "block" }}
+            style={{
+              fontSize: "11px",
+              color: "#5C9470",
+              display: "block",
+            }}
           >
             Organization
           </span>
@@ -327,12 +622,16 @@ export default function TechnicianSettingsPage() {
               color: "#2F4F3E",
             }}
           >
-            {user?.organization_name || user?.tenant_id}
+            {user?.organization_name ||
+              user?.tenant_id}
           </span>
         </div>
       </div>
 
-      {/* 2. Compact Tabs Bar */}
+      {/* =====================================================
+          TABS
+      ===================================================== */}
+
       <div
         style={{
           display: "flex",
@@ -353,8 +652,14 @@ export default function TechnicianSettingsPage() {
             fontSize: "12px",
             fontWeight: 600,
             border: "none",
-            background: activeTab === "profile" ? "#2F4F3E" : "transparent",
-            color: activeTab === "profile" ? "#FFFFFF" : "#5C9470",
+            background:
+              activeTab === "profile"
+                ? "#2F4F3E"
+                : "transparent",
+            color:
+              activeTab === "profile"
+                ? "#FFFFFF"
+                : "#5C9470",
             cursor: "pointer",
             display: "flex",
             alignItems: "center",
@@ -362,7 +667,8 @@ export default function TechnicianSettingsPage() {
             transition: "all 0.2s ease",
           }}
         >
-          <User size={14} /> Profile Details
+          <User size={14} />
+          Profile Details
         </button>
 
         <button
@@ -373,8 +679,14 @@ export default function TechnicianSettingsPage() {
             fontSize: "12px",
             fontWeight: 600,
             border: "none",
-            background: activeTab === "security" ? "#2F4F3E" : "transparent",
-            color: activeTab === "security" ? "#FFFFFF" : "#5C9470",
+            background:
+              activeTab === "security"
+                ? "#2F4F3E"
+                : "transparent",
+            color:
+              activeTab === "security"
+                ? "#FFFFFF"
+                : "#5C9470",
             cursor: "pointer",
             display: "flex",
             alignItems: "center",
@@ -382,22 +694,31 @@ export default function TechnicianSettingsPage() {
             transition: "all 0.2s ease",
           }}
         >
-          <Key size={14} /> Security & Password
+          <Key size={14} />
+          Security & Password
         </button>
       </div>
 
-      {/* 3. Main Single Panel Container */}
+      {/* =====================================================
+          MAIN PANEL
+      ===================================================== */}
+
       <div
         style={{
           background: "#FFFFFF",
           borderRadius: "12px",
           padding: "24px",
           border: "1px solid #E3ECE7",
-          boxShadow: "0 1px 4px rgba(47, 79, 62, 0.03)",
+          boxShadow:
+            "0 1px 4px rgba(47, 79, 62, 0.03)",
           flex: 1,
           boxSizing: "border-box",
         }}
       >
+        {/* ===================================================
+            PROFILE TAB
+        =================================================== */}
+
         {activeTab === "profile" && (
           <div>
             <div
@@ -410,10 +731,12 @@ export default function TechnicianSettingsPage() {
                 alignItems: "center",
                 gap: "8px",
                 paddingBottom: "10px",
-                borderBottom: "1px solid #E3ECE7",
+                borderBottom:
+                  "1px solid #E3ECE7",
               }}
             >
-              <User size={16} /> Personal & Professional Details
+              <User size={16} />
+              Personal & Professional Details
             </div>
 
             {profileError && (
@@ -431,14 +754,17 @@ export default function TechnicianSettingsPage() {
                   gap: "8px",
                 }}
               >
-                <AlertCircle size={16} /> {profileError}
+                <AlertCircle size={16} />
+                {profileError}
               </div>
             )}
+
             {profileSuccess && (
               <div
                 style={{
                   background: "#F0FFF4",
-                  border: "1px solid #C6F6D5",
+                  border:
+                    "1px solid #C6F6D5",
                   borderRadius: "8px",
                   padding: "10px 14px",
                   color: "#22543D",
@@ -449,37 +775,64 @@ export default function TechnicianSettingsPage() {
                   gap: "8px",
                 }}
               >
-                <CheckCircle size={16} /> {profileSuccess}
+                <CheckCircle size={16} />
+                {profileSuccess}
               </div>
             )}
 
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "1fr 1fr",
+                gridTemplateColumns:
+                  "1fr 1fr",
                 gap: "16px",
               }}
             >
-              {/* Personal Details */}
-              <div style={{ gridColumn: "1 / -1" }}>
-                <label style={labelStyle}>Full Name *</label>
+              {/* FULL NAME */}
+
+              <div
+                style={{
+                  gridColumn: "1 / -1",
+                }}
+              >
+                <label style={labelStyle}>
+                  Full Name *
+                </label>
+
                 <input
                   style={inputStyle}
                   value={profileForm.full_name}
-                  onChange={(e) => updProf("full_name", e.target.value)}
+                  onChange={(e) =>
+                    updProf(
+                      "full_name",
+                      e.target.value
+                    )
+                  }
                   placeholder="Enter full name"
                 />
               </div>
 
+              {/* MOBILE */}
+
               <div>
-                <label style={labelStyle}>Mobile Number *</label>
+                <label style={labelStyle}>
+                  Mobile Number *
+                </label>
+
                 <input
                   style={inputStyle}
-                  value={profileForm.mobile_number}
+                  value={
+                    profileForm.mobile_number
+                  }
                   onChange={(e) => {
-                    const value = e.target.value;
+                    const value =
+                      e.target.value;
+
                     if (/^\d{0,10}$/.test(value)) {
-                      updProf("mobile_number", value);
+                      updProf(
+                        "mobile_number",
+                        value
+                      );
                     }
                   }}
                   maxLength={10}
@@ -488,8 +841,13 @@ export default function TechnicianSettingsPage() {
                 />
               </div>
 
+              {/* EMAIL */}
+
               <div>
-                <label style={labelStyle}>Email Address</label>
+                <label style={labelStyle}>
+                  Email Address
+                </label>
+
                 <input
                   style={{
                     ...inputStyle,
@@ -501,14 +859,26 @@ export default function TechnicianSettingsPage() {
                 />
               </div>
 
+              {/* DOB */}
+
               <div>
-                <label style={labelStyle}>Date of Birth</label>
+                <label style={labelStyle}>
+                  Date of Birth
+                </label>
+
                 <input
                   style={inputStyle}
                   type="date"
-                  value={profileForm.date_of_birth}
-                  onChange={(e) => handleDobChange(e.target.value)}
+                  value={
+                    profileForm.date_of_birth
+                  }
+                  onChange={(e) =>
+                    handleDobChange(
+                      e.target.value
+                    )
+                  }
                 />
+
                 {age !== null && (
                   <div
                     style={{
@@ -519,9 +889,16 @@ export default function TechnicianSettingsPage() {
                     }}
                   >
                     Age: {age} years{" "}
+
                     {age < 18 ? (
-                      <span style={{ color: "#DC2626", fontWeight: 700 }}>
-                        (Must be at least 18 years old)
+                      <span
+                        style={{
+                          color: "#DC2626",
+                          fontWeight: 700,
+                        }}
+                      >
+                        (Must be at least 18
+                        years old)
                       </span>
                     ) : (
                       ""
@@ -530,27 +907,50 @@ export default function TechnicianSettingsPage() {
                 )}
               </div>
 
+              {/* GENDER */}
+
               <div>
-                <label style={labelStyle}>Gender</label>
+                <label style={labelStyle}>
+                  Gender
+                </label>
+
                 <select
                   style={inputStyle}
                   value={profileForm.gender}
-                  onChange={(e) => updProf("gender", e.target.value)}
+                  onChange={(e) =>
+                    updProf(
+                      "gender",
+                      e.target.value
+                    )
+                  }
                 >
-                  <option value="">Select Gender</option>
-                  <option value="Male">Male</option>
-                  <option value="Female">Female</option>
-                  <option value="Other">Other</option>
+                  <option value="">
+                    Select Gender
+                  </option>
+
+                  <option value="Male">
+                    Male
+                  </option>
+
+                  <option value="Female">
+                    Female
+                  </option>
+
+                  <option value="Other">
+                    Other
+                  </option>
                 </select>
               </div>
 
-              {/* Location & Address */}
+              {/* ADDRESS HEADER */}
+
               <div
                 style={{
                   gridColumn: "1 / -1",
                   marginTop: "8px",
                   paddingTop: "14px",
-                  borderTop: "1px solid #E3ECE7",
+                  borderTop:
+                    "1px solid #E3ECE7",
                 }}
               >
                 <div
@@ -564,79 +964,134 @@ export default function TechnicianSettingsPage() {
                     gap: "6px",
                   }}
                 >
-                  <MapPin size={14} /> Address & Emergency Details
+                  <MapPin size={14} />
+                  Address & Emergency Details
                 </div>
               </div>
 
-              <div style={{ gridColumn: "1 / -1" }}>
-                <label style={labelStyle}>Street Address</label>
+              {/* ADDRESS */}
+
+              <div
+                style={{
+                  gridColumn: "1 / -1",
+                }}
+              >
+                <label style={labelStyle}>
+                  Street Address
+                </label>
+
                 <textarea
                   style={
                     {
                       ...inputStyle,
                       minHeight: "70px",
                       resize: "vertical",
-                    } as any
+                    } as React.CSSProperties
                   }
                   value={profileForm.address}
-                  onChange={(e) => updProf("address", e.target.value)}
+                  onChange={(e) =>
+                    updProf(
+                      "address",
+                      e.target.value
+                    )
+                  }
                   placeholder="Street address or location details"
                 />
               </div>
 
+              {/* CITY */}
+
               <div>
-                <label style={labelStyle}>City</label>
+                <label style={labelStyle}>
+                  City
+                </label>
+
                 <input
                   style={inputStyle}
                   value={profileForm.city}
-                  onChange={(e) => updProf("city", e.target.value)}
+                  onChange={(e) =>
+                    updProf(
+                      "city",
+                      e.target.value
+                    )
+                  }
                   placeholder="City"
                 />
               </div>
 
+              {/* STATE */}
+
               <div>
-                <label style={labelStyle}>State</label>
+                <label style={labelStyle}>
+                  State
+                </label>
+
                 <input
                   style={inputStyle}
                   value={profileForm.state}
-                  onChange={(e) => updProf("state", e.target.value)}
+                  onChange={(e) =>
+                    updProf(
+                      "state",
+                      e.target.value
+                    )
+                  }
                   placeholder="State"
                 />
               </div>
 
+              {/* PINCODE */}
+
               <div>
-                <label style={labelStyle}>Pincode</label>
+                <label style={labelStyle}>
+                  Pincode
+                </label>
+
                 <input
                   style={inputStyle}
                   value={profileForm.pincode}
-                  onChange={(e) => updProf("pincode", e.target.value)}
+                  onChange={(e) =>
+                    updProf(
+                      "pincode",
+                      e.target.value
+                    )
+                  }
                   maxLength={6}
                   placeholder="6-digit pincode"
                 />
               </div>
 
+              {/* EMERGENCY CONTACT */}
+
               <div>
-                <div>
-                  <label style={labelStyle}>Emergency Contact</label>
-                  <input
-                    style={inputStyle}
-                    value={profileForm.emergency_contact}
-                    onChange={(e) =>
-                      updProf("emergency_contact", e.target.value)
-                    }
-                    maxLength={100}
-                    placeholder="Contact name & phone"
-                  />
-                </div>
+                <label style={labelStyle}>
+                  Emergency Contact
+                </label>
+
+                <input
+                  style={inputStyle}
+                  value={
+                    profileForm.emergency_contact
+                  }
+                  onChange={(e) =>
+                    updProf(
+                      "emergency_contact",
+                      e.target.value
+                    )
+                  }
+                  maxLength={100}
+                  placeholder="Contact name & phone"
+                />
               </div>
 
-              {/* Professional Background */}
+              {/* PROFESSIONAL HEADER */}
+
               <div
                 style={{
                   gridColumn: "1 / -1",
                   marginTop: "8px",
                   paddingTop: "14px",
-                  borderTop: "1px solid #E3ECE7",
+                  borderTop:
+                    "1px solid #E3ECE7",
                 }}
               >
                 <div
@@ -650,42 +1105,80 @@ export default function TechnicianSettingsPage() {
                     gap: "6px",
                   }}
                 >
-                  <Briefcase size={14} /> Professional Skills & Experience
+                  <Briefcase size={14} />
+                  Professional Skills &
+                  Experience
                 </div>
               </div>
 
-              <div style={{ gridColumn: "1 / -1" }}>
-                <label style={labelStyle}>Skills (comma-separated)</label>
+              {/* SKILLS */}
+
+              <div
+                style={{
+                  gridColumn: "1 / -1",
+                }}
+              >
+                <label style={labelStyle}>
+                  Skills (comma-separated)
+                </label>
+
                 <SkillComboSelect
                   value={profileForm.skills}
-                  onChange={(val) => updProf("skills", val)}
+                  onChange={(val) =>
+                    updProf("skills", val)
+                  }
                   placeholder="e.g. Electrical, Plumbing, HVAC Repair"
                   inputStyle={inputStyle}
                 />
               </div>
 
+              {/* EXPERIENCE */}
+
               <div>
-                <label style={labelStyle}>Years of Experience</label>
+                <label style={labelStyle}>
+                  Years of Experience
+                </label>
+
                 <input
                   style={inputStyle}
-                  value={profileForm.experience}
-                  onChange={(e) => updProf("experience", e.target.value)}
+                  value={
+                    profileForm.experience
+                  }
+                  onChange={(e) =>
+                    updProf(
+                      "experience",
+                      e.target.value
+                    )
+                  }
                   placeholder="e.g. 5 years"
                 />
               </div>
 
+              {/* CERTIFICATIONS */}
+
               <div>
                 <label style={labelStyle}>
-                  Certifications (comma-separated)
+                  Certifications
+                  (comma-separated)
                 </label>
+
                 <input
                   style={inputStyle}
-                  value={profileForm.certifications}
-                  onChange={(e) => updProf("certifications", e.target.value)}
+                  value={
+                    profileForm.certifications
+                  }
+                  onChange={(e) =>
+                    updProf(
+                      "certifications",
+                      e.target.value
+                    )
+                  }
                   placeholder="e.g. EPA 608, OSHA 30"
                 />
               </div>
             </div>
+
+            {/* SAVE PROFILE */}
 
             <div
               style={{
@@ -707,25 +1200,34 @@ export default function TechnicianSettingsPage() {
                   gap: "6px",
                   background: "#7AAE8A",
                   color: "#FFFFFF",
-                  opacity: profileSaving ? 0.7 : 1,
-                  boxShadow: "0 2px 6px rgba(122, 174, 138, 0.3)",
+                  opacity:
+                    profileSaving ? 0.7 : 1,
+                  boxShadow:
+                    "0 2px 6px rgba(122, 174, 138, 0.3)",
                 }}
                 onClick={handleSaveProfile}
                 disabled={profileSaving}
               >
-                <Save size={15} />{" "}
+                <Save size={15} />
+
                 {profileSaving
                   ? "Saving..."
                   : isNewProfile
-                    ? "Save Profile"
-                    : "Update Profile"}
+                  ? "Save Profile"
+                  : "Update Profile"}
               </button>
             </div>
           </div>
         )}
 
+        {/* ===================================================
+            SECURITY TAB
+        =================================================== */}
+
         {activeTab === "security" && (
           <div style={{ maxWidth: "500px" }}>
+            {/* SECURITY HEADER */}
+
             <div
               style={{
                 fontSize: "15px",
@@ -736,11 +1238,15 @@ export default function TechnicianSettingsPage() {
                 alignItems: "center",
                 gap: "8px",
                 paddingBottom: "10px",
-                borderBottom: "1px solid #E3ECE7",
+                borderBottom:
+                  "1px solid #E3ECE7",
               }}
             >
-              <Key size={16} /> Account Security & Password
+              <Key size={16} />
+              Account Security & Password
             </div>
+
+            {/* PASSWORD ERROR */}
 
             {pwError && (
               <div
@@ -757,14 +1263,19 @@ export default function TechnicianSettingsPage() {
                   gap: "8px",
                 }}
               >
-                <AlertCircle size={16} /> {pwError}
+                <AlertCircle size={16} />
+                {pwError}
               </div>
             )}
+
+            {/* PASSWORD SUCCESS */}
+
             {pwSuccess && (
               <div
                 style={{
                   background: "#F0FFF4",
-                  border: "1px solid #C6F6D5",
+                  border:
+                    "1px solid #C6F6D5",
                   borderRadius: "8px",
                   padding: "10px 14px",
                   color: "#22543D",
@@ -775,45 +1286,75 @@ export default function TechnicianSettingsPage() {
                   gap: "8px",
                 }}
               >
-                <CheckCircle size={16} /> {pwSuccess}
+                <CheckCircle size={16} />
+                {pwSuccess}
               </div>
             )}
 
+            {/* PASSWORD FORM */}
+
             <div
-              style={{ display: "flex", flexDirection: "column", gap: "14px" }}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "14px",
+              }}
             >
+              {/* CURRENT PASSWORD */}
+
               <div>
-                <label style={labelStyle}>Current Password</label>
+                <label style={labelStyle}>
+                  Current Password
+                </label>
+
                 <input
                   type="password"
                   style={inputStyle}
                   value={currentPw}
-                  onChange={(e) => setCurrentPw(e.target.value)}
+                  onChange={(e) =>
+                    setCurrentPw(e.target.value)
+                  }
                   placeholder="Enter current password"
                 />
               </div>
 
+              {/* NEW PASSWORD */}
+
               <div>
-                <label style={labelStyle}>New Password (min 8 chars)</label>
+                <label style={labelStyle}>
+                  New Password (min 8 chars)
+                </label>
+
                 <input
                   type="password"
                   style={inputStyle}
                   value={newPw}
-                  onChange={(e) => setNewPw(e.target.value)}
+                  onChange={(e) =>
+                    setNewPw(e.target.value)
+                  }
                   placeholder="Enter new password"
                 />
               </div>
 
+              {/* CONFIRM PASSWORD */}
+
               <div>
-                <label style={labelStyle}>Confirm New Password</label>
+                <label style={labelStyle}>
+                  Confirm New Password
+                </label>
+
                 <input
                   type="password"
                   style={inputStyle}
                   value={confirmPw}
-                  onChange={(e) => setConfirmPw(e.target.value)}
+                  onChange={(e) =>
+                    setConfirmPw(e.target.value)
+                  }
                   placeholder="Confirm new password"
                 />
               </div>
+
+              {/* CHANGE PASSWORD BUTTON */}
 
               <div
                 style={{
@@ -837,14 +1378,120 @@ export default function TechnicianSettingsPage() {
                     gap: "6px",
                     background: "#7AAE8A",
                     color: "#FFFFFF",
-                    opacity: pwSaving ? 0.7 : 1,
-                    boxShadow: "0 2px 6px rgba(122, 174, 138, 0.3)",
+                    opacity: pwSaving
+                      ? 0.7
+                      : 1,
+                    boxShadow:
+                      "0 2px 6px rgba(122, 174, 138, 0.3)",
                   }}
                 >
-                  <Key size={15} />{" "}
-                  {pwSaving ? "Updating..." : "Change Password"}
+                  <Key size={15} />
+
+                  {pwSaving
+                    ? "Updating..."
+                    : "Change Password"}
                 </button>
               </div>
+            </div>
+
+            {/* =================================================
+                GOOGLE ACCOUNT LINKING
+            ================================================= */}
+
+            <div
+              style={{
+                marginTop: "28px",
+                paddingTop: "20px",
+                borderTop:
+                  "1px solid #E3ECE7",
+              }}
+            >
+              <div
+                style={{
+                  fontSize: "15px",
+                  fontWeight: 700,
+                  color: "#2F4F3E",
+                  marginBottom: "8px",
+                }}
+              >
+                Google Account
+              </div>
+
+              <div
+                style={{
+                  fontSize: "12px",
+                  color: "#6B7280",
+                  marginBottom: "14px",
+                  lineHeight: 1.5,
+                }}
+              >
+                Link your Google account to this
+                existing FieldOps account. After
+                linking, you can use Google to sign
+                in.
+              </div>
+
+              {/* GOOGLE ERROR */}
+
+              {googleError && (
+                <div
+                  style={{
+                    background: "#FEF2F2",
+                    border:
+                      "1px solid #FECACA",
+                    borderRadius: "8px",
+                    padding: "10px 14px",
+                    color: "#991B1B",
+                    fontSize: "13px",
+                    marginBottom: "12px",
+                  }}
+                >
+                  {googleError}
+                </div>
+              )}
+
+              {/* GOOGLE SUCCESS */}
+
+              {googleSuccess && (
+                <div
+                  style={{
+                    background: "#F0FFF4",
+                    border:
+                      "1px solid #C6F6D5",
+                    borderRadius: "8px",
+                    padding: "10px 14px",
+                    color: "#22543D",
+                    fontSize: "13px",
+                    marginBottom: "12px",
+                  }}
+                >
+                  {googleSuccess}
+                </div>
+              )}
+
+              {/* GOOGLE GIS BUTTON */}
+
+              <div
+                ref={googleButtonRef}
+                style={{
+                  minHeight: "40px",
+                }}
+              />
+
+              {/* LINKING STATUS */}
+
+              {linkingGoogle && (
+                <div
+                  style={{
+                    marginTop: "10px",
+                    fontSize: "13px",
+                    color: "#5C9470",
+                    fontWeight: 600,
+                  }}
+                >
+                  Linking Google account...
+                </div>
+              )}
             </div>
           </div>
         )}
