@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   User,
   Building2,
@@ -17,6 +17,36 @@ import {
 } from "lucide-react";
 import useAuthStore from "../store/authStore";
 import api from "../services/api";
+
+declare global {
+  interface Window {
+    google?: {
+      accounts: {
+        id: {
+          initialize: (config: {
+            client_id: string;
+            callback: (response: { credential: string }) => void;
+          }) => void;
+
+          renderButton: (
+            parent: HTMLElement,
+            options: {
+              theme?: "outline" | "filled_blue" | "filled_black";
+              size?: "large" | "medium" | "small";
+              text?:
+                | "signin_with"
+                | "signup_with"
+                | "continue_with"
+                | "signin";
+              shape?: "rectangular" | "pill" | "circle" | "square";
+              width?: number;
+            }
+          ) => void;
+        };
+      };
+    };
+  }
+}
 
 interface OrganizationItem {
   id: string;
@@ -68,6 +98,9 @@ export default function ProfilePage() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isChangingPassword, setIsChangingPassword] = useState(false);
+  // Google OIDC Account Linking
+  const googleButtonRef = useRef<HTMLDivElement | null>(null);
+  const [linkingGoogle, setLinkingGoogle] = useState(false);
 
   // State for Organization Creation
   const [orgName, setOrgName] = useState("");
@@ -199,6 +232,122 @@ export default function ProfilePage() {
       setIsChangingPassword(false);
     }
   };
+  const handleGoogleCredential = async (
+  response: { credential: string }
+) => {
+  if (!response.credential) {
+    addPopToast(
+      "error",
+      "Google did not return an ID token."
+    );
+    return;
+  }
+
+  setLinkingGoogle(true);
+
+  try {
+    const result = await api.post(
+      "/auth/oidc/google/link",
+      {
+        id_token: response.credential,
+      }
+    );
+
+    if (result.data.status === "ALREADY_LINKED") {
+      addPopToast(
+        "success",
+        "Google account is already linked."
+      );
+    } else {
+      addPopToast(
+        "success",
+        "Google account linked successfully."
+      );
+    }
+  } catch (err: any) {
+    const status = err.response?.status;
+    const detail = err.response?.data?.detail;
+
+    if (status === 409) {
+      addPopToast(
+        "error",
+        typeof detail === "string"
+          ? detail
+          : "This Google account is already linked to another FieldOps account."
+      );
+    } else if (status === 401) {
+      addPopToast(
+        "error",
+        typeof detail === "string"
+          ? detail
+          : "Invalid Google identity. Please try again."
+      );
+    } else {
+      addPopToast(
+        "error",
+        typeof detail === "string"
+          ? detail
+          : "Failed to link Google account."
+      );
+    }
+  } finally {
+    setLinkingGoogle(false);
+  }
+};
+  useEffect(() => {
+  if (activeTab !== "profile") {
+    return;
+  }
+
+  const clientId =
+    import.meta.env.VITE_GOOGLE_CLIENT_ID;
+
+  if (!clientId) {
+    addPopToast(
+      "error",
+      "Google Client ID is not configured."
+    );
+    return;
+  }
+
+  let attempts = 0;
+  const maxAttempts = 20;
+
+  const initializeGoogle = () => {
+    attempts += 1;
+
+    if (
+      !window.google?.accounts?.id ||
+      !googleButtonRef.current
+    ) {
+      if (attempts < maxAttempts) {
+        setTimeout(initializeGoogle, 250);
+      }
+
+      return;
+    }
+
+    googleButtonRef.current.innerHTML = "";
+
+    window.google.accounts.id.initialize({
+      client_id: clientId,
+      callback: handleGoogleCredential,
+    });
+
+    window.google.accounts.id.renderButton(
+      googleButtonRef.current,
+      {
+        theme: "outline",
+        size: "large",
+        text: "continue_with",
+        shape: "rectangular",
+        width: 280,
+      }
+    );
+  };
+
+  initializeGoogle();
+}, [activeTab]);
 
   const handleCreateOrg = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -840,160 +989,232 @@ export default function ProfilePage() {
           </div>
 
           {/* Right Column: Change Password */}
-          <div
-            style={{
-              background: "#FFFFFF",
-              borderRadius: "12px",
-              border: "1px solid #E3ECE7",
-              padding: "16px 20px",
-              boxShadow: "0 1px 4px rgba(47, 79, 62, 0.02)",
-              display: "flex",
-              flexDirection: "column",
-              height: "fit-content",
-            }}
-          >
-            <h2
-              style={{
-                fontSize: "14px",
-                fontWeight: 700,
-                color: "#2F4F3E",
-                margin: "0 0 12px",
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-              }}
-            >
-              <Lock size={15} /> Change Password
-            </h2>
+<div
+  style={{
+    background: "#FFFFFF",
+    borderRadius: "12px",
+    border: "1px solid #E3ECE7",
+    padding: "12px 20px",
+    boxShadow: "0 1px 4px rgba(47, 79, 62, 0.02)",
+    display: "flex",
+    flexDirection: "column",
+    height: "fit-content",
+    boxSizing: "border-box",
+  }}
+>
+  {/* Change Password Heading */}
+  <h2
+    style={{
+      fontSize: "14px",
+      fontWeight: 700,
+      color: "#2F4F3E",
+      margin: "0 0 8px",
+      display: "flex",
+      alignItems: "center",
+      gap: "6px",
+    }}
+  >
+    <Lock size={15} /> Change Password
+  </h2>
 
-            <form
-              onSubmit={handleChangePassword}
-              style={{ display: "flex", flexDirection: "column", gap: "10px" }}
-            >
-              <div>
-                <label
-                  style={{
-                    fontSize: "11px",
-                    fontWeight: 700,
-                    color: "#2F4F3E",
-                    display: "block",
-                    marginBottom: "3px",
-                  }}
-                >
-                  Current Password *
-                </label>
-                <input
-                  type="password"
-                  placeholder="Enter current password"
-                  value={currentPassword}
-                  onChange={(e) => setCurrentPassword(e.target.value)}
-                  required
-                  style={{
-                    width: "100%",
-                    padding: "7px 10px",
-                    border: "1px solid #E3ECE7",
-                    borderRadius: "7px",
-                    fontSize: "12px",
-                    background: "#F9FAF9",
-                    color: "#2F4F3E",
-                    outline: "none",
-                    boxSizing: "border-box",
-                  }}
-                />
-              </div>
+  {/* Change Password Form */}
+  <form
+    onSubmit={handleChangePassword}
+    style={{
+      display: "flex",
+      flexDirection: "column",
+      gap: "6px",
+    }}
+  >
+    {/* Current Password */}
+    <div>
+      <label
+        style={{
+          fontSize: "11px",
+          fontWeight: 700,
+          color: "#2F4F3E",
+          display: "block",
+          marginBottom: "3px",
+        }}
+      >
+        Current Password *
+      </label>
 
-              <div>
-                <label
-                  style={{
-                    fontSize: "11px",
-                    fontWeight: 700,
-                    color: "#2F4F3E",
-                    display: "block",
-                    marginBottom: "3px",
-                  }}
-                >
-                  New Password * (min 8 chars, 1 upper, 1 lower, 1 digit, 1
-                  special)
-                </label>
-                <input
-                  type="password"
-                  placeholder="Enter new password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  required
-                  style={{
-                    width: "100%",
-                    padding: "7px 10px",
-                    border: "1px solid #E3ECE7",
-                    borderRadius: "7px",
-                    fontSize: "12px",
-                    background: "#F9FAF9",
-                    color: "#2F4F3E",
-                    outline: "none",
-                    boxSizing: "border-box",
-                  }}
-                />
-              </div>
+      <input
+        type="password"
+        placeholder="Enter current password"
+        value={currentPassword}
+        onChange={(e) => setCurrentPassword(e.target.value)}
+        required
+        style={{
+          width: "100%",
+          padding: "6px 10px",
+          border: "1px solid #E3ECE7",
+          borderRadius: "7px",
+          fontSize: "12px",
+          background: "#F9FAF9",
+          color: "#2F4F3E",
+          outline: "none",
+          boxSizing: "border-box",
+        }}
+      />
+    </div>
 
-              <div>
-                <label
-                  style={{
-                    fontSize: "11px",
-                    fontWeight: 700,
-                    color: "#2F4F3E",
-                    display: "block",
-                    marginBottom: "3px",
-                  }}
-                >
-                  Confirm New Password *
-                </label>
-                <input
-                  type="password"
-                  placeholder="Confirm new password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  required
-                  style={{
-                    width: "100%",
-                    padding: "7px 10px",
-                    border: "1px solid #E3ECE7",
-                    borderRadius: "7px",
-                    fontSize: "12px",
-                    background: "#F9FAF9",
-                    color: "#2F4F3E",
-                    outline: "none",
-                    boxSizing: "border-box",
-                  }}
-                />
-              </div>
+    {/* New Password */}
+    <div>
+      <label
+        style={{
+          fontSize: "11px",
+          fontWeight: 700,
+          color: "#2F4F3E",
+          display: "block",
+          marginBottom: "3px",
+        }}
+      >
+        New Password * (min 8 chars, 1 upper, 1 lower, 1 digit, 1
+        special)
+      </label>
 
-              <button
-                type="submit"
-                disabled={isChangingPassword}
-                style={{
-                  padding: "9px 16px",
-                  background: "#2F4F3E",
-                  color: "#FFFFFF",
-                  border: "none",
-                  borderRadius: "7px",
-                  fontSize: "12px",
-                  fontWeight: 700,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "6px",
-                  marginTop: "4px",
-                  boxShadow: "0 2px 5px rgba(47, 79, 62, 0.12)",
-                }}
-              >
-                <Key size={14} />
-                {isChangingPassword
-                  ? "Updating Password..."
-                  : "Update Password"}
-              </button>
-            </form>
-          </div>
+      <input
+        type="password"
+        placeholder="Enter new password"
+        value={newPassword}
+        onChange={(e) => setNewPassword(e.target.value)}
+        required
+        style={{
+          width: "100%",
+          padding: "6px 10px",
+          border: "1px solid #E3ECE7",
+          borderRadius: "7px",
+          fontSize: "12px",
+          background: "#F9FAF9",
+          color: "#2F4F3E",
+          outline: "none",
+          boxSizing: "border-box",
+        }}
+      />
+    </div>
+
+    {/* Confirm New Password */}
+    <div>
+      <label
+        style={{
+          fontSize: "11px",
+          fontWeight: 700,
+          color: "#2F4F3E",
+          display: "block",
+          marginBottom: "3px",
+        }}
+      >
+        Confirm New Password *
+      </label>
+
+      <input
+        type="password"
+        placeholder="Confirm new password"
+        value={confirmPassword}
+        onChange={(e) => setConfirmPassword(e.target.value)}
+        required
+        style={{
+          width: "100%",
+          padding: "6px 10px",
+          border: "1px solid #E3ECE7",
+          borderRadius: "7px",
+          fontSize: "12px",
+          background: "#F9FAF9",
+          color: "#2F4F3E",
+          outline: "none",
+          boxSizing: "border-box",
+        }}
+      />
+    </div>
+
+    {/* Update Password Button */}
+    <button
+      type="submit"
+      disabled={isChangingPassword}
+      style={{
+        padding: "8px 16px",
+        background: "#2F4F3E",
+        color: "#FFFFFF",
+        border: "none",
+        borderRadius: "7px",
+        fontSize: "12px",
+        fontWeight: 700,
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: "6px",
+        marginTop: "3px",
+        boxShadow: "0 2px 5px rgba(47, 79, 62, 0.12)",
+      }}
+    >
+      <Key size={14} />
+
+      {isChangingPassword
+        ? "Updating Password..."
+        : "Update Password"}
+    </button>
+  </form>
+
+  {/* Google Account */}
+  <div
+    style={{
+      marginTop: "10px",
+      paddingTop: "10px",
+      borderTop: "1px solid #E3ECE7",
+    }}
+  >
+    <h2
+      style={{
+        fontSize: "14px",
+        fontWeight: 700,
+        color: "#2F4F3E",
+        margin: "0 0 6px",
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+      }}
+    >
+      <Shield size={15} />
+      Google Account
+    </h2>
+
+    <p
+      style={{
+        fontSize: "12px",
+        color: "#6B7280",
+        margin: "0 0 8px",
+        lineHeight: 1.4,
+      }}
+    >
+      Link your Google account to this existing FieldOps account.
+      After linking, you can use Google to sign in.
+    </p>
+
+    <div
+      ref={googleButtonRef}
+      style={{
+        minHeight: "40px",
+      }}
+    />
+
+    {linkingGoogle && (
+      <div
+        style={{
+          marginTop: "6px",
+          fontSize: "12px",
+          color: "#5C9470",
+          fontWeight: 600,
+        }}
+      >
+        Linking Google account...
+      </div>
+    )}
+  </div>
+</div>
+          
         </div>
       )}
 

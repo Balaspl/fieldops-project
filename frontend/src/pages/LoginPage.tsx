@@ -1,18 +1,59 @@
+
 /**
  * LoginPage — Enterprise authentication page for FieldOps Commander.
  *
  * Features:
  * - Email/password login with validation
+ * - Google OIDC login
  * - Account lockout feedback
  * - Password visibility toggle
  * - Loading states and error handling
  * - Responsive design with glassmorphism
  */
 
-import { useState, useEffect } from "react";
-import { Eye, EyeOff, Lock, Mail, Shield, ArrowRight, AlertCircle } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import {
+  Eye,
+  EyeOff,
+  Lock,
+  Mail,
+  Shield,
+  ArrowRight,
+  AlertCircle,
+} from "lucide-react";
 import useAuthStore from "../store/authStore";
+import api from "../services/api";
 import logo from "../assets/logo.png";
+
+declare global {
+  interface Window {
+    google?: {
+      accounts: {
+        id: {
+          initialize: (config: {
+            client_id: string;
+            callback: (response: { credential: string }) => void;
+          }) => void;
+
+          renderButton: (
+            parent: HTMLElement,
+            options: {
+              theme?: "outline" | "filled_blue" | "filled_black";
+              size?: "large" | "medium" | "small";
+              text?:
+                | "signin_with"
+                | "signup_with"
+                | "continue_with"
+                | "signin";
+              shape?: "rectangular" | "pill" | "circle" | "square";
+              width?: number;
+            }
+          ) => void;
+        };
+      };
+    };
+  }
+}
 
 const styles = {
   page: {
@@ -20,7 +61,8 @@ const styles = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    background: "linear-gradient(135deg, #0a1a12 0%, #0d2818 25%, #143d24 50%, #1a5032 75%, #0d2818 100%)",
+    background:
+      "linear-gradient(135deg, #0a1a12 0%, #0d2818 25%, #143d24 50%, #1a5032 75%, #0d2818 100%)",
     fontFamily: "'Inter', sans-serif",
     position: "relative" as const,
     overflow: "hidden",
@@ -44,7 +86,8 @@ const styles = {
     border: "1px solid rgba(34, 197, 94, 0.15)",
     borderRadius: "20px",
     padding: "48px 40px",
-    boxShadow: "0 25px 60px rgba(0, 0, 0, 0.4), 0 0 80px rgba(34, 197, 94, 0.05)",
+    boxShadow:
+      "0 25px 60px rgba(0, 0, 0, 0.4), 0 0 80px rgba(34, 197, 94, 0.05)",
     position: "relative" as const,
     zIndex: 1,
   },
@@ -192,50 +235,155 @@ interface LoginPageProps {
 export default function LoginPage({
   onCreateOrganization,
 }: LoginPageProps) {
-
-  <div
-  style={{
-    marginTop: "24px",
-    textAlign: "center",
-    color: "rgba(167, 199, 183, 0.6)",
-    fontSize: "13px",
-  }}
->
-  <span>Don't have an organization account? </span>
-
-  <button
-    type="button"
-    onClick={onCreateOrganization}
-    style={{
-      background: "none",
-      border: "none",
-      padding: 0,
-      color: "#4ade80",
-      fontSize: "13px",
-      fontWeight: 600,
-      cursor: "pointer",
-      fontFamily: "'Inter', sans-serif",
-    }}
-  >
-    Create Organization
-  </button>
-</div>
-
-
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [emailFocused, setEmailFocused] = useState(false);
   const [passwordFocused, setPasswordFocused] = useState(false);
 
-  const { login, isLoading, error, clearError } = useAuthStore();
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [googleError, setGoogleError] = useState("");
+
+  const googleButtonRef = useRef<HTMLDivElement | null>(null);
+
+  const {
+    login,
+    isLoading,
+    error,
+    clearError,
+    authenticateWithTokens,
+  } = useAuthStore();
 
   useEffect(() => {
     clearError();
+  }, [clearError]);
+
+  /**
+   * Handle Google ID token returned by Google Identity Services.
+   */
+  const handleGoogleCredential = async (
+    response: { credential: string }
+  ) => {
+    setGoogleError("");
+
+    if (!response.credential) {
+      setGoogleError("Google did not return an ID token.");
+      return;
+    }
+
+    setGoogleLoading(true);
+
+    try {
+      const result = await api.post("/auth/oidc/google", {
+        id_token: response.credential,
+      });
+
+      const {
+        access_token,
+        refresh_token,
+        user,
+      } = result.data;
+
+      if (!access_token || !refresh_token || !user) {
+        throw new Error(
+          "Google login response is missing authentication data."
+        );
+      }
+
+      authenticateWithTokens(
+        access_token,
+        refresh_token,
+        user
+      );
+    } catch (err: any) {
+      const status = err.response?.status;
+      const detail = err.response?.data?.detail;
+
+      if (status === 401) {
+        setGoogleError(
+          typeof detail === "string"
+            ? detail
+            : "This Google account is not linked to a FieldOps account."
+        );
+      } else if (status === 403) {
+        setGoogleError(
+          typeof detail === "string"
+            ? detail
+            : "Google login is not allowed for this account."
+        );
+      } else {
+        setGoogleError(
+          typeof detail === "string"
+            ? detail
+            : "Google sign-in failed. Please try again."
+        );
+      }
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
+
+  /**
+   * Initialize Google Identity Services.
+   */
+  useEffect(() => {
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+
+    if (!clientId) {
+      setGoogleError(
+        "Google Client ID is not configured."
+      );
+      return;
+    }
+
+    let attempts = 0;
+    const maxAttempts = 20;
+
+    const initializeGoogle = () => {
+      attempts += 1;
+
+      if (
+        !window.google?.accounts?.id ||
+        !googleButtonRef.current
+      ) {
+        if (attempts < maxAttempts) {
+          setTimeout(initializeGoogle, 250);
+        } else {
+          setGoogleError(
+            "Google authentication could not be loaded. Please refresh the page."
+          );
+        }
+
+        return;
+      }
+
+      googleButtonRef.current.innerHTML = "";
+
+      window.google.accounts.id.initialize({
+        client_id: clientId,
+        callback: handleGoogleCredential,
+      });
+
+      window.google.accounts.id.renderButton(
+        googleButtonRef.current,
+        {
+          theme: "outline",
+          size: "large",
+          text: "continue_with",
+          shape: "rectangular",
+          width: 280,
+        }
+      );
+    };
+
+    initializeGoogle();
   }, []);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (
+    e: React.FormEvent
+  ) => {
     e.preventDefault();
+
     if (!email || !password) return;
 
     try {
@@ -251,34 +399,87 @@ export default function LoginPage({
 
       <div style={styles.card}>
         <div style={styles.logoSection}>
-          <img src={logo} alt="FieldOps Commander" style={styles.logo} />
-          <h1 style={styles.title}>FieldOps Commander</h1>
-          <p style={styles.subtitle}>Enterprise Field Operations Platform</p>
+          <img
+            src={logo}
+            alt="FieldOps Commander"
+            style={styles.logo}
+          />
+
+          <h1 style={styles.title}>
+            FieldOps Commander
+          </h1>
+
+          <p style={styles.subtitle}>
+            Enterprise Field Operations Platform
+          </p>
         </div>
 
-        <form style={styles.form} onSubmit={handleSubmit}>
+        <form
+          style={styles.form}
+          onSubmit={handleSubmit}
+        >
           {error && (
             <div style={styles.error}>
-              <AlertCircle size={16} style={{ flexShrink: 0, marginTop: 2 }} />
-              <span>{typeof error === "string" ? error : "An error occurred"}</span>
+              <AlertCircle
+                size={16}
+                style={{
+                  flexShrink: 0,
+                  marginTop: 2,
+                }}
+              />
+
+              <span>
+                {typeof error === "string"
+                  ? error
+                  : "An error occurred"}
+              </span>
+            </div>
+          )}
+
+          {googleError && (
+            <div style={styles.error}>
+              <AlertCircle
+                size={16}
+                style={{
+                  flexShrink: 0,
+                  marginTop: 2,
+                }}
+              />
+
+              <span>{googleError}</span>
             </div>
           )}
 
           <div style={styles.fieldGroup}>
-            <label style={styles.label}>Email Address</label>
+            <label style={styles.label}>
+              Email Address
+            </label>
+
             <div style={styles.inputWrapper}>
-              <Mail size={18} style={styles.inputIcon} />
+              <Mail
+                size={18}
+                style={styles.inputIcon}
+              />
+
               <input
                 id="login-email"
                 type="email"
                 placeholder="you@company.com"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                onFocus={() => setEmailFocused(true)}
-                onBlur={() => setEmailFocused(false)}
+                onChange={(e) =>
+                  setEmail(e.target.value)
+                }
+                onFocus={() =>
+                  setEmailFocused(true)
+                }
+                onBlur={() =>
+                  setEmailFocused(false)
+                }
                 style={{
                   ...styles.input,
-                  ...(emailFocused ? styles.inputFocus : {}),
+                  ...(emailFocused
+                    ? styles.inputFocus
+                    : {}),
                 }}
                 autoComplete="email"
                 required
@@ -287,32 +488,58 @@ export default function LoginPage({
           </div>
 
           <div style={styles.fieldGroup}>
-            <label style={styles.label}>Password</label>
+            <label style={styles.label}>
+              Password
+            </label>
+
             <div style={styles.inputWrapper}>
-              <Lock size={18} style={styles.inputIcon} />
+              <Lock
+                size={18}
+                style={styles.inputIcon}
+              />
+
               <input
                 id="login-password"
-                type={showPassword ? "text" : "password"}
+                type={
+                  showPassword
+                    ? "text"
+                    : "password"
+                }
                 placeholder="Enter your password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                onFocus={() => setPasswordFocused(true)}
-                onBlur={() => setPasswordFocused(false)}
+                onChange={(e) =>
+                  setPassword(e.target.value)
+                }
+                onFocus={() =>
+                  setPasswordFocused(true)
+                }
+                onBlur={() =>
+                  setPasswordFocused(false)
+                }
                 style={{
                   ...styles.input,
                   paddingRight: "44px",
-                  ...(passwordFocused ? styles.inputFocus : {}),
+                  ...(passwordFocused
+                    ? styles.inputFocus
+                    : {}),
                 }}
                 autoComplete="current-password"
                 required
               />
+
               <button
                 type="button"
                 style={styles.togglePassword}
-                onClick={() => setShowPassword(!showPassword)}
+                onClick={() =>
+                  setShowPassword(!showPassword)
+                }
                 tabIndex={-1}
               >
-                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                {showPassword ? (
+                  <EyeOff size={18} />
+                ) : (
+                  <Eye size={18} />
+                )}
               </button>
             </div>
           </div>
@@ -322,18 +549,34 @@ export default function LoginPage({
             type="submit"
             style={{
               ...styles.button,
-              ...(isLoading ? styles.buttonDisabled : {}),
+              ...(isLoading
+                ? styles.buttonDisabled
+                : {}),
             }}
             disabled={isLoading}
             onMouseEnter={(e) => {
               if (!isLoading) {
-                (e.target as HTMLElement).style.transform = "translateY(-1px)";
-                (e.target as HTMLElement).style.boxShadow = "0 6px 20px rgba(22, 163, 74, 0.4)";
+                (
+                  e.target as HTMLElement
+                ).style.transform =
+                  "translateY(-1px)";
+
+                (
+                  e.target as HTMLElement
+                ).style.boxShadow =
+                  "0 6px 20px rgba(22, 163, 74, 0.4)";
               }
             }}
             onMouseLeave={(e) => {
-              (e.target as HTMLElement).style.transform = "translateY(0)";
-              (e.target as HTMLElement).style.boxShadow = "0 4px 15px rgba(22, 163, 74, 0.3)";
+              (
+                e.target as HTMLElement
+              ).style.transform =
+                "translateY(0)";
+
+              (
+                e.target as HTMLElement
+              ).style.boxShadow =
+                "0 4px 15px rgba(22, 163, 74, 0.3)";
             }}
           >
             {isLoading ? (
@@ -342,12 +585,15 @@ export default function LoginPage({
                   style={{
                     width: 18,
                     height: 18,
-                    border: "2px solid rgba(255,255,255,0.3)",
+                    border:
+                      "2px solid rgba(255,255,255,0.3)",
                     borderTopColor: "#fff",
                     borderRadius: "50%",
-                    animation: "spin 0.8s linear infinite",
+                    animation:
+                      "spin 0.8s linear infinite",
                   }}
                 />
+
                 Signing in...
               </>
             ) : (
@@ -357,7 +603,77 @@ export default function LoginPage({
               </>
             )}
           </button>
-                    <button
+
+          {/* Divider */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "12px",
+              margin: "4px 0",
+            }}
+          >
+            <div
+              style={{
+                flex: 1,
+                height: "1px",
+                background:
+                  "rgba(167, 199, 183, 0.15)",
+              }}
+            />
+
+            <span
+              style={{
+                color:
+                  "rgba(167, 199, 183, 0.45)",
+                fontSize: "12px",
+                fontWeight: 500,
+              }}
+            >
+              OR
+            </span>
+
+            <div
+              style={{
+                flex: 1,
+                height: "1px",
+                background:
+                  "rgba(167, 199, 183, 0.15)",
+              }}
+            />
+          </div>
+
+          {/* Google Sign-In */}
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: "8px",
+            }}
+          >
+            <div
+              ref={googleButtonRef}
+              style={{
+                minHeight: "40px",
+              }}
+            />
+
+            {googleLoading && (
+              <div
+                style={{
+                  fontSize: "12px",
+                  color:
+                    "rgba(167, 199, 183, 0.6)",
+                }}
+              >
+                Signing in with Google...
+              </div>
+            )}
+          </div>
+
+          {/* Create Organization */}
+          <button
             type="button"
             onClick={onCreateOrganization}
             style={{
@@ -365,7 +681,8 @@ export default function LoginPage({
               padding: "12px",
               width: "100%",
               background: "transparent",
-              border: "1px solid rgba(34, 197, 94, 0.3)",
+              border:
+                "1px solid rgba(34, 197, 94, 0.3)",
               borderRadius: "12px",
               color: "#86efac",
               fontSize: "14px",
@@ -380,14 +697,22 @@ export default function LoginPage({
 
         <div style={styles.securityBadge}>
           <Shield size={14} />
-          <span>Secured with enterprise-grade encryption</span>
+
+          <span>
+            Secured with enterprise-grade encryption
+          </span>
         </div>
       </div>
 
       <style>{`
         @keyframes spin {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
+          from {
+            transform: rotate(0deg);
+          }
+
+          to {
+            transform: rotate(360deg);
+          }
         }
 
         input::placeholder {
@@ -397,3 +722,4 @@ export default function LoginPage({
     </div>
   );
 }
+
