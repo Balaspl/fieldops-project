@@ -5,7 +5,12 @@ import LoadingSpinner from "../components/ui/LoadingSpinner";
 import EmptyState from "../components/ui/EmptyState";
 import JobStatusTimeline from "../components/customer-tracking/JobStatusTimeline";
 import useAuthStore from "../store/authStore";
-import { getJobClosure, getJobs, getJobSla } from "../services/planningService";
+import {
+  getJobClosure,
+  getJobs,
+  getJobSla,
+  getTechnicians,
+} from "../services/planningService";
 import { JobClosureModal } from "../components/jobs/JobClosureModal";
 
 const JOBS_PAGE_SIZE = 8;
@@ -26,13 +31,21 @@ interface JobFormData {
 }
 
 
-type JobFilterKey = "status" | "priority" | "service_type" | "sla";
+type JobFilterKey =
+  | "status"
+  | "priority"
+  | "service_type"
+  | "sla"
+  | "technician"
+  | "location";
 
 interface JobListFilters {
   status: string;
   priority: string;
   service_type: string;
   sla: string;
+  technician: string;
+  location: string;
 }
 
 const DEFAULT_JOB_LIST_FILTERS: JobListFilters = {
@@ -40,6 +53,8 @@ const DEFAULT_JOB_LIST_FILTERS: JobListFilters = {
   priority: "ALL",
   service_type: "ALL",
   sla: "ALL",
+  technician: "ALL",
+  location: "",
 };
 
 
@@ -80,6 +95,10 @@ interface Job {
   completed_by?: string;
 }
 
+interface TechnicianOption {
+  technician_id: number;
+  technician_name: string;
+}
 
 const PRIORITY_FILTER_OPTIONS = [
   { label: "All Priorities", value: "ALL" },
@@ -212,6 +231,10 @@ function JobCreationForm() {
 
   // State variables for list rendering and filtering
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [technicians, setTechnicians] = useState<TechnicianOption[]>([]);
+  const [techniciansLoading, setTechniciansLoading] = useState(false);
+  const [techniciansError, setTechniciansError] = useState("");
+
   const [searchTerm, setSearchTerm] = useState("");
   const [debSearchTerm, setDebSearchTerm] = useState("");
   const [jobsError, setJobsError] = useState("");
@@ -319,6 +342,28 @@ function JobCreationForm() {
     }
   };
 
+  useEffect(() => {
+    const loadTechnicians = async () => {
+      setTechniciansLoading(true);
+      setTechniciansError("");
+
+      try {
+        const response = await getTechnicians();
+        setTechnicians(response.data ?? []);
+      } catch (error) {
+        console.error("Failed to fetch technicians:", error);
+        setTechnicians([]);
+        setTechniciansError("Unable to load technicians.");
+      } finally {
+        setTechniciansLoading(false);
+      }
+    };
+
+    loadTechnicians();
+  }, []);
+
+
+
   const fetchJobs = async () => {
     const requestId = ++jobsRequestIdRef.current;
 
@@ -345,6 +390,13 @@ function JobCreationForm() {
         sla:
           jobFilters.sla !== "ALL"
             ? jobFilters.sla
+            : undefined,
+
+        location: jobFilters.location.trim() || undefined,
+
+        technician_id:
+          jobFilters.technician !== "ALL"
+            ? Number(jobFilters.technician)
             : undefined,
       });
 
@@ -388,6 +440,11 @@ function JobCreationForm() {
       }
     }
   };
+
+
+  useEffect(() => {
+    fetchJobs();
+  }, [jobsPage, debSearchTerm, jobFilters]);
 
   const validateForm = () => {
     const newErrors: Partial<Record<keyof JobFormData, string>> = {};
@@ -490,16 +547,23 @@ function JobCreationForm() {
           priority: "ALL",
           service_type: "ALL",
           sla: "ALL",
+          technician: "ALL",
+          location: "",
         });
         
         
-        if (debSearchTerm === "" &&
+        if (
+          debSearchTerm === "" &&
           jobFilters.status === "ALL" &&
           jobFilters.priority === "ALL" &&
-          jobFilters.service_type === "ALL") {
+          jobFilters.service_type === "ALL" &&
+          jobFilters.sla === "ALL" &&
+          jobFilters.technician === "ALL"
+        ) {
           fetchJobs();
         }
       }
+
       fetchServiceTypes();
     } catch (error: any) {
       console.error(error);
@@ -667,6 +731,26 @@ function JobCreationForm() {
                 }
               />
             </div>
+
+            <div style={styles.filterGroup}>
+              <label style={styles.filterLabel}>Location</label>
+              <input
+                type="text"
+                aria-label="Filter jobs by location"
+                placeholder="Search location..."
+                value={jobFilters.location}
+                onChange={(e) => updateJobFilter("location", e.target.value)}
+                onFocus={() => setFocusedInput("location")}
+                onBlur={() => setFocusedInput(null)}
+                style={
+                  focusedInput === "location"
+                    ? { ...styles.filterInput, ...styles.filterInputFocus }
+                    : styles.filterInput
+                }
+              />
+            </div>
+
+
             <div style={styles.filterGroup}>
               <label style={styles.filterLabel}>Priority</label>
               <select
@@ -703,7 +787,7 @@ function JobCreationForm() {
                 style={focusedInput === 'service' ? { ...styles.filterInput, ...styles.filterInputFocus } : styles.filterInput}
               >
                 <option value="ALL">All Services</option>
-                {serviceTypesList.map(st => (
+                {serviceTypes.map((st) => (
                   <option key={st.value} value={st.value}>
                     {st.label}
                   </option>
@@ -722,20 +806,52 @@ function JobCreationForm() {
                 onBlur={() => setFocusedInput(null)}
                 style={focusedInput === 'status' ? { ...styles.filterInput, ...styles.filterInputFocus } : styles.filterInput}
               >
-                <option value="ALL">All Statuses</option>
-                <option value="active">Active (Unassigned)</option>
-                <option value="QUEUED">Queued</option>
-                <option value="ASSIGNED">Assigned</option>
-                <option value="EN_ROUTE">En Route</option>
-                <option value="ON_SITE">On Site</option>
-                <option value="in progress">In Progress</option>
-                <option value="ESCALATED">Escalated</option>
-                <option value="completed">Completed</option>
-                <option value="cancelled">Cancelled</option>
+               <option value="ALL">All Statuses</option>
+               <option value="CREATED">Unassigned</option>
+               <option value="ASSIGNED">Assigned</option>
+               <option value="EN_ROUTE">En Route</option>
+               <option value="IN_PROGRESS">In Progress</option>
+               <option value="COMPLETED">Completed</option>
+               <option value="CANCELLED">Cancelled</option>
               </select>
             </div>
           </div>
           
+          <div style={styles.filterGroup}>
+            <label style={styles.filterLabel}>Technician</label>
+
+            <select
+              value={jobFilters.technician}
+              onChange={(e) => updateJobFilter("technician", e.target.value)}
+              aria-label="Filter jobs by technician"
+              onFocus={() => setFocusedInput("technician")}
+              onBlur={() => setFocusedInput(null)}
+              style={
+                focusedInput === "technician"
+                  ? { ...styles.filterInput, ...styles.filterInputFocus }
+                  : styles.filterInput
+              }
+            >
+              <option value="ALL">
+                {techniciansLoading ? "Loading technicians..." : "All Technicians"}
+              </option>
+
+              {technicians.map((technician) => (
+                <option
+                  key={technician.technician_id}
+                  value={String(technician.technician_id)}
+                >
+                  {technician.technician_name}
+                </option>
+              ))}
+            </select>
+
+            {techniciansError && (
+              <span style={{ fontSize: "11px", color: "#7A2020" }}>
+                {techniciansError}
+              </span>
+            )}
+          </div>
 
           <div style={styles.filterGroup}>
             <label style={styles.filterLabel}>SLA</label>
@@ -830,7 +946,9 @@ function JobCreationForm() {
                     jobFilters.status !== "ALL" ||
                     jobFilters.priority !== "ALL" ||
                     jobFilters.service_type !== "ALL" ||
-                    jobFilters.sla !== "ALL"
+                    jobFilters.sla !== "ALL" ||
+                    jobFilters.technician !== "ALL" ||
+                    jobFilters.location.trim()
                     ? "No jobs match your filters"
                     : "No jobs found"
                 }
@@ -839,7 +957,9 @@ function JobCreationForm() {
                     jobFilters.status !== "ALL" ||
                     jobFilters.priority !== "ALL" ||
                     jobFilters.service_type !== "ALL" ||
-                    jobFilters.sla !== "ALL"
+                    jobFilters.sla !== "ALL"  ||
+                    jobFilters.technician !== "ALL" ||
+                    jobFilters.location.trim()
                     ? "Try adjusting your search terms or filters."
                     : "Get started by creating your first job request."
                 }
@@ -848,7 +968,10 @@ function JobCreationForm() {
                     jobFilters.status !== "ALL" ||
                     jobFilters.priority !== "ALL" ||
                     jobFilters.service_type !== "ALL" ||
-                    jobFilters.sla !== "ALL") ? (
+                    jobFilters.sla !== "ALL" ||
+                    jobFilters.technician !== "ALL" ||
+                    jobFilters.location.trim()) ? (
+                    
                     <button
                       style={hoveredBtn === 'clearFilters' ? { ...styles.refreshIconBtn, background: '#F6FAF8', borderColor: '#7AAE8A' } : styles.refreshIconBtn}
                       onMouseEnter={() => setHoveredBtn('clearFilters')}

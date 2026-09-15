@@ -97,7 +97,7 @@ describe('Job Status Timeline System', () => {
 
     it('renders empty placeholder if history is empty', async () => {
       vi.mocked(api.get).mockResolvedValue({ data: [] });
-      render(<JobStatusTimeline jobId={10} currentStatus="CREATED" />);
+      render(<JobStatusTimeline jobId={10} currentStatus="UNASSIGNED" />);
 
       await waitFor(() => {
         expect(screen.getByText('No status changes')).toBeDefined();
@@ -109,7 +109,7 @@ describe('Job Status Timeline System', () => {
       render(<JobStatusTimeline jobId={10} currentStatus="ASSIGNED" />);
 
       await waitFor(() => {
-        expect(screen.getByText('CREATED')).toBeDefined();
+        expect(screen.getByText('UNASSIGNED')).toBeDefined();
         expect(screen.getByText('ASSIGNED')).toBeDefined();
       });
 
@@ -126,7 +126,8 @@ describe('Job Status Timeline System', () => {
       render(<JobStatusTimeline jobId={10} currentStatus="ASSIGNED" />);
 
       await waitFor(() => {
-        expect(screen.getByText('CREATED')).toBeDefined();
+        expect(screen.getByText('UNASSIGNED')).toBeDefined();
+        expect(screen.getByText('ASSIGNED')).toBeDefined();
       });
 
       // The active item 'ASSIGNED' is expanded by default, 'CREATED' is collapsed
@@ -134,8 +135,8 @@ describe('Job Status Timeline System', () => {
       expect(screen.getByText('Vijay Iyer')).toBeDefined(); // Vijay is in ASSIGNED (expanded)
 
       // Click header of 'CREATED' to expand it
-      const createdHeader = screen.getByText('CREATED');
-      fireEvent.click(createdHeader);
+      const unassignedHeader = screen.getByText('UNASSIGNED');
+      fireEvent.click(unassignedHeader);
 
       expect(screen.getByText('Rajesh Kumar')).toBeDefined(); // Now expanded!
     });
@@ -156,7 +157,8 @@ describe('Job Status Timeline System', () => {
       fireEvent.click(retryBtn);
 
       await waitFor(() => {
-        expect(screen.getByText('CREATED')).toBeDefined();
+        expect(screen.getByText('UNASSIGNED')).toBeDefined();
+        expect(screen.getByText('ASSIGNED')).toBeDefined();
       });
     });
   });

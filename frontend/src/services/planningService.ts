@@ -116,6 +116,8 @@ export const getJobs = async (params?: {
   priority?: string;
   service_type?: string;
   sla?: string;
+  location?: string;
+  technician_id?: number;
   page?: number;
   limit?: number;
 }): Promise<any> => {

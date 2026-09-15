@@ -41,6 +41,7 @@ interface DashboardStats {
     active: number;
     in_progress: number;
     completed: number;
+    cancelled: number;
     total: number;
   };
   technicians: {
@@ -1074,12 +1075,14 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewTab, unreadCount, isBellAni
   const activeCount = stats.jobs.active;
   const inProgressCount = stats.jobs.in_progress;
   const completedCount = stats.jobs.completed;
+  const cancelledCount = stats.jobs.cancelled;
   const totalJobsCount = stats.jobs.total;
 
   const activePct = totalJobsCount > 0 ? parseFloat(((activeCount / totalJobsCount) * 100).toFixed(1)) : 0;
   const inProgressPct = totalJobsCount > 0 ? parseFloat(((inProgressCount / totalJobsCount) * 100).toFixed(1)) : 0;
   const completedPct = totalJobsCount > 0 ? parseFloat(((completedCount / totalJobsCount) * 100).toFixed(1)) : 0;
   const pendingPct = totalJobsCount > 0 ? parseFloat(((pendingCount / totalJobsCount) * 100).toFixed(1)) : 0;
+  const cancelledPct = totalJobsCount > 0 ? parseFloat(((cancelledCount / totalJobsCount) * 100).toFixed(1)) : 0;
 
   const techAvailable = stats.technicians.available;
   const techBusy = stats.technicians.busy;
@@ -1420,6 +1423,15 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewTab, unreadCount, isBellAni
                 <span style={styles.overviewLbl}>Unassigned</span>
                 <span style={styles.overviewNum}>{pendingCount}</span>
                 <span style={styles.overviewPct}>({pendingPct}%)</span>
+              </div>
+
+              <div style={styles.overviewRow}>
+                <span style={{ ...styles.indicatorBadge, background: "#EF4444" }}>
+                  <MinusCircle size={14} strokeWidth={2.5} />
+                </span>
+                <span style={styles.overviewLbl}>Cancelled</span>
+                <span style={styles.overviewNum}>{cancelledCount}</span>
+                <span style={styles.overviewPct}>({cancelledPct}%)</span>
               </div>
             </div>
 
