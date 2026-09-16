@@ -71,3 +71,5 @@ from .sentiment_audit import SentimentAuditRecord
 from .sentiment_escalation import SentimentEscalation
 from .runtime_metrics import RuntimeMetricRollup  # noqa: F401
 from .oidc_identity import OIDCIdentity
+from .mfa import MFA  # noqa: F401
+from .mfa_recovery_code import MFARecoveryCode  # noqa: F401

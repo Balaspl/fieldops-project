@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import {
   User,
   Key,
@@ -95,6 +96,21 @@ export default function TechnicianSettingsPage() {
   const [pwSaving, setPwSaving] = useState(false);
   const [pwError, setPwError] = useState("");
   const [pwSuccess, setPwSuccess] = useState("");
+
+  const [mfaLoading, setMfaLoading] = useState(false);
+const [mfaError, setMfaError] = useState("");
+const [mfaSuccess, setMfaSuccess] = useState("");
+
+const [mfaEnrolled, setMfaEnrolled] = useState(false);
+const [mfaEnabled, setMfaEnabled] = useState(false);
+
+const [mfaSecret, setMfaSecret] = useState("");
+const [mfaProvisioningUri, setMfaProvisioningUri] = useState("");
+
+const [mfaCode, setMfaCode] = useState("");
+const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
+
+const [showMfaSetup, setShowMfaSetup] = useState(false);
 
   // =========================================================
   // GOOGLE OIDC STATE
@@ -302,6 +318,135 @@ export default function TechnicianSettingsPage() {
       );
     } finally {
       setPwSaving(false);
+    }
+  };
+
+  // =========================================================
+  // MFA STATUS
+  // =========================================================
+
+  useEffect(() => {
+    if (activeTab !== "security") {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadMfaStatus = async () => {
+      setMfaLoading(true);
+      setMfaError("");
+
+      try {
+        const response = await api.get("/auth/mfa/status");
+
+        if (cancelled) {
+          return;
+        }
+
+        setMfaEnrolled(Boolean(response.data?.enrolled));
+        setMfaEnabled(Boolean(response.data?.enabled));
+      } catch (err: any) {
+        if (cancelled) {
+          return;
+        }
+
+        setMfaError(
+          typeof err.response?.data?.detail === "string"
+            ? err.response.data.detail
+            : "Failed to load MFA status."
+        );
+      } finally {
+        if (!cancelled) {
+          setMfaLoading(false);
+        }
+      }
+    };
+
+    loadMfaStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab]);
+
+  // =========================================================
+  // ENABLE / ENROLL MFA
+  // =========================================================
+
+  const handleEnableMFA = async () => {
+    setMfaError("");
+    setMfaSuccess("");
+    setMfaCode("");
+    setRecoveryCodes([]);
+    setMfaLoading(true);
+
+    try {
+      const response = await api.post("/auth/mfa/enroll");
+
+      setMfaSecret(response.data?.secret || "");
+      setMfaProvisioningUri(response.data?.provisioning_uri || "");
+      setShowMfaSetup(true);
+
+      setMfaSuccess(
+        "MFA setup started. Scan the QR code with your authenticator app."
+      );
+    } catch (err: any) {
+      setMfaError(
+        typeof err.response?.data?.detail === "string"
+          ? err.response.data.detail
+          : "Failed to start MFA enrollment."
+      );
+    } finally {
+      setMfaLoading(false);
+    }
+  };
+
+  // =========================================================
+  // VERIFY MFA ENROLLMENT
+  // =========================================================
+
+  const handleVerifyMFA = async () => {
+    setMfaError("");
+    setMfaSuccess("");
+
+    const code = mfaCode.trim();
+
+    if (!/^\d{6}$/.test(code)) {
+      setMfaError("Enter the 6-digit code from your authenticator app.");
+      return;
+    }
+
+    setMfaLoading(true);
+
+    try {
+      const response = await api.post("/auth/mfa/enroll/verify", {
+        code,
+      });
+
+      setMfaEnrolled(true);
+      setMfaEnabled(true);
+      setMfaCode("");
+      setMfaSecret("");
+      setMfaProvisioningUri("");
+      setShowMfaSetup(false);
+
+      const codes = Array.isArray(response.data?.recovery_codes)
+        ? response.data.recovery_codes
+        : [];
+
+      setRecoveryCodes(codes);
+
+      setMfaSuccess(
+        "Multi-Factor Authentication is enabled. It cannot be disabled from this account."
+      );
+    } catch (err: any) {
+      setMfaError(
+        typeof err.response?.data?.detail === "string"
+          ? err.response.data.detail
+          : "Invalid MFA code. Please try again."
+      );
+    } finally {
+      setMfaLoading(false);
     }
   };
 
@@ -1225,7 +1370,7 @@ export default function TechnicianSettingsPage() {
         =================================================== */}
 
         {activeTab === "security" && (
-          <div style={{ maxWidth: "500px" }}>
+          <div style={{ maxWidth: "620px" }}>
             {/* SECURITY HEADER */}
 
             <div
@@ -1392,6 +1537,474 @@ export default function TechnicianSettingsPage() {
                     : "Change Password"}
                 </button>
               </div>
+            </div>
+
+            {/* =================================================
+                MULTI-FACTOR AUTHENTICATION
+            ================================================= */}
+
+            <div
+              style={{
+                marginTop: "28px",
+                paddingTop: "20px",
+                borderTop: "1px solid #E3ECE7",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  marginBottom: "8px",
+                }}
+              >
+                <Shield size={16} color="#2F4F3E" />
+
+                <div
+                  style={{
+                    fontSize: "15px",
+                    fontWeight: 700,
+                    color: "#2F4F3E",
+                  }}
+                >
+                  Multi-Factor Authentication
+                </div>
+              </div>
+
+              <div
+                style={{
+                  fontSize: "12px",
+                  color: "#6B7280",
+                  marginBottom: "14px",
+                  lineHeight: 1.5,
+                }}
+              >
+                Add an authenticator app as an additional security step when
+                signing in to FieldOps. MFA is optional until you enable it.
+                Once enabled, it cannot be disabled from this account.
+              </div>
+
+              {mfaError && (
+                <div
+                  style={{
+                    background: "#FEF2F2",
+                    border: "1px solid #FECACA",
+                    borderRadius: "8px",
+                    padding: "10px 14px",
+                    color: "#991B1B",
+                    fontSize: "13px",
+                    marginBottom: "12px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                  }}
+                >
+                  <AlertCircle size={16} />
+                  {mfaError}
+                </div>
+              )}
+
+              {mfaSuccess && (
+                <div
+                  style={{
+                    background: "#F0FFF4",
+                    border: "1px solid #C6F6D5",
+                    borderRadius: "8px",
+                    padding: "10px 14px",
+                    color: "#22543D",
+                    fontSize: "13px",
+                    marginBottom: "12px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                  }}
+                >
+                  <CheckCircle size={16} />
+                  {mfaSuccess}
+                </div>
+              )}
+
+              {mfaLoading && !showMfaSetup ? (
+                <div
+                  style={{
+                    padding: "14px",
+                    border: "1px solid #E3ECE7",
+                    borderRadius: "8px",
+                    color: "#5C9470",
+                    fontSize: "13px",
+                    fontWeight: 600,
+                  }}
+                >
+                  Loading MFA status...
+                </div>
+              ) : mfaEnabled ? (
+                <>
+                  <div
+                    style={{
+                      border: "1px solid #C6F6D5",
+                      background: "#F0FFF4",
+                      borderRadius: "10px",
+                      padding: "16px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "10px",
+                        marginBottom: "8px",
+                      }}
+                    >
+                      <Shield size={20} color="#22543D" />
+
+                      <div
+                        style={{
+                          fontSize: "14px",
+                          fontWeight: 700,
+                          color: "#22543D",
+                        }}
+                      >
+                        MFA is ON
+                      </div>
+
+                      <span
+                        style={{
+                          marginLeft: "auto",
+                          fontSize: "10px",
+                          fontWeight: 700,
+                          padding: "3px 8px",
+                          borderRadius: "5px",
+                          background: "#C6F6D5",
+                          color: "#22543D",
+                        }}
+                      >
+                        ENABLED
+                      </span>
+                    </div>
+
+                    <div
+                      style={{
+                        fontSize: "12px",
+                        color: "#276749",
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      Your authenticator app is configured. Future logins
+                      require your email/password followed by a 6-digit
+                      authenticator code.
+                    </div>
+
+                    <div
+                      style={{
+                        marginTop: "10px",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                        color: "#22543D",
+                      }}
+                    >
+                      MFA cannot be disabled from Settings.
+                    </div>
+                  </div>
+
+                  {recoveryCodes.length > 0 && (
+                    <div
+                      style={{
+                        marginTop: "14px",
+                        border: "1px solid #FDE68A",
+                        background: "#FFFBEB",
+                        borderRadius: "10px",
+                        padding: "16px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: "14px",
+                          fontWeight: 700,
+                          color: "#92400E",
+                          marginBottom: "6px",
+                        }}
+                      >
+                        Save your recovery codes
+                      </div>
+
+                      <div
+                        style={{
+                          fontSize: "12px",
+                          color: "#78350F",
+                          lineHeight: 1.5,
+                          marginBottom: "12px",
+                        }}
+                      >
+                        These codes are shown only after MFA enrollment.
+                        Store them somewhere safe. Do not share them with
+                        anyone.
+                      </div>
+
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "1fr 1fr",
+                          gap: "8px",
+                          padding: "10px",
+                          background: "#FFFFFF",
+                          border: "1px solid #FDE68A",
+                          borderRadius: "8px",
+                          fontFamily: "monospace",
+                          fontSize: "13px",
+                          fontWeight: 700,
+                        }}
+                      >
+                        {recoveryCodes.map((code) => (
+                          <div key={code}>{code}</div>
+                        ))}
+                      </div>
+
+                      <div
+                        style={{
+                          marginTop: "12px",
+                          fontSize: "11px",
+                          color: "#92400E",
+                          fontWeight: 600,
+                        }}
+                      >
+                        Keep these codes secure. They are not stored in this
+                        page after a refresh.
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : showMfaSetup ? (
+                <div
+                  style={{
+                    border: "1px solid #E3ECE7",
+                    borderRadius: "10px",
+                    padding: "18px",
+                    background: "#FAFCFB",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "14px",
+                      fontWeight: 700,
+                      color: "#2F4F3E",
+                      marginBottom: "6px",
+                    }}
+                  >
+                    Set up your authenticator
+                  </div>
+
+                  <div
+                    style={{
+                      fontSize: "12px",
+                      color: "#6B7280",
+                      lineHeight: 1.5,
+                      marginBottom: "16px",
+                    }}
+                  >
+                    Open Google Authenticator, Microsoft Authenticator, or
+                    another compatible TOTP app and scan this QR code.
+                  </div>
+
+                  {mfaProvisioningUri && (
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "center",
+                        padding: "16px",
+                        background: "#FFFFFF",
+                        border: "1px solid #E3ECE7",
+                        borderRadius: "8px",
+                        marginBottom: "14px",
+                      }}
+                    >
+                      <QRCodeSVG
+                        value={mfaProvisioningUri}
+                        size={220}
+                        level="M"
+                        includeMargin
+                      />
+                    </div>
+                  )}
+
+                  {mfaSecret && (
+                    <div style={{ marginBottom: "16px" }}>
+                      <label style={labelStyle}>
+                        Manual Setup Key
+                      </label>
+
+                      <div
+                        style={{
+                          padding: "10px 12px",
+                          background: "#F3F8F5",
+                          border: "1px solid #E3ECE7",
+                          borderRadius: "8px",
+                          fontFamily: "monospace",
+                          fontSize: "13px",
+                          fontWeight: 700,
+                          color: "#2F4F3E",
+                          wordBreak: "break-all",
+                        }}
+                      >
+                        {mfaSecret}
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <label style={labelStyle}>
+                      Authenticator Code
+                    </label>
+
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      maxLength={6}
+                      value={mfaCode}
+                      onChange={(e) => {
+                        const value = e.target.value
+                          .replace(/\D/g, "")
+                          .slice(0, 6);
+
+                        setMfaCode(value);
+                      }}
+                      placeholder="Enter 6-digit code"
+                      style={{
+                        ...inputStyle,
+                        letterSpacing: "0.2em",
+                        fontWeight: 700,
+                        textAlign: "center",
+                      }}
+                    />
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "flex-end",
+                      gap: "8px",
+                      marginTop: "14px",
+                    }}
+                  >
+                    <button
+                      onClick={() => {
+                        setShowMfaSetup(false);
+                        setMfaCode("");
+                        setMfaSecret("");
+                        setMfaProvisioningUri("");
+                        setMfaError("");
+                        setMfaSuccess("");
+                      }}
+                      disabled={mfaLoading}
+                      style={{
+                        padding: "10px 18px",
+                        border: "1px solid #D1D5DB",
+                        borderRadius: "8px",
+                        fontSize: "13px",
+                        fontWeight: 700,
+                        cursor: mfaLoading ? "not-allowed" : "pointer",
+                        background: "#FFFFFF",
+                        color: "#4B5563",
+                        opacity: mfaLoading ? 0.6 : 1,
+                      }}
+                    >
+                      Cancel Setup
+                    </button>
+
+                    <button
+                      onClick={handleVerifyMFA}
+                      disabled={mfaLoading || mfaCode.length !== 6}
+                      style={{
+                        padding: "10px 18px",
+                        border: "none",
+                        borderRadius: "8px",
+                        fontSize: "13px",
+                        fontWeight: 700,
+                        cursor:
+                          mfaLoading || mfaCode.length !== 6
+                            ? "not-allowed"
+                            : "pointer",
+                        background: "#7AAE8A",
+                        color: "#FFFFFF",
+                        opacity:
+                          mfaLoading || mfaCode.length !== 6 ? 0.6 : 1,
+                        boxShadow:
+                          "0 2px 6px rgba(122, 174, 138, 0.3)",
+                      }}
+                    >
+                      {mfaLoading
+                        ? "Verifying..."
+                        : "Verify & Enable MFA"}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  style={{
+                    border: "1px solid #E3ECE7",
+                    borderRadius: "10px",
+                    padding: "16px",
+                    background: "#FAFCFB",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                      marginBottom: "8px",
+                    }}
+                  >
+                    <Shield size={20} color="#5C9470" />
+
+                    <div
+                      style={{
+                        fontSize: "14px",
+                        fontWeight: 700,
+                        color: "#2F4F3E",
+                      }}
+                    >
+                      MFA is currently OFF
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      fontSize: "12px",
+                      color: "#6B7280",
+                      lineHeight: 1.5,
+                      marginBottom: "14px",
+                    }}
+                  >
+                    Your account currently uses the normal email/password
+                    login. Enable MFA to require an authenticator code on
+                    future logins.
+                  </div>
+
+                  <button
+                    onClick={handleEnableMFA}
+                    disabled={mfaLoading || mfaEnrolled}
+                    style={{
+                      padding: "10px 20px",
+                      border: "none",
+                      borderRadius: "8px",
+                      fontSize: "13px",
+                      fontWeight: 700,
+                      cursor:
+                        mfaLoading || mfaEnrolled
+                          ? "not-allowed"
+                          : "pointer",
+                      background: "#7AAE8A",
+                      color: "#FFFFFF",
+                      opacity: mfaLoading || mfaEnrolled ? 0.6 : 1,
+                      boxShadow:
+                        "0 2px 6px rgba(122, 174, 138, 0.3)",
+                    }}
+                  >
+                    {mfaLoading ? "Starting..." : "Enable MFA"}
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* =================================================

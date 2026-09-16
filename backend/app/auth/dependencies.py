@@ -1,40 +1,64 @@
+
 """
 Authentication and authorization dependencies for FastAPI.
 
-These replace all existing auth patterns in the project with a single,
-consistent approach based on JWT claims.
+These provide a single, consistent authentication approach based
+on verified JWT claims.
 
-Key principle: NEVER trust tenant_id or role from request headers/payloads.
-Always derive them from the signed JWT.
+Key principles:
+- NEVER trust tenant_id or role from request headers/payloads.
+- Always derive tenant and role from the signed JWT/database.
+- Bearer authentication remains supported.
+- Browser SSO authentication can use the secure HttpOnly cookie.
 """
 
 from typing import Optional
 
-from fastapi import Depends, HTTPException, status, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import jwt
+import logging
+
+from fastapi import (
+    Depends,
+    HTTPException,
+    Request,
+    status,
+)
+from fastapi.security import (
+    HTTPAuthorizationCredentials,
+    HTTPBearer,
+    OAuth2PasswordBearer,
+)
 from sqlalchemy.orm import Session
-from fastapi.security import OAuth2PasswordBearer
-
-
-
 
 from ..database import get_db
 from .jwt_handler import verify_access_token
-from .rbac import UserRole, Permission, has_permission, can_manage_role
-
-import jwt
-import logging
+from .rbac import (
+    Permission,
+    UserRole,
+    can_manage_role,
+    has_permission,
+)
 
 logger = logging.getLogger(__name__)
 
 security = HTTPBearer(auto_error=False)
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/oauth2/token", auto_error=False)
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl="/oauth2/token",
+    auto_error=False,
+)
+
+# Cookie used by browser-based SSO.
+SSO_ACCESS_COOKIE = "fieldops_access_token"
+
+
 class AuthenticatedUser:
     """
-    Represents the currently authenticated user derived from JWT claims.
+    Represents the currently authenticated user derived
+    from verified JWT claims and the database.
 
-    This object is injected into route handlers via Depends(get_current_user).
+    This object is injected into route handlers via
+    Depends(get_current_user).
     """
 
     def __init__(
@@ -53,79 +77,171 @@ class AuthenticatedUser:
     def is_super_admin(self) -> bool:
         return self.role == UserRole.SUPER_ADMIN
 
-    def has_permission(self, permission: Permission) -> bool:
-        return has_permission(self.role, permission)
+    def has_permission(
+        self,
+        permission: Permission,
+    ) -> bool:
+        return has_permission(
+            self.role,
+            permission,
+        )
 
-    def can_manage(self, target_role: UserRole) -> bool:
-        return can_manage_role(self.role, target_role)
+    def can_manage(
+        self,
+        target_role: UserRole,
+    ) -> bool:
+        return can_manage_role(
+            self.role,
+            target_role,
+        )
+
+
+def _get_access_token(
+    request: Request,
+    credentials: Optional[
+        HTTPAuthorizationCredentials
+    ],
+) -> Optional[str]:
+    """
+    Get the access token from either:
+
+    1. Authorization: Bearer <token>
+    2. Secure SSO HttpOnly cookie
+
+    Bearer authentication has priority so existing API clients
+    continue working exactly as before.
+
+    The cookie is used for browser-based SSO sessions.
+    """
+
+    # ---------------------------------------------------------
+    # 1. Existing Bearer token
+    # ---------------------------------------------------------
+    if credentials is not None:
+        return credentials.credentials
+
+    # ---------------------------------------------------------
+    # 2. Browser SSO cookie
+    # ---------------------------------------------------------
+    return request.cookies.get(
+        SSO_ACCESS_COOKIE
+    )
 
 
 async def get_current_user(
     request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    credentials: Optional[
+        HTTPAuthorizationCredentials
+    ] = Depends(security),
     db: Session = Depends(get_db),
 ) -> AuthenticatedUser:
     """
-    Extract and verify the current user from the JWT Bearer token.
+    Extract and verify the current user from a JWT.
 
-    This is the SINGLE SOURCE OF TRUTH for authentication.
-    All route handlers should depend on this.
+    Authentication sources:
+    - Authorization Bearer token
+    - fieldops_access_token HttpOnly cookie
+
+    The JWT is always verified before the user is accepted.
 
     Raises 401 if:
-    - No token provided
-    - Token is expired
-    - Token is malformed
-    - Token has been blacklisted (revoked)
+    - no token is provided
+    - token is expired
+    - token is malformed
+    - token has been blacklisted/revoked
+    - user no longer exists
+    - user is inactive
+    - token role no longer matches database
+    - token tenant no longer matches database
     """
-    if credentials is None:
+
+    token = _get_access_token(
+        request=request,
+        credentials=credentials,
+    )
+
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
-            headers={"WWW-Authenticate": "Bearer"},
+            headers={
+                "WWW-Authenticate": "Bearer"
+            },
         )
 
     try:
-        claims = verify_access_token(credentials.credentials)
+        claims = verify_access_token(token)
+
     except jwt.ExpiredSignatureError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired",
-            headers={"WWW-Authenticate": "Bearer"},
+            headers={
+                "WWW-Authenticate": "Bearer"
+            },
         )
-    except jwt.InvalidTokenError as e:
+
+    except jwt.InvalidTokenError as exc:
+        logger.warning(
+            "Access token validation failed: %s",
+            str(exc),
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
-            headers={"WWW-Authenticate": "Bearer"},
+            headers={
+                "WWW-Authenticate": "Bearer"
+            },
         )
 
+    # ---------------------------------------------------------
     # Parse role from JWT
-    role_str = claims.get("role", "")
+    # ---------------------------------------------------------
+    role_str = claims.get(
+        "role",
+        "",
+    )
+
     try:
         token_role = UserRole(role_str)
+
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid role in token",
-            headers={"WWW-Authenticate": "Bearer"},
+            headers={
+                "WWW-Authenticate": "Bearer"
+            },
         )
+
+    # ---------------------------------------------------------
+    # Parse subject/user ID
+    # ---------------------------------------------------------
     subject = claims.get("sub")
 
     if not subject:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token subject is missing",
-            headers={"WWW-Authenticate": "Bearer"},
+            headers={
+                "WWW-Authenticate": "Bearer"
+            },
         )
-    
 
+    # ---------------------------------------------------------
     # Verify user still exists and is active
+    # ---------------------------------------------------------
     from ..models.user import User
-    user = db.query(User).filter(
-        User.id == subject,
-        User.is_active == True,
-        User.deleted_at.is_(None),
-    ).first()
+
+    user = (
+        db.query(User)
+        .filter(
+            User.id == subject,
+            User.is_active == True,
+            User.deleted_at.is_(None),
+        )
+        .first()
+    )
 
     if user is None:
         raise HTTPException(
@@ -133,34 +249,70 @@ async def get_current_user(
             detail="User account not found or deactivated",
         )
 
+    # ---------------------------------------------------------
     # Check account lockout
+    # ---------------------------------------------------------
     if user.is_locked:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is temporarily locked due to too many failed login attempts",
+            detail=(
+                "Account is temporarily locked due to "
+                "too many failed login attempts"
+            ),
         )
+
+    # ---------------------------------------------------------
     # Server-side role is authoritative.
+    #
+    # This prevents a modified JWT role from granting
+    # unauthorized permissions.
+    # ---------------------------------------------------------
     try:
         db_role = UserRole(user.role)
+
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid user role",
-            headers={"WWW-Authenticate": "Bearer"},
+            headers={
+                "WWW-Authenticate": "Bearer"
+            },
         )
-    
+
     if token_role != db_role:
+        logger.warning(
+            "Role mismatch: user=%s token_role=%s db_role=%s",
+            user.id,
+            token_role.value,
+            db_role.value,
+        )
+
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token role is no longer valid",
-            headers={"WWW-Authenticate": "Bearer"},
+            headers={
+                "WWW-Authenticate": "Bearer"
+            },
         )
-    token_tenant_id = str(claims.get("tenant_id", ""))
-    database_tenant_id = str(user.tenant_id)
+
+    # ---------------------------------------------------------
+    # Server-side tenant is authoritative.
+    # ---------------------------------------------------------
+    token_tenant_id = str(
+        claims.get(
+            "tenant_id",
+            "",
+        )
+    )
+
+    database_tenant_id = str(
+        user.tenant_id
+    )
 
     if token_tenant_id != database_tenant_id:
         logger.warning(
-            "Tenant claim mismatch: user=%s token_tenant=%s db_tenant=%s",
+            "Tenant claim mismatch: "
+            "user=%s token_tenant=%s db_tenant=%s",
             user.id,
             token_tenant_id,
             database_tenant_id,
@@ -169,88 +321,151 @@ async def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token tenant is no longer valid",
-            headers={"WWW-Authenticate": "Bearer"},
+            headers={
+                "WWW-Authenticate": "Bearer"
+            },
         )
-    
-    
+
+    # ---------------------------------------------------------
+    # Return authenticated FieldOps identity.
+    # ---------------------------------------------------------
     return AuthenticatedUser(
-            user_id=claims["sub"],
-            tenant_id=user.tenant_id,
-            role=db_role,
-            jti=claims.get("jti", ""),
-        )
+        user_id=str(claims["sub"]),
+        tenant_id=user.tenant_id,
+        role=db_role,
+        jti=claims.get("jti", ""),
+    )
 
 
 async def get_current_active_user(
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(
+        get_current_user
+    ),
 ) -> AuthenticatedUser:
-    """Alias for get_current_user — ensures user is active (already checked)."""
+    """
+    Alias for get_current_user.
+
+    User activity is already checked inside get_current_user.
+    """
+
     return current_user
 
 
 def get_tenant_id(
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(
+        get_current_user
+    ),
 ) -> str:
     """
-    Extract tenant_id from the authenticated JWT.
+    Extract tenant_id from the authenticated identity.
 
-    This is the ONLY way to get tenant_id — never from headers.
+    Never use tenant_id from request headers.
     """
+
     return current_user.tenant_id
 
 
-def require_role(*allowed_roles: UserRole):
+def require_role(
+    *allowed_roles: UserRole,
+):
     """
     Dependency factory that enforces one or more roles.
 
-    Usage:
-        @router.get("/admin-only", dependencies=[Depends(require_role(UserRole.SUPER_ADMIN, UserRole.SUPER_ADMIN))])
-        def admin_endpoint():
-            ...
+    Example:
+
+        @router.get(
+            "/admin-only",
+            dependencies=[
+                Depends(
+                    require_role(
+                        UserRole.SUPER_ADMIN
+                    )
+                )
+            ],
+        )
     """
+
     async def checker(
-        current_user: AuthenticatedUser = Depends(get_current_user),
+        current_user: AuthenticatedUser = Depends(
+            get_current_user
+        ),
     ) -> AuthenticatedUser:
+
         if current_user.role not in allowed_roles:
             logger.warning(
                 "Access denied: user=%s role=%s required=%s",
                 current_user.user_id,
                 current_user.role.value,
-                [r.value for r in allowed_roles],
+                [
+                    role.value
+                    for role in allowed_roles
+                ],
             )
+
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Insufficient permissions. Required role: {', '.join(r.value for r in allowed_roles)}",
+                detail=(
+                    "Insufficient permissions. "
+                    "Required role: "
+                    + ", ".join(
+                        role.value
+                        for role in allowed_roles
+                    )
+                ),
             )
+
         return current_user
 
     return checker
 
 
-def require_permission(*required_permissions: Permission):
+def require_permission(
+    *required_permissions: Permission,
+):
     """
     Dependency factory that enforces one or more permissions.
 
-    Usage:
-        @router.post("/jobs", dependencies=[Depends(require_permission(Permission.JOBS_CREATE))])
-        def create_job():
-            ...
+    Example:
+
+        @router.post(
+            "/jobs",
+            dependencies=[
+                Depends(
+                    require_permission(
+                        Permission.JOBS_CREATE
+                    )
+                )
+            ],
+        )
     """
+
     async def checker(
-        current_user: AuthenticatedUser = Depends(get_current_user),
+        current_user: AuthenticatedUser = Depends(
+            get_current_user
+        ),
     ) -> AuthenticatedUser:
-        for perm in required_permissions:
-            if not current_user.has_permission(perm):
+
+        for permission in required_permissions:
+
+            if not current_user.has_permission(
+                permission
+            ):
                 logger.warning(
-                    "Permission denied: user=%s role=%s permission=%s",
+                    "Permission denied: "
+                    "user=%s role=%s permission=%s",
                     current_user.user_id,
                     current_user.role.value,
-                    perm.value,
+                    permission.value,
                 )
+
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Permission denied: {perm.value}",
+                    detail=(
+                        "Permission denied: "
+                        f"{permission.value}"
+                    ),
                 )
+
         return current_user
 
     return checker
@@ -261,81 +476,102 @@ def require_same_tenant_or_super_admin(
     current_user: AuthenticatedUser,
 ) -> None:
     """
-    Verify the current user belongs to the same tenant as the resource,
-    or is a super admin.
+    Verify the current user belongs to the same tenant
+    as the resource, or is a super admin.
 
-    Raises 403 if tenant mismatch.
+    Raises 403 on cross-tenant access.
     """
+
     if current_user.is_super_admin:
         return
-    if current_user.tenant_id != resource_tenant_id:
+
+    if (
+        current_user.tenant_id
+        != resource_tenant_id
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied: cross-tenant access is not permitted",
+            detail=(
+                "Access denied: "
+                "cross-tenant access is not permitted"
+            ),
         )
 
 
 # ──────────────────────────────────────────────────
 # Backward-compatibility shim
 # ──────────────────────────────────────────────────
-# The existing verify_jwt_token in dispatch.py just checks that a
-# Bearer token exists. This shim provides the same interface but
-# actually validates the JWT.
 
 async def verify_jwt_token_secure(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    request: Request,
+    credentials: Optional[
+        HTTPAuthorizationCredentials
+    ] = Depends(security),
 ) -> str:
     """
-    Backward-compatible JWT verification that actually validates the token.
-    
-    Returns the raw token string for callers that need it.
-    This is a transitional shim — prefer get_current_user() for new code.
+    Backward-compatible JWT verification.
+
+    Supports:
+    - Authorization Bearer token
+    - SSO HttpOnly cookie
+
+    Returns the raw verified token.
     """
-    if credentials is None:
+
+    token = _get_access_token(
+        request=request,
+        credentials=credentials,
+    )
+
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authorization header missing",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+            detail="Authorization required",
+            headers={
+                "WWW-Authenticate": "Bearer"
+            },
+        ) 
 
     try:
-        verify_access_token(credentials.credentials)
+        verify_access_token(token)
+
     except jwt.ExpiredSignatureError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired",
         )
+
     except jwt.InvalidTokenError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
         )
 
-    return credentials.credentials
+    return token
 
 
 async def get_current_user_or_tenant(
     request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    credentials: Optional[
+        HTTPAuthorizationCredentials
+    ] = Depends(security),
     db: Session = Depends(get_db),
 ) -> tuple[AuthenticatedUser, str]:
+    """
+    Return the authenticated user and their tenant.
 
-    # OAuth2/Bearer token is required for authenticated routes.
-    if not credentials:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    Tenant is ALWAYS derived from the authenticated
+    FieldOps identity.
 
-    # IMPORTANT:
-    # Do NOT catch the authentication error and fall back to X-Tenant-ID.
+    X-Tenant-ID must never be used as an authentication
+    or authorization fallback.
+    """
+
     user = await get_current_user(
         request=request,
         credentials=credentials,
         db=db,
     )
 
-    # Tenant comes from the authenticated server-side identity,
-    # never from X-Tenant-ID.
     return user, user.tenant_id
+
