@@ -61,6 +61,12 @@ class User(Base):
     # Relationships
     refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
     organization=relationship("Organization",back_populates="users")
+    mfa = relationship(
+    "MFA",
+    back_populates="user",
+    uselist=False,
+    cascade="all, delete-orphan",
+)
 
     __table_args__ = (
         UniqueConstraint("email", "tenant_id", name="uq_users_email_tenant"),

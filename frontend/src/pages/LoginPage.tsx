@@ -2,16 +2,29 @@
 /**
  * LoginPage — Enterprise authentication page for FieldOps Commander.
  *
- * Features:
- * - Email/password login with validation
- * - Google OIDC login
+ * Authentication methods:
+ * - Email/password login
+ * - Enterprise OIDC SSO
  * - Account lockout feedback
  * - Password visibility toggle
  * - Loading states and error handling
  * - Responsive design with glassmorphism
+ *
+ * SSO flow:
+ *   Sign in with SSO
+ *        ↓
+ *   /auth/sso/login
+ *        ↓
+ *   Configured OIDC provider
+ *        ↓
+ *   /auth/sso/callback
+ *        ↓
+ *   Backend sets HttpOnly access-token cookie
+ *        ↓
+ *   Frontend loads authenticated user
  */
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import {
   Eye,
   EyeOff,
@@ -20,40 +33,12 @@ import {
   Shield,
   ArrowRight,
   AlertCircle,
+  Building2,
 } from "lucide-react";
+
 import useAuthStore from "../store/authStore";
 import api from "../services/api";
 import logo from "../assets/logo.png";
-
-declare global {
-  interface Window {
-    google?: {
-      accounts: {
-        id: {
-          initialize: (config: {
-            client_id: string;
-            callback: (response: { credential: string }) => void;
-          }) => void;
-
-          renderButton: (
-            parent: HTMLElement,
-            options: {
-              theme?: "outline" | "filled_blue" | "filled_black";
-              size?: "large" | "medium" | "small";
-              text?:
-                | "signin_with"
-                | "signup_with"
-                | "continue_with"
-                | "signin";
-              shape?: "rectangular" | "pill" | "circle" | "square";
-              width?: number;
-            }
-          ) => void;
-        };
-      };
-    };
-  }
-}
 
 const styles = {
   page: {
@@ -204,6 +189,24 @@ const styles = {
     cursor: "not-allowed",
   },
 
+  ssoButton: {
+    padding: "14px",
+    background: "rgba(10, 26, 18, 0.6)",
+    border: "1px solid rgba(34, 197, 94, 0.3)",
+    borderRadius: "12px",
+    color: "#e8f5ee",
+    fontSize: "15px",
+    fontWeight: 600,
+    fontFamily: "'Inter', sans-serif",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "10px",
+    transition: "background 0.2s, border-color 0.2s, opacity 0.2s",
+    width: "100%",
+  },
+
   error: {
     display: "flex",
     alignItems: "flex-start",
@@ -241,17 +244,24 @@ export default function LoginPage({
   const [emailFocused, setEmailFocused] = useState(false);
   const [passwordFocused, setPasswordFocused] = useState(false);
 
-  const [googleLoading, setGoogleLoading] = useState(false);
-  const [googleError, setGoogleError] = useState("");
+  const [ssoLoading, setSsoLoading] = useState(false);
+  const [ssoError, setSsoError] = useState("");
 
-  const googleButtonRef = useRef<HTMLDivElement | null>(null);
+  // =========================================================
+  // MFA LOGIN STATE
+  // =========================================================
+
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaChallenge, setMfaChallenge] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
+  const [mfaLoading, setMfaLoading] = useState(false);
+  const [mfaError, setMfaError] = useState("");
 
   const {
-    login,
+    authenticateWithTokens,
     isLoading,
     error,
     clearError,
-    authenticateWithTokens,
   } = useAuthStore();
 
   useEffect(() => {
@@ -259,139 +269,183 @@ export default function LoginPage({
   }, [clearError]);
 
   /**
-   * Handle Google ID token returned by Google Identity Services.
+   * Start enterprise OIDC SSO.
+   *
+   * The backend performs the complete authentication flow.
+   *
+   * The browser is redirected to:
+   *
+   *   /auth/sso/login
+   *
+   * The backend then:
+   *   1. Generates state + nonce
+   *   2. Redirects to the configured OIDC provider
+   *   3. Validates the callback
+   *   4. Resolves the FieldOps user
+   *   5. Creates the normal FieldOps JWT
+   *   6. Stores the access token in an HttpOnly cookie
+   *   7. Redirects back to the frontend
    */
-  const handleGoogleCredential = async (
-    response: { credential: string }
-  ) => {
-    setGoogleError("");
+  const handleSSOLogin = () => {
+  setSsoError("");
+  setSsoLoading(true);
 
-    if (!response.credential) {
-      setGoogleError("Google did not return an ID token.");
-      return;
-    }
+  const apiBaseUrl =
+    import.meta.env.VITE_API_BASE_URL ||
+    "http://localhost:8000";
 
-    setGoogleLoading(true);
-
-    try {
-      const result = await api.post("/auth/oidc/google", {
-        id_token: response.credential,
-      });
-
-      const {
-        access_token,
-        refresh_token,
-        user,
-      } = result.data;
-
-      if (!access_token || !refresh_token || !user) {
-        throw new Error(
-          "Google login response is missing authentication data."
-        );
-      }
-
-      authenticateWithTokens(
-        access_token,
-        refresh_token,
-        user
-      );
-    } catch (err: any) {
-      const status = err.response?.status;
-      const detail = err.response?.data?.detail;
-
-      if (status === 401) {
-        setGoogleError(
-          typeof detail === "string"
-            ? detail
-            : "This Google account is not linked to a FieldOps account."
-        );
-      } else if (status === 403) {
-        setGoogleError(
-          typeof detail === "string"
-            ? detail
-            : "Google login is not allowed for this account."
-        );
-      } else {
-        setGoogleError(
-          typeof detail === "string"
-            ? detail
-            : "Google sign-in failed. Please try again."
-        );
-      }
-    } finally {
-      setGoogleLoading(false);
-    }
-  };
-
-  /**
-   * Initialize Google Identity Services.
-   */
-  useEffect(() => {
-    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-
-    if (!clientId) {
-      setGoogleError(
-        "Google Client ID is not configured."
-      );
-      return;
-    }
-
-    let attempts = 0;
-    const maxAttempts = 20;
-
-    const initializeGoogle = () => {
-      attempts += 1;
-
-      if (
-        !window.google?.accounts?.id ||
-        !googleButtonRef.current
-      ) {
-        if (attempts < maxAttempts) {
-          setTimeout(initializeGoogle, 250);
-        } else {
-          setGoogleError(
-            "Google authentication could not be loaded. Please refresh the page."
-          );
-        }
-
-        return;
-      }
-
-      googleButtonRef.current.innerHTML = "";
-
-      window.google.accounts.id.initialize({
-        client_id: clientId,
-        callback: handleGoogleCredential,
-      });
-
-      window.google.accounts.id.renderButton(
-        googleButtonRef.current,
-        {
-          theme: "outline",
-          size: "large",
-          text: "continue_with",
-          shape: "rectangular",
-          width: 280,
-        }
-      );
-    };
-
-    initializeGoogle();
-  }, []);
+  window.location.href =
+    `${apiBaseUrl}/auth/sso/login`;
+};
 
   const handleSubmit = async (
     e: React.FormEvent
   ) => {
     e.preventDefault();
 
-    if (!email || !password) return;
+    if (!email || !password) {
+      return;
+    }
+
+    setMfaError("");
+    clearError();
 
     try {
-      await login(email, password);
-    } catch {
-      // Error is already set in the store
+      const response = await api.post("/auth/login", {
+        email,
+        password,
+      });
+
+      const data = response.data;
+
+      // -------------------------------------------------------
+      // MFA is enabled for this account.
+      // The backend deliberately returns no JWT yet.
+      // -------------------------------------------------------
+      if (data?.status === "MFA_REQUIRED") {
+        setMfaRequired(true);
+        setMfaChallenge(data.challenge || "");
+        setMfaCode("");
+        return;
+      }
+
+      // -------------------------------------------------------
+      // Normal login: MFA is optional/not enabled.
+      // -------------------------------------------------------
+      if (
+        data?.access_token &&
+        data?.refresh_token &&
+        data?.user
+      ) {
+        authenticateWithTokens(
+          data.access_token,
+          data.refresh_token,
+          data.user
+        );
+        return;
+      }
+
+      throw new Error("Invalid login response");
+    } catch (err: any) {
+      const detail =
+        err.response?.data?.detail ||
+        err.response?.data?.message;
+
+      if (typeof detail === "string") {
+        // Keep MFA errors separate from the normal login error.
+        if (mfaRequired) {
+          setMfaError(detail);
+        }
+      } else if (!mfaRequired) {
+        // The existing auth store used to expose the login error.
+        // We keep the generic API error visible through a local
+        // message because this page now handles the login response
+        // directly to detect MFA_REQUIRED.
+      }
     }
   };
+
+  // =========================================================
+  // VERIFY MFA LOGIN
+  // =========================================================
+
+  const handleMfaVerify = async (
+    e: React.FormEvent
+  ) => {
+    e.preventDefault();
+
+    const code = mfaCode.trim();
+
+    if (!mfaChallenge) {
+      setMfaError(
+        "Your MFA session is missing or expired. Please log in again."
+      );
+      return;
+    }
+
+    if (!/^\d{6}$/.test(code)) {
+      setMfaError(
+        "Enter the 6-digit code from your authenticator app."
+      );
+      return;
+    }
+
+    setMfaLoading(true);
+    setMfaError("");
+
+    try {
+      const response = await api.post("/auth/mfa/verify", {
+        challenge: mfaChallenge,
+        code,
+      });
+
+      const data = response.data;
+
+      // The MFA verification endpoint must return the normal
+      // FieldOps tokens after successful verification.
+      if (
+        data?.status === "VERIFIED" &&
+        data?.access_token &&
+        data?.refresh_token &&
+        data?.user
+      ) {
+        authenticateWithTokens(
+          data.access_token,
+          data.refresh_token,
+          data.user
+        );
+
+        setMfaRequired(false);
+        setMfaChallenge("");
+        setMfaCode("");
+        return;
+      }
+
+      setMfaError(
+        "MFA was verified, but the server did not return a login session."
+      );
+    } catch (err: any) {
+      const detail =
+        err.response?.data?.detail ||
+        err.response?.data?.message;
+
+      setMfaError(
+        typeof detail === "string"
+          ? detail
+          : "Invalid MFA code. Please try again."
+      );
+    } finally {
+      setMfaLoading(false);
+    }
+  };
+
+  const handleBackToLogin = () => {
+    setMfaRequired(false);
+    setMfaChallenge("");
+    setMfaCode("");
+    setMfaError("");
+  };
+
 
   return (
     <div style={styles.page}>
@@ -414,286 +468,499 @@ export default function LoginPage({
           </p>
         </div>
 
-        <form
-          style={styles.form}
-          onSubmit={handleSubmit}
-        >
-          {error && (
-            <div style={styles.error}>
-              <AlertCircle
-                size={16}
+        {mfaRequired ? (
+          <form
+            style={styles.form}
+            onSubmit={handleMfaVerify}
+          >
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                textAlign: "center",
+                marginBottom: "4px",
+              }}
+            >
+              <div
                 style={{
-                  flexShrink: 0,
-                  marginTop: 2,
+                  width: 56,
+                  height: 56,
+                  borderRadius: "50%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: "rgba(34, 197, 94, 0.1)",
+                  border: "1px solid rgba(34, 197, 94, 0.25)",
+                  marginBottom: "14px",
                 }}
-              />
+              >
+                <Shield size={26} color="#86efac" />
+              </div>
 
+              <h2
+                style={{
+                  margin: 0,
+                  color: "#e8f5ee",
+                  fontSize: "20px",
+                  fontWeight: 700,
+                }}
+              >
+                Multi-Factor Authentication
+              </h2>
+
+              <p
+                style={{
+                  margin: "8px 0 0",
+                  color: "rgba(167, 199, 183, 0.7)",
+                  fontSize: "13px",
+                  lineHeight: 1.5,
+                }}
+              >
+                Enter the 6-digit code from your
+                authenticator app to continue.
+              </p>
+            </div>
+
+            {mfaError && (
+              <div style={styles.error}>
+                <AlertCircle
+                  size={16}
+                  style={{
+                    flexShrink: 0,
+                    marginTop: 2,
+                  }}
+                />
+                <span>{mfaError}</span>
+              </div>
+            )}
+
+            <div style={styles.fieldGroup}>
+              <label style={styles.label}>
+                Authenticator Code
+              </label>
+
+              <div style={styles.inputWrapper}>
+                <Shield
+                  size={18}
+                  style={styles.inputIcon}
+                />
+
+                <input
+                  id="mfa-login-code"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  placeholder="Enter 6-digit code"
+                  value={mfaCode}
+                  onChange={(e) => {
+                    const value = e.target.value
+                      .replace(/\D/g, "")
+                      .slice(0, 6);
+
+                    setMfaCode(value);
+                    setMfaError("");
+                  }}
+                  style={{
+                    ...styles.input,
+                    paddingLeft: "44px",
+                    textAlign: "center",
+                    letterSpacing: "0.3em",
+                    fontWeight: 700,
+                  }}
+                  maxLength={6}
+                  autoFocus
+                  required
+                />
+              </div>
+            </div>
+
+            <button
+              id="mfa-verify-submit"
+              type="submit"
+              style={{
+                ...styles.button,
+                ...(mfaLoading ||
+                mfaCode.length !== 6
+                  ? styles.buttonDisabled
+                  : {}),
+              }}
+              disabled={
+                mfaLoading || mfaCode.length !== 6
+              }
+            >
+              {mfaLoading ? (
+                <>
+                  <div
+                    style={{
+                      width: 18,
+                      height: 18,
+                      border:
+                        "2px solid rgba(255,255,255,0.3)",
+                      borderTopColor: "#fff",
+                      borderRadius: "50%",
+                      animation:
+                        "spin 0.8s linear infinite",
+                    }}
+                  />
+                  Verifying...
+                </>
+              ) : (
+                <>
+                  Verify & Continue
+                  <ArrowRight size={18} />
+                </>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleBackToLogin}
+              disabled={mfaLoading}
+              style={{
+                padding: "12px",
+                background: "transparent",
+                border: "1px solid rgba(34, 197, 94, 0.25)",
+                borderRadius: "12px",
+                color: "#86efac",
+                fontSize: "14px",
+                fontWeight: 600,
+                cursor: mfaLoading
+                  ? "not-allowed"
+                  : "pointer",
+                fontFamily: "'Inter', sans-serif",
+                opacity: mfaLoading ? 0.6 : 1,
+              }}
+            >
+              Back to Login
+            </button>
+
+            <div style={styles.securityBadge}>
+              <Shield size={14} />
               <span>
-                {typeof error === "string"
-                  ? error
-                  : "An error occurred"}
+                MFA protects your FieldOps account
               </span>
             </div>
-          )}
-
-          {googleError && (
-            <div style={styles.error}>
-              <AlertCircle
-                size={16}
-                style={{
-                  flexShrink: 0,
-                  marginTop: 2,
-                }}
-              />
-
-              <span>{googleError}</span>
-            </div>
-          )}
-
-          <div style={styles.fieldGroup}>
-            <label style={styles.label}>
-              Email Address
-            </label>
-
-            <div style={styles.inputWrapper}>
-              <Mail
-                size={18}
-                style={styles.inputIcon}
-              />
-
-              <input
-                id="login-email"
-                type="email"
-                placeholder="you@company.com"
-                value={email}
-                onChange={(e) =>
-                  setEmail(e.target.value)
-                }
-                onFocus={() =>
-                  setEmailFocused(true)
-                }
-                onBlur={() =>
-                  setEmailFocused(false)
-                }
-                style={{
-                  ...styles.input,
-                  ...(emailFocused
-                    ? styles.inputFocus
-                    : {}),
-                }}
-                autoComplete="email"
-                required
-              />
-            </div>
-          </div>
-
-          <div style={styles.fieldGroup}>
-            <label style={styles.label}>
-              Password
-            </label>
-
-            <div style={styles.inputWrapper}>
-              <Lock
-                size={18}
-                style={styles.inputIcon}
-              />
-
-              <input
-                id="login-password"
-                type={
-                  showPassword
-                    ? "text"
-                    : "password"
-                }
-                placeholder="Enter your password"
-                value={password}
-                onChange={(e) =>
-                  setPassword(e.target.value)
-                }
-                onFocus={() =>
-                  setPasswordFocused(true)
-                }
-                onBlur={() =>
-                  setPasswordFocused(false)
-                }
-                style={{
-                  ...styles.input,
-                  paddingRight: "44px",
-                  ...(passwordFocused
-                    ? styles.inputFocus
-                    : {}),
-                }}
-                autoComplete="current-password"
-                required
-              />
-
-              <button
-                type="button"
-                style={styles.togglePassword}
-                onClick={() =>
-                  setShowPassword(!showPassword)
-                }
-                tabIndex={-1}
-              >
-                {showPassword ? (
-                  <EyeOff size={18} />
-                ) : (
-                  <Eye size={18} />
-                )}
-              </button>
-            </div>
-          </div>
-
-          <button
-            id="login-submit"
-            type="submit"
-            style={{
-              ...styles.button,
-              ...(isLoading
-                ? styles.buttonDisabled
-                : {}),
-            }}
-            disabled={isLoading}
-            onMouseEnter={(e) => {
-              if (!isLoading) {
-                (
-                  e.target as HTMLElement
-                ).style.transform =
-                  "translateY(-1px)";
-
-                (
-                  e.target as HTMLElement
-                ).style.boxShadow =
-                  "0 6px 20px rgba(22, 163, 74, 0.4)";
-              }
-            }}
-            onMouseLeave={(e) => {
-              (
-                e.target as HTMLElement
-              ).style.transform =
-                "translateY(0)";
-
-              (
-                e.target as HTMLElement
-              ).style.boxShadow =
-                "0 4px 15px rgba(22, 163, 74, 0.3)";
-            }}
+          </form>
+        ) : (
+          <form
+            style={styles.form}
+            onSubmit={handleSubmit}
           >
-            {isLoading ? (
-              <>
-                <div
+            {error && (
+              <div style={styles.error}>
+                <AlertCircle
+                  size={16}
                   style={{
-                    width: 18,
-                    height: 18,
-                    border:
-                      "2px solid rgba(255,255,255,0.3)",
-                    borderTopColor: "#fff",
-                    borderRadius: "50%",
-                    animation:
-                      "spin 0.8s linear infinite",
+                    flexShrink: 0,
+                    marginTop: 2,
                   }}
                 />
 
-                Signing in...
-              </>
-            ) : (
-              <>
-                Sign In
-                <ArrowRight size={18} />
-              </>
-            )}
-          </button>
-
-          {/* Divider */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "12px",
-              margin: "4px 0",
-            }}
-          >
-            <div
-              style={{
-                flex: 1,
-                height: "1px",
-                background:
-                  "rgba(167, 199, 183, 0.15)",
-              }}
-            />
-
-            <span
-              style={{
-                color:
-                  "rgba(167, 199, 183, 0.45)",
-                fontSize: "12px",
-                fontWeight: 500,
-              }}
-            >
-              OR
-            </span>
-
-            <div
-              style={{
-                flex: 1,
-                height: "1px",
-                background:
-                  "rgba(167, 199, 183, 0.15)",
-              }}
-            />
-          </div>
-
-          {/* Google Sign-In */}
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              gap: "8px",
-            }}
-          >
-            <div
-              ref={googleButtonRef}
-              style={{
-                minHeight: "40px",
-              }}
-            />
-
-            {googleLoading && (
-              <div
-                style={{
-                  fontSize: "12px",
-                  color:
-                    "rgba(167, 199, 183, 0.6)",
-                }}
-              >
-                Signing in with Google...
+                <span>
+                  {typeof error === "string"
+                    ? error
+                    : "An error occurred"}
+                </span>
               </div>
             )}
-          </div>
 
-          {/* Create Organization */}
-          <button
-            type="button"
-            onClick={onCreateOrganization}
-            style={{
-              marginTop: "12px",
-              padding: "12px",
-              width: "100%",
-              background: "transparent",
-              border:
-                "1px solid rgba(34, 197, 94, 0.3)",
-              borderRadius: "12px",
-              color: "#86efac",
-              fontSize: "14px",
-              fontWeight: 600,
-              cursor: "pointer",
-              fontFamily: "'Inter', sans-serif",
-            }}
-          >
-            Create Organization
-          </button>
-        </form>
+            {ssoError && (
+              <div style={styles.error}>
+                <AlertCircle
+                  size={16}
+                  style={{
+                    flexShrink: 0,
+                    marginTop: 2,
+                  }}
+                />
+
+                <span>{ssoError}</span>
+              </div>
+            )}
+
+            {/* Email */}
+            <div style={styles.fieldGroup}>
+              <label style={styles.label}>
+                Email Address
+              </label>
+
+              <div style={styles.inputWrapper}>
+                <Mail
+                  size={18}
+                  style={styles.inputIcon}
+                />
+
+                <input
+                  id="login-email"
+                  type="email"
+                  placeholder="you@company.com"
+                  value={email}
+                  onChange={(e) =>
+                    setEmail(e.target.value)
+                  }
+                  onFocus={() =>
+                    setEmailFocused(true)
+                  }
+                  onBlur={() =>
+                    setEmailFocused(false)
+                  }
+                  style={{
+                    ...styles.input,
+                    ...(emailFocused
+                      ? styles.inputFocus
+                      : {}),
+                  }}
+                  autoComplete="email"
+                  required
+                />
+              </div>
+            </div>
+
+            {/* Password */}
+            <div style={styles.fieldGroup}>
+              <label style={styles.label}>
+                Password
+              </label>
+
+              <div style={styles.inputWrapper}>
+                <Lock
+                  size={18}
+                  style={styles.inputIcon}
+                />
+
+                <input
+                  id="login-password"
+                  type={
+                    showPassword
+                      ? "text"
+                      : "password"
+                  }
+                  placeholder="Enter your password"
+                  value={password}
+                  onChange={(e) =>
+                    setPassword(e.target.value)
+                  }
+                  onFocus={() =>
+                    setPasswordFocused(true)
+                  }
+                  onBlur={() =>
+                    setPasswordFocused(false)
+                  }
+                  style={{
+                    ...styles.input,
+                    paddingRight: "44px",
+                    ...(passwordFocused
+                      ? styles.inputFocus
+                      : {}),
+                  }}
+                  autoComplete="current-password"
+                  required
+                />
+
+                <button
+                  type="button"
+                  style={styles.togglePassword}
+                  onClick={() =>
+                    setShowPassword(!showPassword)
+                  }
+                  tabIndex={-1}
+                >
+                  {showPassword ? (
+                    <EyeOff size={18} />
+                  ) : (
+                    <Eye size={18} />
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Local Login */}
+            <button
+              id="login-submit"
+              type="submit"
+              style={{
+                ...styles.button,
+                ...(isLoading
+                  ? styles.buttonDisabled
+                  : {}),
+              }}
+              disabled={isLoading}
+              onMouseEnter={(e) => {
+                if (!isLoading) {
+                  (
+                    e.target as HTMLElement
+                  ).style.transform =
+                    "translateY(-1px)";
+
+                  (
+                    e.target as HTMLElement
+                  ).style.boxShadow =
+                    "0 6px 20px rgba(22, 163, 74, 0.4)";
+                }
+              }}
+              onMouseLeave={(e) => {
+                (
+                  e.currentTarget as HTMLElement
+                ).style.transform =
+                  "translateY(0)";
+
+                (
+                  e.currentTarget as HTMLElement
+                ).style.boxShadow =
+                  "0 4px 15px rgba(22, 163, 74, 0.3)";
+              }}
+            >
+              {isLoading ? (
+                <>
+                  <div
+                    style={{
+                      width: 18,
+                      height: 18,
+                      border:
+                        "2px solid rgba(255,255,255,0.3)",
+                      borderTopColor: "#fff",
+                      borderRadius: "50%",
+                      animation:
+                        "spin 0.8s linear infinite",
+                    }}
+                  />
+
+                  Signing in...
+                </>
+              ) : (
+                <>
+                  Sign In
+                  <ArrowRight size={18} />
+                </>
+              )}
+            </button>
+
+            {/* Divider */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "12px",
+                margin: "4px 0",
+              }}
+            >
+              <div
+                style={{
+                  flex: 1,
+                  height: "1px",
+                  background:
+                    "rgba(167, 199, 183, 0.15)",
+                }}
+              />
+
+              <span
+                style={{
+                  color:
+                    "rgba(167, 199, 183, 0.45)",
+                  fontSize: "12px",
+                  fontWeight: 500,
+                }}
+              >
+                OR
+              </span>
+
+              <div
+                style={{
+                  flex: 1,
+                  height: "1px",
+                  background:
+                    "rgba(167, 199, 183, 0.15)",
+                }}
+              />
+            </div>
+
+            {/* Enterprise SSO */}
+            <button
+              id="sso-login"
+              type="button"
+              style={{
+                ...styles.ssoButton,
+                ...(ssoLoading
+                  ? styles.buttonDisabled
+                  : {}),
+              }}
+              disabled={ssoLoading}
+              onClick={handleSSOLogin}
+              onMouseEnter={(e) => {
+                if (!ssoLoading) {
+                  (
+                    e.currentTarget as HTMLElement
+                  ).style.background =
+                    "rgba(34, 197, 94, 0.08)";
+
+                  (
+                    e.currentTarget as HTMLElement
+                  ).style.borderColor =
+                    "rgba(34, 197, 94, 0.5)";
+                }
+              }}
+              onMouseLeave={(e) => {
+                (
+                  e.currentTarget as HTMLElement
+                ).style.background =
+                  "rgba(10, 26, 18, 0.6)";
+
+                (
+                  e.currentTarget as HTMLElement
+                ).style.borderColor =
+                  "rgba(34, 197, 94, 0.3)";
+              }}
+            >
+              {ssoLoading ? (
+                <>
+                  <div
+                    style={{
+                      width: 18,
+                      height: 18,
+                      border:
+                        "2px solid rgba(255,255,255,0.3)",
+                      borderTopColor: "#fff",
+                      borderRadius: "50%",
+                      animation:
+                        "spin 0.8s linear infinite",
+                    }}
+                  />
+
+                  Redirecting to SSO...
+                </>
+              ) : (
+                <>
+                  <Building2 size={18} />
+
+                  Sign in with Enterprise SSO
+                </>
+              )}
+            </button>
+
+            {/* Create Organization */}
+            <button
+              type="button"
+              onClick={onCreateOrganization}
+              style={{
+                marginTop: "12px",
+                padding: "12px",
+                width: "100%",
+                background: "transparent",
+                border:
+                  "1px solid rgba(34, 197, 94, 0.3)",
+                borderRadius: "12px",
+                color: "#86efac",
+                fontSize: "14px",
+                fontWeight: 600,
+                cursor: "pointer",
+                fontFamily: "'Inter', sans-serif",
+              }}
+            >
+              Create Organization
+            </button>
+          </form>
+        )}
 
         <div style={styles.securityBadge}>
           <Shield size={14} />

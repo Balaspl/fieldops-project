@@ -8,7 +8,6 @@ import {
   Users,
   Calendar,
   FlaskConical,
-  Info,
   User,
   ChevronDown,
   Activity,
@@ -57,7 +56,9 @@ const OrganizationOnboardingPage = lazy(
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const JobsPage = lazy(() => import("./pages/JobsPage"));
 const TechDashboardPage = lazy(() => import("./pages/TechDashboardPage"));
-const DispatcherPage = lazy(() => import("./pages/dispatcher/DispatcherPage"));
+const DispatcherPage = lazy(
+  () => import("./pages/dispatcher/DispatcherPage"),
+);
 const PlanningPage = lazy(() => import("./pages/PlanningPage"));
 const TrackingDashboardPage = lazy(
   () => import("./pages/TrackingDashboardPage"),
@@ -159,27 +160,27 @@ const styles = {
     minWidth: "60px",
   } as React.CSSProperties,
 
- sidebarMobile: {
-  width: "100%",
-  minWidth: 0,
-  height: "64px",
-  position: "fixed",
-  left: 0,
-  right: 0,
-  bottom: 0,
-  top: "auto",
-  display: "flex",
-  flexDirection: "row",
-  alignItems: "center",
-  borderRight: "none",
-  borderTop: "1px solid #E3ECE7",
-  padding: "4px 6px",
-  overflow: "hidden",
-  boxShadow: "0 -2px 8px rgba(47, 79, 62, 0.06)",
-  zIndex: 9999,
-  background: "#F3F8F5",
-  boxSizing: "border-box",
-} as React.CSSProperties,
+  sidebarMobile: {
+    width: "100%",
+    minWidth: 0,
+    height: "64px",
+    position: "fixed",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    top: "auto",
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "center",
+    borderRight: "none",
+    borderTop: "1px solid #E3ECE7",
+    padding: "4px 6px",
+    overflow: "hidden",
+    boxShadow: "0 -2px 8px rgba(47, 79, 62, 0.06)",
+    zIndex: 9999,
+    background: "#F3F8F5",
+    boxSizing: "border-box",
+  } as React.CSSProperties,
 
   sidebarContent: {
     display: "flex",
@@ -197,17 +198,17 @@ const styles = {
   } as React.CSSProperties,
 
   sidebarContentMobile: {
-  display: "flex",
-  flexDirection: "row",
-  height: "100%",
-  padding: 0,
-  overflowX: "auto",
-  overflowY: "hidden",
-  alignItems: "center",
-  width: "100%",
-  minWidth: 0,
-  boxSizing: "border-box",
-} as React.CSSProperties,
+    display: "flex",
+    flexDirection: "row",
+    height: "100%",
+    padding: 0,
+    overflowX: "auto",
+    overflowY: "hidden",
+    alignItems: "center",
+    width: "100%",
+    minWidth: 0,
+    boxSizing: "border-box",
+  } as React.CSSProperties,
 
   sidebarBrand: {
     display: "flex",
@@ -228,7 +229,8 @@ const styles = {
     width: "90px",
     objectFit: "contain",
     display: "block",
-    transition: "width 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+    transition:
+      "width 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
   } as React.CSSProperties,
 
   sidebarNav: {
@@ -240,17 +242,17 @@ const styles = {
   } as React.CSSProperties,
 
   sidebarNavMobile: {
-  display: "flex",
-  flexDirection: "row",
-  justifyContent: "space-around",
-  alignItems: "center",
-  width: "100%",
-  minWidth: 0,
-  height: "100%",
-  marginTop: 0,
-  gap: 0,
-  flex: 1,
-} as React.CSSProperties,
+    display: "flex",
+    flexDirection: "row",
+    justifyContent: "space-around",
+    alignItems: "center",
+    width: "100%",
+    minWidth: 0,
+    height: "100%",
+    marginTop: 0,
+    gap: 0,
+    flex: 1,
+  } as React.CSSProperties,
 
   navGroupLabel: {
     fontSize: "10px",
@@ -283,22 +285,22 @@ const styles = {
   } as React.CSSProperties,
 
   navItemMobile: {
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  justifyContent: "center",
-  gap: "2px",
-  fontSize: "8px",
-  padding: "3px 2px",
-  borderRadius: "6px",
-  width: "auto",
-  minWidth: 0,
-  height: "56px",
-  flex: "1 1 0",
-  textAlign: "center",
-  whiteSpace: "nowrap",
-  overflow: "hidden",
-} as React.CSSProperties,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "2px",
+    fontSize: "8px",
+    padding: "3px 2px",
+    borderRadius: "6px",
+    width: "auto",
+    minWidth: 0,
+    height: "56px",
+    flex: "1 1 0",
+    textAlign: "center",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+  } as React.CSSProperties,
 
   navItemCollapsed: {
     justifyContent: "center",
@@ -385,7 +387,8 @@ const styles = {
     justifyContent: "center",
     padding: 0,
     zIndex: 300,
-    transition: "color 0.2s ease, transform 0.2s ease",
+    transition:
+      "color 0.2s ease, transform 0.2s ease",
   } as React.CSSProperties,
 
   sidebarToggleCollapsed: {
@@ -401,7 +404,8 @@ const styles = {
     borderTop: "1px solid #E3ECE7",
     marginTop: "auto",
     flexShrink: 0,
-    transition: "padding 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+    transition:
+      "padding 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
   } as React.CSSProperties,
 
   sidebarProfileMiniCollapsed: {
@@ -588,11 +592,11 @@ const styles = {
   } as React.CSSProperties,
 
   mainAreaMobile: {
-  marginLeft: 0,
-  marginBottom: "64px",
-  height: "calc(100vh - 64px)",
-  width: "100%",
-} as React.CSSProperties,
+    marginLeft: 0,
+    marginBottom: "64px",
+    height: "calc(100vh - 64px)",
+    width: "100%",
+  } as React.CSSProperties,
 
   pageWrap: {
     flex: 1,
@@ -613,22 +617,28 @@ const localCss = `
     background-color: #EAF4EE !important;
     color: #2F4F3E !important;
   }
+
   .nav-group-header-style:hover {
     color: #2F4F3E !important;
   }
+
   .nav-group-header-style:hover .chevron-icon-style {
     color: #2F4F3E !important;
   }
+
   .sidebar-toggle-style:hover {
     color: #5C9470 !important;
     transform: scale(1.2) !important;
   }
+
   .sidebar-content-style::-webkit-scrollbar {
     display: none !important;
   }
+
   .simulate-alert-btn-style:hover {
     background-color: #5C9470 !important;
   }
+
   .simulate-alert-btn-style:active {
     transform: scale(0.98) !important;
   }
@@ -638,467 +648,975 @@ function AppInner() {
   const { user, logout } = useAuthStore();
   const { addToast } = useToast();
 
-  const userRole = (user?.role || "").toLowerCase();
-  const isTechnician = userRole === "technician";
-  const isCustomer = userRole === "customer";
-  const isDispatcher = userRole === "dispatcher";
-  const isSuperAdmin = userRole === "super_admin";
-  const isAdminOrDispatcher = !isTechnician && !isCustomer;
+  const userRole =
+    (user?.role || "").toLowerCase();
 
-  const [activeTab, setActiveTab] = useState(() => {
-    if (isTechnician) return "tech_dashboard";
-    if (isCustomer) return "cust_dashboard";
-    return "dashboard";
-  });
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [isNavigating, setIsNavigating] = useState(false);
+  const isTechnician =
+    userRole === "technician";
 
-  const handleTabChange = (tab: string) => {
+  const isCustomer =
+    userRole === "customer";
+
+  const isDispatcher =
+    userRole === "dispatcher";
+
+  const isSuperAdmin =
+    userRole === "super_admin";
+
+  const isAdminOrDispatcher =
+    !isTechnician && !isCustomer;
+
+  const [activeTab, setActiveTab] =
+    useState(() => {
+      if (isTechnician)
+        return "tech_dashboard";
+
+      if (isCustomer)
+        return "cust_dashboard";
+
+      return "dashboard";
+    });
+
+  const [sidebarCollapsed, setSidebarCollapsed] =
+    useState(false);
+
+  const [isNavigating, setIsNavigating] =
+    useState(false);
+
+  const handleTabChange = (
+    tab: string,
+  ) => {
     if (tab === activeTab) return;
+
     setIsNavigating(true);
     setActiveTab(tab);
+
     setTimeout(() => {
       setIsNavigating(false);
     }, 400);
   };
 
-  const getLoadingMessage = (tab: string) => {
+  const getLoadingMessage = (
+    tab: string,
+  ) => {
     switch (tab) {
       case "dashboard":
         return "Assembling Operations Center Dashboard...";
+
       case "jobs":
         return "Loading Jobs & Service Requests...";
+
       case "techboard":
         return "Loading Technician Dashboard...";
+
       case "dispatchers":
         return "Loading Dispatchers...";
+
       case "planning":
         return "Loading Planning Board...";
+
       case "profile":
         return "Loading Account & Organization Control...";
+
       case "tech_dashboard":
       case "cust_dashboard":
         return "Loading Dashboard...";
+
       case "tech_profile":
       case "cust_profile":
         return "Loading Profile...";
+
       case "tech_jobs":
         return "Loading Assigned Jobs...";
+
       case "cust_requests":
       case "cust_create_request":
         return "Loading Service Requests...";
+
       case "cust_tracking":
         return "Loading Real-Time Job Tracking...";
+
       default:
         return "Loading page...";
     }
   };
 
   // Notification States
-  const [isNotificationDrawerOpen, setIsNotificationDrawerOpen] =
-    useState(false);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [selectedNotification, setSelectedNotification] =
-    useState<NotificationItem | null>(null);
-  const [selectedJobDetail, setSelectedJobDetail] = useState<any>(null);
-  const [isBellAnimated, setIsBellAnimated] = useState(false);
-  const [activeTechId, setActiveTechId] = useState<string | number | null>(
-    null,
-  ); // set after fetching real technicians
-  const [techList, setTechList] = useState<Technician[]>([]);
+  const [
+    isNotificationDrawerOpen,
+    setIsNotificationDrawerOpen,
+  ] = useState(false);
 
-  const [windowWidth, setWindowWidth] = useState(
-    typeof window !== "undefined" ? window.innerWidth : 500,
-  );
+  const [unreadCount, setUnreadCount] =
+    useState(0);
+
+  const [
+    notifications,
+    setNotifications,
+  ] = useState<NotificationItem[]>([]);
+
+  const [
+    selectedNotification,
+    setSelectedNotification,
+  ] =
+    useState<NotificationItem | null>(
+      null,
+    );
+
+  const [
+    selectedJobDetail,
+    setSelectedJobDetail,
+  ] = useState<any>(null);
+
+  const [isBellAnimated, setIsBellAnimated] =
+    useState(false);
+
+  const [
+    activeTechId,
+    setActiveTechId,
+  ] =
+    useState<string | number | null>(
+      null,
+    );
+
+  const [techList, setTechList] =
+    useState<Technician[]>([]);
+
+  const [windowWidth, setWindowWidth] =
+    useState(
+      typeof window !== "undefined"
+        ? window.innerWidth
+        : 500,
+    );
 
   useEffect(() => {
-    const handleResize = () => setWindowWidth(window.innerWidth);
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+    const handleResize = () =>
+      setWindowWidth(
+        window.innerWidth,
+      );
+
+    window.addEventListener(
+      "resize",
+      handleResize,
+    );
+
+    return () => {
+      window.removeEventListener(
+        "resize",
+        handleResize,
+      );
+    };
   }, []);
 
   // Real-time technician toast notification pop-up
-  const seenNotifIdsRef = useRef<Set<string>>(new Set());
+  const seenNotifIdsRef =
+    useRef<Set<string>>(
+      new Set(),
+    );
+
   useEffect(() => {
     if (!isTechnician) return;
 
-    const checkNewJobNotifications = async () => {
-      try {
-        const res = await getTechnicianNotifications();
-        const list = res.data.notifications || [];
-        list.forEach((n: any) => {
-          if (!n.isRead && !seenNotifIdsRef.current.has(n.id)) {
-            seenNotifIdsRef.current.add(n.id);
-            addToast({
-              title: n.title || "New Job Assigned",
-              message: n.message || "A new job has been assigned to you.",
-              type: "info",
-              autoDismiss: 7000,
-              priority: "normal",
-            });
-          }
-        });
-      } catch (e) {}
-    };
+    const checkNewJobNotifications =
+      async () => {
+        try {
+          const res =
+            await getTechnicianNotifications();
+
+          const list =
+            res.data.notifications || [];
+
+          list.forEach((n: any) => {
+            if (
+              !n.isRead &&
+              !seenNotifIdsRef.current.has(
+                n.id,
+              )
+            ) {
+              seenNotifIdsRef.current.add(
+                n.id,
+              );
+
+              addToast({
+                title:
+                  n.title ||
+                  "New Job Assigned",
+
+                message:
+                  n.message ||
+                  "A new job has been assigned to you.",
+
+                type: "info",
+
+                autoDismiss: 7000,
+
+                priority: "normal",
+              });
+            }
+          });
+        } catch (e) {}
+      };
 
     checkNewJobNotifications();
-    const interval = setInterval(checkNewJobNotifications, 4000);
-    return () => clearInterval(interval);
-  }, [isTechnician, addToast]);
 
-  const isMobileLayout = windowWidth <= 500;
+    const interval =
+      setInterval(
+        checkNewJobNotifications,
+        4000,
+      );
+
+    return () =>
+      clearInterval(interval);
+  }, [
+    isTechnician,
+    addToast,
+  ]);
+
+  const isMobileLayout =
+    windowWidth <= 500;
 
   // Lazy fetch registered technicians if not already loaded
-  const ensureActiveTechLoaded = async () => {
-    if (techList.length > 0 && activeTechId !== null) {
-      return activeTechId;
-    }
-    try {
-      const response = await getAllTechnicians();
-      if (response.data && response.data.length > 0) {
-        setTechList(response.data);
-        // Pick the first technician's UUID
-        const firstTech = response.data[0];
-        const techId =
-          firstTech.tech_id || firstTech.technician_id || firstTech.id;
-        if (techId) {
-          setActiveTechId(techId);
-          return techId;
-        }
+  const ensureActiveTechLoaded =
+    async () => {
+      if (
+        techList.length > 0 &&
+        activeTechId !== null
+      ) {
+        return activeTechId;
       }
-    } catch (err) {
-      console.warn("Failed to fetch technicians list lazily.", err);
-    }
-    return null;
-  };
 
-  // Fetch notifications only when the notification drawer is opened or notification feature is active
-  useEffect(() => {
-    if (!activeTechId || !isNotificationDrawerOpen) return;
-
-    const loadNotifications = async () => {
       try {
-        const data = await fetchNotifications(activeTechId);
-        setNotifications(data.notifications);
-        setUnreadCount(data.unreadCount);
-      } catch (err) {
-        console.error("Failed to load notifications:", err);
-      }
-    };
-    loadNotifications();
-  }, [activeTechId, isNotificationDrawerOpen]);
+        const response =
+          await getAllTechnicians();
 
-  // Fetch notifications and initialize socket listeners for the active technician
+        if (
+          response.data &&
+          response.data.length > 0
+        ) {
+          setTechList(
+            response.data,
+          );
+
+          const firstTech =
+            response.data[0];
+
+          const techId =
+            firstTech.tech_id ||
+            firstTech.technician_id ||
+            firstTech.id;
+
+          if (techId) {
+            setActiveTechId(
+              techId,
+            );
+
+            return techId;
+          }
+        }
+      } catch (err) {
+        console.warn(
+          "Failed to fetch technicians list lazily.",
+          err,
+        );
+      }
+
+      return null;
+    };
+
+  // Fetch notifications only when drawer is opened
+  useEffect(() => {
+    if (
+      !activeTechId ||
+      !isNotificationDrawerOpen
+    ) {
+      return;
+    }
+
+    const loadNotifications =
+      async () => {
+        try {
+          const data =
+            await fetchNotifications(
+              activeTechId,
+            );
+
+          setNotifications(
+            data.notifications,
+          );
+
+          setUnreadCount(
+            data.unreadCount,
+          );
+        } catch (err) {
+          console.error(
+            "Failed to load notifications:",
+            err,
+          );
+        }
+      };
+
+    loadNotifications();
+  }, [
+    activeTechId,
+    isNotificationDrawerOpen,
+  ]);
+
+  // Fetch notifications and initialize socket listeners
   useEffect(() => {
     if (!activeTechId) return;
 
-    // Start heartbeat loop (POST /technicians/{id}/heartbeat every 30 seconds)
-    startHeartbeatLoop(String(activeTechId), 30000, () => ({
-      last_lat: 13.0827 + (Math.random() - 0.5) * 0.01,
-      last_lng: 80.2707 + (Math.random() - 0.5) * 0.01,
-    }));
+    startHeartbeatLoop(
+      String(activeTechId),
+      30000,
+      () => ({
+        last_lat:
+          13.0827 +
+          (Math.random() - 0.5) *
+            0.01,
 
-    // 2. Connect Socket.io
+        last_lng:
+          80.2707 +
+          (Math.random() - 0.5) *
+            0.01,
+      }),
+    );
+
     const socketHandlers = {
       onConnect: () => {
-        console.log("Connected to notification server.");
+        console.log(
+          "Connected to notification server.",
+        );
       },
+
       onDisconnect: () => {
-        console.log("Disconnected from notification server.");
+        console.log(
+          "Disconnected from notification server.",
+        );
       },
-      onNewNotification: (notif: NotificationItem) => {
-        setNotifications((prev) => [notif, ...prev]);
-        setUnreadCount((prev) => prev + 1);
-        // Mirror to toast system
-        addToast(createToastFromNotification(notif as any));
-        // Trigger bell bounce animation
+
+      onNewNotification: (
+        notif: NotificationItem,
+      ) => {
+        setNotifications(
+          (prev) => [
+            notif,
+            ...prev,
+          ],
+        );
+
+        setUnreadCount(
+          (prev) => prev + 1,
+        );
+
+        addToast(
+          createToastFromNotification(
+            notif as any,
+          ),
+        );
+
         setIsBellAnimated(true);
-        setTimeout(() => setIsBellAnimated(false), 1000);
+
+        setTimeout(
+          () =>
+            setIsBellAnimated(
+              false,
+            ),
+          1000,
+        );
       },
-      onUnreadCount: (count: number) => {
-        setUnreadCount(count);
+
+      onUnreadCount: (
+        count: number,
+      ) => {
+        setUnreadCount(
+          count,
+        );
       },
     };
 
-    const socket = connectNotificationSocket(activeTechId, socketHandlers);
+    const socket =
+      connectNotificationSocket(
+        activeTechId,
+        socketHandlers,
+      );
 
-    // Subscribe to dispatch-specific job.* events
-    const unsubscribeDispatch = subscribeToDispatchEvents(socket, addToast);
+    const unsubscribeDispatch =
+      subscribeToDispatchEvents(
+        socket,
+        addToast,
+      );
 
     return () => {
       stopHeartbeatLoop();
       unsubscribeDispatch();
-      disconnectNotificationSocket(socket);
+      disconnectNotificationSocket(
+        socket,
+      );
     };
-  }, [activeTechId]);
+  }, [
+    activeTechId,
+    addToast,
+  ]);
 
-  // Handlers for NotificationDetail Actions
-  const handleAcceptJob = async (jobId: string | number) => {
-    console.log(`Accepting job ID: ${jobId}`);
-    const isMock =
-      selectedNotification &&
-      typeof selectedNotification.id === "string" &&
-      selectedNotification.id.startsWith("notif-");
-    if (!isMock) {
-      await acceptJob(jobId);
-    }
-    if (selectedNotification) {
-      await handleMarkAsRead(selectedNotification.id);
-    }
-  };
+  // NotificationDetail Actions
+  const handleAcceptJob =
+    async (
+      jobId: string | number,
+    ) => {
+      console.log(
+        `Accepting job ID: ${jobId}`,
+      );
 
-  const handleRejectJob = async (jobId: string | number, reason: string) => {
-    console.log(`Rejecting job ID: ${jobId} for reason: ${reason}`);
-    const isMock =
-      selectedNotification &&
-      typeof selectedNotification.id === "string" &&
-      selectedNotification.id.startsWith("notif-");
-    if (!isMock) {
-      await rejectJob(jobId, reason);
-    }
-    if (selectedNotification) {
-      await handleMarkAsRead(selectedNotification.id);
-    }
-  };
+      const isMock =
+        selectedNotification &&
+        typeof selectedNotification.id ===
+          "string" &&
+        selectedNotification.id.startsWith(
+          "notif-",
+        );
 
-  const handleReassignJob = async (
-    jobId: string | number,
-    colleagueId?: string | number,
-    reason?: string,
-  ) => {
-    console.log(
-      `Requesting reassignment for job ID: ${jobId} to colleague: ${colleagueId} with reason: ${reason}`,
-    );
-    const isMock =
-      selectedNotification &&
-      typeof selectedNotification.id === "string" &&
-      selectedNotification.id.startsWith("notif-");
-    if (!isMock && colleagueId) {
-      await reassignJob(jobId, colleagueId, reason || "");
-    }
-    if (selectedNotification) {
-      await handleMarkAsRead(selectedNotification.id);
-    }
-  };
-
-  const handleNotificationClick = async (notif: NotificationItem) => {
-    setSelectedNotification(notif);
-    setSelectedJobDetail(notif.job || null);
-    setIsNotificationDrawerOpen(false); // Close drawer to display details
-
-    // Mark as read immediately on click
-    if (!notif.isRead) {
-      await handleMarkAsRead(notif.id);
-    }
-  };
-
-  const handleMarkAsRead = async (notifId: string | number) => {
-    const isMock = typeof notifId === "string" && notifId.startsWith("notif-");
-    if (!isMock) {
-      await markNotificationAsRead(notifId);
-    }
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === notifId ? { ...n, isRead: true } : n)),
-    );
-    setUnreadCount((prev) => Math.max(0, prev - 1));
-  };
-
-  const handleMarkAllAsRead = async () => {
-    const unreadIds = notifications
-      .filter((n) => !n.isRead)
-      .map((n) => String(n.id));
-    const realUnreadIds = unreadIds.filter((id) => !id.startsWith("notif-"));
-    if (realUnreadIds.length > 0) {
-      try {
-        await batchMarkAsRead(realUnreadIds);
-      } catch (err) {
-        console.error("Failed to batch mark notifications as read", err);
+      if (!isMock) {
+        await acceptJob(
+          jobId,
+        );
       }
-    }
-    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
-    setUnreadCount(0);
-  };
 
-  const handleDismissNotification = async (notifId: string) => {
-    const isMock = typeof notifId === "string" && notifId.startsWith("notif-");
-    if (!isMock) {
-      try {
-        await dismissNotification(notifId);
-      } catch (err) {
-        console.error(`Failed to dismiss notification ${notifId}`, err);
+      if (selectedNotification) {
+        await handleMarkAsRead(
+          selectedNotification.id,
+        );
       }
-    }
-    setNotifications((prev) =>
-      prev.filter((n) => String(n.id) !== String(notifId)),
-    );
-    const notif = notifications.find((n) => String(n.id) === String(notifId));
-    if (notif && !notif.isRead) {
-      setUnreadCount((prev) => Math.max(0, prev - 1));
-    }
-  };
+    };
 
-  const handleToastNavigate = (jobId: string | number) => {
-    // Find matching notification in the state
-    const matchingNotif = notifications.find(
-      (n) =>
-        String(n.jobId) === String(jobId) || String(n.id) === String(jobId),
-    );
+  const handleRejectJob =
+    async (
+      jobId: string | number,
+      reason: string,
+    ) => {
+      console.log(
+        `Rejecting job ID: ${jobId} for reason: ${reason}`,
+      );
 
-    if (matchingNotif) {
-      setSelectedNotification(matchingNotif);
-      setSelectedJobDetail(matchingNotif.job || null);
-      setIsNotificationDrawerOpen(false);
-    } else {
-      // Create a temporary/placeholder notification detail so we can open it!
-      const tempNotif: NotificationItem = {
-        id: `notif-temp-${Date.now()}`,
-        type: "JOB_ASSIGNED",
-        title: "Job Notification",
-        message: "Details for job #" + jobId,
-        isRead: true,
-        createdAt: new Date().toISOString(),
-        jobId: jobId,
-        job: {
-          id: jobId,
-          title: "Dispatch Assignment",
-          description: "Scheduled dispatch details for job #" + jobId,
-          location: "Chennai Site",
-          priority: "MEDIUM",
-          customer_name: "Customer",
-          customer_phone: "+91 9876543210",
-          estimated_value: 1500,
-          sla_deadline: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
-          distance_km: 4.5,
-          required_skills: [],
-        },
-      };
-      setSelectedNotification(tempNotif);
-      setSelectedJobDetail(tempNotif.job);
-      setIsNotificationDrawerOpen(false);
-    }
-  };
+      const isMock =
+        selectedNotification &&
+        typeof selectedNotification.id ===
+          "string" &&
+        selectedNotification.id.startsWith(
+          "notif-",
+        );
 
-  // Helper function to trigger mock dispatch events (cycles through all types)
+      if (!isMock) {
+        await rejectJob(
+          jobId,
+          reason,
+        );
+      }
+
+      if (selectedNotification) {
+        await handleMarkAsRead(
+          selectedNotification.id,
+        );
+      }
+    };
+
+  const handleReassignJob =
+    async (
+      jobId: string | number,
+      colleagueId?: string | number,
+      reason?: string,
+    ) => {
+      console.log(
+        `Requesting reassignment for job ID: ${jobId} to colleague: ${colleagueId} with reason: ${reason}`,
+      );
+
+      const isMock =
+        selectedNotification &&
+        typeof selectedNotification.id ===
+          "string" &&
+        selectedNotification.id.startsWith(
+          "notif-",
+        );
+
+      if (
+        !isMock &&
+        colleagueId
+      ) {
+        await reassignJob(
+          jobId,
+          colleagueId,
+          reason || "",
+        );
+      }
+
+      if (selectedNotification) {
+        await handleMarkAsRead(
+          selectedNotification.id,
+        );
+      }
+    };
+
+  const handleNotificationClick =
+    async (
+      notif: NotificationItem,
+    ) => {
+      setSelectedNotification(
+        notif,
+      );
+
+      setSelectedJobDetail(
+        notif.job || null,
+      );
+
+      setIsNotificationDrawerOpen(
+        false,
+      );
+
+      if (!notif.isRead) {
+        await handleMarkAsRead(
+          notif.id,
+        );
+      }
+    };
+
+  const handleMarkAsRead =
+    async (
+      notifId: string | number,
+    ) => {
+      const isMock =
+        typeof notifId ===
+          "string" &&
+        notifId.startsWith(
+          "notif-",
+        );
+
+      if (!isMock) {
+        await markNotificationAsRead(
+          notifId,
+        );
+      }
+
+      setNotifications(
+        (prev) =>
+          prev.map((n) =>
+            n.id === notifId
+              ? {
+                  ...n,
+                  isRead: true,
+                }
+              : n,
+          ),
+      );
+
+      setUnreadCount(
+        (prev) =>
+          Math.max(
+            0,
+            prev - 1,
+          ),
+      );
+    };
+
+  const handleMarkAllAsRead =
+    async () => {
+      const unreadIds =
+        notifications
+          .filter(
+            (n) => !n.isRead,
+          )
+          .map((n) =>
+            String(n.id),
+          );
+
+      const realUnreadIds =
+        unreadIds.filter(
+          (id) =>
+            !id.startsWith(
+              "notif-",
+            ),
+        );
+
+      if (
+        realUnreadIds.length >
+        0
+      ) {
+        try {
+          await batchMarkAsRead(
+            realUnreadIds,
+          );
+        } catch (err) {
+          console.error(
+            "Failed to batch mark notifications as read",
+            err,
+          );
+        }
+      }
+
+      setNotifications(
+        (prev) =>
+          prev.map((n) => ({
+            ...n,
+            isRead: true,
+          })),
+      );
+
+      setUnreadCount(0);
+    };
+
+  const handleDismissNotification =
+    async (
+      notifId: string,
+    ) => {
+      const isMock =
+        typeof notifId ===
+          "string" &&
+        notifId.startsWith(
+          "notif-",
+        );
+
+      if (!isMock) {
+        try {
+          await dismissNotification(
+            notifId,
+          );
+        } catch (err) {
+          console.error(
+            `Failed to dismiss notification ${notifId}`,
+            err,
+          );
+        }
+      }
+
+      setNotifications(
+        (prev) =>
+          prev.filter(
+            (n) =>
+              String(n.id) !==
+              String(notifId),
+          ),
+      );
+
+      const notif =
+        notifications.find(
+          (n) =>
+            String(n.id) ===
+            String(notifId),
+        );
+
+      if (
+        notif &&
+        !notif.isRead
+      ) {
+        setUnreadCount(
+          (prev) =>
+            Math.max(
+              0,
+              prev - 1,
+            ),
+        );
+      }
+    };
+
+  const handleToastNavigate =
+    (jobId: string | number) => {
+      const matchingNotif =
+        notifications.find(
+          (n) =>
+            String(n.jobId) ===
+              String(jobId) ||
+            String(n.id) ===
+              String(jobId),
+        );
+
+      if (matchingNotif) {
+        setSelectedNotification(
+          matchingNotif,
+        );
+
+        setSelectedJobDetail(
+          matchingNotif.job ||
+            null,
+        );
+
+        setIsNotificationDrawerOpen(
+          false,
+        );
+      } else {
+        const tempNotif: NotificationItem =
+          {
+            id: `notif-temp-${Date.now()}`,
+            type: "JOB_ASSIGNED",
+            title: "Job Notification",
+            message:
+              "Details for job #" +
+              jobId,
+            isRead: true,
+            createdAt:
+              new Date().toISOString(),
+            jobId,
+            job: {
+              id: jobId,
+              title:
+                "Dispatch Assignment",
+              description:
+                "Scheduled dispatch details for job #" +
+                jobId,
+              location:
+                "Chennai Site",
+              priority:
+                "MEDIUM",
+              customer_name:
+                "Customer",
+              customer_phone:
+                "+91 9876543210",
+              estimated_value:
+                1500,
+              sla_deadline:
+                new Date(
+                  Date.now() +
+                    2 *
+                      60 *
+                      60 *
+                      1000,
+                ).toISOString(),
+              distance_km: 4.5,
+              required_skills: [],
+            },
+          };
+
+        setSelectedNotification(
+          tempNotif,
+        );
+
+        setSelectedJobDetail(
+          tempNotif.job,
+        );
+
+        setIsNotificationDrawerOpen(
+          false,
+        );
+      }
+    };
+
+  // Mock dispatch events
   const MOCK_EVENTS = [
     {
-      eventType: "job.assigned",
+      eventType:
+        "job.assigned",
       type: "info" as const,
-      title: "Job Assigned",
-      message: "AC Repair Service → Rajesh Kumar",
+      title:
+        "Job Assigned",
+      message:
+        "AC Repair Service → Rajesh Kumar",
       autoDismiss: 5000,
       priority: "normal",
       jobId: 101,
     },
     {
-      eventType: "job.accepted",
+      eventType:
+        "job.accepted",
       type: "success" as const,
-      title: "Job Accepted",
-      message: "Rajesh Kumar accepted AC Repair at ABC Corp",
+      title:
+        "Job Accepted",
+      message:
+        "Rajesh Kumar accepted AC Repair at ABC Corp",
       autoDismiss: 5000,
       priority: "normal",
       jobId: 101,
     },
     {
-      eventType: "job.rejected",
+      eventType:
+        "job.rejected",
       type: "warning" as const,
-      title: "Job Rejected",
-      message: "Vijay Iyer rejected Plumbing — Too far",
+      title:
+        "Job Rejected",
+      message:
+        "Vijay Iyer rejected Plumbing — Too far",
       autoDismiss: 8000,
       priority: "critical",
       jobId: 102,
     },
     {
-      eventType: "job.expired",
+      eventType:
+        "job.expired",
       type: "error" as const,
-      title: "Job Expired",
-      message: "Electrical Repair — Re-dispatching…",
+      title:
+        "Job Expired",
+      message:
+        "Electrical Repair — Re-dispatching…",
       autoDismiss: 10000,
       priority: "critical",
       jobId: 103,
     },
     {
-      eventType: "job.en_route",
+      eventType:
+        "job.en_route",
       type: "info" as const,
-      title: "Tech En Route",
-      message: "Arjun Sharma is en route — ETA 12 min",
+      title:
+        "Tech En Route",
+      message:
+        "Arjun Sharma is en route — ETA 12 min",
       autoDismiss: 5000,
       priority: "normal",
       jobId: 104,
     },
   ];
-  const mockCursorRef = useRef(0);
 
-  const triggerMockNotification = () => {
-    const event = MOCK_EVENTS[mockCursorRef.current % MOCK_EVENTS.length];
-    mockCursorRef.current += 1;
+  const mockCursorRef =
+    useRef(0);
 
-    // Fire as toast
-    // Fire as toast
-    addToast({
-      title: event.title,
-      message: event.message,
-      type: "info",
-      autoDismiss: event.autoDismiss,
-      priority: "low" as any,
-    });
+  const triggerMockNotification =
+    () => {
+      const event =
+        MOCK_EVENTS[
+          mockCursorRef.current %
+            MOCK_EVENTS.length
+        ];
 
-    // Also populate the bell/drawer with an equivalent notification
-    const newNotif: NotificationItem = {
-      id: `notif-${Date.now()}`,
-      type: event.eventType === "job.assigned" ? "JOB_ASSIGNED" : "SYSTEM",
-      title: event.title,
-      message: event.message,
-      isRead: false,
-      createdAt: new Date().toISOString(),
-      jobId: event.jobId,
-      job: {
-        id: event.jobId,
-        title: event.title,
-        description: event.message,
-        location: "Chennai",
-        priority: event.priority === "critical" ? "HIGH" : "MEDIUM",
-        customer_name: "Demo Customer",
-        customer_phone: "+91 9876543210",
-        estimated_value: 2500,
-        sla_deadline: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
-        distance_km: 6.8,
-        required_skills: [],
-      },
+      mockCursorRef.current +=
+        1;
+
+      addToast({
+        title:
+          event.title,
+        message:
+          event.message,
+        type: "info",
+        autoDismiss:
+          event.autoDismiss,
+        priority:
+          "low" as any,
+      });
+
+      const newNotif: NotificationItem =
+        {
+          id: `notif-${Date.now()}`,
+          type:
+            event.eventType ===
+            "job.assigned"
+              ? "JOB_ASSIGNED"
+              : "SYSTEM",
+          title:
+            event.title,
+          message:
+            event.message,
+          isRead: false,
+          createdAt:
+            new Date().toISOString(),
+          jobId:
+            event.jobId,
+          job: {
+            id:
+              event.jobId,
+            title:
+              event.title,
+            description:
+              event.message,
+            location:
+              "Chennai",
+            priority:
+              event.priority ===
+              "critical"
+                ? "HIGH"
+                : "MEDIUM",
+            customer_name:
+              "Demo Customer",
+            customer_phone:
+              "+91 9876543210",
+            estimated_value:
+              2500,
+            sla_deadline:
+              new Date(
+                Date.now() +
+                  2 *
+                    60 *
+                    60 *
+                    1000,
+              ).toISOString(),
+            distance_km:
+              6.8,
+            required_skills:
+              [],
+          },
+        };
+
+      setNotifications(
+        (prev) => [
+          newNotif,
+          ...prev,
+        ],
+      );
+
+      setUnreadCount(
+        (prev) => prev + 1,
+      );
+
+      setIsBellAnimated(
+        true,
+      );
+
+      setTimeout(
+        () =>
+          setIsBellAnimated(
+            false,
+          ),
+        1000,
+      );
     };
-    setNotifications((prev) => [newNotif, ...prev]);
-    setUnreadCount((prev) => prev + 1);
-    setIsBellAnimated(true);
-    setTimeout(() => setIsBellAnimated(false), 1000);
-  };
 
-  const getItemStyle = (tab: string, isSub = false) => {
-    const active = activeTab === tab;
+  const getItemStyle = (
+    tab: string,
+    isSub = false,
+  ) => {
+    const active =
+      activeTab === tab;
+
     let base = {
       ...styles.navItem,
-      ...(isMobileLayout ? styles.navItemMobile : {}),
-      ...(!isMobileLayout && sidebarCollapsed ? styles.navItemCollapsed : {}),
-      ...(isSub ? { fontSize: "13px", padding: "5px 6px" } : {}),
+      ...(isMobileLayout
+        ? styles.navItemMobile
+        : {}),
+      ...(!isMobileLayout &&
+      sidebarCollapsed
+        ? styles.navItemCollapsed
+        : {}),
+      ...(isSub
+        ? {
+            fontSize:
+              "13px",
+            padding:
+              "5px 6px",
+          }
+        : {}),
     };
+
     if (active) {
       base = {
         ...base,
         ...styles.navActive,
-        ...(isMobileLayout ? styles.navActiveMobile : {}),
+        ...(isMobileLayout
+          ? styles.navActiveMobile
+          : {}),
       };
     }
+
     return base;
   };
 
   return (
     <div style={styles.appShell}>
-      <style>{localCss}</style>
+      <style>
+        {localCss}
+      </style>
+
       <aside
         style={
           isMobileLayout
             ? styles.sidebarMobile
             : sidebarCollapsed
-              ? { ...styles.sidebar, ...styles.sidebarCollapsed }
+              ? {
+                  ...styles.sidebar,
+                  ...styles.sidebarCollapsed,
+                }
               : styles.sidebar
         }
       >
@@ -1106,18 +1624,32 @@ function AppInner() {
           className="sidebar-toggle-style"
           style={
             isMobileLayout
-              ? { display: "none" }
+              ? {
+                  display:
+                    "none",
+                }
               : sidebarCollapsed
-                ? { ...styles.sidebarToggle, ...styles.sidebarToggleCollapsed }
+                ? {
+                    ...styles.sidebarToggle,
+                    ...styles.sidebarToggleCollapsed,
+                  }
                 : styles.sidebarToggle
           }
-          onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+          onClick={() =>
+            setSidebarCollapsed(
+              !sidebarCollapsed,
+            )
+          }
           aria-label="Toggle sidebar"
         >
           {sidebarCollapsed ? (
-            <ChevronsRight size={18} />
+            <ChevronsRight
+              size={18}
+            />
           ) : (
-            <ChevronsLeft size={18} />
+            <ChevronsLeft
+              size={18}
+            />
           )}
         </button>
 
@@ -1125,106 +1657,220 @@ function AppInner() {
           className="sidebar-content-style"
           style={{
             ...styles.sidebarContent,
-            ...(isMobileLayout ? styles.sidebarContentMobile : {}),
-            ...(!isMobileLayout && sidebarCollapsed
+            ...(isMobileLayout
+              ? styles.sidebarContentMobile
+              : {}),
+            ...(!isMobileLayout &&
+            sidebarCollapsed
               ? styles.sidebarContentCollapsed
               : {}),
           }}
         >
           <div
-            style={isMobileLayout ? { display: "none" } : styles.sidebarBrand}
+            style={
+              isMobileLayout
+                ? {
+                    display:
+                      "none",
+                  }
+                : styles.sidebarBrand
+            }
           >
-            <div style={styles.brandLogoWrap}>
-              <img src={logo} alt="FieldOps Logo" style={styles.brandLogoImg} />
+            <div
+              style={
+                styles.brandLogoWrap
+              }
+            >
+              <img
+                src={logo}
+                alt="FieldOps Logo"
+                style={
+                  styles.brandLogoImg
+                }
+              />
             </div>
           </div>
 
           {isTechnician ? (
             <nav
               style={
-                isMobileLayout ? styles.sidebarNavMobile : styles.sidebarNav
+                isMobileLayout
+                  ? styles.sidebarNavMobile
+                  : styles.sidebarNav
               }
             >
               <span
                 style={
-                 isMobileLayout || sidebarCollapsed
-                    ? { display: "none" }
+                  isMobileLayout ||
+                  sidebarCollapsed
+                    ? {
+                        display:
+                          "none",
+                      }
                     : styles.navGroupLabel
                 }
               >
                 TECHNICIAN
               </span>
+
               <button
                 className="nav-item-style"
-                style={getItemStyle("tech_dashboard")}
-                onClick={() => handleTabChange("tech_dashboard")}
+                style={getItemStyle(
+                  "tech_dashboard",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "tech_dashboard",
+                  )
+                }
               >
-                <LayoutDashboard size={18} style={{ flexShrink: 0 }} />
+                <LayoutDashboard
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
                 <span
                   className="nav-text"
-                  style={sidebarCollapsed ? { display: "none" } : {}}
+                  style={
+                    sidebarCollapsed
+                      ? {
+                          display:
+                            "none",
+                        }
+                      : {}
+                  }
                 >
                   Dashboard
                 </span>
               </button>
+
               <button
                 className="nav-item-style"
-                style={getItemStyle("tech_jobs")}
-                onClick={() => handleTabChange("tech_jobs")}
+                style={getItemStyle(
+                  "tech_jobs",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "tech_jobs",
+                  )
+                }
               >
-                <Briefcase size={18} style={{ flexShrink: 0 }} />
+                <Briefcase
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
                 <span
                   className="nav-text"
                   style={
-                     sidebarCollapsed
-                      ? { display: "none" }
+                    sidebarCollapsed
+                      ? {
+                          display:
+                            "none",
+                        }
                       : {}
                   }
                 >
                   Assigned Jobs
                 </span>
               </button>
+
               <button
                 className="nav-item-style"
-                style={getItemStyle("tech_history")}
-                onClick={() => handleTabChange("tech_history")}
+                style={getItemStyle(
+                  "tech_history",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "tech_history",
+                  )
+                }
               >
-                <History size={18} style={{ flexShrink: 0 }} />
+                <History
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
                 <span
                   className="nav-text"
                   style={
-                     sidebarCollapsed
-                      ? { display: "none" }
+                    sidebarCollapsed
+                      ? {
+                          display:
+                            "none",
+                        }
                       : {}
                   }
                 >
                   Job History
                 </span>
               </button>
+
               <button
                 className="nav-item-style"
-                style={getItemStyle("tech_billing_reports")}
-                onClick={() => handleTabChange("tech_billing_reports")}
+                style={getItemStyle(
+                  "tech_billing_reports",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "tech_billing_reports",
+                  )
+                }
               >
-                <FileText size={18} style={{ flexShrink: 0 }} />
-                <span
-                  className="nav-text"
-                  style={sidebarCollapsed ? { display: "none" } : {}}
-                >
-                  Billing Report
-                </span>
-              </button>
-              <button
-                className="nav-item-style"
-                style={getItemStyle("tech_notifications")}
-                onClick={() => handleTabChange("tech_notifications")}
-              >
-                <BellRing size={18} style={{ flexShrink: 0 }} />
+                <FileText
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
                 <span
                   className="nav-text"
                   style={
                     sidebarCollapsed
-                      ? { display: "none" }
+                      ? {
+                          display:
+                            "none",
+                        }
+                      : {}
+                  }
+                >
+                  Billing Report
+                </span>
+              </button>
+
+              <button
+                className="nav-item-style"
+                style={getItemStyle(
+                  "tech_notifications",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "tech_notifications",
+                  )
+                }
+              >
+                <BellRing
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
+                <span
+                  className="nav-text"
+                  style={
+                    sidebarCollapsed
+                      ? {
+                          display:
+                            "none",
+                        }
                       : {}
                   }
                 >
@@ -1235,148 +1881,290 @@ function AppInner() {
           ) : isCustomer ? (
             <nav
               style={
-                isMobileLayout ? styles.sidebarNavMobile : styles.sidebarNav
+                isMobileLayout
+                  ? styles.sidebarNavMobile
+                  : styles.sidebarNav
               }
             >
               <span
                 style={
-                  isMobileLayout || sidebarCollapsed
-                    ? { display: "none" }
+                  isMobileLayout ||
+                  sidebarCollapsed
+                    ? {
+                        display:
+                          "none",
+                      }
                     : styles.navGroupLabel
                 }
               >
                 CUSTOMER PORTAL
               </span>
+
               <button
                 className="nav-item-style"
-                style={getItemStyle("cust_dashboard")}
-                onClick={() => handleTabChange("cust_dashboard")}
+                style={getItemStyle(
+                  "cust_dashboard",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "cust_dashboard",
+                  )
+                }
               >
-                <LayoutDashboard size={18} style={{ flexShrink: 0 }} />
+                <LayoutDashboard
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
                 <span
                   className="nav-text"
                   style={
-                    isMobileLayout || sidebarCollapsed
-                      ? { display: "none" }
+                    isMobileLayout ||
+                    sidebarCollapsed
+                      ? {
+                          display:
+                            "none",
+                        }
                       : {}
                   }
                 >
                   Dashboard
                 </span>
               </button>
+
               <button
                 className="nav-item-style"
-                style={getItemStyle("cust_profile")}
-                onClick={() => handleTabChange("cust_profile")}
+                style={getItemStyle(
+                  "cust_profile",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "cust_profile",
+                  )
+                }
               >
-                <User size={18} style={{ flexShrink: 0 }} />
+                <User
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
                 <span
                   className="nav-text"
                   style={
-                    isMobileLayout || sidebarCollapsed
-                      ? { display: "none" }
+                    isMobileLayout ||
+                    sidebarCollapsed
+                      ? {
+                          display:
+                            "none",
+                        }
                       : {}
                   }
                 >
                   My Profile
                 </span>
               </button>
+
               <button
                 className="nav-item-style"
-                style={getItemStyle("cust_create_request")}
-                onClick={() => handleTabChange("cust_create_request")}
+                style={getItemStyle(
+                  "cust_create_request",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "cust_create_request",
+                  )
+                }
               >
-                <PlusCircle size={18} style={{ flexShrink: 0 }} />
+                <PlusCircle
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
                 <span
                   className="nav-text"
                   style={
-                    isMobileLayout || sidebarCollapsed
-                      ? { display: "none" }
+                    isMobileLayout ||
+                    sidebarCollapsed
+                      ? {
+                          display:
+                            "none",
+                        }
                       : {}
                   }
                 >
                   New Request
                 </span>
               </button>
+
               <button
                 className="nav-item-style"
-                style={getItemStyle("cust_requests")}
-                onClick={() => handleTabChange("cust_requests")}
+                style={getItemStyle(
+                  "cust_requests",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "cust_requests",
+                  )
+                }
               >
-                <FileText size={18} style={{ flexShrink: 0 }} />
+                <FileText
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
                 <span
                   className="nav-text"
                   style={
-                    isMobileLayout || sidebarCollapsed
-                      ? { display: "none" }
+                    isMobileLayout ||
+                    sidebarCollapsed
+                      ? {
+                          display:
+                            "none",
+                        }
                       : {}
                   }
                 >
                   My Requests
                 </span>
               </button>
+
               <button
                 className="nav-item-style"
-                style={getItemStyle("cust_tracking")}
-                onClick={() => handleTabChange("cust_tracking")}
+                style={getItemStyle(
+                  "cust_tracking",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "cust_tracking",
+                  )
+                }
               >
-                <Navigation size={18} style={{ flexShrink: 0 }} />
+                <Navigation
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
                 <span
                   className="nav-text"
                   style={
-                    isMobileLayout || sidebarCollapsed
-                      ? { display: "none" }
+                    isMobileLayout ||
+                    sidebarCollapsed
+                      ? {
+                          display:
+                            "none",
+                        }
                       : {}
                   }
                 >
                   Job Tracking
                 </span>
               </button>
+
               <button
                 className="nav-item-style"
-                style={getItemStyle("cust_notifications")}
-                onClick={() => handleTabChange("cust_notifications")}
+                style={getItemStyle(
+                  "cust_notifications",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "cust_notifications",
+                  )
+                }
               >
-                <BellRing size={18} style={{ flexShrink: 0 }} />
+                <BellRing
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
                 <span
                   className="nav-text"
                   style={
-                    isMobileLayout || sidebarCollapsed
-                      ? { display: "none" }
+                    isMobileLayout ||
+                    sidebarCollapsed
+                      ? {
+                          display:
+                            "none",
+                        }
                       : {}
                   }
                 >
                   Notifications
                 </span>
               </button>
+
               <button
                 className="nav-item-style"
-                style={getItemStyle("cust_history")}
-                onClick={() => handleTabChange("cust_history")}
+                style={getItemStyle(
+                  "cust_history",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "cust_history",
+                  )
+                }
               >
-                <History size={18} style={{ flexShrink: 0 }} />
+                <History
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
                 <span
                   className="nav-text"
                   style={
-                    isMobileLayout || sidebarCollapsed
-                      ? { display: "none" }
+                    isMobileLayout ||
+                    sidebarCollapsed
+                      ? {
+                          display:
+                            "none",
+                        }
                       : {}
                   }
                 >
                   Service History
                 </span>
               </button>
+
               <button
                 className="nav-item-style"
-                style={getItemStyle("cust_settings")}
-                onClick={() => handleTabChange("cust_settings")}
+                style={getItemStyle(
+                  "cust_settings",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "cust_settings",
+                  )
+                }
               >
-                <Settings size={18} style={{ flexShrink: 0 }} />
+                <Settings
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
                 <span
                   className="nav-text"
                   style={
-                    isMobileLayout || sidebarCollapsed
-                      ? { display: "none" }
+                    isMobileLayout ||
+                    sidebarCollapsed
+                      ? {
+                          display:
+                            "none",
+                        }
                       : {}
                   }
                 >
@@ -1387,13 +2175,19 @@ function AppInner() {
           ) : (
             <nav
               style={
-                isMobileLayout ? styles.sidebarNavMobile : styles.sidebarNav
+                isMobileLayout
+                  ? styles.sidebarNavMobile
+                  : styles.sidebarNav
               }
             >
               <span
                 style={
-                  isMobileLayout || sidebarCollapsed
-                    ? { display: "none" }
+                  isMobileLayout ||
+                  sidebarCollapsed
+                    ? {
+                        display:
+                          "none",
+                      }
                     : styles.navGroupLabel
                 }
               >
@@ -1402,15 +2196,31 @@ function AppInner() {
 
               <button
                 className="nav-item-style"
-                style={getItemStyle("dashboard")}
-                onClick={() => handleTabChange("dashboard")}
+                style={getItemStyle(
+                  "dashboard",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "dashboard",
+                  )
+                }
               >
-                <LayoutDashboard size={18} style={{ flexShrink: 0 }} />
+                <LayoutDashboard
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
                 <span
                   className="nav-text"
                   style={
-                    isMobileLayout || sidebarCollapsed
-                      ? { display: "none" }
+                    isMobileLayout ||
+                    sidebarCollapsed
+                      ? {
+                          display:
+                            "none",
+                        }
                       : {}
                   }
                 >
@@ -1420,15 +2230,31 @@ function AppInner() {
 
               <button
                 className="nav-item-style"
-                style={getItemStyle("jobs")}
-                onClick={() => handleTabChange("jobs")}
+                style={getItemStyle(
+                  "jobs",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "jobs",
+                  )
+                }
               >
-                <Briefcase size={18} style={{ flexShrink: 0 }} />
+                <Briefcase
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
                 <span
                   className="nav-text"
                   style={
-                    isMobileLayout || sidebarCollapsed
-                      ? { display: "none" }
+                    isMobileLayout ||
+                    sidebarCollapsed
+                      ? {
+                          display:
+                            "none",
+                        }
                       : {}
                   }
                 >
@@ -1438,33 +2264,66 @@ function AppInner() {
 
               <button
                 className="nav-item-style"
-                style={getItemStyle("techboard")}
-                onClick={() => handleTabChange("techboard")}
+                style={getItemStyle(
+                  "techboard",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "techboard",
+                  )
+                }
               >
-                <Users size={18} style={{ flexShrink: 0 }} />
+                <Users
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
                 <span
                   className="nav-text"
                   style={
-                    isMobileLayout || sidebarCollapsed
-                      ? { display: "none" }
+                    isMobileLayout ||
+                    sidebarCollapsed
+                      ? {
+                          display:
+                            "none",
+                        }
                       : {}
                   }
                 >
                   Technicians
                 </span>
               </button>
+
               {!isDispatcher && (
                 <button
                   className="nav-item-style"
-                  style={getItemStyle("dispatchers")}
-                  onClick={() => handleTabChange("dispatchers")}
+                  style={getItemStyle(
+                    "dispatchers",
+                  )}
+                  onClick={() =>
+                    handleTabChange(
+                      "dispatchers",
+                    )
+                  }
                 >
-                  <Users size={18} style={{ flexShrink: 0 }} />
+                  <Users
+                    size={18}
+                    style={{
+                      flexShrink: 0,
+                    }}
+                  />
+
                   <span
                     className="nav-text"
                     style={
-                      isMobileLayout || sidebarCollapsed
-                        ? { display: "none" }
+                      isMobileLayout ||
+                      sidebarCollapsed
+                        ? {
+                            display:
+                              "none",
+                          }
                         : {}
                     }
                   >
@@ -1475,15 +2334,31 @@ function AppInner() {
 
               <button
                 className="nav-item-style"
-                style={getItemStyle("planning")}
-                onClick={() => handleTabChange("planning")}
+                style={getItemStyle(
+                  "planning",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "planning",
+                  )
+                }
               >
-                <Calendar size={18} style={{ flexShrink: 0 }} />
+                <Calendar
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
                 <span
                   className="nav-text"
                   style={
-                    isMobileLayout || sidebarCollapsed
-                      ? { display: "none" }
+                    isMobileLayout ||
+                    sidebarCollapsed
+                      ? {
+                          display:
+                            "none",
+                        }
                       : {}
                   }
                 >
@@ -1493,15 +2368,31 @@ function AppInner() {
 
               <button
                 className="nav-item-style"
-                style={getItemStyle("tracking")}
-                onClick={() => handleTabChange("tracking")}
+                style={getItemStyle(
+                  "tracking",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "tracking",
+                  )
+                }
               >
-                <Activity size={18} style={{ flexShrink: 0 }} />
+                <Activity
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
                 <span
                   className="nav-text"
                   style={
-                    isMobileLayout || sidebarCollapsed
-                      ? { display: "none" }
+                    isMobileLayout ||
+                    sidebarCollapsed
+                      ? {
+                          display:
+                            "none",
+                        }
                       : {}
                   }
                 >
@@ -1511,72 +2402,156 @@ function AppInner() {
             </nav>
           )}
 
-          {/* Active tech switcher and demo controls for Admin/Dispatcher */}
+          {/* Active tech switcher and demo controls */}
           {isAdminOrDispatcher && (
             <div
               style={
-                isMobileLayout || sidebarCollapsed
-                  ? { display: "none" }
+                isMobileLayout ||
+                sidebarCollapsed
+                  ? {
+                      display:
+                        "none",
+                    }
                   : styles.sidebarSimulationControls
               }
-              onMouseEnter={ensureActiveTechLoaded}
+              onMouseEnter={
+                ensureActiveTechLoaded
+              }
             >
-              <div style={styles.simulationCard}>
-                <div style={styles.simulationHeader}>
-                  <div style={styles.simulationTitleWrap}>
+              <div
+                style={
+                  styles.simulationCard
+                }
+              >
+                <div
+                  style={
+                    styles.simulationHeader
+                  }
+                >
+                  <div
+                    style={
+                      styles.simulationTitleWrap
+                    }
+                  >
                     <FlaskConical
                       size={14}
                       color="#0F9D58"
-                      style={{ flexShrink: 0 }}
+                      style={{
+                        flexShrink: 0,
+                      }}
                     />
-                    <span style={styles.simulationTitle}>Simulation Lab</span>
+
+                    <span
+                      style={
+                        styles.simulationTitle
+                      }
+                    >
+                      Simulation Lab
+                    </span>
                   </div>
                 </div>
 
                 <div
                   style={{
-                    display: "flex",
-                    flexDirection: "column",
+                    display:
+                      "flex",
+                    flexDirection:
+                      "column",
                     gap: "4px",
                   }}
                 >
-                  <span style={styles.simulationLabel}>
+                  <span
+                    style={
+                      styles.simulationLabel
+                    }
+                  >
                     Simulated Technician
                   </span>
-                  <div style={styles.dropdownWrapper}>
-                    <div style={styles.userCircle}>
-                      <User size={12} color="#0F9D58" />
+
+                  <div
+                    style={
+                      styles.dropdownWrapper
+                    }
+                  >
+                    <div
+                      style={
+                        styles.userCircle
+                      }
+                    >
+                      <User
+                        size={12}
+                        color="#0F9D58"
+                      />
                     </div>
-                    {techList.length === 0 ? (
+
+                    {techList.length ===
+                    0 ? (
                       <select
-                        style={styles.simulationSelect}
-                        onClick={ensureActiveTechLoaded}
-                        onFocus={ensureActiveTechLoaded}
+                        style={
+                          styles.simulationSelect
+                        }
+                        onClick={
+                          ensureActiveTechLoaded
+                        }
+                        onFocus={
+                          ensureActiveTechLoaded
+                        }
                       >
-                        <option>Click to load techs...</option>
+                        <option>
+                          Click to load techs...
+                        </option>
                       </select>
                     ) : (
-                      activeTechId !== null && (
+                      activeTechId !==
+                        null && (
                         <select
-                          style={styles.simulationSelect}
-                          value={activeTechId}
-                          onChange={(e) => setActiveTechId(e.target.value)}
+                          style={
+                            styles.simulationSelect
+                          }
+                          value={
+                            activeTechId
+                          }
+                          onChange={(
+                            e,
+                          ) =>
+                            setActiveTechId(
+                              e.target
+                                .value,
+                            )
+                          }
                         >
-                          {techList.map((t) => {
-                            const val = t.tech_id || t.technician_id || t.id;
-                            return (
-                              <option key={val} value={val}>
-                                {t.technician_name || t.name}
-                              </option>
-                            );
-                          })}
+                          {techList.map(
+                            (t) => {
+                              const val =
+                                t.tech_id ||
+                                t.technician_id ||
+                                t.id;
+
+                              return (
+                                <option
+                                  key={
+                                    val
+                                  }
+                                  value={
+                                    val
+                                  }
+                                >
+                                  {t.technician_name ||
+                                    t.name}
+                                </option>
+                              );
+                            },
+                          )}
                         </select>
                       )
                     )}
+
                     <ChevronDown
                       size={14}
                       color="#64748B"
-                      style={styles.dropdownChevron}
+                      style={
+                        styles.dropdownChevron
+                      }
                     />
                   </div>
                 </div>
@@ -1584,20 +2559,29 @@ function AppInner() {
                 <button
                   type="button"
                   className="simulate-alert-btn-style"
-                  style={styles.simulateAlertBtn}
+                  style={
+                    styles.simulateAlertBtn
+                  }
                   onClick={() => {
-                    ensureActiveTechLoaded().then(() => {
-                      triggerMockNotification();
-                    });
+                    ensureActiveTechLoaded().then(
+                      () => {
+                        triggerMockNotification();
+                      },
+                    );
                   }}
                   title="Test Notification UI"
                 >
                   <BellRing
                     size={16}
                     color="#FFFFFF"
-                    style={{ flexShrink: 0 }}
+                    style={{
+                      flexShrink: 0,
+                    }}
                   />
-                  <span>Simulate Alert</span>
+
+                  <span>
+                    Simulate Alert
+                  </span>
                 </button>
               </div>
             </div>
@@ -1606,7 +2590,10 @@ function AppInner() {
           <div
             style={
               isMobileLayout
-                ? { display: "none" }
+                ? {
+                    display:
+                      "none",
+                  }
                 : sidebarCollapsed
                   ? styles.sidebarProfileMiniCollapsed
                   : styles.sidebarProfileMini
@@ -1623,27 +2610,61 @@ function AppInner() {
                 )
               }
               style={{
-                display: "flex",
-                alignItems: "center",
+                display:
+                  "flex",
+                alignItems:
+                  "center",
                 gap: "10px",
-                cursor: "pointer",
+                cursor:
+                  "pointer",
                 flex: 1,
                 minWidth: 0,
               }}
               title="Click to open Profile & Settings"
             >
-              <div style={styles.miniAvatar}>
-                {user?.first_name ? user.first_name[0].toUpperCase() : "U"}
+              <div
+                style={
+                  styles.miniAvatar
+                }
+              >
+                {user?.first_name
+                  ? user.first_name[0].toUpperCase()
+                  : "U"}
               </div>
 
               <div
-                style={sidebarCollapsed ? { display: "none" } : styles.miniInfo}
+                style={
+                  sidebarCollapsed
+                    ? {
+                        display:
+                          "none",
+                      }
+                    : styles.miniInfo
+                }
               >
-                <span style={styles.miniName}>
-                  {user ? `${user.first_name} ${user.last_name}` : "User"}
+                <span
+                  style={
+                    styles.miniName
+                  }
+                >
+                  {user
+                    ? `${user.first_name} ${user.last_name}`
+                    : "User"}
                 </span>
-                <span style={styles.miniRole}>
-                  {user ? user.role.replace("_", " ").toUpperCase() : "Role"}
+
+                <span
+                  style={
+                    styles.miniRole
+                  }
+                >
+                  {user
+                    ? user.role
+                        .replace(
+                          "_",
+                          " ",
+                        )
+                        .toUpperCase()
+                    : "Role"}
                 </span>
               </div>
             </div>
@@ -1652,38 +2673,68 @@ function AppInner() {
               style={
                 sidebarCollapsed
                   ? {
-                      marginTop: "12px",
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
+                      marginTop:
+                        "12px",
+                      display:
+                        "flex",
+                      flexDirection:
+                        "column",
+                      alignItems:
+                        "center",
                       gap: "8px",
                     }
                   : {
-                      marginLeft: "auto",
-                      display: "flex",
-                      alignItems: "center",
+                      marginLeft:
+                        "auto",
+                      display:
+                        "flex",
+                      alignItems:
+                        "center",
                       gap: "8px",
                     }
               }
             >
               <button
                 title="Log out"
-                onClick={() => logout()}
+                onClick={() =>
+                  logout()
+                }
                 style={{
-                  background: "none",
-                  border: "none",
-                  color: "#94a3b8",
-                  cursor: "pointer",
-                  padding: "6px",
-                  display: "flex",
-                  alignItems: "center",
-                  borderRadius: "6px",
-                  transition: "color 0.2s",
+                  background:
+                    "none",
+                  border:
+                    "none",
+                  color:
+                    "#94a3b8",
+                  cursor:
+                    "pointer",
+                  padding:
+                    "6px",
+                  display:
+                    "flex",
+                  alignItems:
+                    "center",
+                  borderRadius:
+                    "6px",
+                  transition:
+                    "color 0.2s",
                 }}
-                onMouseEnter={(e) => (e.currentTarget.style.color = "#ef4444")}
-                onMouseLeave={(e) => (e.currentTarget.style.color = "#94a3b8")}
+                onMouseEnter={(
+                  e,
+                ) =>
+                  (e.currentTarget.style.color =
+                    "#ef4444")
+                }
+                onMouseLeave={(
+                  e,
+                ) =>
+                  (e.currentTarget.style.color =
+                    "#94a3b8")
+                }
               >
-                <LogOut size={18} />
+                <LogOut
+                  size={18}
+                />
               </button>
             </div>
           </div>
@@ -1693,160 +2744,411 @@ function AppInner() {
       <div
         style={
           isMobileLayout
-            ? { ...styles.mainArea, ...styles.mainAreaMobile }
+            ? {
+                ...styles.mainArea,
+                ...styles.mainAreaMobile,
+              }
             : styles.mainArea
         }
       >
         <main
           style={{
             ...styles.pageWrap,
-            ...(isMobileLayout ? styles.pageWrapMobile : {}),
-            overflowY: activeTab === "dashboard" ? "auto" : "hidden",
+            ...(isMobileLayout
+              ? styles.pageWrapMobile
+              : {}),
+            overflowY:
+              activeTab ===
+              "dashboard"
+                ? "auto"
+                : "hidden",
           }}
         >
-          {/* Selected Notification Detail view */}
           {selectedNotification && (
             <NotificationDetail
-              notification={selectedNotification as any}
-              job={selectedJobDetail}
-              onAccept={handleAcceptJob}
-              onReject={handleRejectJob}
-              onReassign={handleReassignJob}
+              notification={
+                selectedNotification as any
+              }
+              job={
+                selectedJobDetail
+              }
+              onAccept={
+                handleAcceptJob
+              }
+              onReject={
+                handleRejectJob
+              }
+              onReassign={
+                handleReassignJob
+              }
               onClose={() => {
-                setSelectedNotification(null);
-                setSelectedJobDetail(null);
+                setSelectedNotification(
+                  null,
+                );
+                setSelectedJobDetail(
+                  null,
+                );
               }}
             />
           )}
 
           {isNavigating ? (
             <LoadingSpinner
-              message={getLoadingMessage(activeTab)}
+              message={getLoadingMessage(
+                activeTab,
+              )}
               fullPage={true}
             />
           ) : (
             <Suspense
               fallback={
-                <LoadingSpinner message="Loading page..." fullPage={true} />
+                <LoadingSpinner
+                  message="Loading page..."
+                  fullPage={true}
+                />
               }
             >
-              {/* Admin / Dispatcher Tabs */}
-              {activeTab === "dashboard" && (
+              {activeTab ===
+                "dashboard" && (
                 <DashboardPage
-                  onViewTab={(tab) => handleTabChange(tab)}
-                  unreadCount={unreadCount}
-                  isBellAnimated={isBellAnimated}
+                  onViewTab={(
+                    tab,
+                  ) =>
+                    handleTabChange(
+                      tab,
+                    )
+                  }
+                  unreadCount={
+                    unreadCount
+                  }
+                  isBellAnimated={
+                    isBellAnimated
+                  }
                   onOpenBellDrawer={() => {
-                    setIsNotificationDrawerOpen(true);
+                    setIsNotificationDrawerOpen(
+                      true,
+                    );
                     ensureActiveTechLoaded();
                   }}
                 />
               )}
-              {activeTab === "jobs" && <JobsPage />}
-              {activeTab === "techboard" && <TechDashboardPage />}
-              {activeTab === "dispatchers" && <DispatcherPage />}
-              {activeTab === "planning" && <PlanningPage />}
-              {activeTab === "tracking" && <TrackingDashboardPage />}
-              {activeTab === "profile" && <ProfilePage />}
 
-              {/* Technician Portal Tabs */}
-              {activeTab === "tech_dashboard" && (
-                <TechnicianPortalDashboard onNavigate={handleTabChange} />
+              {activeTab ===
+                "jobs" && (
+                <JobsPage />
               )}
-              {activeTab === "tech_profile" && <TechnicianProfilePage />}
-              {activeTab === "tech_jobs" && <TechnicianJobsPage />}
-              {activeTab === "tech_history" && <TechnicianJobHistoryPage />}
-              {activeTab === "tech_billing_reports" && (
+
+              {activeTab ===
+                "techboard" && (
+                <TechDashboardPage />
+              )}
+
+              {activeTab ===
+                "dispatchers" && (
+                <DispatcherPage />
+              )}
+
+              {activeTab ===
+                "planning" && (
+                <PlanningPage />
+              )}
+
+              {activeTab ===
+                "tracking" && (
+                <TrackingDashboardPage />
+              )}
+
+              {activeTab ===
+                "profile" && (
+                <ProfilePage />
+              )}
+
+              {activeTab ===
+                "tech_dashboard" && (
+                <TechnicianPortalDashboard
+                  onNavigate={
+                    handleTabChange
+                  }
+                />
+              )}
+
+              {activeTab ===
+                "tech_profile" && (
+                <TechnicianProfilePage />
+              )}
+
+              {activeTab ===
+                "tech_jobs" && (
+                <TechnicianJobsPage />
+              )}
+
+              {activeTab ===
+                "tech_history" && (
+                <TechnicianJobHistoryPage />
+              )}
+
+              {activeTab ===
+                "tech_billing_reports" && (
                 <TechnicianBillingReportPage />
               )}
-              {activeTab === "tech_notifications" && (
+
+              {activeTab ===
+                "tech_notifications" && (
                 <TechnicianNotificationsPage />
               )}
-              {activeTab === "tech_settings" && <TechnicianSettingsPage />}
 
-              {/* Customer Portal Tabs */}
-              {activeTab === "cust_dashboard" && (
-                <CustomerPortalDashboard onNavigate={handleTabChange} />
+              {activeTab ===
+                "tech_settings" && (
+                <TechnicianSettingsPage />
               )}
-              {activeTab === "cust_profile" && <CustomerProfilePage />}
 
-              {activeTab === "cust_create_request" && (
+              {activeTab ===
+                "cust_dashboard" && (
+                <CustomerPortalDashboard
+                  onNavigate={
+                    handleTabChange
+                  }
+                />
+              )}
+
+              {activeTab ===
+                "cust_profile" && (
+                <CustomerProfilePage />
+              )}
+
+              {activeTab ===
+                "cust_create_request" && (
                 <CustomerServiceRequestsPage
                   createOnly={true}
-                  onNavigate={handleTabChange}
+                  onNavigate={
+                    handleTabChange
+                  }
                 />
               )}
 
-              {activeTab === "cust_requests" && (
+              {activeTab ===
+                "cust_requests" && (
                 <CustomerServiceRequestsPage
                   createOnly={false}
-                  onNavigate={handleTabChange}
+                  onNavigate={
+                    handleTabChange
+                  }
                 />
               )}
 
-              {activeTab === "cust_tracking" && <CustomerJobTrackingPage />}
-              {activeTab === "cust_notifications" && (
+              {activeTab ===
+                "cust_tracking" && (
+                <CustomerJobTrackingPage />
+              )}
+
+              {activeTab ===
+                "cust_notifications" && (
                 <CustomerNotificationsPage />
               )}
-              {activeTab === "cust_history" && <CustomerServiceHistoryPage />}
-              {activeTab === "cust_settings" && <CustomerSettingsPage />}
+
+              {activeTab ===
+                "cust_history" && (
+                <CustomerServiceHistoryPage />
+              )}
+
+              {activeTab ===
+                "cust_settings" && (
+                <CustomerSettingsPage />
+              )}
             </Suspense>
           )}
         </main>
       </div>
 
-      {/* Slide-out Drawer */}
       <NotificationDrawer
-        isOpen={isNotificationDrawerOpen}
-        onClose={() => setIsNotificationDrawerOpen(false)}
-        notifications={notifications as any}
-        onNotificationClick={handleNotificationClick}
-        onMarkAllAsRead={handleMarkAllAsRead}
-        onDismissNotification={handleDismissNotification}
+        isOpen={
+          isNotificationDrawerOpen
+        }
+        onClose={() =>
+          setIsNotificationDrawerOpen(
+            false,
+          )
+        }
+        notifications={
+          notifications as any
+        }
+        onNotificationClick={
+          handleNotificationClick
+        }
+        onMarkAllAsRead={
+          handleMarkAllAsRead
+        }
+        onDismissNotification={
+          handleDismissNotification
+        }
       />
 
-      {/* Real-time toast overlay */}
-      <ToastContainer onNavigate={handleToastNavigate} />
+      <ToastContainer
+        onNavigate={
+          handleToastNavigate
+        }
+      />
     </div>
   );
 }
 
-// Wrap with ToastProvider & Auth check at the root
+// ─────────────────────────────────────────────
+// Authentication wrapper
+// ─────────────────────────────────────────────
+//
+// Supports both:
+//
+// 1. Normal JWT/localStorage authentication
+// 2. Enterprise SSO/HttpOnly cookie authentication
+//
+// For SSO:
+//
+//   /auth/sso/callback
+//          ↓
+//   HttpOnly cookie
+//          ↓
+//   loadFromSession()
+//          ↓
+//   GET /auth/me
+//          ↓
+//   Zustand user
+//          ↓
+//   AppInner
+// ─────────────────────────────────────────────
+
 function AppContent() {
-  const { isAuthenticated, loadFromStorage } = useAuthStore();
-  const [showOnboarding, setShowOnboarding] = useState(false);
+  const {
+    isAuthenticated,
+    isLoading,
+    loadFromStorage,
+    loadFromSession,
+  } = useAuthStore();
+
+  const [
+    showOnboarding,
+    setShowOnboarding,
+  ] = useState(false);
 
   useEffect(() => {
-    loadFromStorage();
-  }, [loadFromStorage]);
+    let mounted = true;
 
+    const initializeAuthentication =
+      async () => {
+        /*
+         * First check normal JWT authentication.
+         */
+        loadFromStorage();
+
+        /*
+         * Get the latest Zustand state.
+         */
+        const currentState =
+          useAuthStore.getState();
+
+        /*
+         * Normal login session already exists.
+         */
+        if (
+          currentState.isAuthenticated
+        ) {
+          return;
+        }
+
+        /*
+         * No local JWT session.
+         *
+         * Check whether the backend has
+         * an active SSO HttpOnly cookie.
+         */
+        await loadFromSession();
+
+        if (!mounted) {
+          return;
+        }
+      };
+
+    initializeAuthentication();
+
+    return () => {
+      mounted = false;
+    };
+  }, [
+    loadFromStorage,
+    loadFromSession,
+  ]);
+
+  /*
+   * Hide onboarding after successful login.
+   */
   useEffect(() => {
     if (isAuthenticated) {
-      setShowOnboarding(false);
+      setShowOnboarding(
+        false,
+      );
     }
   }, [isAuthenticated]);
 
-  // Show organization onboarding page
-  if (!isAuthenticated && showOnboarding) {
+  /*
+   * Prevent the login page from flashing while
+   * the browser session is being checked.
+   */
+  if (isLoading) {
     return (
-      <Suspense fallback={<LoadingSpinner />}>
+      <LoadingSpinner
+        message="Checking authentication..."
+        fullPage={true}
+      />
+    );
+  }
+
+  /*
+   * Organization onboarding.
+   */
+  if (
+    !isAuthenticated &&
+    showOnboarding
+  ) {
+    return (
+      <Suspense
+        fallback={
+          <LoadingSpinner />
+        }
+      >
         <OrganizationOnboardingPage
-          onBackToLogin={() => setShowOnboarding(false)}
+          onBackToLogin={() =>
+            setShowOnboarding(
+              false,
+            )
+          }
         />
       </Suspense>
     );
   }
 
-  // Show login page
+  /*
+   * Login page.
+   */
   if (!isAuthenticated) {
     return (
-      <Suspense fallback={<LoadingSpinner />}>
-        <LoginPage onCreateOrganization={() => setShowOnboarding(true)} />
+      <Suspense
+        fallback={
+          <LoadingSpinner />
+        }
+      >
+        <LoginPage
+          onCreateOrganization={() =>
+            setShowOnboarding(
+              true,
+            )
+          }
+        />
       </Suspense>
     );
   }
 
-  // User is authenticated
+  /*
+   * Authenticated user.
+   */
   return <AppInner />;
 }
 
@@ -1859,3 +3161,4 @@ function App() {
 }
 
 export default App;
+

@@ -47,6 +47,26 @@ class RedisCacheManager:
     def delete(self, key: str) -> bool:
         result = self._execute_with_retry(self.client.delete, key)
         return result is not None
+    def get_and_delete(self, key: str) -> Optional[str]:
+        """
+        Atomically get and delete a Redis key.
+
+        Used for one-time MFA challenges to prevent replay attacks.
+        """
+        script = """
+        local value = redis.call('GET', KEYS[1])
+        if value then
+            redis.call('DEL', KEYS[1])
+        end
+        return value
+        """
+
+        return self._execute_with_retry(
+            self.client.eval,
+            script,
+            1,
+            key,
+        )
 
     def incr(self, key: str, amount: int = 1) -> Optional[int]:
         return self._execute_with_retry(self.client.incrby, key, amount)

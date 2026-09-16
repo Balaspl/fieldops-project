@@ -12,6 +12,13 @@ import re
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+MIN_PASSWORD_LENGTH = 8
+MAX_PASSWORD_LENGTH = 128
+
+REQUIRE_UPPERCASE = True
+REQUIRE_LOWERCASE = True
+REQUIRE_DIGIT = True
+REQUIRE_SPECIAL = True
 
 def hash_password(password: str) -> str:
     """Hash a plaintext password using bcrypt."""
@@ -44,6 +51,15 @@ def validate_password_strength(password: str) -> None:
     Raises PasswordValidationError if any rule fails.
     """
     errors = []
+    if len(password) < MIN_PASSWORD_LENGTH:
+        errors.append(
+            f"Password must be at least {MIN_PASSWORD_LENGTH} characters long"
+        )
+
+    if len(password) > MAX_PASSWORD_LENGTH:
+        errors.append(
+            f"Password must not exceed {MAX_PASSWORD_LENGTH} characters"
+        )
 
     if len(password) < 8:
         errors.append("Password must be at least 8 characters long")

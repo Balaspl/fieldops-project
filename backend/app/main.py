@@ -27,7 +27,7 @@ from .runtime.metrics import runtime_metrics_collector
 from .services.default_template import seed_default_templates
 from .services.kafka.producer import KafkaProducer
 from app.sentiment.dashboard import router as sentiment_dashboard_router
-from .routes import oauth2
+from .routes import oauth2,sso
 
 scheduler = None
 redis_async_client = None
@@ -327,6 +327,7 @@ app.include_router(message_preview.router)
 app.include_router(sentiment_dashboard_router)
 
 app.include_router(oauth2.router)
+app.include_router(sso.router)
 
 
 # Lifespan events handled via asynccontextmanager lifespan handler

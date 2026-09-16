@@ -70,6 +70,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         "/auth/register": (5, 60),
         "/auth/forgot-password": (3, 300),
         "/auth/refresh": (20, 60),
+        "/auth/sso/login": (20, 60),
+        "/auth/sso/callback": (30, 60),
     }
     DEFAULT_LIMIT = (100, 60)
 
