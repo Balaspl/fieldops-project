@@ -33,6 +33,8 @@ interface Job {
   priority: string;
   status: string;
   preferred_service_date?: string;
+  sla_deadline?: string;
+  is_breached?: boolean;
 }
 
 interface DashboardStats {
@@ -893,6 +895,15 @@ const formatStatus = (status: string): string => {
   return s.charAt(0).toUpperCase() + s.slice(1);
 };
 
+const isJobOverdue = (job: Job): boolean => {
+  return job.is_breached === true;
+};
+
+const isEmergencyJob = (job: Job): boolean => {
+  const priority = (job.priority || "").toUpperCase().trim();
+  return priority === "CRITICAL" || priority === "P1";
+};
+
 interface SegmentedProgressBarProps {
   percentage: number;
   colorClass: string;
@@ -1060,8 +1071,83 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewTab, unreadCount, isBellAni
   if (statsError) {
     return (
       <div style={styles.opsDashboard}>
-        <div style={{ padding: "2rem", textAlign: "center", color: "#ef4444" }}>
-          <strong>Failed to load dashboard data.</strong> Please ensure the backend server is running and refresh the page.
+        <div
+          style={{
+            padding: "3rem 2rem",
+            textAlign: "center",
+            color: "#B91C1C",
+            background: "#FFFFFF",
+            border: "1px solid #FECACA",
+            borderRadius: "12px",
+            boxShadow: "0 2px 6px rgba(47, 79, 62, 0.03)",
+          }}
+        >
+          <AlertCircle
+            size={32}
+            style={{ marginBottom: "10px" }}
+          />
+
+          <div
+            style={{
+              fontSize: "15px",
+              fontWeight: 700,
+              marginBottom: "6px",
+            }}
+          >
+            Failed to load dashboard data
+          </div>
+
+          <div
+            style={{
+              fontSize: "12px",
+              color: "#64748B",
+              marginBottom: "16px",
+            }}
+          >
+            We couldn't retrieve the latest dashboard information.
+            Please try again.
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setStatsError(false);
+              setLoading(true);
+
+              Promise.all([
+                getDashboardStats(timeRange),
+                getJobs(),
+              ])
+                .then(([statsRes, jobsRes]) => {
+                  if (statsRes && statsRes.data) {
+                    setStats(statsRes.data);
+                  }
+
+                  if (jobsRes && jobsRes.data) {
+                    setRecentJobs(jobsRes.data.slice(0, 5));
+                  }
+                })
+                .catch((err) => {
+                  console.error("Dashboard error loading data:", err);
+                  setStatsError(true);
+                })
+                .finally(() => {
+                  setLoading(false);
+                });
+            }}
+            style={{
+              padding: "8px 16px",
+              border: "none",
+              borderRadius: "7px",
+              background: "#2F4F3E",
+              color: "#FFFFFF",
+              fontSize: "12px",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Retry
+          </button>
         </div>
       </div>
     );
@@ -1399,6 +1485,23 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewTab, unreadCount, isBellAni
             </div>
           </div>
           <div className="body-jobs-overview-responsive" style={styles.bodyJobsOverview}>
+            {totalJobsCount === 0 ? (
+              <div
+                style={{
+                  width: "100%",
+                  minHeight: "150px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <EmptyState
+                  title="No jobs available"
+                  description="There are currently no jobs to display for the selected time range."
+                />
+              </div>
+            ) : (
+              <>
             <div style={styles.jobsOverviewLabels}>
               <div style={styles.overviewRow}>
                 <span style={{ ...styles.indicatorBadge, background: "#10B981" }}><User size={14} strokeWidth={2.5} /></span>
@@ -1497,7 +1600,10 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewTab, unreadCount, isBellAni
                 </g>
               </svg>
             </div>
+            </>
+            )}
           </div>
+          
           <div className="footer-green" style={styles.opsCardFooter}>
             <span style={styles.footerStat}>
               <TrendingUp size={16} style={styles.footerIconGreen} /> 12% increase in active jobs vs last week
@@ -1520,43 +1626,68 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewTab, unreadCount, isBellAni
               <option value="all">All Time</option>
             </select>
           </div>
-          <div className="gauges-flex-row-responsive" style={{ ...styles.opsCardBody, ...styles.bodyTechAvailability }}>
-            {/* Circle Gauges */}
-            <div className="gauges-flex-row-responsive" style={styles.gaugesFlexRow}>
-              <AnimatedGauge
-                percentage={availablePct}
-                count={techAvailable}
-                label="Available"
-                icon={User}
-                color="#10B981"
-                textColor="#10B981"
-              />
-              <AnimatedGauge
-                percentage={busyPct}
-                count={techBusy}
-                label="On Job / Busy"
-                icon={Users}
-                color="#F97316"
-                textColor="#F97316"
-              />
-              <AnimatedGauge
-                percentage={breakPct}
-                count={techBreak}
-                label="Break"
-                icon={Coffee}
-                color="#8B5CF6"
-                textColor="#8B5CF6"
-              />
-              <AnimatedGauge
-                percentage={offlinePct}
-                count={techOffline}
-                label="Offline"
-                icon={MinusCircle}
-                color="#64748B"
-                textColor="#64748B"
-              />
-            </div>
+          <div
+            className="gauges-flex-row-responsive"
+            style={{ ...styles.opsCardBody, ...styles.bodyTechAvailability }}
+          >
+            {totalTechs === 0 ? (
+              <div
+                style={{
+                  width: "100%",
+                  minHeight: "150px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <EmptyState
+                  title="No technicians available"
+                  description="There are currently no technician availability data to display."
+                />
+              </div>
+            ) : (
+              <div className="gauges-flex-row-responsive" style={styles.gaugesFlexRow}>
+                {/* KEEP ALL FOUR AnimatedGauge COMPONENTS EXACTLY AS THEY ARE */}
+                
+                <AnimatedGauge
+                  percentage={availablePct}
+                  count={techAvailable}
+                  label="Available"
+                  icon={User}
+                  color="#10B981"
+                  textColor="#10B981"
+                />
+
+                <AnimatedGauge
+                  percentage={busyPct}
+                  count={techBusy}
+                  label="On Job / Busy"
+                  icon={Users}
+                  color="#F97316"
+                  textColor="#F97316"
+                />
+
+                <AnimatedGauge
+                  percentage={breakPct}
+                  count={techBreak}
+                  label="Break"
+                  icon={Coffee}
+                  color="#8B5CF6"
+                  textColor="#8B5CF6"
+                />
+
+                <AnimatedGauge
+                  percentage={offlinePct}
+                  count={techOffline}
+                  label="Offline"
+                  icon={MinusCircle}
+                  color="#64748B"
+                  textColor="#64748B"
+                />
+              </div>
+            )}
           </div>
+          
           <div className="footer-blue" style={styles.opsCardFooter}>
             <div style={styles.footerStatContainer}>
               <Users size={18} style={styles.footerIconBlue} />
@@ -1586,47 +1717,96 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewTab, unreadCount, isBellAni
             </select>
           </div>
           <div style={{ ...styles.opsCardBody, ...styles.bodyServiceSplit }}>
-            <div style={styles.categoryBarsList}>
-              {/* Category 1: HVAC */}
-              <div style={styles.categoryBarRow}>
-                <span style={{ ...styles.categoryTagBadge, background: "#02B075" }}><Snowflake size={11} /></span>
-                <span style={styles.categoryLabel}>HVAC</span>
-                <SegmentedProgressBar percentage={hvacPct} colorClass="fill-hvac" />
-                <strong style={styles.categoryValue}>{hvacCount} ({hvacPct}%)</strong>
+            {totalCategories === 0 ? (
+              <div
+                style={{
+                  width: "100%",
+                  minHeight: "150px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <EmptyState
+                  title="No service category data"
+                  description="There are currently no service category data to display."
+                />
               </div>
+            ) : (
+              <div style={styles.categoryBarsList}>
+                {/* Category 1: HVAC */}
+                <div style={styles.categoryBarRow}>
+                  <span style={{ ...styles.categoryTagBadge, background: "#02B075" }}>
+                    <Snowflake size={11} />
+                  </span>
+                  <span style={styles.categoryLabel}>HVAC</span>
+                  <SegmentedProgressBar percentage={hvacPct} colorClass="fill-hvac" />
+                  <strong style={styles.categoryValue}>
+                    {hvacCount} ({hvacPct}%)
+                  </strong>
+                </div>
 
-              {/* Category 2: Electrical */}
-              <div style={styles.categoryBarRow}>
-                <span style={{ ...styles.categoryTagBadge, background: "#2F80ED" }}><Zap size={11} /></span>
-                <span style={styles.categoryLabel}>Electrical</span>
-                <SegmentedProgressBar percentage={electricalPct} colorClass="fill-elec" />
-                <strong style={styles.categoryValue}>{electricalCount} ({electricalPct}%)</strong>
-              </div>
+                {/* Category 2: Electrical */}
+                <div style={styles.categoryBarRow}>
+                  <span style={{ ...styles.categoryTagBadge, background: "#2F80ED" }}>
+                    <Zap size={11} />
+                  </span>
+                  <span style={styles.categoryLabel}>Electrical</span>
+                  <SegmentedProgressBar
+                    percentage={electricalPct}
+                    colorClass="fill-elec"
+                  />
+                  <strong style={styles.categoryValue}>
+                    {electricalCount} ({electricalPct}%)
+                  </strong>
+                </div>
 
-              {/* Category 3: Plumbing */}
-              <div style={styles.categoryBarRow}>
-                <span style={{ ...styles.categoryTagBadge, background: "#F2994A" }}><Droplet size={11} /></span>
-                <span style={styles.categoryLabel}>Plumbing</span>
-                <SegmentedProgressBar percentage={plumbingPct} colorClass="fill-plumb" />
-                <strong style={styles.categoryValue}>{plumbingCount} ({plumbingPct}%)</strong>
-              </div>
+                {/* Category 3: Plumbing */}
+                <div style={styles.categoryBarRow}>
+                  <span style={{ ...styles.categoryTagBadge, background: "#F2994A" }}>
+                    <Droplet size={11} />
+                  </span>
+                  <span style={styles.categoryLabel}>Plumbing</span>
+                  <SegmentedProgressBar
+                    percentage={plumbingPct}
+                    colorClass="fill-plumb"
+                  />
+                  <strong style={styles.categoryValue}>
+                    {plumbingCount} ({plumbingPct}%)
+                  </strong>
+                </div>
 
-              {/* Category 4: Mechanical */}
-              <div style={styles.categoryBarRow}>
-                <span style={{ ...styles.categoryTagBadge, background: "#9B51E0" }}><Wrench size={11} /></span>
-                <span style={styles.categoryLabel}>Mechanical</span>
-                <SegmentedProgressBar percentage={mechanicalPct} colorClass="fill-mech" />
-                <strong style={styles.categoryValue}>{mechanicalCount} ({mechanicalPct}%)</strong>
-              </div>
+                {/* Category 4: Mechanical */}
+                <div style={styles.categoryBarRow}>
+                  <span style={{ ...styles.categoryTagBadge, background: "#9B51E0" }}>
+                    <Wrench size={11} />
+                  </span>
+                  <span style={styles.categoryLabel}>Mechanical</span>
+                  <SegmentedProgressBar
+                    percentage={mechanicalPct}
+                    colorClass="fill-mech"
+                  />
+                  <strong style={styles.categoryValue}>
+                    {mechanicalCount} ({mechanicalPct}%)
+                  </strong>
+                </div>
 
-              {/* Category 5: Other */}
-              <div style={styles.categoryBarRow}>
-                <span style={{ ...styles.categoryTagBadge, background: "#828282" }}><MoreHorizontal size={11} /></span>
-                <span style={styles.categoryLabel}>Other</span>
-                <SegmentedProgressBar percentage={otherPct} colorClass="fill-other" />
-                <strong style={styles.categoryValue}>{otherCount} ({otherPct}%)</strong>
+                {/* Category 5: Other */}
+                <div style={styles.categoryBarRow}>
+                  <span style={{ ...styles.categoryTagBadge, background: "#828282" }}>
+                    <MoreHorizontal size={11} />
+                  </span>
+                  <span style={styles.categoryLabel}>Other</span>
+                  <SegmentedProgressBar
+                    percentage={otherPct}
+                    colorClass="fill-other"
+                  />
+                  <strong style={styles.categoryValue}>
+                    {otherCount} ({otherPct}%)
+                  </strong>
+                </div>
               </div>
-            </div>
+            )}
           </div>
           <div className="footer-purple" style={styles.opsCardFooter}>
             <div style={styles.footerStatContainer}>
@@ -1672,12 +1852,18 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewTab, unreadCount, isBellAni
         <div style={styles.opsCardHeader}>
           <h3 style={styles.opsCardHeaderH3}>RECENT JOBS</h3>
           <button
-            style={{ ...styles.dropdownSmall, padding: "5px 12px", appearance: "none", backgroundImage: "none" }}
+            style={{
+              ...styles.dropdownSmall,
+              padding: "5px 12px",
+              appearance: "none",
+              backgroundImage: "none",
+            }}
             onClick={() => onViewTab("jobs")}
           >
             View All
           </button>
         </div>
+
         <div style={styles.recentJobsTableContainer}>
           <table style={styles.recentJobsTable}>
             <thead>
@@ -1691,6 +1877,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewTab, unreadCount, isBellAni
                 <th style={styles.recentJobsTableTh}>Preferred Date</th>
               </tr>
             </thead>
+
             <tbody>
               {recentJobs.length === 0 ? (
                 <tr>
@@ -1704,45 +1891,123 @@ const Dashboard: React.FC<DashboardProps> = ({ onViewTab, unreadCount, isBellAni
               ) : (
                 recentJobs.map((job) => (
                   <tr key={job.id} className="recent-jobs-table-row">
-                    <td style={{ ...styles.recentJobsTableTd, ...styles.jobIdPill }}>#{job.id}</td>
-                    <td style={{ ...styles.recentJobsTableTd, fontWeight: "700", color: "#2F4F3E" }}>
+                    <td
+                      style={{
+                        ...styles.recentJobsTableTd,
+                        ...styles.jobIdPill,
+                      }}
+                    >
+                      #{job.id}
+                    </td>
+
+                    <td
+                      style={{
+                        ...styles.recentJobsTableTd,
+                        fontWeight: "700",
+                        color: "#2F4F3E",
+                      }}
+                    >
                       <div>{job.customer_name}</div>
+
                       {job.issue_description && (
-                        <div style={{ fontSize: "11px", color: "#6B7280", fontWeight: "400", marginTop: "2px" }}>
+                        <div
+                          style={{
+                            fontSize: "11px",
+                            color: "#6B7280",
+                            fontWeight: "400",
+                            marginTop: "2px",
+                          }}
+                        >
                           {job.issue_description}
                         </div>
                       )}
                     </td>
-                    <td style={styles.recentJobsTableTd}>{job.location}</td>
-                    <td style={styles.recentJobsTableTd}>{(job.service_type || "").replace(/_/g, " ")}</td>
+
+                    <td style={styles.recentJobsTableTd}>
+                      {job.location}
+                    </td>
+
+                    <td style={styles.recentJobsTableTd}>
+                      {(job.service_type || "").replace(/_/g, " ")}
+                    </td>
+
                     <td style={styles.recentJobsTableTd}>
                       <span style={getPriorityStyle(job.priority)}>
                         {(job.priority || "UNKNOWN").toUpperCase()}
                       </span>
+
+                      {isEmergencyJob(job) && (
+                        <span
+                          style={{
+                            ...styles.statusBadge,
+                            background: "#FEE2E2",
+                            color: "#B91C1C",
+                            marginLeft: "6px",
+                            fontWeight: 700,
+                          }}
+                        >
+                          EMERGENCY
+                        </span>
+                      )}
                     </td>
+
                     <td style={styles.recentJobsTableTd}>
                       <span style={getStatusStyle(job.status)}>
                         {formatStatus(job.status)}
                       </span>
+
+                      {isJobOverdue(job) && (
+                        <span
+                          style={{
+                            ...styles.statusBadge,
+                            background: "#FEE2E2",
+                            color: "#B91C1C",
+                            marginLeft: "6px",
+                            fontWeight: 700,
+                          }}
+                        >
+                          OVERDUE
+                        </span>
+                      )}
                     </td>
-                    <td style={styles.recentJobsTableTd}>{job.preferred_service_date || "—"}</td>
+
+                    <td style={styles.recentJobsTableTd}>
+                      {job.preferred_service_date || "—"}
+                    </td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
         </div>
-        <div className="footer-green" style={styles.opsCardFooter}>
+
+        <div
+          className="footer-green"
+          style={styles.opsCardFooter}
+        >
           <span style={styles.footerStat}>
-            <TrendingUp size={16} style={styles.footerIconGreen} /> Total pending: {stats.jobs.pending} · active: {stats.jobs.active}
+            <TrendingUp
+              size={16}
+              style={styles.footerIconGreen}
+            />{" "}
+            Total pending: {stats.jobs.pending} · active: {stats.jobs.active}
           </span>
-          <button className="footer-link-btn-style" style={{ ...styles.footerLinkBtn, color: "#15803D" }} onClick={() => onViewTab("jobs")}>
+
+          <button
+            className="footer-link-btn-style"
+            style={{
+              ...styles.footerLinkBtn,
+              color: "#15803D",
+            }}
+            onClick={() => onViewTab("jobs")}
+          >
             Manage Jobs →
           </button>
         </div>
       </div>
-    </div>
-  );
-}
 
-export default Dashboard;
+      </div>
+        );
+      }
+
+      export default Dashboard;
