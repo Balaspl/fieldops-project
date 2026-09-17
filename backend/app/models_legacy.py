@@ -5,7 +5,8 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import uuid
 from .database import Base
-
+from sqlalchemy.types import TypeDecorator
+from datetime import datetime, timezone
 
 class Tenant(Base):
     __tablename__ = "tenants"
@@ -46,6 +47,47 @@ class Technician(Base):
     organization=relationship("Organization",back_populates="technicans")
 
 
+class UTCDateTime(TypeDecorator):
+    """
+    Store datetimes as UTC and return timezone-aware UTC datetimes.
+
+    SQLite does not preserve timezone information for DateTime values,
+    so this normalizes SQLite results back to UTC-aware datetimes.
+    """
+
+    impl = DateTime
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(DateTime(timezone=True))
+
+        return dialect.type_descriptor(DateTime())
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        else:
+            value = value.astimezone(timezone.utc)
+
+        if dialect.name == "sqlite":
+            return value.replace(tzinfo=None)
+
+        return value
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+
+        return value.astimezone(timezone.utc)
+
+
 class Job(Base):
     __tablename__ = "jobs"  
 
@@ -80,7 +122,7 @@ class Job(Base):
     assigned_at = Column(DateTime(timezone=True), nullable=True)
     en_route_at = Column(DateTime(timezone=True), nullable=True)
     on_site_at = Column(DateTime(timezone=True), nullable=True)
-    completed_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(UTCDateTime(), nullable=True)
     cancelled_at = Column(DateTime(timezone=True), nullable=True)
     closed_at = Column(DateTime(timezone=True), nullable=True)
 

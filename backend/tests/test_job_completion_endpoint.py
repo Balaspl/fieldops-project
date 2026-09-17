@@ -13,6 +13,7 @@ from app.auth.rbac import UserRole
 from app.database import Base, get_db
 from app.main import app
 from app.models import AuditEvent, Job, JobClosure, Technician
+from app.schemas import COMPLETION_NOTE_MAX_LENGTH, JobClosureCreate, validate_completion_notes
 from app.redis_client import get_redis_client
 
 
@@ -151,6 +152,7 @@ def test_close_endpoint_succeeds_for_assigned_technician():
     assert data["job_id"] == job_id
     assert data["technician_id"] == tech_id
     assert data["work_summary"] == completion_payload()["work_summary"]
+    assert data["completion_notes"] == completion_payload()["work_summary"]
     assert data["subtotal"] == 225.5
     assert data["completed_at"]
     assert publish_event.called
@@ -420,3 +422,157 @@ def test_close_endpoint_rolls_back_on_status_side_effect_failure():
         JobClosure.job_id == job_id
     ).count() == 0
     db.close()
+
+def test_close_endpoint_rejects_empty_completion_notes_without_mutation():
+    db = TestingSessionLocal()
+    _, job = _create_tech_and_job(db)
+    job_id = job.id
+    db.close()
+
+    payload = completion_payload()
+    payload["work_summary"] = ""
+
+    response = client.post(
+        f"/jobs/{job_id}/close",
+        json=payload,
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 400
+
+    db = TestingSessionLocal()
+    unchanged_job = db.query(Job).filter(Job.id == job_id).one()
+    assert unchanged_job.status == "ON_SITE"
+    assert db.query(JobClosure).filter(JobClosure.job_id == job_id).count() == 0
+    db.close()
+
+
+def test_close_endpoint_rejects_whitespace_only_completion_notes():
+    db = TestingSessionLocal()
+    _, job = _create_tech_and_job(db)
+    job_id = job.id
+    db.close()
+
+    payload = completion_payload()
+    payload["work_summary"] = "  \n\t  "
+
+    response = client.post(
+        f"/jobs/{job_id}/close",
+        json=payload,
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 400
+
+
+def test_close_endpoint_rejects_oversized_completion_notes():
+    db = TestingSessionLocal()
+    _, job = _create_tech_and_job(db)
+    job_id = job.id
+    db.close()
+
+    payload = completion_payload()
+    payload["work_summary"] = "x" * (COMPLETION_NOTE_MAX_LENGTH + 1)
+
+    response = client.post(
+        f"/jobs/{job_id}/close",
+        json=payload,
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 400
+
+
+def test_close_endpoint_rejects_markup_in_completion_notes():
+    db = TestingSessionLocal()
+    _, job = _create_tech_and_job(db)
+    job_id = job.id
+    db.close()
+
+    payload = completion_payload()
+    payload["work_summary"] = "Repaired unit <script>alert(1)</script> successfully."
+
+    response = client.post(
+        f"/jobs/{job_id}/close",
+        json=payload,
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 400
+
+
+def test_close_endpoint_returns_trimmed_canonical_completion_notes():
+    db = TestingSessionLocal()
+    _, job = _create_tech_and_job(db)
+    job_id = job.id
+    db.close()
+
+    payload = completion_payload()
+    payload["work_summary"] = "  Replaced valve & checked < 10 PSI.  "
+
+    with patch("app.services.event_publisher.publish_dispatch_event"):
+        response = client.post(
+            f"/jobs/{job_id}/close",
+            json=payload,
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["work_summary"] == "Replaced valve & checked < 10 PSI."
+    assert data["completion_notes"] == "Replaced valve & checked < 10 PSI."
+
+    db = TestingSessionLocal()
+    closure = db.query(JobClosure).filter(JobClosure.job_id == job_id).one()
+    updated_job = db.query(Job).filter(Job.id == job_id).one()
+    assert closure.work_summary == "Replaced valve & checked < 10 PSI."
+    assert updated_job.work_report == "Replaced valve & checked < 10 PSI."
+    db.close()
+
+
+def test_completion_notes_reject_empty():
+    with pytest.raises(ValueError, match="Completion notes cannot be empty"):
+        validate_completion_notes("")
+
+
+def test_completion_notes_reject_whitespace_only():
+    with pytest.raises(ValueError, match="Completion notes cannot be empty"):
+        validate_completion_notes("   \n\t  ")
+
+
+def test_completion_notes_reject_oversized():
+    value = "x" * (COMPLETION_NOTE_MAX_LENGTH + 1)
+    with pytest.raises(ValueError, match="cannot exceed 5000 characters"):
+        validate_completion_notes(value)
+
+
+def test_completion_notes_trim_and_preserve_special_characters():
+    value = "  Pressure < 10 PSI & valve #2 checked; customer said OK.  "
+
+    assert validate_completion_notes(value) == (
+        "Pressure < 10 PSI & valve #2 checked; customer said OK."
+    )
+
+
+def test_completion_notes_reject_markup():
+    value = "Repaired unit <script>alert(1)</script> successfully."
+
+    with pytest.raises(ValueError, match="plain text"):
+        validate_completion_notes(value)
+
+
+def test_completion_notes_exact_maximum_is_accepted():
+    value = "x" * COMPLETION_NOTE_MAX_LENGTH
+
+    assert validate_completion_notes(value) == value
+
+
+def test_job_closure_schema_uses_canonical_completion_notes():
+    payload = JobClosureCreate(
+        work_summary="  Replaced valve & verified pressure.  ",
+        after_images=["/uploads/after.jpg"],
+        labour_cost=100.0,
+        material_cost=25.0,
+    )
+
+    assert payload.work_summary == "Replaced valve & verified pressure."

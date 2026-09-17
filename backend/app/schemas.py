@@ -1,5 +1,6 @@
 from datetime import date, datetime
 from typing import Literal, Optional, Union
+import re
 from pydantic import BaseModel, field_validator, ConfigDict, Field
 from .services.ai.FieldOpsAI.schemas.prompt_variable import PromptVariableDeclaration
 
@@ -767,8 +768,115 @@ class GPSBatchRequest(BaseModel):
         return v
 
 
+COMPLETION_NOTE_MAX_LENGTH = 5000
+_COMPLETION_NOTE_MARKUP_RE = re.compile(r"<\s*/?\s*[A-Za-z][^>]*>")
+
+
+def validate_completion_notes(value: str) -> str:
+    """Return canonical completion notes or raise a deterministic validation error.
+
+    Completion notes are stored as plain text. Leading/trailing whitespace is
+    removed, meaningful internal whitespace and ordinary special characters are
+    preserved, and HTML-like tags are rejected so downstream renderers do not
+    receive markup from this field.
+    """
+    if not isinstance(value, str):
+        raise ValueError("Completion notes must be text")
+
+    canonical = value.strip()
+    if not canonical:
+        raise ValueError("Completion notes cannot be empty")
+
+    if len(canonical) > COMPLETION_NOTE_MAX_LENGTH:
+        raise ValueError(
+            f"Completion notes cannot exceed {COMPLETION_NOTE_MAX_LENGTH} characters"
+        )
+
+    if _COMPLETION_NOTE_MARKUP_RE.search(canonical):
+        raise ValueError("Completion notes must be plain text and cannot contain markup tags")
+
+    return canonical
+
+
+class WorkReport(BaseModel):
+    """
+    Structured report of the work performed by the technician.
+    """
+
+    summary: str
+    parts_used: list[str] = Field(default_factory=list)
+    duration_minutes: Optional[int] = Field(default=None, ge=0)
+
+    @field_validator("summary")
+    @classmethod
+    def validate_summary(cls, value: str) -> str:
+        return validate_completion_notes(value)
+
+    @field_validator("parts_used")
+    @classmethod
+    def validate_parts_used(cls, value: list[str]) -> list[str]:
+        cleaned_parts: list[str] = []
+
+        for part in value:
+            if not isinstance(part, str):
+                raise ValueError("Each part must be text")
+
+            cleaned_part = part.strip()
+
+            if not cleaned_part:
+                raise ValueError("Parts used cannot contain empty values")
+
+            cleaned_parts.append(cleaned_part)
+
+        return cleaned_parts
+
+
+class CompletionChecklistItem(BaseModel):
+    """
+    A single completion checklist item submitted by the technician.
+    """
+
+    id: str
+    label: str
+    status: str
+    required: bool = False
+
+    @field_validator("id", "label")
+    @classmethod
+    def validate_text_fields(cls, value: str) -> str:
+        value = value.strip()
+
+        if not value:
+            raise ValueError("Checklist item id and label cannot be empty")
+
+        return value
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str) -> str:
+        value = value.strip().upper()
+
+        allowed_statuses = {"COMPLETED", "INCOMPLETE"}
+
+        if value not in allowed_statuses:
+            raise ValueError(
+                "Checklist item status must be COMPLETED or INCOMPLETE"
+            )
+
+        return value
+
+
+class CompletionChecklist(BaseModel):
+    """
+    Completion checklist submitted when closing a job.
+    """
+
+    items: list[CompletionChecklistItem] = Field(default_factory=list)
+
 class JobClosureCreate(BaseModel):
     work_summary: str
+    work_report: Optional[WorkReport] = None
+    checklist: Optional[CompletionChecklist] = None
     before_images: Optional[list[str]] = Field(default_factory=list)
     after_images: list[str] = Field(..., min_length=1)
     labour_cost: float = Field(..., ge=0.0)
@@ -776,26 +884,50 @@ class JobClosureCreate(BaseModel):
 
     @field_validator("work_summary")
     @classmethod
-    def validate_work_summary(cls, v):
-        if not v or not v.strip():
-            raise ValueError("Work summary cannot be empty")
-        return v.strip()
+    def validate_work_summary(cls, value: str) -> str:
+        return validate_completion_notes(value)
+
+    @field_validator("work_report")
+    @classmethod
+    def validate_work_report(cls, value: Optional[WorkReport]) -> Optional[WorkReport]:
+        return value
+
+    @model_validator(mode="after")
+    def synchronize_work_report_summary(self):
+        """
+        Keep the legacy work_summary and structured report summary consistent.
+
+        New structured callers may provide work_report.summary. That summary
+        becomes the canonical completion summary.
+
+        Legacy callers that provide only work_summary continue to work, with
+        no structured fields beyond the summary.
+        """
+        if self.work_report is not None:
+            self.work_summary = self.work_report.summary
+
+        return self
 
     @field_validator("after_images")
     @classmethod
-    def validate_after_images(cls, v):
-        if not v or len(v) < 1:
+    def validate_after_images(cls, value: list[str]) -> list[str]:
+        if not value:
             raise ValueError("Minimum one after image is required")
-        return v
 
+        return value
 
 class JobClosureResponse(BaseModel):
     id: int
     job_id: int
     technician_id: str
+
     work_summary: str
+    completion_notes: str
+    work_report: Optional[WorkReport] = None
+    checklist: Optional[CompletionChecklist] = None
     before_images: list[str] = Field(default_factory=list)
     after_images: list[str] = Field(default_factory=list)
+
     labour_cost: float
     material_cost: float
     subtotal: float
@@ -804,7 +936,6 @@ class JobClosureResponse(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
-
 
 
 
