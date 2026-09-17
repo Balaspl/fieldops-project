@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from ..models import Job, Technician, AuditEvent
 from ..models.job_closure import JobClosure
-from ..schemas import JobClosureCreate
+from ..schemas import JobClosureCreate, CompletionChecklist
 from .job_status_machine import (
     JobStatus,
     InvalidTransitionError,
@@ -24,6 +24,42 @@ from .job_status_machine import (
 
 logger = logging.getLogger(__name__)
 
+
+def validate_completion_checklist(
+    checklist: Optional[CompletionChecklist],
+) -> None:
+    """
+    Validate required completion checklist items before job mutation.
+
+    Optional checklists remain backward compatible. When a checklist is
+    submitted, every required item must be COMPLETED.
+    """
+    if checklist is None:
+        return
+
+    incomplete_required = [
+        item
+        for item in checklist.items
+        if item.required and item.status != "COMPLETED"
+    ]
+
+    if incomplete_required:
+        incomplete_items = [
+            {
+                "id": item.id,
+                "label": item.label,
+            }
+            for item in incomplete_required
+        ]
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "INCOMPLETE_CHECKLIST",
+                "message": "Required checklist items are incomplete",
+                "incomplete_items": incomplete_items,
+            },
+        )
 
 def close_job(
     db: Session,
@@ -129,13 +165,42 @@ def close_job(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Job closure record already exists for this job",
         )
+            # Validate the completion checklist before any job state mutation.
+    validate_completion_checklist(closure_data.checklist)
 
     # Pydantic has already validated the completion payload before this
     # service is entered. The existing lifecycle prerequisite requires a work
     # report, and the closure's work_summary is the authoritative report for
     # this completion flow.
+    # Pydantic has already validated the completion payload before this
+    # service is entered.
+
     previous_work_report = job.work_report
-    job.work_report = closure_data.work_summary
+
+    # Build the canonical structured work report.
+    #
+    # Backward compatibility:
+    # - Older callers may provide only work_summary.
+    # - New callers may provide work_report.
+    #
+    # The structured report's summary is kept synchronized with the existing
+    # Job.work_report field so older consumers continue to work.
+    if closure_data.work_report is not None:
+        canonical_work_report = {
+            "summary": closure_data.work_report.summary,
+            "parts_used": closure_data.work_report.parts_used,
+            "duration_minutes": closure_data.work_report.duration_minutes,
+        }
+
+        job.work_report = closure_data.work_report.summary
+    else:
+        canonical_work_report = {
+            "summary": closure_data.work_summary,
+            "parts_used": [],
+            "duration_minutes": None,
+        }
+
+        job.work_report = closure_data.work_summary
 
     old_status = current_status or "CREATED"
     actor_id = technician_identifier
@@ -150,22 +215,33 @@ def close_job(
             actor_role="technician",
         )
 
-        completed_at = job.completed_at or datetime.now(timezone.utc)
+        completed_at = job.completed_at
+        if completed_at is None:
+            raise RuntimeError(
+                "Completion transition did not set the authoritative completion timestamp"
+            )
+
         subtotal = round(
             closure_data.labour_cost + closure_data.material_cost,
             2,
         )
 
         closure_record = JobClosure(
-            job_id=job.id,
-            tenant_id=tenant_id,
-            work_summary=closure_data.work_summary,
-            before_images=closure_data.before_images or [],
-            after_images=closure_data.after_images,
-            labour_cost=closure_data.labour_cost,
-            material_cost=closure_data.material_cost,
-            subtotal=subtotal,
-            completed_at=completed_at,
+        job_id=job.id,
+        tenant_id=tenant_id,
+        work_summary=closure_data.work_summary,
+        work_report=canonical_work_report,
+        completion_checklist=(
+            {"items": [item.model_dump() for item in closure_data.checklist.items]}
+            if closure_data.checklist is not None
+            else None
+        ),
+        before_images=closure_data.before_images or [],
+        after_images=closure_data.after_images,
+        labour_cost=closure_data.labour_cost,
+        material_cost=closure_data.material_cost,
+        subtotal=subtotal,
+        completed_at=completed_at,
         )
         db.add(closure_record)
         db.flush()
