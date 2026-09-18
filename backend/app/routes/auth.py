@@ -10,6 +10,10 @@ Endpoints:
 - POST /auth/reset-password
 - GET  /auth/me
 
+Authentication history events are written to EnterpriseAuditLog and
+never contain passwords, bearer tokens, refresh tokens, MFA codes, or
+raw trusted-device/password-reset tokens.
+
 Enterprise SSO/OIDC:
 - GET  /auth/sso/login
 - GET  /auth/sso/callback
@@ -28,7 +32,9 @@ Security model:
 import hashlib
 import logging
 import os
+import secrets
 import uuid
+
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Union
 
@@ -40,6 +46,7 @@ from fastapi import (
     Response,
     status,
 )
+
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -51,7 +58,7 @@ from ..auth.password import (
     validate_password_strength,
     verify_password,
     MAX_PASSWORD_LENGTH,
-    MIN_PASSWORD_LENGTH
+    MIN_PASSWORD_LENGTH,
 )
 
 from ..auth.jwt_handler import (
@@ -69,16 +76,25 @@ from ..auth.dependencies import (
     get_current_user,
 )
 
+from ..auth.session_service import (
+    create_session,
+    delete_session,
+)
+
 from ..models.user import (
     RefreshToken,
     User,
 )
+
+from ..models.trust_device import TrustedDevice
+
 from app.models.mfa import MFA
 
 from ..models.organization import Organization
 
+from ..models.password_reset_token import PasswordResetToken
 
-from fastapi import Request
+from ..services.email.email_service import EmailService
 
 from .oauth2 import (
     GrantError,
@@ -91,6 +107,8 @@ from .oauth2 import (
 from ..auth.mfa_service import (
     create_enrollment_secret,
     create_mfa_challenge,
+    create_trusted_device,
+    get_trusted_device,
     delete_mfa_challenge,
     generate_recovery_codes,
     get_mfa_challenge,
@@ -110,7 +128,7 @@ from ..services.ai.FieldOpsAI.schemas.mfa import (
     MFAStatusResponse,
     MFAChallengeResponse,
     MFAVerificationResponse,
-    MFAEnrollmentVerifyRequest
+    MFAEnrollmentVerifyRequest,
 )
 
 from ..auth.oidc import (
@@ -137,6 +155,22 @@ router = APIRouter(
 SSO_ACCESS_COOKIE = "fieldops_access_token"
 SSO_REFRESH_COOKIE = "fieldops_refresh_token"
 
+PASSWORD_RESET_TOKEN_EXPIRE_MINUTES = 15
+
+# Durable authentication history events. Keep these values stable so
+# administrators can query a consistent authentication history.
+AUTH_EVENT_LOGIN_SUCCESS = "LOGIN_SUCCESS"
+AUTH_EVENT_LOGIN_FAILURE = "LOGIN_FAILURE"
+AUTH_EVENT_ACCOUNT_LOCKED = "ACCOUNT_LOCKED"
+AUTH_EVENT_LOGOUT = "LOGOUT"
+
+AUTH_HISTORY_ACTIONS = {
+    AUTH_EVENT_LOGIN_SUCCESS,
+    AUTH_EVENT_LOGIN_FAILURE,
+    AUTH_EVENT_ACCOUNT_LOCKED,
+    AUTH_EVENT_LOGOUT,
+}
+
 
 # ============================================================
 # Request / Response Schemas
@@ -152,8 +186,8 @@ class RegisterRequest(BaseModel):
 
     password: str = Field(
         ...,
-    min_length=MIN_PASSWORD_LENGTH,
-    max_length=MAX_PASSWORD_LENGTH,
+        min_length=MIN_PASSWORD_LENGTH,
+        max_length=MAX_PASSWORD_LENGTH,
     )
 
     first_name: str = Field(
@@ -225,6 +259,11 @@ class LoginRequest(BaseModel):
         max_length=128,
     )
 
+    trusted_device_token: Optional[str] = Field(
+        default=None,
+        max_length=512,
+    )
+
 
 class RefreshRequest(BaseModel):
     """
@@ -294,8 +333,8 @@ class ResetPasswordRequest(BaseModel):
 
     new_password: str = Field(
         ...,
-    min_length=MIN_PASSWORD_LENGTH,
-    max_length=MAX_PASSWORD_LENGTH,
+        min_length=MIN_PASSWORD_LENGTH,
+        max_length=MAX_PASSWORD_LENGTH,
     )
 
 
@@ -401,23 +440,52 @@ def _build_token_response(
     db: Session,
 ) -> TokenResponse:
     """
-    Create access + refresh tokens and persist refresh token.
+    Create a new application session and issue
+    access + refresh tokens.
 
-    Tenant and role are always taken from the FieldOps
-    User record.
+    The session is the server-side source of truth
+    for inactivity and maximum lifetime.
+
+    Tenant and role are always taken from the
+    FieldOps User record.
     """
+
+    # ---------------------------------------------------------
+    # Create server-side application session
+    # ---------------------------------------------------------
+
+    session = create_session(
+        user_id=str(user.id),
+        tenant_id=str(user.tenant_id),
+    )
+
+    session_id = session["session_id"]
+
+    # ---------------------------------------------------------
+    # Create access token
+    # ---------------------------------------------------------
 
     access_token = create_access_token(
         user_id=user.id,
         tenant_id=user.tenant_id,
         role=user.role,
+        session_id=session_id,
     )
+
+    # ---------------------------------------------------------
+    # Create refresh token
+    # ---------------------------------------------------------
 
     refresh_token_str = create_refresh_token(
         user_id=user.id,
         tenant_id=user.tenant_id,
         role=user.role,
+        session_id=session_id,
     )
+
+    # ---------------------------------------------------------
+    # Organization information
+    # ---------------------------------------------------------
 
     org = (
         db.query(Organization)
@@ -427,13 +495,22 @@ def _build_token_response(
         .first()
     )
 
+    # ---------------------------------------------------------
+    # Hash refresh token before database storage
+    # ---------------------------------------------------------
+
     token_hash = hashlib.sha256(
         refresh_token_str.encode(),
     ).hexdigest()
 
+    # ---------------------------------------------------------
+    # Persist refresh token
+    # ---------------------------------------------------------
+
     refresh_record = RefreshToken(
         id=str(uuid.uuid4()),
         user_id=user.id,
+        session_id=session_id,
         token_hash=token_hash,
         expires_at=(
             datetime.now(timezone.utc)
@@ -454,6 +531,10 @@ def _build_token_response(
 
     db.add(refresh_record)
     db.commit()
+
+    # ---------------------------------------------------------
+    # Return token response
+    # ---------------------------------------------------------
 
     return TokenResponse(
         access_token=access_token,
@@ -477,8 +558,51 @@ def _build_token_response(
 
 
 # ============================================================
+# Password Reset Helper
+# ============================================================
+
+
+def hash_reset_token(token: str) -> str:
+    """
+    Hash a password reset token before
+    database lookup/storage.
+    """
+
+    return hashlib.sha256(
+        token.encode("utf-8"),
+    ).hexdigest()
+
+
+# ============================================================
 # Audit Helper
 # ============================================================
+
+
+def _find_user_for_auth_audit(
+    db: Session,
+    email: Optional[str],
+) -> Optional[User]:
+    """Resolve a login identifier for internal audit attribution only.
+
+    This does not change the public authentication response and never
+    writes the supplied password or token to the audit log.
+    """
+
+    if not email:
+        return None
+
+    normalized_email = email.lower().strip()
+    if not normalized_email:
+        return None
+
+    return (
+        db.query(User)
+        .filter(
+            User.email == normalized_email,
+            User.deleted_at.is_(None),
+        )
+        .first()
+    )
 
 
 def _log_audit(
@@ -614,8 +738,7 @@ async def register(
     existing = (
         db.query(User)
         .filter(
-            User.email
-            == payload.email.lower().strip(),
+            User.email == payload.email.lower().strip(),
             User.tenant_id == tenant_id,
             User.deleted_at.is_(None),
         )
@@ -696,13 +819,8 @@ async def login(
     """
     Email/password login with role-based MFA.
 
-    MFA is required for:
-    - TECHNICIAN
-    - DISPATCHER
-    - SUPER_ADMIN
-
-    Only the FieldOps database role determines MFA policy.
-    The client cannot select or bypass MFA.
+    A valid trusted-device token can skip MFA for
+    the same user until the token expires.
     """
 
     try:
@@ -713,15 +831,65 @@ async def login(
             password=payload.password,
         )
 
-    except GrantError:
+    except GrantError as exc:
+        # -----------------------------------------------------
+        # ACCOUNT LOCKOUT
+        # -----------------------------------------------------
+        # Preserve HTTP 423 so the frontend can show the
+        # account-locked message instead of treating it as
+        # a normal invalid-password response.
+        # -----------------------------------------------------
+        if exc.error == "account_locked":
+            locked_user = _find_user_for_auth_audit(
+                db,
+                payload.email,
+            )
+
+            _log_audit(
+                db=db,
+                action=AUTH_EVENT_ACCOUNT_LOCKED,
+                user_id=(locked_user.id if locked_user else None),
+                tenant_id=(
+                    locked_user.tenant_id
+                    if locked_user
+                    else None
+                ),
+                request=request,
+                severity="WARNING",
+                details={
+                    "outcome": "blocked",
+                    "reason": "account_locked",
+                },
+            )
+
+            db.commit()
+
+            raise HTTPException(
+                status_code=status.HTTP_423_LOCKED,
+                detail=exc.description,
+            )
+
+        # -----------------------------------------------------
+        # NORMAL INVALID LOGIN
+        # -----------------------------------------------------
+        failed_user = _find_user_for_auth_audit(
+            db,
+            payload.email,
+        )
+
         _log_audit(
             db=db,
-            action="FAILED_LOGIN",
-            user_id=None,
-            tenant_id=None,
+            action=AUTH_EVENT_LOGIN_FAILURE,
+            user_id=(failed_user.id if failed_user else None),
+            tenant_id=(
+                failed_user.tenant_id
+                if failed_user
+                else None
+            ),
             request=request,
             severity="WARNING",
             details={
+                "outcome": "failure",
                 "reason": "invalid_email_or_password",
             },
         )
@@ -733,9 +901,7 @@ async def login(
             detail="Invalid email or password",
         )
 
-    mfa_required = is_mfa_required_for_role(
-        user.role
-    )
+    mfa_required = is_mfa_required_for_role(user.role)
 
     mfa = get_user_mfa(
         db=db,
@@ -744,11 +910,93 @@ async def login(
     )
 
     # ---------------------------------------------------------
-    # MFA required and enrolled
+    # Trusted device bypass
     # ---------------------------------------------------------
+    # Password authentication has already succeeded. A trusted
+    # device is accepted only for this exact user and only while
+    # its server-side token is valid.
+    # ---------------------------------------------------------
+    if (
+        mfa_required
+        and mfa is not None
+        and mfa.enabled
+        and payload.trusted_device_token
+    ):
+        trusted_device = get_trusted_device(
+            db=db,
+            user_id=user.id,
+            token=payload.trusted_device_token,
+        )
 
-    if mfa_required and mfa is not None and mfa.enabled:
+        if trusted_device is not None:
+            access_token, refresh_token = _issue_tokens(
+                db=db,
+                request=request,
+                user=user,
+                granted_scope=granted_scope,
+            )
 
+            org = (
+                db.query(Organization)
+                .filter(
+                    Organization.id == user.tenant_id,
+                )
+                .first()
+            )
+
+            _log_audit(
+                db=db,
+                action=AUTH_EVENT_LOGIN_SUCCESS,
+                user_id=user.id,
+                tenant_id=user.tenant_id,
+                request=request,
+                details={
+                    "mfa_required": True,
+                    "mfa_enabled": True,
+                    "trusted_device": True,
+                    "authentication_method": "trusted_device",
+                    "trusted_device": True,
+                    "trusted_device_id": trusted_device.id,
+                    "expires_at": trusted_device.expires_at.isoformat(),
+                },
+            )
+
+            db.commit()
+
+            logger.info(
+                "Trusted-device login successful: user_id=%s tenant=%s",
+                user.id,
+                user.tenant_id,
+            )
+
+            return TokenResponse(
+                access_token=access_token,
+                refresh_token=refresh_token,
+                token_type="bearer",
+                expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+                user={
+                    "id": user.id,
+                    "email": user.email,
+                    "first_name": user.first_name,
+                    "last_name": user.last_name,
+                    "role": user.role,
+                    "tenant_id": user.tenant_id,
+                    "organization_name": (
+                        org.name
+                        if org
+                        else None
+                    ),
+                },
+            )
+
+    # ---------------------------------------------------------
+    # MFA challenge
+    # ---------------------------------------------------------
+    if (
+        mfa_required
+        and mfa is not None
+        and mfa.enabled
+    ):
         challenge_id = create_mfa_challenge(
             user_id=user.id,
             tenant_id=user.tenant_id,
@@ -776,11 +1024,8 @@ async def login(
         )
 
     # ---------------------------------------------------------
-    # MFA not enrolled
-    #
-    # We allow login here so the user can enroll MFA.
+    # MFA not required / not enabled
     # ---------------------------------------------------------
-
     access_token, refresh_token = _issue_tokens(
         db=db,
         request=request,
@@ -798,13 +1043,15 @@ async def login(
 
     _log_audit(
         db=db,
-        action="LOGIN",
+        action=AUTH_EVENT_LOGIN_SUCCESS,
         user_id=user.id,
         tenant_id=user.tenant_id,
         request=request,
         details={
+            "outcome": "success",
+            "authentication_method": "password",
             "mfa_required": mfa_required,
-            "mfa_enabled": False,
+            "mfa_enabled": bool(mfa and mfa.enabled),
         },
     )
 
@@ -837,6 +1084,12 @@ async def login(
         },
     )
 
+
+# ============================================================
+# MFA Enrollment
+# ============================================================
+
+
 @router.post(
     "/mfa/enroll",
     response_model=MFAEnrollmentResponse,
@@ -850,9 +1103,6 @@ async def enroll_mfa(
 ):
     """
     Start MFA enrollment for the authenticated user.
-
-    The TOTP secret is returned only during enrollment.
-    It is encrypted before database storage.
     """
 
     user = (
@@ -928,8 +1178,6 @@ async def enroll_mfa(
 
     db.commit()
 
-    # The plaintext secret is returned only once.
-    # NEVER log it.
     return MFAEnrollmentResponse(
         status="ENROLLMENT_PENDING",
         mfa_required=True,
@@ -937,6 +1185,11 @@ async def enroll_mfa(
         provisioning_uri=provisioning_uri,
         recovery_codes=[],
     )
+
+
+# ============================================================
+# MFA Enrollment Verification
+# ============================================================
 
 
 @router.post(
@@ -1056,6 +1309,12 @@ async def verify_mfa_enrollment(
         "recovery_codes": recovery_codes,
     }
 
+
+# ============================================================
+# MFA Status
+# ============================================================
+
+
 @router.get(
     "/mfa/status",
     response_model=MFAStatusResponse,
@@ -1100,19 +1359,117 @@ async def mfa_status(
         ),
     )
 
+
+# ============================================================
+# Reset MFA
+# ============================================================
+
+
+@router.post(
+    "/mfa/reset",
+)
+async def reset_mfa(
+    request: Request,
+    current_user: AuthenticatedUser = Depends(
+        get_current_user,
+    ),
+    db: Session = Depends(get_db),
+):
+    """
+    Reset the currently authenticated user's MFA configuration.
+    """
+
+    user = (
+        db.query(User)
+        .filter(
+            User.id == current_user.user_id,
+            User.deleted_at.is_(None),
+        )
+        .first()
+    )
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is disabled",
+        )
+
+    if not is_mfa_required_for_role(user.role):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="MFA is not required for this role",
+        )
+
+    mfa = get_user_mfa(
+        db=db,
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+    )
+
+    if mfa is None:
+        return {
+            "status": "NOT_ENROLLED",
+            "message": "MFA is not currently enrolled",
+        }
+
+    # Resetting MFA also invalidates all trusted devices so an old
+    # trusted-device credential cannot bypass the new MFA setup.
+    db.query(TrustedDevice).filter(
+        TrustedDevice.user_id == user.id,
+    ).delete(
+        synchronize_session=False,
+    )
+
+    db.delete(mfa)
+
+    _log_audit(
+        db=db,
+        action="MFA_RESET",
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+        request=request,
+        severity="WARNING",
+        details={
+            "method": "totp",
+        },
+    )
+
+    db.commit()
+
+    return {
+        "status": "RESET",
+        "message": (
+            "MFA has been reset. "
+            "You can enroll a new authenticator."
+        ),
+    }
+
+
+# ============================================================
+# MFA Verification
+# ============================================================
+
+
 @router.post(
     "/mfa/verify",
     response_model=MFAVerificationResponse,
 )
 def verify_mfa(
-    request:Request,
+    request: Request,
     payload: MFAVerifyRequest,
     db: Session = Depends(get_db),
 ):
     """
-    Verify the MFA code and issue normal FieldOps tokens.
+    Verify MFA and issue application tokens.
 
-    The challenge is single-use and tenant-scoped.
+    If trust_device=True, create a 30-day trusted-device
+    credential. Only the hash is stored in the database.
     """
 
     challenge = get_mfa_challenge(payload.challenge)
@@ -1151,22 +1508,163 @@ def verify_mfa(
         .filter(
             User.id == user_id,
             User.tenant_id == challenge_tenant_id,
+            User.deleted_at.is_(None),
         )
         .first()
     )
 
-    if user is None:
+    if user is None or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
         )
 
-    # MFA has now been successfully verified.
-    # Issue the normal FieldOps access/refresh tokens.
+    trusted_device_token = None
+
+    # ---------------------------------------------------------
+    # Create trusted device only AFTER successful MFA.
+    # ---------------------------------------------------------
+    if payload.trust_device:
+        (
+            trusted_device_token,
+            trusted_device,
+        ) = create_trusted_device(
+            db=db,
+            user_id=user.id,
+        )
+
+        _log_audit(
+            db=db,
+            action="TRUSTED_DEVICE_CREATED",
+            user_id=user.id,
+            tenant_id=user.tenant_id,
+            request=request,
+            details={
+                "trusted_device_id": trusted_device.id,
+                "expires_at": trusted_device.expires_at.isoformat(),
+            },
+        )
+
     token_response = _build_token_response(
         request=request,
         db=db,
         user=user,
+    )
+
+    _log_audit(
+        db=db,
+        action=AUTH_EVENT_LOGIN_SUCCESS,
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+        request=request,
+        details={
+            "outcome": "success",
+            "authentication_method": "password_plus_totp",
+            "mfa_required": True,
+            "mfa_enabled": True,
+            "trusted_device": bool(payload.trust_device),
+        },
+    )
+
+    db.commit()
+
+    return MFAVerificationResponse(
+        status="VERIFIED",
+        mfa_required=True,
+        challenge=payload.challenge,
+        replay_protected=True,
+        access_token=token_response.access_token,
+        refresh_token=token_response.refresh_token,
+        token_type=token_response.token_type,
+        expires_in=token_response.expires_in,
+        user=token_response.user,
+        trusted_device_token=trusted_device_token,
+    )
+
+
+# ============================================================
+# MFA Recovery
+# ============================================================
+
+
+@router.post(
+    "/mfa/recovery",
+    response_model=MFAVerificationResponse,
+)
+def verify_mfa_recovery_code(
+    request: Request,
+    payload: MFARecoveryRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Verify MFA recovery code and issue normal FieldOps tokens.
+    """
+
+    challenge = get_mfa_challenge(payload.challenge)
+
+    if challenge is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired MFA challenge",
+        )
+
+    challenge_tenant_id = str(
+        challenge.get("tenant_id", "")
+    )
+
+    if not challenge_tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid MFA challenge",
+        )
+
+    success, user_id = verify_mfa_recovery(
+        db=db,
+        challenge_id=payload.challenge,
+        recovery_code=payload.recovery_code,
+        tenant_id=challenge_tenant_id,
+    )
+
+    if not success or not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid recovery code",
+        )
+
+    user = (
+        db.query(User)
+        .filter(
+            User.id == user_id,
+            User.tenant_id == challenge_tenant_id,
+            User.deleted_at.is_(None),
+        )
+        .first()
+    )
+
+    if user is None or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+        )
+
+    token_response = _build_token_response(
+        request=request,
+        db=db,
+        user=user,
+    )
+
+    _log_audit(
+        db=db,
+        action=AUTH_EVENT_LOGIN_SUCCESS,
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+        request=request,
+        details={
+            "outcome": "success",
+            "authentication_method": "mfa_recovery_code",
+            "mfa_required": True,
+            "mfa_enabled": True,
+        },
     )
 
     db.commit()
@@ -1182,8 +1680,6 @@ def verify_mfa(
         expires_in=token_response.expires_in,
         user=token_response.user,
     )
-
-
 
 
 # ============================================================
@@ -1202,10 +1698,6 @@ async def google_oidc_login(
 ):
     """
     Authenticate using a previously linked Google identity.
-
-    Enterprise browser SSO should use:
-
-        GET /auth/sso/login
     """
 
     try:
@@ -1323,11 +1815,13 @@ async def google_oidc_login(
 
     _log_audit(
         db=db,
-        action="OIDC_LOGIN",
+        action=AUTH_EVENT_LOGIN_SUCCESS,
         user_id=user.id,
         tenant_id=user.tenant_id,
         request=request,
         details={
+            "outcome": "success",
+            "authentication_method": "oidc",
             "provider": "google",
         },
     )
@@ -1363,30 +1857,11 @@ async def refresh_tokens(
     """
     Refresh an access token.
 
-    Two supported modes:
+    Normal mode:
+        refresh_token in JSON body.
 
-    1. Normal login
-       POST /auth/refresh
-
-       {
-           "refresh_token": "..."
-       }
-
-       Returns tokens in JSON.
-
-    2. Enterprise SSO
-       POST /auth/refresh
-
-       Refresh token comes from:
-
-           fieldops_refresh_token
-
-       HttpOnly cookie.
-
-       New access + refresh tokens are written back
-       to HttpOnly cookies.
-
-       Tokens are NOT returned in the JSON response.
+    SSO mode:
+        refresh_token comes from HttpOnly cookie.
     """
 
     body_refresh_token = None
@@ -1397,13 +1872,6 @@ async def refresh_tokens(
     cookie_refresh_token = request.cookies.get(
         SSO_REFRESH_COOKIE,
     )
-
-    # --------------------------------------------------------
-    # Decide authentication mode.
-    #
-    # JSON token has priority.
-    # Otherwise use SSO HttpOnly cookie.
-    # --------------------------------------------------------
 
     using_sso_cookie = (
         not body_refresh_token
@@ -1434,8 +1902,6 @@ async def refresh_tokens(
         )
 
     except GrantError:
-        # If an SSO refresh token is invalid,
-        # clear the browser session cookies.
         if using_sso_cookie:
             _clear_sso_cookies(response)
 
@@ -1471,15 +1937,6 @@ async def refresh_tokens(
         user.email,
     )
 
-    # --------------------------------------------------------
-    # Enterprise SSO mode.
-    #
-    # IMPORTANT:
-    # Do not expose the new tokens in JSON.
-    #
-    # Rotate both HttpOnly cookies.
-    # --------------------------------------------------------
-
     if using_sso_cookie:
         _set_sso_cookies(
             response=response,
@@ -1495,12 +1952,6 @@ async def refresh_tokens(
             ),
             user=user_data,
         )
-
-    # --------------------------------------------------------
-    # Normal application mode.
-    #
-    # Preserve the existing API contract.
-    # --------------------------------------------------------
 
     return TokenResponse(
         access_token=access_token,
@@ -1531,19 +1982,19 @@ async def logout(
     db: Session = Depends(get_db),
 ):
     """
-    Logout current user.
+    Logout the CURRENT application session.
 
-    Works with:
-
-    - Bearer access token
-    - Enterprise SSO HttpOnly access cookie
-
-    Actions:
-
-    - blacklist current access token
-    - revoke refresh tokens
-    - clear SSO cookies
+    Important:
+    - Does not revoke all sessions for the user.
+    - Only the current session is revoked.
+    - The Redis session is deleted.
+    - The current access token is blacklisted.
+    - SSO cookies are cleared.
     """
+
+    # ---------------------------------------------------------
+    # Blacklist current access token
+    # ---------------------------------------------------------
 
     if current_user.jti:
         blacklist_token(
@@ -1553,34 +2004,79 @@ async def logout(
 
     now = datetime.now(timezone.utc)
 
-    db.query(
-        RefreshToken,
-    ).filter(
-        RefreshToken.user_id
-        == current_user.user_id,
-        RefreshToken.revoked_at.is_(None),
-    ).update(
-        {
-            "revoked_at": now,
-        }
+    # ---------------------------------------------------------
+    # Get current session ID
+    # ---------------------------------------------------------
+
+    session_id = getattr(
+        current_user,
+        "session_id",
+        None,
     )
+
+    # ---------------------------------------------------------
+    # Revoke ONLY refresh tokens belonging
+    # to the current application session.
+    # ---------------------------------------------------------
+
+    if session_id:
+        db.query(
+            RefreshToken,
+        ).filter(
+            RefreshToken.user_id == current_user.user_id,
+            RefreshToken.session_id == session_id,
+            RefreshToken.revoked_at.is_(None),
+        ).update(
+            {
+                "revoked_at": now,
+            },
+            synchronize_session=False,
+        )
+
+        # -----------------------------------------------------
+        # Delete server-side session
+        # -----------------------------------------------------
+
+        delete_session(session_id)
+
+    else:
+        # -----------------------------------------------------
+        # Defensive fallback.
+        #
+        # New tokens should always have session_id.
+        # Do NOT revoke all sessions here because doing so
+        # would break concurrent-session isolation.
+        # -----------------------------------------------------
+
+        logger.warning(
+            "Logout request without session_id: user_id=%s",
+            current_user.user_id,
+        )
 
     _log_audit(
         db,
-        "LOGOUT",
+        AUTH_EVENT_LOGOUT,
         current_user.user_id,
         current_user.tenant_id,
         request,
+        details={
+            "outcome": "success",
+            "session_terminated": bool(session_id),
+        },
     )
 
     db.commit()
 
-    # Always clear SSO cookies.
+    # ---------------------------------------------------------
+    # Always clear SSO cookies
+    # ---------------------------------------------------------
+
     _clear_sso_cookies(response)
 
     logger.info(
-        "User logged out: %s",
+        "User session logged out: user_id=%s session_id=%s",
         current_user.user_id,
+        session_id,
     )
 
     return {
@@ -1599,20 +2095,12 @@ async def logout(
 )
 async def get_current_profile(
     current_user: AuthenticatedUser = Depends(
-        get_current_user,
+        get_current_user
     ),
     db: Session = Depends(get_db),
 ):
     """
     Get current user's profile.
-
-    Authentication can come from:
-
-        Authorization: Bearer <token>
-
-    or:
-
-        fieldops_access_token=<HttpOnly cookie>
     """
 
     user = (
@@ -1684,7 +2172,7 @@ async def update_profile(
     payload: UpdateProfileRequest,
     request: Request,
     current_user: AuthenticatedUser = Depends(
-        get_current_user,
+        get_current_user
     ),
     db: Session = Depends(get_db),
 ):
@@ -1706,13 +2194,8 @@ async def update_profile(
             detail="User not found",
         )
 
-    user.first_name = (
-        payload.first_name.strip()
-    )
-
-    user.last_name = (
-        payload.last_name.strip()
-    )
+    user.first_name = payload.first_name.strip()
+    user.last_name = payload.last_name.strip()
 
     _log_audit(
         db,
@@ -1754,7 +2237,7 @@ async def change_password(
     payload: ChangePasswordRequest,
     request: Request,
     current_user: AuthenticatedUser = Depends(
-        get_current_user,
+        get_current_user
     ),
     db: Session = Depends(get_db),
 ):
@@ -1834,15 +2317,18 @@ async def forgot_password(
     """
     Request a password reset.
 
-    Always returns success to prevent
-    email enumeration.
+    Always returns the same response to prevent
+    account enumeration.
     """
 
-    email = (
-        payload.email
-        .lower()
-        .strip()
-    )
+    generic_response = {
+        "message": (
+            "If an account with that email exists, "
+            "a password reset link has been sent."
+        )
+    }
+
+    email = payload.email.lower().strip()
 
     user = (
         db.query(User)
@@ -1853,28 +2339,132 @@ async def forgot_password(
         .first()
     )
 
-    if user:
-        _log_audit(
-            db,
-            "PASSWORD_RESET_REQUESTED",
+    if user is None:
+        return generic_response
+
+    now = datetime.now(timezone.utc)
+
+    db.query(PasswordResetToken).filter(
+        PasswordResetToken.user_id == user.id,
+        PasswordResetToken.tenant_id == user.tenant_id,
+        PasswordResetToken.used_at.is_(None),
+    ).update(
+        {
+            "used_at": now,
+        },
+        synchronize_session=False,
+    )
+
+    raw_token = secrets.token_urlsafe(32)
+
+    token_hash = hash_reset_token(raw_token)
+
+    expires_at = (
+        now
+        + timedelta(
+            minutes=PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
+        )
+    )
+
+    reset_token = PasswordResetToken(
+        id=str(uuid.uuid4()),
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+        token_hash=token_hash,
+        expires_at=expires_at,
+    )
+
+    db.add(reset_token)
+
+    _log_audit(
+        db=db,
+        action="PASSWORD_RESET_REQUESTED",
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+        request=request,
+    )
+
+    frontend_url = os.getenv(
+        "FRONTEND_URL",
+        "http://localhost:5173",
+    ).rstrip("/")
+
+    reset_url = (
+        f"{frontend_url}/reset-password"
+        f"?token={raw_token}"
+    )
+
+    email_service = EmailService()
+
+    email_text = f"""
+Hello {user.first_name},
+
+We received a request to reset your FieldOps password.
+
+Reset your password using the link below:
+
+{reset_url}
+
+This link will expire in {PASSWORD_RESET_TOKEN_EXPIRE_MINUTES} minutes
+and can only be used once.
+
+If you did not request a password reset, you can ignore this email.
+
+Regards,
+FieldOps Team
+"""
+
+    email_html = f"""
+<html>
+<body>
+    <p>Hello {user.first_name},</p>
+
+    <p>
+        We received a request to reset your FieldOps password.
+    </p>
+
+    <p>
+        <a href="{reset_url}">
+            Reset your password
+        </a>
+    </p>
+
+    <p>
+        This link will expire in
+        {PASSWORD_RESET_TOKEN_EXPIRE_MINUTES} minutes
+        and can only be used once.
+    </p>
+
+    <p>
+        If you did not request a password reset,
+        you can ignore this email.
+    </p>
+
+    <p>Regards,<br>FieldOps Team</p>
+</body>
+</html>
+"""
+
+    sent = await email_service.send_email(
+        to_email=user.email,
+        subject="Reset your FieldOps password",
+        text=email_text,
+        html=email_html,
+    )
+
+    if not sent:
+        db.rollback()
+
+        logger.error(
+            "Password reset email delivery failed for user_id=%s",
             user.id,
-            user.tenant_id,
-            request,
         )
 
-        db.commit()
+        return generic_response
 
-        logger.info(
-            "Password reset requested for: %s",
-            email,
-        )
+    db.commit()
 
-    return {
-        "message": (
-            "If an account with that email exists, "
-            "a password reset link has been sent."
-        )
-    }
+    return generic_response
 
 
 # ============================================================
@@ -1891,14 +2481,13 @@ async def reset_password(
     db: Session = Depends(get_db),
 ):
     """
-    Reset password using reset token.
-
-    Token validation is currently a stub.
+    Reset a user's password using a valid,
+    single-use reset token.
     """
 
     try:
         validate_password_strength(
-            payload.new_password,
+            payload.new_password
         )
 
     except PasswordValidationError as e:
@@ -1910,14 +2499,112 @@ async def reset_password(
             },
         )
 
-    # TODO:
-    # Validate reset token and find user.
+    if not payload.token or len(payload.token) > 512:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token",
+        )
+
+    token_hash = hash_reset_token(
+        payload.token
+    )
+
+    reset_token = (
+        db.query(PasswordResetToken)
+        .filter(
+            PasswordResetToken.token_hash == token_hash,
+        )
+        .first()
+    )
+
+    if reset_token is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token",
+        )
+
+    if reset_token.used_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token",
+        )
+
+    now = datetime.now(timezone.utc)
+
+    expires_at = reset_token.expires_at
+
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(
+            tzinfo=timezone.utc
+        )
+
+    if expires_at <= now:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token",
+        )
+
+    user = (
+        db.query(User)
+        .filter(
+            User.id == reset_token.user_id,
+            User.tenant_id == reset_token.tenant_id,
+            User.deleted_at.is_(None),
+        )
+        .first()
+    )
+
+    if user is None or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token",
+        )
+
+    user.password_hash = hash_password(
+        payload.new_password
+    )
+
+    reset_token.used_at = now
+
+    # ---------------------------------------------------------
+    # Password reset invalidates all sessions.
+    # This is intentional because the password changed.
+    # ---------------------------------------------------------
+
+    db.query(RefreshToken).filter(
+        RefreshToken.user_id == user.id,
+        RefreshToken.revoked_at.is_(None),
+    ).update(
+        {
+            "revoked_at": now,
+        },
+        synchronize_session=False,
+    )
+
+    # Password reset invalidates trusted-device credentials too.
+    db.query(TrustedDevice).filter(
+        TrustedDevice.user_id == user.id,
+    ).delete(
+        synchronize_session=False,
+    )
+
+    _log_audit(
+        db=db,
+        action="PASSWORD_RESET_COMPLETED",
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+        request=request,
+    )
+
+    db.commit()
+
+    logger.info(
+        "Password reset completed: user_id=%s",
+        user.id,
+    )
 
     return {
-        "message": (
-            "Password reset functionality requires "
-            "email integration. Token validation stub."
-        )
+        "message": "Password reset successfully",
     }
 
 
@@ -1951,21 +2638,13 @@ async def link_google_account(
     payload: OIDCLoginRequest,
     request: Request,
     current_user: AuthenticatedUser = Depends(
-        get_current_user,
+        get_current_user
     ),
     db: Session = Depends(get_db),
 ):
     """
     Link one Google identity to the currently
     authenticated FieldOps user.
-
-    Rules:
-
-    1. One FieldOps user can have only one
-       Google identity.
-
-    2. One Google identity can belong to only
-       one FieldOps user.
     """
 
     user = (
@@ -2008,10 +2687,28 @@ async def link_google_account(
         claims["sub"],
     )
 
-    # --------------------------------------------------------
-    # Rule 1:
-    # One FieldOps user = ONE Google identity.
-    # --------------------------------------------------------
+    google_email = str(
+        claims.get("email", ""),
+    ).strip().lower()
+
+    fieldops_email = str(
+        user.email,
+    ).strip().lower()
+
+    if not google_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google account email is missing",
+        )
+
+    if google_email != fieldops_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Google account email must match "
+                "the FieldOps account email"
+            ),
+        )
 
     existing_user_identity = (
         db.query(OIDCIdentity)
@@ -2024,10 +2721,8 @@ async def link_google_account(
     if existing_user_identity is not None:
 
         if (
-            existing_user_identity.issuer
-            == issuer
-            and existing_user_identity.subject
-            == subject
+            existing_user_identity.issuer == issuer
+            and existing_user_identity.subject == subject
         ):
             return {
                 "status": "ALREADY_LINKED",
@@ -2041,11 +2736,6 @@ async def link_google_account(
                 "to this FieldOps account."
             ),
         )
-
-    # --------------------------------------------------------
-    # Rule 2:
-    # One Google identity = ONE FieldOps user.
-    # --------------------------------------------------------
 
     existing = (
         db.query(OIDCIdentity)
@@ -2064,10 +2754,6 @@ async def link_google_account(
                 "to another FieldOps account"
             ),
         )
-
-    # --------------------------------------------------------
-    # Create identity link.
-    # --------------------------------------------------------
 
     identity = OIDCIdentity(
         id=str(uuid.uuid4()),
