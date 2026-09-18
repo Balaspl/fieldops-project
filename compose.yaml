@@ -52,11 +52,32 @@ services:
     environment:
       KAFKA_TOPICS: "${KAFKA_TOPICS:-fieldops.job.events,fieldops.gps.events,fieldops.sla.events,fieldops.notification.events,fieldops.billing.events,fieldops.payment.events,fieldops.audit.events}"
 
+      KAFKA_JOB_EVENTS_PARTITIONS: "${KAFKA_JOB_EVENTS_PARTITIONS:-6}"
+      KAFKA_GPS_EVENTS_PARTITIONS: "${KAFKA_GPS_EVENTS_PARTITIONS:-12}"
+      KAFKA_SLA_EVENTS_PARTITIONS: "${KAFKA_SLA_EVENTS_PARTITIONS:-6}"
+      KAFKA_NOTIFICATION_EVENTS_PARTITIONS: "${KAFKA_NOTIFICATION_EVENTS_PARTITIONS:-6}"
+      KAFKA_BILLING_EVENTS_PARTITIONS: "${KAFKA_BILLING_EVENTS_PARTITIONS:-3}"
+      KAFKA_PAYMENT_EVENTS_PARTITIONS: "${KAFKA_PAYMENT_EVENTS_PARTITIONS:-3}"
+      KAFKA_AUDIT_EVENTS_PARTITIONS: "${KAFKA_AUDIT_EVENTS_PARTITIONS:-6}"
+
     entrypoint: ["/bin/sh", "-c"]
 
     command:
       - |
         set -eu
+
+        get_partitions() {
+          case "$$1" in
+            fieldops.job.events) echo "$$KAFKA_JOB_EVENTS_PARTITIONS" ;;
+            fieldops.gps.events) echo "$$KAFKA_GPS_EVENTS_PARTITIONS" ;;
+            fieldops.sla.events) echo "$$KAFKA_SLA_EVENTS_PARTITIONS" ;;
+            fieldops.notification.events) echo "$$KAFKA_NOTIFICATION_EVENTS_PARTITIONS" ;;
+            fieldops.billing.events) echo "$$KAFKA_BILLING_EVENTS_PARTITIONS" ;;
+            fieldops.payment.events) echo "$$KAFKA_PAYMENT_EVENTS_PARTITIONS" ;;
+            fieldops.audit.events) echo "$$KAFKA_AUDIT_EVENTS_PARTITIONS" ;;
+            *) echo "Unknown topic: $$1" >&2; return 1 ;;
+          esac
+        }
 
         IFS=','
         for topic in $$KAFKA_TOPICS; do
@@ -66,13 +87,31 @@ services:
             continue
           fi
 
-          /opt/kafka/bin/kafka-topics.sh \
-            --bootstrap-server kafka:9092 \
-            --create \
-            --if-not-exists \
-            --topic "$$topic" \
-            --partitions 3 \
-            --replication-factor 1
+          partitions=$$(get_partitions "$$topic")
+
+          if /opt/kafka/bin/kafka-topics.sh \
+              --bootstrap-server kafka:9092 \
+              --describe \
+              --topic "$$topic" > /tmp/topic-info 2>/dev/null; then
+
+            current_partitions=$$(grep -o 'PartitionCount:[[:space:]]*[0-9]*' /tmp/topic-info | head -1 | grep -o '[0-9]*')
+
+            if [ -n "$$current_partitions" ] && [ "$$current_partitions" -lt "$$partitions" ]; then
+              /opt/kafka/bin/kafka-topics.sh \
+                --bootstrap-server kafka:9092 \
+                --alter \
+                --topic "$$topic" \
+                --partitions "$$partitions"
+            fi
+          else
+            /opt/kafka/bin/kafka-topics.sh \
+              --bootstrap-server kafka:9092 \
+              --create \
+              --if-not-exists \
+              --topic "$$topic" \
+              --partitions "$$partitions" \
+              --replication-factor 1
+          fi
         done
 
 volumes:

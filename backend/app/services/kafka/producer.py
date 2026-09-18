@@ -20,6 +20,39 @@ class KafkaProducer:
         )
         self._producer: Optional[AIOKafkaProducer] = None
 
+    @staticmethod
+    def _get_partition_key(
+        message: MessageEnvelope,
+        topic: str,
+    ) -> str:
+        job_ordered_topics = {
+            "fieldops.job.events",
+            "fieldops.gps.events",
+            "fieldops.sla.events",
+        }
+
+        tenant_ordered_topics = {
+            "fieldops.notification.events",
+            "fieldops.billing.events",
+            "fieldops.payment.events",
+            "fieldops.audit.events",
+        }
+
+        if topic in job_ordered_topics:
+            job_id = message.payload.get("job_id")
+
+            if job_id is None or str(job_id).strip() == "":
+                raise ValueError(
+                    f"job_id is required for ordered Kafka topic: {topic}"
+                )
+
+            return str(job_id)
+
+        if topic in tenant_ordered_topics:
+            return message.tenant_id
+
+        return str(message.message_id)
+
     async def start(self) -> None:
         if self._producer is not None:
             return
@@ -59,6 +92,7 @@ class KafkaProducer:
             raise RuntimeError("Kafka producer is not started.")
 
         target_topic = topic or message.topic
+        partition_key = self._get_partition_key(message, target_topic)
 
         payload = message.model_dump(mode="json")
 
@@ -67,6 +101,7 @@ class KafkaProducer:
                 self._producer.send_and_wait(
                     target_topic,
                     json.dumps(payload).encode("utf-8"),
+                    key=partition_key.encode("utf-8"),
                 ),
                 timeout=5.0,
             )
