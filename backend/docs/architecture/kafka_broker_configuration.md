@@ -15,7 +15,8 @@ The Kafka broker runs as a single-node KRaft broker/controller in the repository
 - Controller listener: `CONTROLLER://:9093`
 - Topic auto-creation: disabled
 - Default partitions: `3`
-- Default replication factor: `1` for the local single-broker setup
+- Default replication factor: `1` for the local single-broker setup; production-capable multi-broker environments should use `3`
+- Minimum in-sync replicas: `1` locally; production-capable multi-broker environments should use `2`
 
 ## Environment-Driven Settings
 
@@ -27,6 +28,13 @@ The Kafka broker runs as a single-node KRaft broker/controller in the repository
 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:29092` | Backend producer/consumer bootstrap address |
 | `KAFKA_TOPICS` | `fieldops.job.events,fieldops.gps.events,fieldops.sla.events,fieldops.notification.events,fieldops.billing.events,fieldops.payment.events,fieldops.audit.events` | Comma-separated FieldOps Kafka topics initialized by `kafka-init` |
 | `KAFKA_CONSUMER_GROUP` | `fieldops` | Consumer group used by the backend consumer |
+| `KAFKA_DEFAULT_REPLICATION_FACTOR` | `1` | Default replication factor for broker-created topics |
+| `KAFKA_REPLICATION_FACTOR` | `1` | Replication factor used by `kafka-init` when creating FieldOps topics |
+| `KAFKA_MIN_INSYNC_REPLICAS` | `1` | Minimum in-sync replicas required for topic writes |
+| `KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR` | `1` | Replication factor for Kafka consumer-offset storage |
+| `KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR` | `1` | Replication factor for Kafka transaction state |
+| `KAFKA_TRANSACTION_STATE_LOG_MIN_ISR` | `1` | Minimum in-sync replicas for Kafka transaction state |
+| `KAFKA_ACKS` | `all` | Producer acknowledgement level used for durable event publication |
 
 Deployment environments should set `KAFKA_ADVERTISED_LISTENERS` and `KAFKA_BOOTSTRAP_SERVERS` to addresses reachable by the corresponding clients.
 
@@ -54,6 +62,37 @@ Kafka guarantees ordering only within a partition. Stable partition keys ensure 
 
 Partition increases should be avoided unless required because changing the partition count can change the partition mapping for keyed events.
 
+## Replication and Durability
+
+Replication settings are environment-driven so the same Compose configuration can support both local single-broker development and multi-broker deployment environments.
+
+### Local Single-Broker Environment
+
+The local development setup uses:
+
+- Replication factor: `1`
+- Minimum in-sync replicas: `1`
+- Producer acknowledgements: `all`
+
+With only one broker, there is no replica available on another broker. Therefore, a broker failure can make locally stored events unavailable. This is an expected limitation of the single-broker development environment.
+
+### Multi-Broker Deployment Environment
+
+A production-capable multi-broker environment should use:
+
+- Replication factor: `3`
+- Minimum in-sync replicas: `2`
+- Producer acknowledgements: `all`
+- Offset topic replication factor: `3`
+- Transaction state replication factor: `3`
+- Transaction state minimum in-sync replicas: `2`
+
+With three brokers and a minimum of two in-sync replicas, committed event writes can remain available when one broker fails, provided the remaining replicas stay healthy and the Kafka cluster can elect an available leader.
+
+If the number of in-sync replicas falls below the configured minimum, writes requiring the configured acknowledgement level should fail rather than accepting a write with insufficient replica durability.
+
+The repository's local single-broker environment does not provide a true broker-failure resilience test. Multi-broker failure behavior must be validated in an environment with multiple Kafka brokers.
+
 ## Health Check
 
 The Kafka service uses `kafka-broker-api-versions.sh` against `localhost:9092` to verify broker connectivity.
@@ -80,3 +119,10 @@ Focused Kafka producer and consumer tests are maintained under `backend/tests/`.
 Broker-level end-to-end verification requires a running Docker/Compose environment.
 
 The configured topic partition counts are verified against the running Kafka broker during infrastructure validation.
+
+Replication configuration verification should confirm:
+
+- Local configuration resolves to replication factor `1` and minimum in-sync replicas `1`.
+- Multi-broker deployment configuration resolves to replication factor `3` and minimum in-sync replicas `2`.
+- Producer configuration uses `acks=all`.
+- Running multi-broker environments verify replica count, ISR membership, and broker-failure recovery.
