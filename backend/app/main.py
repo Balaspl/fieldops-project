@@ -1,3 +1,7 @@
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from fastapi import FastAPI, Request, HTTPException
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,9 +38,8 @@ redis_async_client = None
 redis_pubsub_client = None
 listener_task = None
 kafka_producer = None
-from dotenv import load_dotenv
 
-load_dotenv()
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global scheduler, redis_async_client, redis_pubsub_client, listener_task, kafka_producer

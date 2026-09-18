@@ -39,6 +39,8 @@ from .rbac import (
     has_permission,
 )
 
+from .session_service import validate_session, touch_session
+
 logger = logging.getLogger(__name__)
 
 security = HTTPBearer(auto_error=False)
@@ -67,11 +69,13 @@ class AuthenticatedUser:
         tenant_id: str,
         role: UserRole,
         jti: str,
+        session_id: str,
     ):
         self.user_id = user_id
         self.tenant_id = tenant_id
         self.role = role
         self.jti = jti
+        self.session_id = session_id
 
     @property
     def is_super_admin(self) -> bool:
@@ -325,6 +329,40 @@ async def get_current_user(
                 "WWW-Authenticate": "Bearer"
             },
         )
+    session_id = claims.get("session_id")
+
+    if not session_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session is invalid or expired",
+            headers={
+                "WWW-Authenticate": "Bearer"
+            },
+        )
+
+    session = validate_session(
+        session_id=session_id,
+        user_id=str(user.id),
+        tenant_id=str(user.tenant_id),
+    )
+
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session expired due to inactivity or maximum lifetime",
+            headers={
+                "WWW-Authenticate": "Bearer"
+            },
+        )
+
+    if touch_session(session_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session is no longer active",
+            headers={
+                "WWW-Authenticate": "Bearer"
+            },
+        )
 
     # ---------------------------------------------------------
     # Return authenticated FieldOps identity.
@@ -334,6 +372,7 @@ async def get_current_user(
         tenant_id=user.tenant_id,
         role=db_role,
         jti=claims.get("jti", ""),
+        session_id=str(session_id),
     )
 
 

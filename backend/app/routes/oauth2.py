@@ -42,6 +42,9 @@ from ..auth.oauth2_scope import (
     default_scope_for_role,
 )
 
+from ..auth.session_service import create_session, validate_session, touch_session
+
+
 from ..models.organization import Organization
 from ..models.user import User, RefreshToken
 
@@ -90,6 +93,7 @@ def _persist_refresh_token(
     user: User,
     refresh_token_str: str,
     request: Request,
+    session_id: Optional[str] = None,
 ) -> None:
     """
     Store only a SHA-256 hash of the refresh token.
@@ -104,6 +108,7 @@ def _persist_refresh_token(
     record = RefreshToken(
         id=str(uuid.uuid4()),
         user_id=user.id,
+        session_id=session_id,
         token_hash=token_hash,
         expires_at=(
             datetime.now(timezone.utc)
@@ -193,11 +198,29 @@ def _authenticate_password(
         .first()
     )
 
-    if user is None or user.is_locked or not user.is_active:
+    # Keep unknown/inactive accounts on the generic authentication
+    # response, but return a distinct lockout response for an account
+    # that exists and is currently locked. The frontend can then show
+    # the user an appropriate lockout message.
+    if user is None:
         raise GrantError(
             "invalid_grant",
             "Invalid credentials",
             status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if not user.is_active:
+        raise GrantError(
+            "invalid_grant",
+            "Invalid credentials",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if user.is_locked:
+        raise GrantError(
+            "account_locked",
+            "Your account is locked. Please try again later.",
+            status.HTTP_423_LOCKED,
         )
 
     if not verify_password(
@@ -230,11 +253,17 @@ def _issue_tokens(
     granted_scope: str,
 ) -> tuple[str, str]:
     """
-    Issue and persist access/refresh tokens.
+    Issue and persist access/refresh tokens for a new application session.
 
-    This function must only be called after all required
-    authentication factors have succeeded.
+    A session is created only after all required authentication
+    factors have succeeded.
     """
+
+    session = create_session(
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+    )
+    session_id = session["session_id"]
 
     scopes = (
         granted_scope.split()
@@ -247,12 +276,14 @@ def _issue_tokens(
         tenant_id=user.tenant_id,
         role=user.role,
         scopes=scopes,
+        session_id=session_id,
     )
 
     refresh = create_refresh_token(
         user_id=user.id,
         tenant_id=user.tenant_id,
         role=user.role,
+        session_id=session_id,
     )
 
     _persist_refresh_token(
@@ -260,6 +291,7 @@ def _issue_tokens(
         user,
         refresh,
         request,
+        session_id=session_id,
     )
 
     db.commit()
@@ -441,6 +473,40 @@ def _refresh_token_grant(
             "Refresh token role validation failed",
             status.HTTP_401_UNAUTHORIZED,
         )
+    session_id = claims.get("session_id")
+
+    if not session_id:
+        raise GrantError(
+            "invalid_grant",
+            "Refresh token is not associated with a session",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    session = validate_session(
+        session_id=session_id,
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+    )
+
+    if session is None:
+        stored.revoked_at = datetime.now(timezone.utc)
+        db.commit()
+
+        raise GrantError(
+            "invalid_grant",
+            "Session expired due to inactivity or maximum lifetime",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if touch_session(session_id) is None:
+        stored.revoked_at = datetime.now(timezone.utc)
+        db.commit()
+
+        raise GrantError(
+            "invalid_grant",
+            "Session is no longer active",
+            status.HTTP_401_UNAUTHORIZED,
+        )
 
     granted_scope = _validate_scope(
         user,
@@ -462,12 +528,14 @@ def _refresh_token_grant(
         tenant_id=user.tenant_id,
         role=user.role,
         scopes=scopes,
+        session_id=session_id,
     )
 
     new_refresh = create_refresh_token(
         user_id=user.id,
         tenant_id=user.tenant_id,
         role=user.role,
+        session_id=session_id,
     )
 
     _persist_refresh_token(
@@ -475,6 +543,7 @@ def _refresh_token_grant(
         user,
         new_refresh,
         request,
+        session_id=session_id,
     )
 
     db.commit()
