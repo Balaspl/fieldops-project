@@ -216,3 +216,87 @@ async def test_stop_handles_producer_failure():
     await producer.stop()
 
     assert producer._producer is None
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "topic",
+    [
+        "fieldops.job.events",
+        "fieldops.gps.events",
+        "fieldops.sla.events",
+    ],
+)
+async def test_publish_uses_job_id_as_partition_key(monkeypatch, topic):
+    mock_producer = AsyncMock()
+
+    monkeypatch.setattr(
+        "app.services.kafka.producer.AIOKafkaProducer",
+        lambda **kwargs: mock_producer,
+    )
+
+    producer = KafkaProducer()
+    await producer.start()
+
+    message = create_message()
+
+    await producer.publish(message, topic=topic)
+
+    call_kwargs = mock_producer.send_and_wait.call_args.kwargs
+
+    assert call_kwargs["key"] == b"JOB-1001"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "topic",
+    [
+        "fieldops.notification.events",
+        "fieldops.billing.events",
+        "fieldops.payment.events",
+        "fieldops.audit.events",
+    ],
+)
+async def test_publish_uses_tenant_id_as_partition_key(monkeypatch, topic):
+    mock_producer = AsyncMock()
+
+    monkeypatch.setattr(
+        "app.services.kafka.producer.AIOKafkaProducer",
+        lambda **kwargs: mock_producer,
+    )
+
+    producer = KafkaProducer()
+    await producer.start()
+
+    message = create_message()
+
+    await producer.publish(message, topic=topic)
+
+    call_kwargs = mock_producer.send_and_wait.call_args.kwargs
+
+    assert call_kwargs["key"] == b"tenant-001"
+
+
+@pytest.mark.asyncio
+async def test_publish_ordered_topic_requires_job_id(monkeypatch):
+    mock_producer = AsyncMock()
+
+    monkeypatch.setattr(
+        "app.services.kafka.producer.AIOKafkaProducer",
+        lambda **kwargs: mock_producer,
+    )
+
+    producer = KafkaProducer()
+    await producer.start()
+
+    message = create_message()
+    message.payload.pop("job_id")
+
+    with pytest.raises(
+        ValueError,
+        match="job_id is required for ordered Kafka topic",
+    ):
+        await producer.publish(
+            message,
+            topic="fieldops.job.events",
+        )
+
+    mock_producer.send_and_wait.assert_not_awaited()

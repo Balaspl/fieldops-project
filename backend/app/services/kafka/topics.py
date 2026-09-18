@@ -13,6 +13,17 @@ DEFAULT_KAFKA_TOPICS: Final[tuple[str, ...]] = (
 )
 
 
+DEFAULT_KAFKA_PARTITIONS: Final[dict[str, int]] = {
+    "fieldops.job.events": 6,
+    "fieldops.gps.events": 12,
+    "fieldops.sla.events": 6,
+    "fieldops.notification.events": 6,
+    "fieldops.billing.events": 3,
+    "fieldops.payment.events": 3,
+    "fieldops.audit.events": 6,
+}
+
+
 def get_kafka_topics() -> tuple[str, ...]:
     configured_topics = os.getenv("KAFKA_TOPICS")
 
@@ -32,3 +43,35 @@ def get_kafka_topics() -> tuple[str, ...]:
         raise ValueError("KAFKA_TOPICS contains duplicate topic names.")
 
     return topics
+
+
+def get_kafka_partition_count(topic: str) -> int:
+    if topic not in DEFAULT_KAFKA_PARTITIONS:
+        raise ValueError(f"Unknown Kafka topic: {topic}")
+
+    env_name = (
+        "KAFKA_"
+        + topic.removeprefix("fieldops.")
+        .replace(".", "_")
+        .upper()
+        + "_PARTITIONS"
+    )
+
+    configured = os.getenv(env_name)
+
+    if configured is None:
+        return DEFAULT_KAFKA_PARTITIONS[topic]
+
+    try:
+        partitions = int(configured)
+    except ValueError as exc:
+        raise ValueError(
+            f"{env_name} must be a positive integer."
+        ) from exc
+
+    if partitions < 1:
+        raise ValueError(
+            f"{env_name} must be a positive integer."
+        )
+
+    return partitions
