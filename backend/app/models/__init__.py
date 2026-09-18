@@ -73,3 +73,5 @@ from .runtime_metrics import RuntimeMetricRollup  # noqa: F401
 from .oidc_identity import OIDCIdentity
 from .mfa import MFA  # noqa: F401
 from .mfa_recovery_code import MFARecoveryCode  # noqa: F401
+from .password_reset_token import PasswordResetToken
+from .trust_device import TrustedDevice

@@ -15,6 +15,9 @@ class MFAVerifyRequest(BaseModel):
     challenge: str = Field(min_length=1)
     code: str = Field(min_length=6, max_length=6)
 
+    # User can choose "Trust this device"
+    trust_device: bool = False
+
 
 class MFARecoveryRequest(BaseModel):
     challenge: str = Field(min_length=1)
@@ -46,6 +49,10 @@ class MFAVerificationResponse(BaseModel):
     token_type: str
     expires_in: int
     user: dict
+
+    # Returned only when trust_device=True
+    trusted_device_token: Optional[str] = None
+
 
 class MFAEnrollmentVerifyRequest(BaseModel):
     code: str = Field(min_length=6, max_length=6)

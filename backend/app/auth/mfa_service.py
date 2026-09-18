@@ -9,19 +9,21 @@ Security model:
 - MFA challenges are single-use and tenant-scoped.
 - MFA is required only for protected FieldOps roles.
 - MFA challenges are invalidated after too many failed attempts.
+- Trusted-device tokens are stored only as SHA-256 hashes.
+- Trusted devices expire after a configurable number of days.
 """
 
 import hashlib
 import json
 import os
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import pyotp
 from cryptography.fernet import Fernet, InvalidToken
 
-from app.models import MFA, MFARecoveryCode
+from app.models import MFA, MFARecoveryCode, TrustedDevice
 from app.redis_client import get_redis_client
 
 
@@ -39,6 +41,11 @@ MFA_CHALLENGE_TTL_SECONDS = 300
 MFA_MAX_ATTEMPTS = 5
 RECOVERY_CODE_COUNT = 10
 
+# Trusted device remains valid for 30 days by default.
+TRUSTED_DEVICE_EXPIRE_DAYS = int(
+    os.getenv("TRUSTED_DEVICE_EXPIRE_DAYS", "30")
+)
+
 
 # ---------------------------------------------------------------------------
 # Encryption
@@ -51,6 +58,7 @@ def _get_fernet() -> Fernet:
     The encryption key must come from the environment.
     It must never be hard-coded in source code.
     """
+
     key = os.getenv("MFA_ENCRYPTION_KEY")
 
     if not key:
@@ -68,6 +76,7 @@ def _get_fernet() -> Fernet:
 
 def encrypt_secret(secret: str) -> str:
     """Encrypt a TOTP secret before database storage."""
+
     return _get_fernet().encrypt(
         secret.encode("utf-8")
     ).decode("utf-8")
@@ -75,10 +84,12 @@ def encrypt_secret(secret: str) -> str:
 
 def decrypt_secret(encrypted_secret: str) -> str:
     """Decrypt a stored TOTP secret."""
+
     try:
         return _get_fernet().decrypt(
             encrypted_secret.encode("utf-8")
         ).decode("utf-8")
+
     except InvalidToken as exc:
         raise ValueError(
             "Unable to decrypt MFA secret"
@@ -93,6 +104,7 @@ def normalize_role(role: Any) -> str:
     """
     Normalize role values so both enum-style and string-style roles work.
     """
+
     if role is None:
         return ""
 
@@ -103,6 +115,7 @@ def normalize_role(role: Any) -> str:
 
 def is_mfa_required_for_role(role: Any) -> bool:
     """Return whether the user's role is protected by MFA."""
+
     return normalize_role(role) in MFA_REQUIRED_ROLES
 
 
@@ -112,6 +125,7 @@ def is_mfa_required_for_role(role: Any) -> bool:
 
 def generate_totp_secret() -> str:
     """Generate a cryptographically secure TOTP secret."""
+
     return pyotp.random_base32()
 
 
@@ -125,6 +139,7 @@ def build_totp_provisioning_uri(
 
     This URI contains the secret and therefore MUST NOT be logged.
     """
+
     return pyotp.TOTP(secret).provisioning_uri(
         name=user_email,
         issuer_name=issuer,
@@ -147,6 +162,7 @@ def create_enrollment_secret(
 
     It must never be persisted or logged in plaintext.
     """
+
     secret = generate_totp_secret()
 
     encrypted_secret = encrypt_secret(secret)
@@ -168,6 +184,7 @@ def verify_totp(
 
     A small clock-drift window is allowed.
     """
+
     if not code:
         return False
 
@@ -200,6 +217,7 @@ def _hash_recovery_code(code: str) -> str:
     Recovery codes are generated with high entropy, so SHA-256 is suitable
     for these random, single-use secrets.
     """
+
     normalized = code.strip().upper()
 
     return hashlib.sha256(
@@ -215,9 +233,11 @@ def generate_recovery_codes(
 
     The plaintext codes are returned only once to the enrollment flow.
     """
+
     codes: List[str] = []
 
     for _ in range(count):
+
         # 16 random hexadecimal characters = 64 bits of randomness.
         raw = secrets.token_hex(8).upper()
 
@@ -238,6 +258,7 @@ def hash_recovery_codes(
     codes: List[str],
 ) -> List[str]:
     """Return hashes for a collection of recovery codes."""
+
     return [
         _hash_recovery_code(code)
         for code in codes
@@ -256,6 +277,7 @@ def get_user_mfa(
     """
     Get MFA configuration with explicit tenant scoping.
     """
+
     return (
         db.query(MFA)
         .filter(
@@ -277,6 +299,7 @@ def create_mfa_record(
 
     MFA remains disabled until enrollment is successfully verified.
     """
+
     existing = get_user_mfa(
         db=db,
         user_id=user_id,
@@ -312,12 +335,14 @@ def save_recovery_codes(
 
     Only hashes are stored.
     """
+
     # Delete existing recovery codes.
     for existing_code in list(mfa.recovery_codes):
         db.delete(existing_code)
 
     # Store only hashes.
     for code in recovery_codes:
+
         recovery = MFARecoveryCode(
             mfa_id=mfa.id,
             tenant_id=tenant_id,
@@ -345,6 +370,7 @@ def verify_recovery_code(
 
     A recovery code can only be used once.
     """
+
     if not supplied_code:
         return False
 
@@ -367,6 +393,7 @@ def verify_recovery_code(
         return False
 
     recovery.used = True
+
     recovery.used_at = datetime.now(
         timezone.utc
     )
@@ -398,6 +425,7 @@ def create_mfa_challenge(
     The challenge contains only identity/context information.
     It does NOT contain the TOTP secret.
     """
+
     challenge_id = secrets.token_urlsafe(32)
 
     payload = {
@@ -431,6 +459,7 @@ def get_mfa_challenge(
     """
     Retrieve an MFA challenge from Redis.
     """
+
     if not challenge_id:
         return None
 
@@ -445,6 +474,7 @@ def get_mfa_challenge(
 
     try:
         return json.loads(raw)
+
     except (
         TypeError,
         json.JSONDecodeError,
@@ -461,6 +491,7 @@ def increment_challenge_attempts(
     The attempts counter is stored in a separate Redis key with
     the same TTL as the MFA challenge.
     """
+
     if not challenge_id:
         return None
 
@@ -502,6 +533,7 @@ def get_challenge_attempts(
     """
     Return the current number of failed attempts.
     """
+
     if not challenge_id:
         return 0
 
@@ -518,6 +550,7 @@ def get_challenge_attempts(
 
     try:
         return int(raw)
+
     except (TypeError, ValueError):
         return 0
 
@@ -530,6 +563,7 @@ def consume_mfa_challenge(
 
     Once consumed, the same challenge cannot be used again.
     """
+
     if not challenge_id:
         return None
 
@@ -551,6 +585,7 @@ def consume_mfa_challenge(
 
     try:
         return json.loads(raw)
+
     except (
         TypeError,
         json.JSONDecodeError,
@@ -564,6 +599,7 @@ def delete_mfa_challenge(
     """
     Delete a challenge and its attempt counter.
     """
+
     if not challenge_id:
         return False
 
@@ -606,6 +642,7 @@ def verify_mfa_challenge(
     - TOTP secret is never returned.
     - Replay of a consumed challenge is rejected.
     """
+
     challenge = get_mfa_challenge(
         challenge_id
     )
@@ -633,9 +670,11 @@ def verify_mfa_challenge(
     )
 
     if current_attempts >= MFA_MAX_ATTEMPTS:
+
         delete_mfa_challenge(
             challenge_id
         )
+
         return False, None
 
     mfa = get_user_mfa(
@@ -651,6 +690,7 @@ def verify_mfa_challenge(
         secret = decrypt_secret(
             mfa.secret_encrypted
         )
+
     except ValueError:
         return False, None
 
@@ -659,6 +699,7 @@ def verify_mfa_challenge(
         secret,
         code,
     ):
+
         attempts = increment_challenge_attempts(
             challenge_id
         )
@@ -668,6 +709,7 @@ def verify_mfa_challenge(
             attempts is not None
             and attempts >= MFA_MAX_ATTEMPTS
         ):
+
             delete_mfa_challenge(
                 challenge_id
             )
@@ -693,6 +735,7 @@ def verify_mfa_challenge(
         str(consumed.get("tenant_id", ""))
         != challenge_tenant_id
     ):
+
         return False, None
 
     mfa.last_used_at = datetime.now(
@@ -722,6 +765,7 @@ def verify_mfa_recovery(
     The MFA challenge is consumed only after the recovery
     code succeeds.
     """
+
     challenge = get_mfa_challenge(
         challenge_id
     )
@@ -750,9 +794,11 @@ def verify_mfa_recovery(
     )
 
     if current_attempts >= MFA_MAX_ATTEMPTS:
+
         delete_mfa_challenge(
             challenge_id
         )
+
         return False, None
 
     mfa = get_user_mfa(
@@ -772,6 +818,7 @@ def verify_mfa_recovery(
     )
 
     if not success:
+
         attempts = increment_challenge_attempts(
             challenge_id
         )
@@ -780,6 +827,7 @@ def verify_mfa_recovery(
             attempts is not None
             and attempts >= MFA_MAX_ATTEMPTS
         ):
+
             delete_mfa_challenge(
                 challenge_id
             )
@@ -802,6 +850,7 @@ def verify_mfa_recovery(
         str(consumed.get("tenant_id", ""))
         != challenge_tenant_id
     ):
+
         return False, None
 
     mfa.last_used_at = datetime.now(
@@ -811,3 +860,164 @@ def verify_mfa_recovery(
     db.flush()
 
     return True, user_id
+
+
+# ---------------------------------------------------------------------------
+# Trusted device
+# ---------------------------------------------------------------------------
+
+def create_trusted_device_token() -> str:
+    """
+    Generate a cryptographically secure trusted-device token.
+
+    The raw token is returned to the client only once.
+    It must never be stored directly in the database.
+    """
+
+    return secrets.token_urlsafe(32)
+
+
+def hash_trusted_device_token(
+    token: str,
+) -> str:
+    """
+    Hash a trusted-device token using SHA-256.
+
+    Only the hash is stored in the database.
+    """
+
+    if not token:
+        raise ValueError(
+            "Trusted device token cannot be empty"
+        )
+
+    return hashlib.sha256(
+        token.encode("utf-8")
+    ).hexdigest()
+
+
+def create_trusted_device(
+    db,
+    user_id: str,
+) -> Tuple[str, TrustedDevice]:
+    """
+    Create a trusted-device record after successful MFA.
+
+    Returns:
+        raw_token:
+            Token that must be returned to the client.
+
+        trusted_device:
+            Database record.
+
+    The raw token is never stored in the database.
+    """
+
+    raw_token = create_trusted_device_token()
+
+    token_hash = hash_trusted_device_token(
+        raw_token
+    )
+
+    expires_at = (
+        datetime.now(timezone.utc)
+        + timedelta(
+            days=TRUSTED_DEVICE_EXPIRE_DAYS
+        )
+    )
+
+    trusted_device = TrustedDevice(
+        user_id=str(user_id),
+        token_hash=token_hash,
+        expires_at=expires_at,
+    )
+
+    db.add(trusted_device)
+
+    db.flush()
+
+    return raw_token, trusted_device
+
+
+def get_trusted_device(
+    db,
+    user_id: str,
+    token: str,
+) -> Optional[TrustedDevice]:
+    """
+    Validate a trusted-device token.
+
+    Returns:
+        TrustedDevice when valid and unexpired.
+
+    Returns:
+        None when token is invalid or expired.
+    """
+
+    if not token:
+        return None
+
+    token_hash = hash_trusted_device_token(
+        token
+    )
+
+    trusted_device = (
+        db.query(TrustedDevice)
+        .filter(
+            TrustedDevice.user_id == str(user_id),
+            TrustedDevice.token_hash == token_hash,
+        )
+        .first()
+    )
+
+    if trusted_device is None:
+        return None
+
+    # Remove expired trusted device.
+    if trusted_device.is_expired:
+
+        db.delete(trusted_device)
+
+        db.flush()
+
+        return None
+
+    return trusted_device
+
+
+def revoke_trusted_device(
+    db,
+    user_id: str,
+    token: str,
+) -> bool:
+    """
+    Revoke a trusted device.
+
+    Returns True when the trusted device existed
+    and was successfully removed.
+    """
+
+    if not token:
+        return False
+
+    token_hash = hash_trusted_device_token(
+        token
+    )
+
+    trusted_device = (
+        db.query(TrustedDevice)
+        .filter(
+            TrustedDevice.user_id == str(user_id),
+            TrustedDevice.token_hash == token_hash,
+        )
+        .first()
+    )
+
+    if trusted_device is None:
+        return False
+
+    db.delete(trusted_device)
+
+    db.flush()
+
+    return True

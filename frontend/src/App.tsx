@@ -50,6 +50,9 @@ import LoadingSpinner from "./components/ui/LoadingSpinner";
 
 // Lazy load page components
 const LoginPage = lazy(() => import("./pages/LoginPage"));
+const ResetPasswordPage = lazy(
+  () => import("./pages/ResetPasswordPage"),
+);
 const OrganizationOnboardingPage = lazy(
   () => import("./pages/OrganizationOnboardingPage"),
 );
@@ -647,6 +650,35 @@ const localCss = `
 function AppInner() {
   const { user, logout } = useAuthStore();
   const { addToast } = useToast();
+  useEffect(() => {
+  const handleSSOCallback = async () => {
+    if (window.location.pathname !== "/auth/sso/callback") {
+      return;
+    }
+
+    try {
+      localStorage.setItem("auth_mode", "sso");
+
+      const success = await useAuthStore
+        .getState()
+        .loadFromSession();
+
+      if (success) {
+        window.history.replaceState({}, "", "/");
+      } else {
+        localStorage.removeItem("auth_mode");
+        window.location.href = "/login";
+      }
+    } catch (error) {
+      console.error("SSO session initialization failed:", error);
+
+      localStorage.removeItem("auth_mode");
+      window.location.href = "/login";
+    }
+  };
+
+  handleSSOCallback();
+}, []);
 
   const userRole =
     (user?.role || "").toLowerCase();
@@ -3015,7 +3047,6 @@ function AppInner() {
 //          ↓
 //   AppInner
 // ─────────────────────────────────────────────
-
 function AppContent() {
   const {
     isAuthenticated,
@@ -3029,42 +3060,130 @@ function AppContent() {
     setShowOnboarding,
   ] = useState(false);
 
+  /*
+   * Password reset route
+   *
+   * Example:
+   * /reset-password?token=abc123
+   */
+  const isResetPasswordPage =
+    window.location.pathname ===
+    "/reset-password";
+
+  const resetToken =
+    new URLSearchParams(
+      window.location.search,
+    ).get("token");
+
+  /*
+   * Initialize authentication
+   */
   useEffect(() => {
     let mounted = true;
 
     const initializeAuthentication =
       async () => {
         /*
-         * First check normal JWT authentication.
-         */
-        loadFromStorage();
-
-        /*
-         * Get the latest Zustand state.
-         */
-        const currentState =
-          useAuthStore.getState();
-
-        /*
-         * Normal login session already exists.
-         */
-        if (
-          currentState.isAuthenticated
-        ) {
-          return;
-        }
-
-        /*
-         * No local JWT session.
+         * Determine which authentication mode
+         * is currently being used.
          *
-         * Check whether the backend has
-         * an active SSO HttpOnly cookie.
+         * local = normal email/password login
+         * sso   = enterprise SSO login
          */
-        await loadFromSession();
+        const authMode =
+          localStorage.getItem(
+            "auth_mode",
+          );
 
-        if (!mounted) {
+        /*
+         * --------------------------------------------------
+         * NORMAL LOGIN
+         * --------------------------------------------------
+         *
+         * Normal login stores the JWT in localStorage.
+         *
+         * Therefore we restore the authentication
+         * state from localStorage.
+         *
+         * IMPORTANT:
+         * We do NOT call /auth/me here.
+         */
+        if (authMode === "local") {
+          loadFromStorage();
+
           return;
         }
+
+        /*
+         * --------------------------------------------------
+         * SSO LOGIN
+         * --------------------------------------------------
+         *
+         * SSO authentication uses HttpOnly cookies.
+         *
+         * The frontend cannot read the HttpOnly cookie,
+         * so we ask the backend to verify the session.
+         *
+         * This internally calls:
+         *
+         * GET /auth/me
+         */
+        if (authMode === "sso") {
+          await loadFromSession();
+
+          if (!mounted) {
+            return;
+          }
+
+          /*
+           * Check the latest Zustand state after
+           * the session validation.
+           */
+          const currentState =
+            useAuthStore.getState();
+
+          /*
+           * The SSO session is no longer valid.
+           *
+           * Remove the stale authentication mode so
+           * that the next application load does not
+           * repeatedly try /auth/me.
+           */
+          if (
+            !currentState.isAuthenticated
+          ) {
+            localStorage.removeItem(
+              "auth_mode",
+            );
+          }
+
+          return;
+        }
+
+        /*
+         * --------------------------------------------------
+         * NO AUTHENTICATION
+         * --------------------------------------------------
+         *
+         * There is no auth_mode in localStorage.
+         *
+         * This normally means the user has not logged in.
+         *
+         * IMPORTANT:
+         *
+         * Do NOT call loadFromSession().
+         *
+         * Otherwise the application will unnecessarily
+         * call:
+         *
+         * GET /auth/me
+         *
+         * and receive:
+         *
+         * 401 Authentication required
+         *
+         * The LoginPage will be displayed below.
+         */
       };
 
     initializeAuthentication();
@@ -3082,15 +3201,48 @@ function AppContent() {
    */
   useEffect(() => {
     if (isAuthenticated) {
-      setShowOnboarding(
-        false,
-      );
+      setShowOnboarding(false);
     }
   }, [isAuthenticated]);
 
   /*
+   * --------------------------------------------------
+   * PASSWORD RESET PAGE
+   * --------------------------------------------------
+   *
+   * This must be checked before the authentication
+   * loading screen and normal login page.
+   */
+  if (isResetPasswordPage) {
+    return (
+      <Suspense
+        fallback={
+          <LoadingSpinner />
+        }
+      >
+        <ResetPasswordPage
+          token={resetToken || ""}
+          onBackToLogin={() => {
+            window.history.replaceState(
+              {},
+              "",
+              "/",
+            );
+
+            window.location.reload();
+          }}
+        />
+      </Suspense>
+    );
+  }
+
+  /*
+   * --------------------------------------------------
+   * AUTHENTICATION LOADING
+   * --------------------------------------------------
+   *
    * Prevent the login page from flashing while
-   * the browser session is being checked.
+   * authentication is being checked.
    */
   if (isLoading) {
     return (
@@ -3102,7 +3254,9 @@ function AppContent() {
   }
 
   /*
-   * Organization onboarding.
+   * --------------------------------------------------
+   * ORGANIZATION ONBOARDING
+   * --------------------------------------------------
    */
   if (
     !isAuthenticated &&
@@ -3116,9 +3270,7 @@ function AppContent() {
       >
         <OrganizationOnboardingPage
           onBackToLogin={() =>
-            setShowOnboarding(
-              false,
-            )
+            setShowOnboarding(false)
           }
         />
       </Suspense>
@@ -3126,7 +3278,9 @@ function AppContent() {
   }
 
   /*
-   * Login page.
+   * --------------------------------------------------
+   * LOGIN PAGE
+   * --------------------------------------------------
    */
   if (!isAuthenticated) {
     return (
@@ -3137,9 +3291,7 @@ function AppContent() {
       >
         <LoginPage
           onCreateOrganization={() =>
-            setShowOnboarding(
-              true,
-            )
+            setShowOnboarding(true)
           }
         />
       </Suspense>
@@ -3147,7 +3299,9 @@ function AppContent() {
   }
 
   /*
-   * Authenticated user.
+   * --------------------------------------------------
+   * AUTHENTICATED APPLICATION
+   * --------------------------------------------------
    */
   return <AppInner />;
 }
