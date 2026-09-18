@@ -28,6 +28,13 @@ The Kafka broker runs as a single-node KRaft broker/controller in the repository
 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:29092` | Backend producer/consumer bootstrap address |
 | `KAFKA_TOPICS` | `fieldops.job.events,fieldops.gps.events,fieldops.sla.events,fieldops.notification.events,fieldops.billing.events,fieldops.payment.events,fieldops.audit.events` | Comma-separated FieldOps Kafka topics initialized by `kafka-init` |
 | `KAFKA_CONSUMER_GROUP` | `fieldops` | Consumer group used by the backend consumer |
+| `KAFKA_DISPATCH_CONSUMER_GROUP` | `fieldops-dispatch` | Consumer group for dispatch processing |
+| `KAFKA_GPS_CONSUMER_GROUP` | `fieldops-gps` | Consumer group for GPS tracking |
+| `KAFKA_NOTIFICATIONS_CONSUMER_GROUP` | `fieldops-notifications` | Consumer group for notifications |
+| `KAFKA_SLA_CONSUMER_GROUP` | `fieldops-sla` | Consumer group for SLA monitoring |
+| `KAFKA_BILLING_CONSUMER_GROUP` | `fieldops-billing` | Consumer group for billing |
+| `KAFKA_PAYMENT_CONSUMER_GROUP` | `fieldops-payment` | Consumer group for payment processing |
+| `KAFKA_AUDIT_CONSUMER_GROUP` | `fieldops-audit` | Consumer group for audit processing |
 | `KAFKA_DEFAULT_REPLICATION_FACTOR` | `1` | Default replication factor for broker-created topics |
 | `KAFKA_REPLICATION_FACTOR` | `1` | Replication factor used by `kafka-init` when creating FieldOps topics |
 | `KAFKA_MIN_INSYNC_REPLICAS` | `1` | Minimum in-sync replicas required for topic writes |
@@ -61,6 +68,40 @@ The local Kafka broker uses a replication factor of `1` because it is a single-b
 Kafka guarantees ordering only within a partition. Stable partition keys ensure related events are routed to the same partition and therefore preserve ordering within that key's scope.
 
 Partition increases should be avoided unless required because changing the partition count can change the partition mapping for keyed events.
+
+## Kafka Authentication
+
+The external Kafka listener uses SASL/PLAIN authentication.
+
+The Kafka broker requires clients connecting through the external listener to provide valid credentials.
+
+The backend `KafkaProducer` and `KafkaConsumerManager` load Kafka authentication configuration from environment variables.
+
+The supported client configuration is:
+
+```text
+KAFKA_SECURITY_PROTOCOL=SASL_PLAINTEXT
+KAFKA_SASL_MECHANISM=PLAIN
+KAFKA_SASL_USERNAME=<configured username>
+KAFKA_SASL_PASSWORD=<configured password>
+
+## Consumer Group Ownership
+
+Each FieldOps Kafka processing domain uses a dedicated consumer group so unrelated consumers do not share offsets or compete for the same partitions.
+
+| Topic | Consumer Group | Processing Domain |
+|---|---|---|
+| `fieldops.job.events` | `fieldops-dispatch` | Dispatch |
+| `fieldops.gps.events` | `fieldops-gps` | GPS tracking |
+| `fieldops.notification.events` | `fieldops-notifications` | Notifications |
+| `fieldops.sla.events` | `fieldops-sla` | SLA monitoring |
+| `fieldops.billing.events` | `fieldops-billing` | Billing |
+| `fieldops.payment.events` | `fieldops-payment` | Payment |
+| `fieldops.audit.events` | `fieldops-audit` | Audit |
+
+Consumer group names are environment-driven through the corresponding `KAFKA_*_CONSUMER_GROUP` variables in `compose.yaml`. The defaults provide stable group IDs for local development.
+
+Multiple consumer instances using the same group can distribute partitions for that processing domain. Consumers for different processing domains must use different group IDs so each domain receives its own logical stream.
 
 ## Replication and Durability
 
@@ -119,6 +160,13 @@ Focused Kafka producer and consumer tests are maintained under `backend/tests/`.
 Broker-level end-to-end verification requires a running Docker/Compose environment.
 
 The configured topic partition counts are verified against the running Kafka broker during infrastructure validation.
+
+Consumer group verification should confirm:
+
+- Each configured FieldOps topic has its dedicated consumer group.
+- Different processing domains use different group IDs.
+- Multiple consumers in the same group can distribute partitions for that domain.
+- Environment-specific consumer group variables resolve to the intended group IDs.
 
 Replication configuration verification should confirm:
 
