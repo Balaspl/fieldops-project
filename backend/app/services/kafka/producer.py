@@ -60,6 +60,7 @@ class KafkaProducer:
         self._producer = AIOKafkaProducer(
             bootstrap_servers=self.bootstrap_servers,
             request_timeout_ms=5000,
+            acks=os.getenv("KAFKA_ACKS", "all"),
         )
 
         try:

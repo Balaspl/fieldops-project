@@ -19,10 +19,11 @@ services:
 
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       KAFKA_NUM_PARTITIONS: 3
-      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: ${KAFKA_DEFAULT_REPLICATION_FACTOR:-1}
+      KAFKA_MIN_INSYNC_REPLICAS: ${KAFKA_MIN_INSYNC_REPLICAS:-1}
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: ${KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR:-1}
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: ${KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR:-1}
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: ${KAFKA_TRANSACTION_STATE_LOG_MIN_ISR:-1}
 
     healthcheck:
       test:
@@ -51,7 +52,7 @@ services:
 
     environment:
       KAFKA_TOPICS: "${KAFKA_TOPICS:-fieldops.job.events,fieldops.gps.events,fieldops.sla.events,fieldops.notification.events,fieldops.billing.events,fieldops.payment.events,fieldops.audit.events}"
-
+      KAFKA_REPLICATION_FACTOR: "${KAFKA_REPLICATION_FACTOR:-1}"
       KAFKA_JOB_EVENTS_PARTITIONS: "${KAFKA_JOB_EVENTS_PARTITIONS:-6}"
       KAFKA_GPS_EVENTS_PARTITIONS: "${KAFKA_GPS_EVENTS_PARTITIONS:-12}"
       KAFKA_SLA_EVENTS_PARTITIONS: "${KAFKA_SLA_EVENTS_PARTITIONS:-6}"
@@ -110,7 +111,7 @@ services:
               --if-not-exists \
               --topic "$$topic" \
               --partitions "$$partitions" \
-              --replication-factor 1
+              --replication-factor "$$KAFKA_REPLICATION_FACTOR"
           fi
         done
 

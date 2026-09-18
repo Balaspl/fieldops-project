@@ -7,6 +7,31 @@ from aiokafka.errors import KafkaError
 
 from app.services.kafka.producer import KafkaProducer
 
+@pytest.mark.asyncio
+async def test_start_uses_durable_kafka_acknowledgement(monkeypatch):
+    captured = {}
+
+    class FakeProducer:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def start(self):
+            pass
+
+    monkeypatch.setattr(
+        "app.services.kafka.producer.AIOKafkaProducer",
+        FakeProducer,
+    )
+
+    monkeypatch.delenv("KAFKA_ACKS", raising=False)
+
+    producer = KafkaProducer()
+    await producer.start()
+
+    assert captured["acks"] == "all"
+
+    await producer.stop()
+
 
 def create_message():
     from app.services.ai.FieldOpsAI.schemas.agent_messages import (
