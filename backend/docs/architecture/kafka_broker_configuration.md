@@ -69,6 +69,22 @@ Kafka guarantees ordering only within a partition. Stable partition keys ensure 
 
 Partition increases should be avoided unless required because changing the partition count can change the partition mapping for keyed events.
 
+## Kafka Authentication
+
+The external Kafka listener uses SASL/PLAIN authentication.
+
+The Kafka broker requires clients connecting through the external listener to provide valid credentials.
+
+The backend `KafkaProducer` and `KafkaConsumerManager` load Kafka authentication configuration from environment variables.
+
+The supported client configuration is:
+
+```text
+KAFKA_SECURITY_PROTOCOL=SASL_PLAINTEXT
+KAFKA_SASL_MECHANISM=PLAIN
+KAFKA_SASL_USERNAME=<configured username>
+KAFKA_SASL_PASSWORD=<configured password>
+
 ## Consumer Group Ownership
 
 Each FieldOps Kafka processing domain uses a dedicated consumer group so unrelated consumers do not share offsets or compete for the same partitions.

@@ -61,6 +61,10 @@ class KafkaProducer:
             bootstrap_servers=self.bootstrap_servers,
             request_timeout_ms=5000,
             acks=os.getenv("KAFKA_ACKS", "all"),
+            security_protocol=os.getenv("KAFKA_SECURITY_PROTOCOL", "SASL_PLAINTEXT"),
+            sasl_mechanism=os.getenv("KAFKA_SASL_MECHANISM", "PLAIN"),
+            sasl_plain_username=os.getenv("KAFKA_SASL_USERNAME"),
+            sasl_plain_password=os.getenv("KAFKA_SASL_PASSWORD"),
         )
 
         try:

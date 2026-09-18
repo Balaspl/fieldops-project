@@ -51,6 +51,10 @@ class KafkaConsumerManager:
             group_id=self.group_id,
             enable_auto_commit=True,
             auto_offset_reset="earliest",
+            security_protocol=os.getenv("KAFKA_SECURITY_PROTOCOL", "SASL_PLAINTEXT"),
+            sasl_mechanism=os.getenv("KAFKA_SASL_MECHANISM", "PLAIN"),
+            sasl_plain_username=os.getenv("KAFKA_SASL_USERNAME"),
+            sasl_plain_password=os.getenv("KAFKA_SASL_PASSWORD"),
             value_deserializer=lambda value: json.loads(
                 value.decode("utf-8")
             ),
