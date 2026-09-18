@@ -77,7 +77,7 @@ async def test_consumer_handler_receives_message(monkeypatch):
     await manager.consume(handler)
 
     assert received == [payload]
-    
+
     await real_consumer.stop()
 
 
@@ -103,7 +103,7 @@ async def test_consumer_propagates_handler_failure():
 
     with pytest.raises(RuntimeError, match="handler failure"):
         await manager.consume(handler)
-        
+
     await real_consumer.stop()
 
 
@@ -111,6 +111,7 @@ async def test_consumer_propagates_handler_failure():
 async def test_consumer_start_and_stop(monkeypatch):
     manager = KafkaConsumerManager()
     real_consumer = manager.consumer
+    original_stop = real_consumer.stop
 
     started = False
     stopped = False
@@ -131,14 +132,15 @@ async def test_consumer_start_and_stop(monkeypatch):
 
     assert started is True
     assert stopped is True
-    
-    await real_consumer.stop()
+
+    await original_stop()
 
 
 @pytest.mark.asyncio
 async def test_consumer_context_manager(monkeypatch):
     manager = KafkaConsumerManager()
     real_consumer = manager.consumer
+    original_stop = real_consumer.stop
 
     started = False
     stopped = False
@@ -158,5 +160,28 @@ async def test_consumer_context_manager(monkeypatch):
         assert started is True
 
     assert stopped is True
-    
-    await real_consumer.stop()
+
+    await original_stop()
+@pytest.mark.parametrize(
+    ("topic", "expected_group"),
+    [
+        ("fieldops.job.events", "fieldops-dispatch"),
+        ("fieldops.gps.events", "fieldops-gps"),
+        ("fieldops.notification.events", "fieldops-notifications"),
+        ("fieldops.sla.events", "fieldops-sla"),
+        ("fieldops.billing.events", "fieldops-billing"),
+        ("fieldops.payment.events", "fieldops-payment"),
+        ("fieldops.audit.events", "fieldops-audit"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_consumer_uses_dedicated_group_for_each_domain(
+    topic,
+    expected_group,
+):
+    manager = KafkaConsumerManager(topic=topic)
+
+    try:
+        assert manager.group_id == expected_group
+    finally:
+        await manager.consumer.stop()
