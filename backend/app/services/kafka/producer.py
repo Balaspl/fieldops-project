@@ -63,8 +63,8 @@ class KafkaProducer:
             acks=os.getenv("KAFKA_ACKS", "all"),
             security_protocol=os.getenv("KAFKA_SECURITY_PROTOCOL", "SASL_PLAINTEXT"),
             sasl_mechanism=os.getenv("KAFKA_SASL_MECHANISM", "PLAIN"),
-            sasl_plain_username=os.getenv("KAFKA_SASL_USERNAME"),
-            sasl_plain_password=os.getenv("KAFKA_SASL_PASSWORD"),
+            sasl_plain_username=os.getenv("KAFKA_PRODUCER_USERNAME"),
+            sasl_plain_password=os.getenv("KAFKA_PRODUCER_PASSWORD"),
         )
 
         try:
