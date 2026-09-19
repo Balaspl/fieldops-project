@@ -1628,6 +1628,18 @@ class TransitionRequest(BaseModel):
     is_override: Optional[bool] = False
 
 
+class BulkJobCancellationRequest(BaseModel):
+    job_ids: list[int] = Field(..., min_length=1)
+    reason: str = Field(..., min_length=1)
+
+
+class BulkJobCancellationResponse(BaseModel):
+    status: str
+    total_requested: int
+    total_cancelled: int
+    results: list[dict]
+
+
 @api_v1_router.get("/jobs/{id}/valid-transitions")
 def get_job_valid_transitions(
     id: str,
@@ -1781,6 +1793,239 @@ def transition_job_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to transition job",
         )
+
+
+@api_v1_router.post(
+    "/jobs/bulk-cancel",
+    response_model=BulkJobCancellationResponse,
+)
+def bulk_cancel_jobs(
+    payload: BulkJobCancellationRequest,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Bulk cancel jobs for dispatcher/admin users.
+
+    Uses the existing TransitionValidator for validation and
+    Job.transition() for the actual state change.
+    """
+
+    actor_id = current_user.user_id
+    actor_role = current_user.role.value
+
+    # Only dispatcher/admin can perform bulk cancellation.
+    if actor_role not in {"dispatcher", "admin"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only dispatcher or admin can perform bulk cancellation",
+        )
+
+    # Remove duplicate IDs while preserving order.
+    job_ids = list(dict.fromkeys(payload.job_ids))
+
+    if not job_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one job ID is required",
+        )
+
+    from app.services.job_status_machine import (
+        TransitionValidator,
+        JobStatus,
+        InvalidTransitionError,
+        PermissionDeniedError,
+    )
+
+    # ---------------------------------------------------------
+    # PHASE 1: Fetch all jobs within the authenticated tenant.
+    # ---------------------------------------------------------
+
+    jobs = (
+        db.query(Job)
+        .filter(
+            Job.id.in_(job_ids),
+            Job.tenant_id == current_user.tenant_id,
+        )
+        .all()
+    )
+
+    jobs_by_id = {job.id: job for job in jobs}
+
+    # Jobs missing from this tenant are rejected.
+    missing_ids = [
+        job_id
+        for job_id in job_ids
+        if job_id not in jobs_by_id
+    ]
+
+    if missing_ids:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "JOB_NOT_FOUND",
+                "message": "One or more jobs were not found in the current tenant",
+                "job_ids": missing_ids,
+            },
+        )
+
+    # ---------------------------------------------------------
+    # PHASE 2: Validate EVERY job without changing its status.
+    # ---------------------------------------------------------
+
+    validator = TransitionValidator()
+    validation_errors = []
+
+    for job_id in job_ids:
+        job = jobs_by_id[job_id]
+
+        try:
+            validator.validate(
+                job,
+                JobStatus.CANCELLED,
+                actor_role,
+                False,
+            )
+
+            # Cancellation requires a reason.
+            if not payload.reason.strip():
+                validation_errors.append({
+                    "job_id": job.id,
+                    "error": "REASON_REQUIRED",
+                    "message": "Cancellation reason is required",
+                })
+
+        except InvalidTransitionError as exc:
+            validation_errors.append({
+                "job_id": job.id,
+                "error": "INVALID_TRANSITION",
+                "message": exc.message,
+                "current_status": exc.current,
+                "target_status": exc.target,
+            })
+
+        except PermissionDeniedError as exc:
+            validation_errors.append({
+                "job_id": job.id,
+                "error": "PERMISSION_DENIED",
+                "message": str(exc),
+            })
+
+        except Exception as exc:
+            validation_errors.append({
+                "job_id": job.id,
+                "error": "VALIDATION_FAILED",
+                "message": str(exc),
+            })
+
+    # ---------------------------------------------------------
+    # If ANY job is invalid, cancel NONE.
+    # ---------------------------------------------------------
+
+    if validation_errors:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "BULK_CANCELLATION_VALIDATION_FAILED",
+                "message": (
+                    "Bulk cancellation was not performed because "
+                    "one or more selected jobs failed validation"
+                ),
+                "errors": validation_errors,
+            },
+        )
+
+    # ---------------------------------------------------------
+    # PHASE 3: Apply the authoritative transition to ALL jobs.
+    # ---------------------------------------------------------
+
+    results = []
+
+    try:
+        for job_id in job_ids:
+            job = (
+                db.query(Job)
+                .filter(
+                    Job.id == job_id,
+                    Job.tenant_id == current_user.tenant_id,
+                )
+                .with_for_update()
+                .first()
+            )
+
+            if not job:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Job {job_id} not found",
+                )
+
+            # Revalidate after locking the row so stale client
+            # state cannot become authoritative.
+            validator.validate(
+                job,
+                JobStatus.CANCELLED,
+                actor_role,
+                False,
+            )
+
+            job.transition(
+                JobStatus.CANCELLED,
+                actor_id=actor_id,
+                actor_role=actor_role,
+                reason=payload.reason.strip(),
+                is_override=False,
+            )
+
+            results.append({
+                "job_id": job.id,
+                "status": job.status,
+                "message": "Job cancelled successfully",
+            })
+
+        # One transaction for the complete bulk operation.
+        db.commit()
+
+    except InvalidTransitionError as exc:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=exc.to_dict(),
+        )
+
+    except PermissionDeniedError as exc:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        )
+
+    except HTTPException:
+        db.rollback()
+        raise
+
+    except Exception:
+        db.rollback()
+
+        logger.exception(
+            "Bulk cancellation failed for tenant %s",
+            current_user.tenant_id,
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Bulk cancellation failed",
+        )
+
+    return BulkJobCancellationResponse(
+        status="success",
+        total_requested=len(job_ids),
+        total_cancelled=len(results),
+        results=results,
+    )
+
 
 @api_v1_router.get("/jobs/{id}/sla")
 def get_job_sla(

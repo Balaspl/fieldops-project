@@ -515,3 +515,326 @@ def assign_job(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred"
         )
+
+
+@router.post("/assign-jobs-bulk")
+def assign_jobs_bulk(
+    assignment: schemas.BulkTechnicianAssignment,
+    user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(
+        get_current_user_or_tenant
+    ),
+    db: Session = Depends(get_db)
+):
+    """
+    Assign one technician to multiple jobs.
+
+    All selected jobs are validated before any job is mutated.
+    If any job fails validation, the entire batch is rejected.
+    """
+
+    user, tenant_id = user_tenant
+
+    try:
+        # ============================================================
+        # 1. Validate request
+        # ============================================================
+
+        if not assignment.job_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="At least one job must be selected"
+            )
+
+        # Remove duplicate job IDs while preserving order.
+        parsed_job_ids = []
+
+        for raw_job_id in assignment.job_ids:
+            job_id_str = str(raw_job_id).strip()
+
+            try:
+                if job_id_str.upper().startswith("JOB"):
+                    job_id = int(job_id_str[3:])
+                else:
+                    job_id = int(job_id_str)
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid job ID: {raw_job_id}"
+                )
+
+            if job_id <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid job ID: {raw_job_id}"
+                )
+
+            if job_id not in parsed_job_ids:
+                parsed_job_ids.append(job_id)
+
+        if not parsed_job_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="No valid jobs were provided"
+            )
+
+        # ============================================================
+        # 2. Find technician
+        # ============================================================
+
+        tech_val = assignment.technician_id
+
+        technician = None
+
+        if (
+            isinstance(tech_val, int)
+            or (
+                isinstance(tech_val, str)
+                and tech_val.isdigit()
+            )
+        ):
+            technician_query = db.query(
+                models.Technician
+            ).filter(
+                models.Technician.technician_id == int(tech_val)
+            ).with_for_update()
+
+            if not user or not user.is_super_admin:
+                technician_query = technician_query.filter(
+                    models.Technician.tenant_id == tenant_id
+                )
+
+            technician = technician_query.first()
+
+        if not technician:
+            technician_query = db.query(
+                models.Technician
+            ).filter(
+                models.Technician.tech_id == str(tech_val)
+            ).with_for_update()
+
+            if not user or not user.is_super_admin:
+                technician_query = technician_query.filter(
+                    models.Technician.tenant_id == tenant_id
+                )
+
+            technician = technician_query.first()
+
+        if not technician:
+            raise HTTPException(
+                status_code=404,
+                detail="Technician not found"
+            )
+
+        # ============================================================
+        # 3. Fetch all jobs
+        # ============================================================
+
+        job_query = db.query(models.Job).filter(
+            models.Job.id.in_(parsed_job_ids)
+        ).with_for_update()
+
+        if not user or not user.is_super_admin:
+            job_query = job_query.filter(
+                models.Job.tenant_id == tenant_id
+            )
+
+        jobs = job_query.all()
+
+        jobs_by_id = {
+            job.id: job
+            for job in jobs
+        }
+
+        # ============================================================
+        # 4. Make sure every requested job exists
+        # ============================================================
+
+        missing_job_ids = [
+            job_id
+            for job_id in parsed_job_ids
+            if job_id not in jobs_by_id
+        ]
+
+        if missing_job_ids:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "Job(s) not found or not accessible: "
+                    + ", ".join(
+                        str(job_id)
+                        for job_id in missing_job_ids
+                    )
+                )
+            )
+
+        ordered_jobs = [
+            jobs_by_id[job_id]
+            for job_id in parsed_job_ids
+        ]
+
+        # ============================================================
+        # 5. Validate EVERY job before mutation
+        # ============================================================
+
+        from ..validation import validate_technician_for_assignment
+
+        for job in ordered_jobs:
+
+            if job.assigned_technician_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Job #{job.id} is already assigned to "
+                        f"technician #{job.assigned_technician_id}"
+                    )
+                )
+
+            validate_technician_for_assignment(
+                technician,
+                job
+            )
+
+        # ============================================================
+        # 6. Validate batch workload
+        # ============================================================
+
+        current_jobs = technician.current_jobs or 0
+        max_jobs = technician.max_jobs
+
+        if max_jobs is not None:
+            requested_count = len(ordered_jobs)
+
+            if current_jobs + requested_count > max_jobs:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Cannot assign {requested_count} jobs to "
+                        f"{technician.technician_name}. "
+                        f"Current workload: {current_jobs}/{max_jobs}."
+                    )
+                )
+
+        # ============================================================
+        # 7. Perform mutations
+        # ============================================================
+
+        assigned_at = datetime.now(timezone.utc)
+
+        from ..workload_utils import update_workload_count
+
+        results = []
+
+        for job in ordered_jobs:
+
+            job.assigned_technician_id = (
+                technician.technician_id
+            )
+
+            job.status = "ASSIGNED"
+
+            # --------------------------------------------------------
+            # Customer ServiceRequest
+            # --------------------------------------------------------
+
+            service_request = db.query(
+                models.ServiceRequest
+            ).filter(
+                models.ServiceRequest.linked_job_id == job.id
+            ).first()
+
+            if service_request:
+                service_request.status = "ASSIGNED"
+
+            # --------------------------------------------------------
+            # Assignment metadata
+            # --------------------------------------------------------
+
+            if hasattr(job, "assigned_at"):
+                job.assigned_at = assigned_at
+
+            if hasattr(job, "assigned_by") and user:
+                job.assigned_by = str(user.user_id)
+
+            # --------------------------------------------------------
+            # Technician workload
+            # --------------------------------------------------------
+
+            update_workload_count(
+                db,
+                technician.technician_id,
+                1
+            )
+
+            # --------------------------------------------------------
+            # Technician notification
+            # --------------------------------------------------------
+
+            notification = models.InAppNotification(
+                id=str(uuid.uuid4()),
+                tenant_id=technician.tenant_id,
+                tech_id=technician.tech_id,
+                job_id=str(job.id),
+                type="JOB_ASSIGNED",
+                title="New Job Assigned",
+                body=(
+                    f"You have been assigned to Job #{job.id}: "
+                    f"{job.service_type or 'Service Request'} "
+                    f"at {job.location or 'Customer location'}."
+                ),
+                status="UNREAD",
+                priority=job.priority or "HIGH",
+                created_at=assigned_at,
+            )
+
+            db.add(notification)
+
+            results.append({
+                "job_id": job.id,
+                "status": "ASSIGNED",
+                "technician_id": technician.technician_id,
+                "message": "Technician assigned successfully"
+            })
+
+        # ============================================================
+        # 8. Commit entire batch
+        # ============================================================
+
+        db.commit()
+
+        # ============================================================
+        # 9. Return response
+        # ============================================================
+
+        return {
+            "results": results,
+            "total_requested": len(parsed_job_ids),
+            "total_assigned": len(results)
+        }
+
+    except HTTPException:
+        db.rollback()
+        raise
+
+    except SQLAlchemyError as e:
+        db.rollback()
+
+        print(
+            f"Database error during bulk job assignment: {str(e)}"
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database connection error occurred"
+        )
+
+    except Exception as e:
+        db.rollback()
+
+        print(
+            f"Unexpected error during bulk job assignment: {str(e)}"
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred"
+        )

@@ -13,6 +13,8 @@ import {
   getPendingJobs,
   getPlannedAssignments,
   assignJob,
+  assignJobsBulk,
+  cancelJobsBulk,
   manualAssign,
   getOverrideHistory,
   getJobPlan,
@@ -1009,8 +1011,10 @@ function PlanningDashboard() {
 
   const [selectedTechs, setSelectedTechs] = useState<Record<number, string>>({});
   const [assigningJobId, setAssigningJobId] = useState<number | null>(null);
-
-
+  const [selectedJobIds, setSelectedJobIds] = useState<number[]>([]);
+  const [bulkAssigning, setBulkAssigning] = useState(false);
+  const [bulkTechnicianId, setBulkTechnicianId] = useState<string>("");
+  const [bulkCancelling, setBulkCancelling] = useState(false);
 
   const [selectedJobForRanking, setSelectedJobForRanking] = useState<PendingJob | null>(null);
   const [rankedCandidates, setRankedCandidates] = useState<RankedTechnician[]>([]);
@@ -1425,6 +1429,115 @@ function PlanningDashboard() {
     }
   };
 
+  const handleBulkAssign = async () => {
+    if (selectedJobIds.length === 0 || !bulkTechnicianId) return;
+
+    const technicianId = parseInt(bulkTechnicianId, 10);
+
+    if (Number.isNaN(technicianId)) {
+      setError("Please select a valid technician.");
+      return;
+    }
+
+    try {
+      setBulkAssigning(true);
+      setError("");
+
+      await assignJobsBulk(selectedJobIds, technicianId);
+
+      const tech = allTechsList.find(
+        (t) => t.technician_id === technicianId
+      );
+
+      showAssignSuccess(
+        `${tech?.technician_name || "Technician"} has been assigned to ${selectedJobIds.length} selected job(s).`
+      );
+
+      setSelectedJobIds([]);
+      setBulkTechnicianId("");
+
+      fetchAllData();
+    } catch (err: any) {
+      const msg =
+        err.response?.data?.detail ||
+        err.response?.data?.error ||
+        "Failed to assign selected jobs.";
+
+      setError(msg);
+    } finally {
+      setBulkAssigning(false);
+    }
+  };
+
+
+  const handleBulkCancel = async () => {
+    if (selectedJobIds.length === 0) return;
+
+    const confirmed = window.confirm(
+      `Are you sure you want to cancel ${selectedJobIds.length} selected job(s)?`
+    );
+
+    if (!confirmed) return;
+
+    const reason = window.prompt(
+      "Enter cancellation reason:",
+      "Dispatcher bulk cancellation"
+    );
+
+    if (!reason || !reason.trim()) {
+      setError("Cancellation reason is required.");
+      return;
+    }
+
+    try {
+      setBulkCancelling(true);
+      setError("");
+
+      await cancelJobsBulk(selectedJobIds, reason.trim());
+
+      showSuccess(
+        `${selectedJobIds.length} selected job(s) cancelled successfully.`
+      );
+
+      setSelectedJobIds([]);
+
+      fetchAllData();
+    } catch (err: any) {
+      const detail = err.response?.data?.detail;
+
+      const msg =
+        typeof detail === "string"
+          ? detail
+          : detail?.message ||
+            err.response?.data?.error ||
+            "Failed to cancel selected jobs.";
+
+      setError(msg);
+    } finally {
+      setBulkCancelling(false);
+    }
+  };
+
+
+  const handleJobSelection = (jobId: number, checked: boolean) => {
+    setSelectedJobIds((prev) => {
+      if (checked) {
+        return prev.includes(jobId) ? prev : [...prev, jobId];
+      }
+
+      return prev.filter((id) => id !== jobId);
+    });
+  };
+
+  const handleSelectAllJobs = (checked: boolean) => {
+    if (checked) {
+      setSelectedJobIds(pendingJobs.map((job) => job.id));
+    } else {
+      setSelectedJobIds([]);
+    }
+  };
+
+
   const showSuccess = (msg: string) => {
     setSuccessMsg(msg);
     setTimeout(() => setSuccessMsg(""), 3500);
@@ -1822,16 +1935,151 @@ function PlanningDashboard() {
                       }
                     />
                   ) : (
-                    <table style={styles.dashboardTable}>
+                    <>
+                      {selectedJobIds.length > 0 && (
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "10px",
+                            padding: "10px 12px",
+                            background: "#F6FAF8",
+                            borderBottom: "1px solid #E3ECE7",
+                            flexWrap: "wrap",
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize: "12px",
+                              fontWeight: 700,
+                              color: "#2F4F3E",
+                            }}
+                          >
+                            {selectedJobIds.length} job(s) selected
+                          </span>
+
+                          <select
+                            value={bulkTechnicianId}
+                            onChange={(e) => setBulkTechnicianId(e.target.value)}
+                            disabled={bulkAssigning}
+                            style={{
+                              ...styles.techSelect,
+                              maxWidth: "220px",
+                            }}
+                            aria-label="Select technician for bulk assignment"
+                          >
+                            <option value="">Select technician</option>
+
+                            {allTechsList.map((tech) => (
+                              <option
+                                key={tech.technician_id}
+                                value={tech.technician_id}
+                              >
+                                {tech.technician_name} — {tech.technician_status}
+                              </option>
+                            ))}
+                          </select>
+
+                          <button
+                            type="button"
+                            onClick={handleBulkAssign}
+                            disabled={bulkAssigning || !bulkTechnicianId}
+                            style={{
+                              ...styles.assignBtn,
+                              opacity: bulkAssigning || !bulkTechnicianId ? 0.6 : 1,
+                              cursor:
+                                bulkAssigning || !bulkTechnicianId
+                                  ? "not-allowed"
+                                  : "pointer",
+                            }}
+                          >
+                            {bulkAssigning ? "Assigning..." : "Assign Selected"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleBulkCancel}
+                            disabled={bulkAssigning || bulkCancelling}
+                            style={{
+                              ...styles.assignBtn,
+                              background: "#EF4444",
+                              color: "#FFFFFF",
+                              opacity: bulkAssigning || bulkCancelling ? 0.6 : 1,
+                              cursor:
+                                bulkAssigning || bulkCancelling
+                                  ? "not-allowed"
+                                  : "pointer",
+                            }}
+                          >
+                            {bulkCancelling ? "Cancelling..." : "Cancel Selected"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedJobIds([]);
+                              setBulkTechnicianId("");
+                            }}
+                            disabled={bulkAssigning}
+                            style={{
+                              height: "34px",
+                              padding: "0 12px",
+                              background: "#FFFFFF",
+                              color: "#6B7280",
+                              border: "1px solid #E3ECE7",
+                              borderRadius: "6px",
+                              fontSize: "12px",
+                              fontWeight: 600,
+                              cursor: bulkAssigning ? "not-allowed" : "pointer",
+                            }}
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      )}
+
+                      <table style={styles.dashboardTable}>
                       <thead>
-                        <tr>
-                          <th style={styles.dashboardTableTh}>ID</th>
-                          <th style={styles.dashboardTableTh}>Customer</th>
-                          <th style={styles.dashboardTableTh}>Location</th>
-                          <th style={styles.dashboardTableTh}>Priority</th>
-                          <th style={{ ...styles.dashboardTableTh, ...styles.assignmentActionCell }}>Assign Technician</th>
-                        </tr>
-                      </thead>
+                      <tr>
+                        <th style={{ ...styles.dashboardTableTh, width: "45px", textAlign: "center" }}>
+                          <input
+                            type="checkbox"
+                            checked={
+                              paginatedPendingJobs.length > 0 &&
+                              paginatedPendingJobs.every((job) =>
+                                selectedJobIds.includes(job.id)
+                              )
+                            }
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedJobIds((prev) => [
+                                  ...prev,
+                                  ...paginatedPendingJobs
+                                    .map((job) => job.id)
+                                    .filter((id) => !prev.includes(id)),
+                                ]);
+                              } else {
+                                setSelectedJobIds((prev) =>
+                                  prev.filter(
+                                    (id) =>
+                                      !paginatedPendingJobs.some(
+                                        (job) => job.id === id
+                                      )
+                                  )
+                                );
+                              }
+                            }}
+                            aria-label="Select all visible jobs"
+                          />
+                        </th>
+
+                        <th style={styles.dashboardTableTh}>ID</th>
+                        <th style={styles.dashboardTableTh}>Customer</th>
+                        <th style={styles.dashboardTableTh}>Location</th>
+                        <th style={styles.dashboardTableTh}>Priority</th>
+                        <th style={{ ...styles.dashboardTableTh, ...styles.assignmentActionCell }}>
+                          Assign Technician
+                        </th>
+                      </tr>
+                    </thead>
                       <tbody key={safePendingPage} className="planning-table-body">
                         {paginatedPendingJobs.map((job) => (
                           <tr
@@ -1841,6 +2089,21 @@ function PlanningDashboard() {
                             style={{ cursor: 'pointer' }}
                             title="Click to see top recommended technicians"
                           >
+                            {/* Bulk selection checkbox */}
+                            <td
+                              style={{ ...styles.dashboardTableTd, textAlign: 'center' }}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selectedJobIds.includes(job.id)}
+                                onChange={(e) =>
+                                  handleJobSelection(job.id, e.target.checked)
+                                }
+                                aria-label={`Select job ${job.id}`}
+                              />
+                            </td>
+
                             <td style={{ ...styles.dashboardTableTd, ...styles.jobIdCell }}>#{job.id}</td>
                             <td style={{ ...styles.dashboardTableTd, ...styles.customerCell }}>
                               <div>{job.customer_name}</div>
@@ -1969,9 +2232,9 @@ function PlanningDashboard() {
                         ))}
                       </tbody>
                     </table>
+                    </>
                   )}
                 </div>
-                {/* Pagination */}
                 <div style={styles.planningPagination}>
                   <span style={styles.planningPageInfo}>
                     Page <strong style={{ color: "#2F4F3E" }}>{safePendingPage}</strong> of <strong style={{ color: "#2F4F3E" }}>{pendingTotalPages}</strong> · {totalPendingCount} results

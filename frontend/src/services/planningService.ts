@@ -94,6 +94,36 @@ export const assignJob = async (jobId: string | number, technicianId: string | n
   }
 };
 
+
+export const assignJobsBulk = async (
+  jobIds: Array<string | number>,
+  technicianId: string | number
+): Promise<any> => {
+  try {
+    return await api.post("/assign-jobs-bulk", {
+      job_ids: jobIds,
+      technician_id: technicianId,
+    });
+  } catch (error) {
+    handleApiError(error);
+  }
+};
+
+export const cancelJobsBulk = async (
+  jobIds: Array<string | number>,
+  reason: string
+): Promise<any> => {
+  try {
+    return await api.post("/jobs/bulk-cancel", {
+      job_ids: jobIds,
+      reason,
+    });
+  } catch (error) {
+    handleApiError(error);
+  }
+};
+
+
 /**
  * Fetch dashboard stats.
  */
