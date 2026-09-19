@@ -15,7 +15,7 @@ from app.services.ai.FieldOpsAI.schemas.agent_messages import (
 @pytest.mark.asyncio
 async def test_kafka_producer_to_consumer_e2e():
     topic = "fieldops.audit.events"
-    group_id = f"fieldops-e2e-{uuid.uuid4()}"
+    group_id = "fieldops-audit"
 
     producer = KafkaProducer()
 
@@ -79,3 +79,17 @@ async def test_kafka_producer_to_consumer_e2e():
     finally:
         await consumer.stop()
         await producer.stop()
+        
+@pytest.mark.asyncio
+async def test_kafka_unauthorized_consumer_group_rejected():
+    consumer = KafkaConsumerManager(
+        topic="fieldops.job.events",
+        group_id="fieldops-gps",
+        bootstrap_servers="localhost:29092",
+    )
+
+    try:
+        with pytest.raises(Exception):
+            await consumer.start()
+    finally:
+        await consumer.stop()

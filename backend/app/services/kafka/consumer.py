@@ -17,6 +17,36 @@ DEFAULT_CONSUMER_GROUPS = {
     "fieldops.payment.events": "fieldops-payment",
     "fieldops.audit.events": "fieldops-audit",
 }
+CONSUMER_CREDENTIALS = {
+    "fieldops.job.events": (
+        "KAFKA_DISPATCH_USERNAME",
+        "KAFKA_DISPATCH_PASSWORD",
+    ),
+    "fieldops.gps.events": (
+        "KAFKA_GPS_USERNAME",
+        "KAFKA_GPS_PASSWORD",
+    ),
+    "fieldops.sla.events": (
+        "KAFKA_SLA_USERNAME",
+        "KAFKA_SLA_PASSWORD",
+    ),
+    "fieldops.notification.events": (
+        "KAFKA_NOTIFICATIONS_USERNAME",
+        "KAFKA_NOTIFICATIONS_PASSWORD",
+    ),
+    "fieldops.billing.events": (
+        "KAFKA_BILLING_USERNAME",
+        "KAFKA_BILLING_PASSWORD",
+    ),
+    "fieldops.payment.events": (
+        "KAFKA_PAYMENT_USERNAME",
+        "KAFKA_PAYMENT_PASSWORD",
+    ),
+    "fieldops.audit.events": (
+        "KAFKA_AUDIT_USERNAME",
+        "KAFKA_AUDIT_PASSWORD",
+    ),
+}
 
 
 class KafkaConsumerManager:
@@ -44,7 +74,11 @@ class KafkaConsumerManager:
             self._group_env_var_name(),
             default_group_id,
         )
-
+        username_env, password_env = CONSUMER_CREDENTIALS.get(
+            self.topic,
+            ("KAFKA_SASL_USERNAME", "KAFKA_SASL_PASSWORD"),
+        )
+        
         self.consumer = AIOKafkaConsumer(
             self.topic,
             bootstrap_servers=self.bootstrap_servers,
@@ -53,8 +87,8 @@ class KafkaConsumerManager:
             auto_offset_reset="earliest",
             security_protocol=os.getenv("KAFKA_SECURITY_PROTOCOL", "SASL_PLAINTEXT"),
             sasl_mechanism=os.getenv("KAFKA_SASL_MECHANISM", "PLAIN"),
-            sasl_plain_username=os.getenv("KAFKA_SASL_USERNAME"),
-            sasl_plain_password=os.getenv("KAFKA_SASL_PASSWORD"),
+            sasl_plain_username=os.getenv(username_env),
+            sasl_plain_password=os.getenv(password_env),
             value_deserializer=lambda value: json.loads(
                 value.decode("utf-8")
             ),

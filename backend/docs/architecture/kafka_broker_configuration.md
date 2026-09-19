@@ -85,6 +85,34 @@ KAFKA_SASL_MECHANISM=PLAIN
 KAFKA_SASL_USERNAME=<configured username>
 KAFKA_SASL_PASSWORD=<configured password>
 
+## Kafka Authorization Permission Matrix
+
+| Principal | Resource | Permission |
+|---|---|---|
+| `fieldops-producer` | `fieldops.job.events` | WRITE |
+| `fieldops-producer` | `fieldops.gps.events` | WRITE |
+| `fieldops-producer` | `fieldops.sla.events` | WRITE |
+| `fieldops-producer` | `fieldops.notification.events` | WRITE |
+| `fieldops-producer` | `fieldops.billing.events` | WRITE |
+| `fieldops-producer` | `fieldops.payment.events` | WRITE |
+| `fieldops-producer` | `fieldops.audit.events` | WRITE |
+| `fieldops-dispatch` | `fieldops.job.events` | READ |
+| `fieldops-dispatch` | `fieldops-dispatch` consumer group | READ |
+| `fieldops-gps` | `fieldops.gps.events` | READ |
+| `fieldops-gps` | `fieldops-gps` consumer group | READ |
+| `fieldops-sla` | `fieldops.sla.events` | READ |
+| `fieldops-sla` | `fieldops-sla` consumer group | READ |
+| `fieldops-notifications` | `fieldops.notification.events` | READ |
+| `fieldops-notifications` | `fieldops-notifications` consumer group | READ |
+| `fieldops-billing` | `fieldops.billing.events` | READ |
+| `fieldops-billing` | `fieldops-billing` consumer group | READ |
+| `fieldops-payment` | `fieldops.payment.events` | READ |
+| `fieldops-payment` | `fieldops-payment` consumer group | READ |
+| `fieldops-audit` | `fieldops.audit.events` | READ |
+| `fieldops-audit` | `fieldops-audit` consumer group | READ |
+
+Application principals are restricted to the topics and consumer groups required by their role. Kafka administration privileges are kept separate from application credentials.
+
 ## Consumer Group Ownership
 
 Each FieldOps Kafka processing domain uses a dedicated consumer group so unrelated consumers do not share offsets or compete for the same partitions.
