@@ -138,8 +138,41 @@ class TechnicianAssignment(BaseModel):
     technician_id: Optional[Union[int, str]] = None
     job_type: Optional[str] = None
 
+class BulkTechnicianAssignment(BaseModel):
+    job_ids: list[Union[int, str]]
+    technician_id: Union[int, str]
 
 
+class BulkTechnicianAssignmentResult(BaseModel):
+    job_id: int
+    status: str
+    technician_id: int
+    message: str
+
+
+class BulkTechnicianAssignmentResponse(BaseModel):
+    results: list[BulkTechnicianAssignmentResult]
+    total_requested: int
+    total_assigned: int
+
+class BulkJobCancellation(BaseModel):
+    job_ids: list[Union[int, str]]
+    cancellation_reason: str
+
+
+class BulkJobCancellationResult(BaseModel):
+    job_id: int
+    status: str
+    cancellation_reason: str
+    message: str
+
+
+class BulkJobCancellationResponse(BaseModel):
+    results: list[BulkJobCancellationResult]
+    total_requested: int
+    total_cancelled: int
+
+    
 class NearestTechnicianResponse(BaseModel):
     technician: TechnicianResponse
     distance: float

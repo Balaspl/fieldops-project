@@ -245,6 +245,91 @@ def test_transition_any_to_cancelled_success_with_reason(setup_db):
     assert job.cancelled_at is not None
     assert job.cancellation_reason == "Customer cancelled"
 
+def test_customer_can_cancel_created_job(setup_db):
+    db = setup_db
+
+    job = Job(
+        customer_name="Alice",
+        location="Zone A",
+        issue_description="Leak",
+        priority="HIGH",
+        service_type="Plumbing",
+        contact_number="1234567890",
+        preferred_service_date=datetime.now().date(),
+        status="CREATED",
+    )
+
+    db.add(job)
+    db.commit()
+
+    job.transition(
+        JobStatus.CANCELLED,
+        actor_id="customer-1",
+        actor_role="customer",
+        reason="Customer no longer needs the service",
+    )
+    db.commit()
+
+    assert job.status == "CANCELLED"
+    assert job.cancellation_reason == "Customer no longer needs the service"
+
+
+def test_customer_can_cancel_assigned_job(setup_db):
+    db = setup_db
+
+    job = Job(
+        customer_name="Alice",
+        location="Zone A",
+        issue_description="Leak",
+        priority="HIGH",
+        service_type="Plumbing",
+        contact_number="1234567890",
+        preferred_service_date=datetime.now().date(),
+        status="ASSIGNED",
+    )
+
+    db.add(job)
+    db.commit()
+
+    job.transition(
+        JobStatus.CANCELLED,
+        actor_id="customer-1",
+        actor_role="customer",
+        reason="Customer no longer needs the service",
+    )
+    db.commit()
+
+    assert job.status == "CANCELLED"
+    assert job.cancellation_reason == "Customer no longer needs the service"
+
+
+def test_customer_cannot_cancel_en_route_job(setup_db):
+    db = setup_db
+
+    job = Job(
+        customer_name="Alice",
+        location="Zone A",
+        issue_description="Leak",
+        priority="HIGH",
+        service_type="Plumbing",
+        contact_number="1234567890",
+        preferred_service_date=datetime.now().date(),
+        status="EN_ROUTE",
+    )
+
+    db.add(job)
+    db.commit()
+
+    with pytest.raises(PermissionDeniedError):
+        job.transition(
+            JobStatus.CANCELLED,
+            actor_id="customer-1",
+            actor_role="customer",
+            reason="Customer wants to cancel",
+        )
+
+    assert job.status == "EN_ROUTE"
+
 def test_transition_completed_to_closed_success(setup_db):
     db = setup_db
     job = Job(
@@ -363,3 +448,5 @@ def test_side_effect_failure_rolls_back_status_change(setup_db):
 
     assert job.status == "CREATED"
     assert job.assigned_at is None
+
+

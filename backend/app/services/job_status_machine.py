@@ -318,7 +318,7 @@ TRANSITION_MATRIX: Dict[tuple[JobStatus, JobStatus], TransitionRule] = {
     ),
     (JobStatus.EN_ROUTE, JobStatus.CANCELLED): TransitionRule(
         allowed=True,
-        requires_role=["dispatcher", "admin", "customer"],
+        requires_role=["dispatcher", "admin"],
         requires_reason=True,
         side_effects=["purge_gps", "notify_all", "log_cancellation", "refund_check"]
     ),

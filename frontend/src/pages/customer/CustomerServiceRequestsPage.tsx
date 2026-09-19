@@ -928,7 +928,9 @@ export default function CustomerServiceRequestsPage({
               </div>
 
               {/* Actions */}
-              {sr.status === "UNASSIGNED" && (
+              {["CREATED", "UNASSIGNED", "ASSIGNED", "AWAITING ACCEPTANCE", "ACCEPTED"].includes(
+                String(sr.status || "").toUpperCase().trim()
+              ) && (
                 <div
                   style={{
                     display: "flex",
