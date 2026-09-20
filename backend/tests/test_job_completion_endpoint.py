@@ -38,6 +38,7 @@ _current_user = AuthenticatedUser(
     tenant_id="tenant-1",
     role=UserRole.TECHNICIAN,
     jti="test-jti",
+    session_id = "test-session-id",
 )
 
 
@@ -67,6 +68,7 @@ def _set_user(user_id="tech-123", tenant_id="tenant-1", role=UserRole.TECHNICIAN
         tenant_id=tenant_id,
         role=role,
         jti="test-jti",
+        session_id="test-session-id",
     )
 
 

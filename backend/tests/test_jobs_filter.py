@@ -3,6 +3,8 @@ from fastapi.testclient import TestClient
 from fastapi import Response
 from fastapi import HTTPException
 from datetime import datetime, date, timezone, timedelta
+from types import SimpleNamespace
+
 
 from app.main import app
 from app.models import Job, Technician
@@ -169,6 +171,7 @@ def apply_overrides():
                 tenant_id="tenant-1",
                 role="DISPATCHER",
                 jti="test-jti",
+                session_id="test-session",
             ),
             "tenant-1",
         )
@@ -434,6 +437,7 @@ def test_update_job_success_with_required_skill():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         job_data = JobCreate(
@@ -483,6 +487,7 @@ def test_plan_job_not_found():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         class FakeRedis:
@@ -535,6 +540,7 @@ def test_plan_job_invalid_status():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         request = Request(
@@ -580,6 +586,7 @@ def test_plan_job_redis_rate_limit_none():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         class FakeRedis:
@@ -636,6 +643,7 @@ def test_plan_job_rate_limit_exceeded():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         class FakeRedis:
@@ -690,6 +698,7 @@ def test_plan_job_cache_hit():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         cached_plan = {
@@ -758,6 +767,7 @@ def test_plan_job_no_available_technicians(monkeypatch):
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         class FakeRedis:
@@ -823,6 +833,7 @@ def test_update_job_required_skill_fallback(monkeypatch):
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         job_data = JobCreate(
@@ -867,6 +878,7 @@ def test_plan_job_admin_override_success(monkeypatch):
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         job = db.query(Job).filter(Job.id == 101).first()
@@ -1003,6 +1015,7 @@ def test_plan_job_invalid_technician_location(monkeypatch):
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         tech = db.query(Technician).filter(
@@ -1118,6 +1131,7 @@ def test_plan_job_technician_location_without_coordinates(monkeypatch):
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         tech = db.query(Technician).filter(
@@ -1230,6 +1244,7 @@ def test_plan_job_certification_disqualified(monkeypatch):
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         class FakeRedis:
@@ -1311,6 +1326,7 @@ def test_plan_job_cooldown_disqualified(monkeypatch):
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         class FakeRedis:
@@ -1394,6 +1410,7 @@ def test_plan_job_certification_warnings(monkeypatch):
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         class FakeRedis:
@@ -1471,6 +1488,7 @@ def test_plan_job_exclusion_disqualified(monkeypatch):
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         class FakeRedis:
@@ -1561,6 +1579,7 @@ def test_plan_job_missing_prerequisite(monkeypatch):
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         class FakeRedis:
@@ -1656,6 +1675,7 @@ def test_plan_job_max_capacity_disqualified(monkeypatch):
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         class FakeRedis:
@@ -1767,6 +1787,7 @@ def test_update_job_required_skill_whitespace_fallback(monkeypatch):
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         job_data = JobCreate(
@@ -1813,6 +1834,7 @@ def test_update_job_not_found():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         job_data = JobCreate(
@@ -1855,6 +1877,7 @@ def test_get_job_by_id_success():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         result = get_job_by_id(
@@ -1882,6 +1905,7 @@ def test_get_job_by_id_not_found():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -1908,6 +1932,7 @@ def test_get_redispatch_history_job_not_found():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -1936,6 +1961,7 @@ def test_get_redispatch_history_with_attempts():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         job = db.query(Job).filter(Job.id == 101).first()
@@ -1989,6 +2015,7 @@ def test_get_redispatch_history_generates_fallback_attempts():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         job = db.query(Job).filter(Job.id == 101).first()
@@ -2036,6 +2063,7 @@ def test_get_override_history_not_found():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -2064,6 +2092,7 @@ def test_get_override_history_success():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         override = AssignmentOverride(
@@ -2109,6 +2138,7 @@ def test_get_job_status_history_not_found():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -2136,6 +2166,7 @@ def test_get_job_status_history_no_events():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         result = get_job_status_history(
@@ -2172,6 +2203,7 @@ def test_get_job_status_history_with_event(monkeypatch):
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         job = db.query(Job).filter(Job.id == 101).first()
@@ -2248,6 +2280,7 @@ def test_get_job_status_history_with_technician_actor():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         job = db.query(Job).filter(Job.id == 101).first()
@@ -3185,6 +3218,7 @@ def test_get_jobs_stats_default():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         result = get_jobs_stats(
@@ -3222,6 +3256,7 @@ def test_get_jobs_stats_time_range(time_range):
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         result = get_jobs_stats(
@@ -3248,6 +3283,7 @@ def test_get_jobs_stats_exception():
         tenant_id="tenant-1",
         role="DISPATCHER",
         jti="test-jti",
+        session_id="test-session",
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -3283,6 +3319,7 @@ def test_get_service_types_exception():
         tenant_id="tenant-1",
         role="DISPATCHER",
         jti="test-jti",
+        session_id="test-session",
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -3462,6 +3499,7 @@ def _technician_user():
         tenant_id="tenant-1",
         role="TECHNICIAN",
         jti="test-jti",
+        session_id="test-session",
     )
 
 
@@ -4337,6 +4375,7 @@ def test_assign_job_success(monkeypatch):
                     tenant_id="tenant-1",
                     role=UserRole.DISPATCHER,
                     jti="test-jti",
+                    session_id="test-session",
                 ),
                 db=db,
                 redis_client=FakeRedis(),
@@ -4382,6 +4421,7 @@ def test_assign_job_job_not_found():
                         tenant_id="tenant-1",
                         role="DISPATCHER",
                         jti="test-jti",
+                        session_id="test-session",
                     ),
                     db=db,
                     redis_client=None,
@@ -4412,6 +4452,22 @@ def test_assign_job_invalid_status():
             justification="Coverage validation for invalid status",
         )
 
+        class FakeRedis:
+            def __init__(self):
+                self.client = self
+
+            def setex(self, *args, **kwargs):
+                return True
+
+            def delete(self, *args, **kwargs):
+                return True
+
+            def get(self, *args, **kwargs):
+                return None
+
+            def set(self, *args, **kwargs):
+                return True
+
         with pytest.raises(HTTPException) as exc_info:
             __import__("asyncio").run(
                 assign_job(
@@ -4422,9 +4478,10 @@ def test_assign_job_invalid_status():
                         tenant_id="tenant-1",
                         role="DISPATCHER",
                         jti="test-jti",
+                        session_id="test-session",
                     ),
                     db=db,
-                    redis_client=None,
+                    redis_client=FakeRedis(),
                 )
             )
 
@@ -4454,6 +4511,22 @@ def test_assign_job_already_assigned():
             justification="Coverage validation for assigned job",
         )
 
+        class FakeRedis:
+            def __init__(self):
+                self.client = self
+
+            def setex(self, *args, **kwargs):
+                return True
+
+            def delete(self, *args, **kwargs):
+                return True
+
+            def get(self, *args, **kwargs):
+                return None
+
+            def set(self, *args, **kwargs):
+                return True
+
         with pytest.raises(HTTPException) as exc_info:
             __import__("asyncio").run(
                 assign_job(
@@ -4464,9 +4537,10 @@ def test_assign_job_already_assigned():
                         tenant_id="tenant-1",
                         role="DISPATCHER",
                         jti="test-jti",
+                        session_id="test-session",
                     ),
                     db=db,
-                    redis_client=None,
+                    redis_client=FakeRedis(),
                 )
             )
 
@@ -4490,6 +4564,22 @@ def test_assign_job_technician_not_found():
             justification="Coverage validation for missing technician",
         )
 
+        class FakeRedis:
+            def __init__(self):
+                self.client = self
+
+            def setex(self, *args, **kwargs):
+                return True
+
+            def delete(self, *args, **kwargs):
+                return True
+
+            def get(self, *args, **kwargs):
+                return None
+
+            def set(self, *args, **kwargs):
+                return True
+
         with pytest.raises(HTTPException) as exc_info:
             __import__("asyncio").run(
                 assign_job(
@@ -4500,9 +4590,10 @@ def test_assign_job_technician_not_found():
                         tenant_id="tenant-1",
                         role="DISPATCHER",
                         jti="test-jti",
+                        session_id="test-session",
                     ),
                     db=db,
-                    redis_client=None,
+                    redis_client=FakeRedis(),
                 )
             )
 
@@ -4532,6 +4623,22 @@ def test_assign_job_offline_technician():
             justification="Coverage validation for offline technician",
         )
 
+        class FakeRedis:
+            def __init__(self):
+                self.client = self
+
+            def setex(self, *args, **kwargs):
+                return True
+
+            def delete(self, *args, **kwargs):
+                return True
+
+            def get(self, *args, **kwargs):
+                return None
+
+            def set(self, *args, **kwargs):
+                return True
+
         with pytest.raises(HTTPException) as exc_info:
             __import__("asyncio").run(
                 assign_job(
@@ -4542,9 +4649,10 @@ def test_assign_job_offline_technician():
                         tenant_id="tenant-1",
                         role="DISPATCHER",
                         jti="test-jti",
+                        session_id="test-session",
                     ),
                     db=db,
-                    redis_client=None,
+                    redis_client=FakeRedis(),
                 )
             )
 
@@ -4584,6 +4692,7 @@ def test_assign_job_skill_mismatch(monkeypatch):
                         tenant_id="tenant-1",
                         role="DISPATCHER",
                         jti="test-jti",
+                        session_id="test-session",
                     ),
                     db=db,
                     redis_client=None,
@@ -4634,6 +4743,7 @@ def test_assign_job_workload_capacity(monkeypatch):
                         tenant_id="tenant-1",
                         role="DISPATCHER",
                         jti="test-jti",
+                        session_id="test-session",
                     ),
                     db=db,
                     redis_client=None,
@@ -4681,6 +4791,7 @@ def test_assign_job_commit_failure(monkeypatch):
                         tenant_id="tenant-1",
                         role=UserRole.DISPATCHER,
                         jti="test-jti",
+                        session_id="test-session",
                     ),
                     db=db,
                     redis_client=None,
@@ -4712,6 +4823,7 @@ def test_get_jobs_stats_all_time():
                     tenant_id="tenant-1",
                     role="DISPATCHER",
                     jti="test-jti",
+                    session_id="test-session",
                 ),
                 "tenant-1",
             ),
@@ -4754,6 +4866,7 @@ def test_get_jobs_stats_time_ranges():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         week_result = get_jobs_stats(
@@ -4795,6 +4908,7 @@ def test_get_jobs_stats_exception():
         tenant_id="tenant-1",
         role="DISPATCHER",
         jti="test-jti",
+        session_id="test-session",
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -4814,6 +4928,7 @@ def _dispatcher_user():
         tenant_id="tenant-1",
         role=UserRole.DISPATCHER,
         jti="test-jti",
+        session_id="test-session",
     )
 
 
@@ -4823,6 +4938,7 @@ def _technician_enum_user():
         tenant_id="tenant-1",
         role=UserRole.TECHNICIAN,
         jti="test-jti",
+        session_id="test-session",
     )
 
 
@@ -4841,6 +4957,7 @@ def test_get_technician_for_current_user_not_found():
             tenant_id="tenant-1",
             role=UserRole.TECHNICIAN,
             jti="test-jti",
+            session_id="test-session",
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -4892,6 +5009,7 @@ def test_create_job_super_admin_platform_tenant():
             tenant_id="__platform__",
             role=UserRole.SUPER_ADMIN,
             jti="test-jti",
+            session_id="test-session",
         )
 
         job_data = JobCreate(
@@ -6095,6 +6213,7 @@ def test_assign_job_numeric_technician_fallback(monkeypatch):
             tenant_id="tenant-1",
             role=UserRole.DISPATCHER,
             jti="test-jti",
+            session_id="test-session",
         )
 
         req = JobAssignRequest(
@@ -6168,6 +6287,7 @@ def test_get_technician_current_user_not_found():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -6525,6 +6645,7 @@ def test_get_job_closure_endpoint_technician_wrong_job():
             tenant_id="tenant-1",
             role=UserRole.TECHNICIAN,
             jti="test-jti",
+            session_id="test-session",
         )
 
         job = db.query(Job).filter(Job.id == 101).first()
@@ -6575,6 +6696,7 @@ def test_close_job_endpoint_success(monkeypatch):
             tenant_id="tenant-1",
             role=UserRole.TECHNICIAN,
             jti="test-jti",
+            session_id="test-session",
         )
 
         payload = JobClosureCreate(
@@ -6705,6 +6827,7 @@ def test_get_technician_for_current_user_numeric_id_not_found():
             tenant_id="tenant-1",
             role="DISPATCHER",
             jti="test-jti",
+            session_id="test-session",
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -6750,6 +6873,7 @@ def test_accept_job_missing_tech_id(monkeypatch):
             tenant_id="tenant-1",
             role="TECHNICIAN",
             jti="test-jti",
+            session_id="test-session",
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -6793,6 +6917,7 @@ def test_assign_job_numeric_lookup_direct(monkeypatch):
             tenant_id="tenant-1",
             role=UserRole.DISPATCHER,
             jti="test-jti",
+            session_id="test-session",
         )
 
         monkeypatch.setattr(
@@ -7095,7 +7220,11 @@ def test_get_jobs_stats_other_count_clamped_to_zero():
             self.count_index = 0
             self.count_values = [
                 0,  # total_jobs
-                0, 0, 0, 0,  # completed, in_progress, active, pending
+                0,  # completed
+                0,  # cancelled
+                0,  # in_progress
+                0,  # active
+                0,  # pending
                 0, 0, 0, 0,  # available, busy, break, offline
                 1, 1, 1, 1,  # hvac, electrical, plumbing, mechanical
             ]
@@ -7440,3 +7569,693 @@ def test_public_tracking_with_gps_ping_and_empty_eta(monkeypatch):
     assert result["eta"] is None
     assert result["latest_gps"]["latitude"] == 13.0827
     assert result["latest_gps"]["longitude"] == 80.2707
+
+def test_get_jobs_location_filter():
+    response = client.get("/jobs/?location=North%20Zone")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert len(data) == 1
+    assert data[0]["id"] == 101
+    assert data[0]["location"] == "North Zone"
+
+
+def test_get_jobs_technician_id_filter():
+    response = client.get("/jobs/?technician_id=1")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert len(data) == 1
+    assert data[0]["id"] == 102
+    assert data[0]["assigned_technician_id"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 100% coverage - bulk cancellation
+# ---------------------------------------------------------------------------
+
+def _bulk_cancel_test_user(role="dispatcher", tenant_id="tenant-1"):
+    
+
+    return SimpleNamespace(
+        user_id="test-user",
+        tenant_id=tenant_id,
+        role=UserRole.DISPATCHER if role == "dispatcher" else UserRole.SUPER_ADMIN,
+        is_super_admin=(role == "admin"),
+    )
+
+
+def test_bulk_cancel_forbidden_role():
+    from app.routes.jobs import (
+        bulk_cancel_jobs,
+        BulkJobCancellationRequest,
+    )
+
+    user = AuthenticatedUser(
+        user_id="test-user",
+        tenant_id="tenant-1",
+        role=UserRole.TECHNICIAN,
+        jti="test-jti",
+        session_id="test-session",
+    )
+
+    payload = BulkJobCancellationRequest(
+        job_ids=[101],
+        reason="Test cancellation",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        bulk_cancel_jobs(
+            payload=payload,
+            request=None,
+            current_user=user,
+            db=TestingSessionLocal(),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_bulk_cancel_missing_job():
+    from app.routes.jobs import (
+        bulk_cancel_jobs,
+        BulkJobCancellationRequest,
+    )
+
+    db = TestingSessionLocal()
+
+    try:
+        user = AuthenticatedUser(
+            user_id="test-user",
+            tenant_id="tenant-1",
+            role=UserRole.DISPATCHER,
+            jti="test-jti",
+            session_id="test-session",
+        )
+
+        payload = BulkJobCancellationRequest(
+            job_ids=[999999],
+            reason="Missing job test",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            bulk_cancel_jobs(
+                payload=payload,
+                request=None,
+                current_user=user,
+                db=db,
+            )
+
+        assert exc_info.value.status_code == 404
+
+        detail = exc_info.value.detail
+        assert detail["error"] == "JOB_NOT_FOUND"
+        assert 999999 in detail["job_ids"]
+
+    finally:
+        db.close()
+
+
+def test_bulk_cancel_requires_reason():
+    from app.routes.jobs import (
+        bulk_cancel_jobs,
+        BulkJobCancellationRequest,
+    )
+
+    db = TestingSessionLocal()
+
+    try:
+        user = AuthenticatedUser(
+            user_id="test-user",
+            tenant_id="tenant-1",
+            role=UserRole.DISPATCHER,
+            jti="test-jti",
+            session_id="test-session",
+        )
+
+        payload = BulkJobCancellationRequest(
+            job_ids=[101],
+            reason="   ",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            bulk_cancel_jobs(
+                payload=payload,
+                request=None,
+                current_user=user,
+                db=db,
+            )
+
+        assert exc_info.value.status_code == 400
+
+        detail = exc_info.value.detail
+
+        assert detail["error"] == "BULK_CANCELLATION_VALIDATION_FAILED"
+        assert detail["errors"][0]["error"] == "REASON_REQUIRED"
+
+    finally:
+        db.close()
+
+
+def test_bulk_cancel_success():
+    from app.routes.jobs import (
+        bulk_cancel_jobs,
+        BulkJobCancellationRequest,
+    )
+
+    db = TestingSessionLocal()
+
+    try:
+        job1 = db.query(Job).filter(Job.id == 101).first()
+        job2 = db.query(Job).filter(Job.id == 102).first()
+
+        assert job1 is not None
+        assert job2 is not None
+
+        job1.status = "CREATED"
+        job2.status = "CREATED"
+
+        db.commit()
+
+        user = AuthenticatedUser(
+            user_id="test-dispatcher",
+            tenant_id="tenant-1",
+            role=UserRole.DISPATCHER,
+            jti="test-jti",
+            session_id="test-session",
+        )
+
+        payload = BulkJobCancellationRequest(
+            job_ids=[101, 102, 101],
+            reason="Dispatcher cancelled selected jobs",
+        )
+
+        result = bulk_cancel_jobs(
+            payload=payload,
+            request=None,
+            current_user=user,
+            db=db,
+        )
+
+        assert result.status == "success"
+        assert result.total_requested == 2
+        assert result.total_cancelled == 2
+        assert len(result.results) == 2
+
+        db.refresh(job1)
+        db.refresh(job2)
+
+        assert job1.status == "CANCELLED"
+        assert job2.status == "CANCELLED"
+
+    finally:
+        db.close()
+
+
+def test_bulk_cancel_invalid_transition():
+    from app.routes.jobs import (
+        bulk_cancel_jobs,
+        BulkJobCancellationRequest,
+    )
+
+    db = TestingSessionLocal()
+
+    try:
+        job = db.query(Job).filter(Job.id == 101).first()
+        assert job is not None
+
+        job.status = "COMPLETED"
+        db.commit()
+
+        user = AuthenticatedUser(
+            user_id="test-dispatcher",
+            tenant_id="tenant-1",
+            role=UserRole.DISPATCHER,
+            jti="test-jti",
+            session_id="test-session",
+        )
+
+        payload = BulkJobCancellationRequest(
+            job_ids=[101],
+            reason="Invalid transition test",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            bulk_cancel_jobs(
+                payload=payload,
+                request=None,
+                current_user=user,
+                db=db,
+            )
+
+        assert exc_info.value.status_code == 400
+
+        detail = exc_info.value.detail
+        assert detail["error"] == "BULK_CANCELLATION_VALIDATION_FAILED"
+        assert detail["errors"][0]["error"] == "INVALID_TRANSITION"
+
+    finally:
+        db.close()
+
+
+def test_bulk_cancel_permission_denied_validation(monkeypatch):
+    from app.routes.jobs import (
+        bulk_cancel_jobs,
+        BulkJobCancellationRequest,
+    )
+    from app.services.job_status_machine import PermissionDeniedError
+
+    class FakeValidator:
+        def validate(self, *args, **kwargs):
+            raise PermissionDeniedError(
+                "Permission denied",
+                required=["dispatcher"],
+                actual="dispatcher",
+            )
+
+    monkeypatch.setattr(
+        "app.services.job_status_machine.TransitionValidator",
+        FakeValidator,
+    )
+
+    db = TestingSessionLocal()
+
+    try:
+        user = AuthenticatedUser(
+            user_id="test-dispatcher",
+            tenant_id="tenant-1",
+            role=UserRole.DISPATCHER,
+            jti="test-jti",
+            session_id="test-session",
+        )
+
+        payload = BulkJobCancellationRequest(
+            job_ids=[101],
+            reason="Permission validation test",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            bulk_cancel_jobs(
+                payload=payload,
+                request=None,
+                current_user=user,
+                db=db,
+            )
+
+        assert exc_info.value.status_code == 400
+
+        detail = exc_info.value.detail
+        assert detail["error"] == "BULK_CANCELLATION_VALIDATION_FAILED"
+        assert detail["errors"][0]["error"] == "PERMISSION_DENIED"
+
+    finally:
+        db.close()
+
+
+def test_bulk_cancel_generic_validation_failure(monkeypatch):
+    from app.routes.jobs import (
+        bulk_cancel_jobs,
+        BulkJobCancellationRequest,
+    )
+
+    class FakeValidator:
+        def validate(self, *args, **kwargs):
+            raise RuntimeError("forced validation failure")
+
+    monkeypatch.setattr(
+        "app.services.job_status_machine.TransitionValidator",
+        FakeValidator,
+    )
+
+    db = TestingSessionLocal()
+
+    try:
+        user = AuthenticatedUser(
+            user_id="test-dispatcher",
+            tenant_id="tenant-1",
+            role=UserRole.DISPATCHER,
+            jti="test-jti",
+            session_id="test-session",
+        )
+
+        payload = BulkJobCancellationRequest(
+            job_ids=[101],
+            reason="Generic validation test",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            bulk_cancel_jobs(
+                payload=payload,
+                request=None,
+                current_user=user,
+                db=db,
+            )
+
+        assert exc_info.value.status_code == 400
+
+        detail = exc_info.value.detail
+        assert detail["errors"][0]["error"] == "VALIDATION_FAILED"
+
+    finally:
+        db.close()
+
+
+def _bulk_cancel_fake_user():
+    from app.auth.rbac import UserRole
+
+    return AuthenticatedUser(
+        user_id="bulk-test-user",
+        tenant_id="tenant-1",
+        role=UserRole.DISPATCHER,
+        jti="bulk-test-jti",
+        session_id="bulk-test-session",
+    )
+
+
+class _BulkCancelFakeQuery:
+    def __init__(self, jobs=None, first_result=None):
+        self.jobs = jobs or []
+        self.first_result = first_result
+
+    def filter(self, *args, **kwargs):
+        return self
+
+    def all(self):
+        return self.jobs
+
+    def with_for_update(self):
+        return self
+
+    def first(self):
+        return self.first_result
+
+
+class _BulkCancelFakeDB:
+    def __init__(self, jobs, locked_results=None, commit_error=None):
+        self.jobs = jobs
+        self.locked_results = list(locked_results or [])
+        self.commit_error = commit_error
+        self.query_count = 0
+        self.rollback_count = 0
+
+    def query(self, model):
+        self.query_count += 1
+
+        # First query = initial tenant-scoped .all()
+        if self.query_count == 1:
+            return _BulkCancelFakeQuery(jobs=self.jobs)
+
+        # Following queries = .with_for_update().first()
+        index = self.query_count - 2
+
+        result = (
+            self.locked_results[index]
+            if index < len(self.locked_results)
+            else None
+        )
+
+        return _BulkCancelFakeQuery(first_result=result)
+
+    def commit(self):
+        if self.commit_error:
+            raise self.commit_error
+
+    def rollback(self):
+        self.rollback_count += 1
+
+
+class _BulkCancelFakeJob:
+    def __init__(self, job_id=1):
+        self.id = job_id
+        self.tenant_id = "tenant-1"
+        self.status = "CREATED"
+        self.transition_called = False
+
+    def transition(
+        self,
+        target_status,
+        actor_id,
+        actor_role,
+        reason,
+        is_override,
+    ):
+        self.transition_called = True
+        self.status = target_status
+
+
+def test_bulk_cancel_empty_job_ids():
+    
+    from app.routes.jobs import bulk_cancel_jobs
+
+    user = _bulk_cancel_fake_user()
+    db = _BulkCancelFakeDB([])
+
+    payload = SimpleNamespace(
+        job_ids=[],
+        reason="Bulk cancellation test",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        bulk_cancel_jobs(
+            payload=payload,
+            request=None,
+            current_user=user,
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "At least one job ID is required"
+
+
+def test_bulk_cancel_locked_job_missing():
+    from app.routes.jobs import bulk_cancel_jobs
+
+    job = _BulkCancelFakeJob(101)
+
+    class PassingValidator:
+        def validate(self, *args, **kwargs):
+            return None
+
+    monkeypatch_target = "app.services.job_status_machine.TransitionValidator"
+
+    # Patch the class used by the function.
+    from unittest.mock import patch
+
+    user = _bulk_cancel_fake_user()
+
+    db = _BulkCancelFakeDB(
+        jobs=[job],
+        locked_results=[None],
+    )
+
+    payload = SimpleNamespace(
+        job_ids=[101],
+        reason="Duplicate request",
+    )
+
+    with patch(monkeypatch_target, PassingValidator):
+        with pytest.raises(HTTPException) as exc_info:
+            bulk_cancel_jobs(
+                payload=payload,
+                request=None,
+                current_user=user,
+                db=db,
+            )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Job 101 not found"
+    assert db.rollback_count == 1
+
+
+def test_bulk_cancel_mutation_invalid_transition():
+    from app.routes.jobs import bulk_cancel_jobs
+    from app.services.job_status_machine import InvalidTransitionError
+    from unittest.mock import patch
+
+    job = _BulkCancelFakeJob(101)
+
+    class MutationInvalidValidator:
+        def __init__(self):
+            self.calls = 0
+
+        def validate(self, *args, **kwargs):
+            self.calls += 1
+
+            # First call = initial validation.
+            # Second call = locked mutation validation.
+            if self.calls == 2:
+                raise InvalidTransitionError(
+                    "Job cannot be cancelled from current status",
+                    "EN_ROUTE",
+                    "CANCELLED",
+                )
+
+    user = _bulk_cancel_fake_user()
+
+    db = _BulkCancelFakeDB(
+        jobs=[job],
+        locked_results=[job],
+    )
+
+    payload = SimpleNamespace(
+        job_ids=[101],
+        reason="Cancellation requested",
+    )
+
+    with patch(
+        "app.services.job_status_machine.TransitionValidator",
+        MutationInvalidValidator,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            bulk_cancel_jobs(
+                payload=payload,
+                request=None,
+                current_user=user,
+                db=db,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert db.rollback_count == 1
+
+
+def test_bulk_cancel_mutation_permission_denied():
+    from app.routes.jobs import bulk_cancel_jobs
+    from app.services.job_status_machine import PermissionDeniedError
+    from unittest.mock import patch
+
+    job = _BulkCancelFakeJob(101)
+
+    class MutationPermissionValidator:
+        def __init__(self):
+            self.calls = 0
+
+        def validate(self, *args, **kwargs):
+            self.calls += 1
+
+            if self.calls == 2:
+                raise PermissionDeniedError(
+                    "Dispatcher is not allowed to cancel this job",
+                    required=["admin"],
+                    actual="dispatcher",
+                )
+
+    user = _bulk_cancel_fake_user()
+
+    db = _BulkCancelFakeDB(
+        jobs=[job],
+        locked_results=[job],
+    )
+
+    payload = SimpleNamespace(
+        job_ids=[101],
+        reason="Permission test",
+    )
+
+    with patch(
+        "app.services.job_status_machine.TransitionValidator",
+        MutationPermissionValidator,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            bulk_cancel_jobs(
+                payload=payload,
+                request=None,
+                current_user=user,
+                db=db,
+            )
+
+    assert exc_info.value.status_code == 403
+    assert db.rollback_count == 1
+
+
+def test_bulk_cancel_mutation_http_exception():
+    from app.routes.jobs import bulk_cancel_jobs
+    from unittest.mock import patch
+
+    job = _BulkCancelFakeJob(101)
+
+    class PassingValidator:
+        def validate(self, *args, **kwargs):
+            return None
+
+    user = _bulk_cancel_fake_user()
+
+    # Initial validation sees the job.
+    # Mutation phase cannot find it.
+    db = _BulkCancelFakeDB(
+        jobs=[job],
+        locked_results=[None],
+    )
+
+    payload = SimpleNamespace(
+        job_ids=[101],
+        reason="Job disappeared",
+    )
+
+    with patch(
+        "app.services.job_status_machine.TransitionValidator",
+        PassingValidator,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            bulk_cancel_jobs(
+                payload=payload,
+                request=None,
+                current_user=user,
+                db=db,
+            )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Job 101 not found"
+    assert db.rollback_count == 1
+
+
+def test_bulk_cancel_mutation_generic_exception():
+    from app.routes.jobs import bulk_cancel_jobs
+    from unittest.mock import patch
+
+    class GenericFailJob(_BulkCancelFakeJob):
+        def transition(
+            self,
+            target_status,
+            actor_id,
+            actor_role,
+            reason,
+            is_override,
+        ):
+            raise RuntimeError("Unexpected transition failure")
+
+    job = GenericFailJob(101)
+
+    class PassingValidator:
+        def validate(self, *args, **kwargs):
+            return None
+
+    user = _bulk_cancel_fake_user()
+
+    db = _BulkCancelFakeDB(
+        jobs=[job],
+        locked_results=[job],
+    )
+
+    payload = SimpleNamespace(
+        job_ids=[101],
+        reason="Generic failure test",
+    )
+
+    with patch(
+        "app.services.job_status_machine.TransitionValidator",
+        PassingValidator,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            bulk_cancel_jobs(
+                payload=payload,
+                request=None,
+                current_user=user,
+                db=db,
+            )
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Bulk cancellation failed"
+    assert db.rollback_count == 1

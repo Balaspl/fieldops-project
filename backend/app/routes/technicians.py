@@ -87,6 +87,9 @@ def create_technician(
             detail=f"An unexpected error occurred: {str(e)}"
         )
 
+
+
+
 @router.get("", response_model=List[schemas.TechnicianResponse])
 def get_all_technicians(
     response: Response,
