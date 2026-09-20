@@ -69,7 +69,8 @@ class AuthenticatedUser:
         tenant_id: str,
         role: UserRole,
         jti: str,
-        session_id: str,
+        session_id: str | None = None,
+
     ):
         self.user_id = user_id
         self.tenant_id = tenant_id

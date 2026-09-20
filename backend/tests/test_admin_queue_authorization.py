@@ -3,10 +3,16 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
 
 from app.auth.jwt_handler import create_access_token
 from app.auth.rbac import UserRole
+from app.auth.dependencies import (
+    AuthenticatedUser,
+    get_current_user,
+    get_current_user_or_tenant,
+)
 from app.database import get_db
 from app.main import app
 from app.models import User, Organization
@@ -14,6 +20,39 @@ from app.models import User, Organization
 
 TEST_TENANT_ID = "test-tenant-admin-queue"
 
+
+# ==========================================================
+# Test authentication state
+# ==========================================================
+
+_test_auth_user: AuthenticatedUser | None = None
+
+
+def set_test_authenticated_user(user: User) -> None:
+    global _test_auth_user
+
+    _test_auth_user = AuthenticatedUser(
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+        role=UserRole(user.role),
+        jti="test-jti",
+        session_id="test-session",
+    )
+
+
+def _get_authenticated_test_user() -> AuthenticatedUser:
+    if _test_auth_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
+
+    return _test_auth_user
+
+
+# ==========================================================
+# Database
+# ==========================================================
 
 @pytest.fixture
 def db():
@@ -27,26 +66,59 @@ def db():
         session.close()
 
 
+# ==========================================================
+# Client + dependency overrides
+# ==========================================================
+
 @pytest.fixture
 def client(db):
+    global _test_auth_user
+
+    # Reset authentication state before every test.
+    _test_auth_user = None
+
     def override_get_db():
         yield db
 
     app.dependency_overrides[get_db] = override_get_db
 
+    def override_current_user():
+        return _get_authenticated_test_user()
+
+    def override_current_user_or_tenant():
+        user = _get_authenticated_test_user()
+        return user, user.tenant_id
+
+    app.dependency_overrides[get_current_user] = override_current_user
+
+    app.dependency_overrides[get_current_user_or_tenant] = (
+        override_current_user_or_tenant
+    )
+
     yield TestClient(app)
 
-    app.dependency_overrides.pop(get_db, None)
+    # Clean up overrides.
+    _test_auth_user = None
 
+    app.dependency_overrides.pop(get_db, None)
+    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(get_current_user_or_tenant, None)
+
+
+# ==========================================================
+# User helper
+# ==========================================================
 
 def create_test_user(
     db,
     role: UserRole,
     tenant_id: str = TEST_TENANT_ID,
 ) -> User:
-    organization = db.query(Organization).filter(
-        Organization.id == tenant_id
-    ).first()
+    organization = (
+        db.query(Organization)
+        .filter(Organization.id == tenant_id)
+        .first()
+    )
 
     if organization is None:
         organization = Organization(
@@ -78,6 +150,10 @@ def create_test_user(
     return user
 
 
+# ==========================================================
+# Token helper
+# ==========================================================
+
 def create_token(user: User) -> str:
     return create_access_token(
         user_id=user.id,
@@ -86,11 +162,19 @@ def create_token(user: User) -> str:
     )
 
 
+# ==========================================================
+# Authentication
+# ==========================================================
+
 def test_queue_stats_requires_authentication(client):
     response = client.get("/admin/queue/stats")
 
     assert response.status_code == 401
 
+
+# ==========================================================
+# Permission checks
+# ==========================================================
 
 @pytest.mark.parametrize(
     "role",
@@ -105,7 +189,14 @@ def test_queue_stats_rejects_users_without_queue_permission(
     db,
     role,
 ):
-    user = create_test_user(db, role)
+    user = create_test_user(
+        db,
+        role,
+    )
+
+    # Make this specific role the authenticated user.
+    set_test_authenticated_user(user)
+
     token = create_token(user)
 
     response = client.get(
@@ -130,7 +221,14 @@ def test_queue_stats_allows_users_with_queue_permission(
     db,
     role,
 ):
-    user = create_test_user(db, role)
+    user = create_test_user(
+        db,
+        role,
+    )
+
+    # Make this specific role the authenticated user.
+    set_test_authenticated_user(user)
+
     token = create_token(user)
 
     response = client.get(
@@ -143,6 +241,10 @@ def test_queue_stats_allows_users_with_queue_permission(
     assert response.status_code == 200
 
 
+# ==========================================================
+# Tenant isolation
+# ==========================================================
+
 def test_queue_stats_uses_authenticated_tenant(
     client,
     db,
@@ -152,6 +254,9 @@ def test_queue_stats_uses_authenticated_tenant(
         UserRole.DISPATCHER,
         tenant_id="tenant-authenticated",
     )
+
+    # Authentication must use the user's actual tenant.
+    set_test_authenticated_user(user)
 
     token = create_token(user)
 

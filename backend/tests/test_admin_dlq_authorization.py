@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import uuid
 
+from fastapi import HTTPException, status
 import pytest
 from fastapi.testclient import TestClient
 
 from app.auth.jwt_handler import create_access_token
 from app.auth.rbac import UserRole
+from app.auth.dependencies import (
+    AuthenticatedUser,
+    get_current_user,
+    get_current_user_or_tenant,
+)
 from app.database import get_db, SessionLocal
 from app.main import app
 from app.models import User, DeadLetterTask, Organization
@@ -15,12 +21,16 @@ from app.models import User, DeadLetterTask, Organization
 TEST_TENANT_ID = "test-tenant-dlq"
 
 
+# ==========================================================
+# Database
+# ==========================================================
+
 @pytest.fixture
 def db():
     session = SessionLocal()
 
     try:
-        # Clean DLQ records before each test so tests are isolated.
+        # Clean DLQ records before each test.
         session.query(DeadLetterTask).delete()
         session.commit()
 
@@ -31,6 +41,10 @@ def db():
         session.close()
 
 
+# ==========================================================
+# Authentication dependency override
+# ==========================================================
+
 @pytest.fixture
 def client(db):
     def override_get_db():
@@ -38,10 +52,63 @@ def client(db):
 
     app.dependency_overrides[get_db] = override_get_db
 
+    # ------------------------------------------------------
+    # The DLQ tests are testing authorization/tenant logic.
+    # Bypass the real JWT/session validation while preserving
+    # the role and tenant contained in the test token.
+    # ------------------------------------------------------
+
+    def override_current_user():
+        return _get_authenticated_test_user()
+
+    def override_current_user_or_tenant():
+        user = _get_authenticated_test_user()
+        return user, user.tenant_id
+
+    app.dependency_overrides[get_current_user] = override_current_user
+    app.dependency_overrides[get_current_user_or_tenant] = (
+        override_current_user_or_tenant
+    )
+
     yield TestClient(app)
 
     app.dependency_overrides.pop(get_db, None)
+    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(get_current_user_or_tenant, None)
 
+
+# ==========================================================
+# Test authentication state
+# ==========================================================
+
+_test_auth_user: AuthenticatedUser | None = None
+
+
+def set_test_authenticated_user(user: User) -> None:
+    global _test_auth_user
+
+    _test_auth_user = AuthenticatedUser(
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+        role=UserRole(user.role),
+        jti="test-jti",
+        session_id="test-session",
+    )
+
+
+def _get_authenticated_test_user() -> AuthenticatedUser:
+    if _test_auth_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
+
+    return _test_auth_user
+
+
+# ==========================================================
+# Organization helpers
+# ==========================================================
 
 def create_test_organization(
     db,
@@ -72,6 +139,10 @@ def create_test_organization(
     return organization
 
 
+# ==========================================================
+# User helpers
+# ==========================================================
+
 def create_test_user(
     db,
     role: UserRole,
@@ -81,8 +152,6 @@ def create_test_user(
     Create a test user together with its organization.
     """
 
-    # User.tenant_id references organizations.id,
-    # so the organization must exist first.
     create_test_organization(
         db,
         tenant_id,
@@ -108,6 +177,10 @@ def create_test_user(
     return user
 
 
+# ==========================================================
+# Token helper
+# ==========================================================
+
 def create_token(user: User) -> str:
     return create_access_token(
         user_id=user.id,
@@ -115,6 +188,10 @@ def create_token(user: User) -> str:
         role=user.role,
     )
 
+
+# ==========================================================
+# DLQ helper
+# ==========================================================
 
 def create_dlq_item(
     db,
@@ -165,7 +242,6 @@ def create_dlq_item(
 # Authentication
 # ==========================================================
 
-
 def test_list_dlq_requires_authentication(client):
     response = client.get("/admin/dlq")
 
@@ -175,7 +251,6 @@ def test_list_dlq_requires_authentication(client):
 # ==========================================================
 # Permission checks
 # ==========================================================
-
 
 @pytest.mark.parametrize(
     "role",
@@ -194,6 +269,9 @@ def test_list_dlq_rejects_users_without_permission(
         db,
         role,
     )
+
+    # Set the authenticated test user to the role being tested.
+    set_test_authenticated_user(user)
 
     token = create_token(user)
 
@@ -224,6 +302,9 @@ def test_list_dlq_allows_authorized_users(
         role,
     )
 
+    # Set the authenticated test user to the role being tested.
+    set_test_authenticated_user(user)
+
     token = create_token(user)
 
     response = client.get(
@@ -239,7 +320,6 @@ def test_list_dlq_allows_authorized_users(
 # ==========================================================
 # Tenant isolation
 # ==========================================================
-
 
 def test_list_dlq_uses_authenticated_tenant(
     client,
@@ -264,6 +344,9 @@ def test_list_dlq_uses_authenticated_tenant(
         tenant_id=other_tenant,
     )
 
+    # The authenticated user's tenant must be used.
+    set_test_authenticated_user(user)
+
     token = create_token(user)
 
     response = client.get(
@@ -286,7 +369,6 @@ def test_list_dlq_uses_authenticated_tenant(
 # Missing DLQ item
 # ==========================================================
 
-
 def test_requeue_missing_dlq_item_returns_404(
     client,
     db,
@@ -295,6 +377,8 @@ def test_requeue_missing_dlq_item_returns_404(
         db,
         UserRole.DISPATCHER,
     )
+
+    set_test_authenticated_user(user)
 
     token = create_token(user)
 
@@ -317,6 +401,8 @@ def test_delete_missing_dlq_item_returns_404(
         UserRole.DISPATCHER,
     )
 
+    set_test_authenticated_user(user)
+
     token = create_token(user)
 
     response = client.delete(
@@ -332,7 +418,6 @@ def test_delete_missing_dlq_item_returns_404(
 # ==========================================================
 # Cross-tenant protection
 # ==========================================================
-
 
 def test_requeue_rejects_wrong_tenant(
     client,
@@ -351,6 +436,8 @@ def test_requeue_rejects_wrong_tenant(
         db,
         tenant_id=dlq_tenant,
     )
+
+    set_test_authenticated_user(user)
 
     token = create_token(user)
 
@@ -381,6 +468,8 @@ def test_delete_rejects_wrong_tenant(
         db,
         tenant_id=dlq_tenant,
     )
+
+    set_test_authenticated_user(user)
 
     token = create_token(user)
 

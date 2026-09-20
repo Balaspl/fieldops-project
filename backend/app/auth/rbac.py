@@ -84,6 +84,7 @@ class Permission(str, Enum):
     JOBS_DELETE = "jobs:delete"
     JOBS_ASSIGN = "jobs:assign"
     JOBS_REASSIGN = "jobs:reassign"
+    JOBS_REASSIGN_OWN = "jobs:reassign_own"
     JOBS_CANCEL = "jobs:cancel"
     JOBS_ACCEPT_REJECT = "jobs:accept_reject"
     JOBS_STATUS_UPDATE = "jobs:status_update"
@@ -356,6 +357,7 @@ ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
         Permission.JOBS_VIEW_OWN,
         Permission.JOBS_ACCEPT_REJECT,
         Permission.JOBS_STATUS_UPDATE,
+        Permission.JOBS_REASSIGN_OWN,
 
         # Own profile
         Permission.TECHNICIANS_VIEW_OWN,
@@ -401,23 +403,21 @@ ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
 # PERMISSION HELPERS
 # ======================================================
 
-def has_permission(
-    role: UserRole,
-    permission: Permission,
-) -> bool:
-    """Check whether a role has a permission."""
+def has_permission(role: UserRole, permission: Permission) -> bool:
+    if not isinstance(role, UserRole):
+        return False
 
-    permissions = ROLE_PERMISSIONS.get(role, set())
+    if not isinstance(permission, Permission):
+        return False
 
-    return permission in permissions
+    return permission in ROLE_PERMISSIONS.get(role, set())
 
 
-def get_permissions(
-    role: UserRole,
-) -> set[Permission]:
-    """Return all permissions for a role."""
+def get_permissions(role: UserRole) -> set[Permission]:
+    if not isinstance(role, UserRole):
+        return set()
 
-    return ROLE_PERMISSIONS.get(role, set())
+    return set(ROLE_PERMISSIONS.get(role, set()))
 
 
 def is_super_admin(role: str) -> bool:

@@ -20,14 +20,19 @@ These tests verify:
 15. Missing id_token is rejected.
 16. Empty id_token is rejected.
 """
-
+from app.auth.rbac import UserRole
 import uuid
 from unittest.mock import AsyncMock, patch
+
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
+from app.auth.dependencies import (
+    AuthenticatedUser,
+    get_current_user,
+)
 from app.auth.jwt_handler import create_access_token
 from app.auth.oidc import OIDCValidationError
 from app.database import SessionLocal
@@ -35,6 +40,7 @@ from app.main import app
 from app.models.organization import Organization
 from app.models.oidc_identity import OIDCIdentity
 from app.models.user import User
+
 
 
 client = TestClient(app)
@@ -242,11 +248,11 @@ def create_oidc_identity(
 # ============================================================================
 
 
+
 def create_fieldops_token(user):
     """
     Create a FieldOps access token for authenticated link requests.
     """
-
     return create_access_token(
         user_id=user.id,
         tenant_id=user.tenant_id,
@@ -258,13 +264,48 @@ def auth_headers(user):
     """
     Authorization headers for authenticated FieldOps API requests.
     """
-
     token = create_fieldops_token(user)
 
     return {
         "Authorization": f"Bearer {token}",
     }
 
+
+def override_oidc_auth(user):
+    """
+    Override the production get_current_user dependency for
+    Google account-linking tests.
+
+    Production authentication requires a server-side session.
+    These tests are specifically testing Google account linking,
+    so the authenticated FieldOps user is supplied directly.
+    """
+    role = user.role
+
+    if not isinstance(role, UserRole):
+        role = UserRole(role)
+
+    authenticated_user = AuthenticatedUser(
+        user_id=str(user.id),
+        tenant_id=str(user.tenant_id),
+        role=role,
+        jti="oidc-test-jti",
+        session_id="oidc-test-session",
+    )
+
+    app.dependency_overrides[get_current_user] = (
+        lambda: authenticated_user
+    )
+
+
+def clear_oidc_auth_override():
+    """
+    Remove only the OIDC authentication override.
+    """
+    app.dependency_overrides.pop(
+        get_current_user,
+        None,
+    )
 
 # ============================================================================
 # 1. Linked Google account can log in
@@ -479,17 +520,22 @@ def test_google_oidc_link_account(db):
         email=unique_email("google-link"),
     )
 
-    with patch(
-        "app.routes.auth.validate_google_id_token",
-        new=AsyncMock(return_value=claims),
-    ):
-        response = client.post(
-            "/auth/oidc/google/link",
-            headers=auth_headers(user),
-            json={
-                "id_token": "fake-google-link-token",
-            },
-        )
+    override_oidc_auth(user)
+
+    try:
+        with patch(
+            "app.routes.auth.validate_google_id_token",
+            new=AsyncMock(return_value=claims),
+        ):
+            response = client.post(
+                "/auth/oidc/google/link",
+                headers=auth_headers(user),
+                json={
+                    "id_token": "fake-google-link-token",
+                },
+            )
+    finally:
+        clear_oidc_auth_override()
 
     assert response.status_code == 200
 
@@ -511,7 +557,6 @@ def test_google_oidc_link_account(db):
     assert identity is not None
     assert identity.user_id == user.id
     assert identity.provider == "google"
-
 
 # ============================================================================
 # 7. Same Google account linked again to same user
@@ -537,17 +582,22 @@ def test_google_oidc_link_same_account_again(db):
         email=unique_email("google-same-link"),
     )
 
-    with patch(
-        "app.routes.auth.validate_google_id_token",
-        new=AsyncMock(return_value=claims),
-    ):
-        response = client.post(
-            "/auth/oidc/google/link",
-            headers=auth_headers(user),
-            json={
-                "id_token": "fake-google-token",
-            },
-        )
+    override_oidc_auth(user)
+
+    try:
+        with patch(
+            "app.routes.auth.validate_google_id_token",
+            new=AsyncMock(return_value=claims),
+        ):
+            response = client.post(
+                "/auth/oidc/google/link",
+                headers=auth_headers(user),
+                json={
+                    "id_token": "fake-google-token",
+                },
+            )
+    finally:
+        clear_oidc_auth_override()
 
     assert response.status_code == 200
 
@@ -577,7 +627,6 @@ def test_google_oidc_link_account_already_owned(db):
         email=unique_email("second-user"),
     )
 
-    # Deliberately use ONE Google subject for the existing owner.
     subject = unique_subject("already-owned")
 
     create_oidc_identity(
@@ -591,24 +640,28 @@ def test_google_oidc_link_account_already_owned(db):
         email=unique_email("google-owned"),
     )
 
-    with patch(
-        "app.routes.auth.validate_google_id_token",
-        new=AsyncMock(return_value=claims),
-    ):
-        response = client.post(
-            "/auth/oidc/google/link",
-            headers=auth_headers(second_user),
-            json={
-                "id_token": "fake-google-token",
-            },
-        )
+    override_oidc_auth(second_user)
+
+    try:
+        with patch(
+            "app.routes.auth.validate_google_id_token",
+            new=AsyncMock(return_value=claims),
+        ):
+            response = client.post(
+                "/auth/oidc/google/link",
+                headers=auth_headers(second_user),
+                json={
+                    "id_token": "fake-google-token",
+                },
+            )
+    finally:
+        clear_oidc_auth_override()
 
     assert response.status_code == 409
 
     body = response.json()
 
     assert "already linked" in body["detail"].lower()
-
 
 # ============================================================================
 # 9. Linking Google does not create FieldOps user
@@ -632,17 +685,22 @@ def test_google_oidc_link_does_not_create_user(db):
         email=google_email,
     )
 
-    with patch(
-        "app.routes.auth.validate_google_id_token",
-        new=AsyncMock(return_value=claims),
-    ):
-        response = client.post(
-            "/auth/oidc/google/link",
-            headers=auth_headers(fieldops_user),
-            json={
-                "id_token": "fresh-google-link-token",
-            },
-        )
+    override_oidc_auth(fieldops_user)
+
+    try:
+        with patch(
+            "app.routes.auth.validate_google_id_token",
+            new=AsyncMock(return_value=claims),
+        ):
+            response = client.post(
+                "/auth/oidc/google/link",
+                headers=auth_headers(fieldops_user),
+                json={
+                    "id_token": "fresh-google-link-token",
+                },
+            )
+    finally:
+        clear_oidc_auth_override()
 
     assert response.status_code == 200
 
@@ -650,7 +708,6 @@ def test_google_oidc_link_does_not_create_user(db):
 
     assert after_count == before_count
 
-    # Google email must NOT become a new FieldOps user.
     google_user = (
         db.query(User)
         .filter(User.email == google_email)
@@ -659,7 +716,6 @@ def test_google_oidc_link_does_not_create_user(db):
 
     assert google_user is None
 
-    # But an OIDC identity must exist and point to the existing user.
     identity = (
         db.query(OIDCIdentity)
         .filter(

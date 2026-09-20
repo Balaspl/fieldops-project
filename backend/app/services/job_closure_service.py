@@ -141,7 +141,7 @@ def close_job(
     if current_status == "COMPLETED":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Job is already completed",
+            detail="Job is already COMPLETED",
         )
     if current_status in {"CANCELLED", "CANCELED", "CLOSED"}:
         raise HTTPException(

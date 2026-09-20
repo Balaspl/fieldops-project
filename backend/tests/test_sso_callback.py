@@ -251,7 +251,7 @@ def test_sso_callback_token_exchange_failure_redirects_with_sso_authentication_f
         "app.routes.sso.SSOService.consume_state",
         new=AsyncMock(return_value=_VALID_STATE_DATA),
     ), patch(
-        "app.routes.sso.GoogleOIDCValidator.exchange_authorization_code",
+        "app.routes.sso.OIDCProviderValidator.exchange_authorization_code",
         new=AsyncMock(
             side_effect=OIDCValidationError(
                 "Unable to exchange OIDC authorization code"
@@ -286,10 +286,10 @@ def test_sso_callback_invalid_id_token_redirects_with_sso_authentication_failed(
         "app.routes.sso.SSOService.consume_state",
         new=AsyncMock(return_value=_VALID_STATE_DATA),
     ), patch(
-        "app.routes.sso.GoogleOIDCValidator.exchange_authorization_code",
+        "app.routes.sso.OIDCProviderValidator.exchange_authorization_code",
         new=AsyncMock(return_value=_GOOGLE_TOKEN_RESPONSE),
     ), patch(
-        "app.routes.sso.GoogleOIDCValidator.validate_id_token",
+        "app.routes.sso.OIDCProviderValidator.validate_id_token",
         new=AsyncMock(
             side_effect=OIDCValidationError("OIDC nonce validation failed")
         ),
@@ -323,10 +323,10 @@ def test_sso_callback_unknown_identity_redirects_with_sso_not_authorized():
         "app.routes.sso.SSOService.consume_state",
         new=AsyncMock(return_value=_VALID_STATE_DATA),
     ), patch(
-        "app.routes.sso.GoogleOIDCValidator.exchange_authorization_code",
+        "app.routes.sso.OIDCProviderValidator.exchange_authorization_code",
         new=AsyncMock(return_value=_GOOGLE_TOKEN_RESPONSE),
     ), patch(
-        "app.routes.sso.GoogleOIDCValidator.validate_id_token",
+        "app.routes.sso.OIDCProviderValidator.validate_id_token",
         new=AsyncMock(return_value=_VALID_ID_TOKEN_CLAIMS),
     ), patch(
         "app.routes.sso.SSOService.resolve_user",
@@ -362,10 +362,10 @@ def test_sso_callback_disabled_user_redirects_with_sso_not_authorized():
         "app.routes.sso.SSOService.consume_state",
         new=AsyncMock(return_value=_VALID_STATE_DATA),
     ), patch(
-        "app.routes.sso.GoogleOIDCValidator.exchange_authorization_code",
+        "app.routes.sso.OIDCProviderValidator.exchange_authorization_code",
         new=AsyncMock(return_value=_GOOGLE_TOKEN_RESPONSE),
     ), patch(
-        "app.routes.sso.GoogleOIDCValidator.validate_id_token",
+        "app.routes.sso.OIDCProviderValidator.validate_id_token",
         new=AsyncMock(return_value=_VALID_ID_TOKEN_CLAIMS),
     ), patch(
         "app.routes.sso.SSOService.resolve_user",
@@ -399,10 +399,10 @@ def test_sso_callback_inactive_tenant_redirects_with_sso_not_authorized():
         "app.routes.sso.SSOService.consume_state",
         new=AsyncMock(return_value=_VALID_STATE_DATA),
     ), patch(
-        "app.routes.sso.GoogleOIDCValidator.exchange_authorization_code",
+        "app.routes.sso.OIDCProviderValidator.exchange_authorization_code",
         new=AsyncMock(return_value=_GOOGLE_TOKEN_RESPONSE),
     ), patch(
-        "app.routes.sso.GoogleOIDCValidator.validate_id_token",
+        "app.routes.sso.OIDCProviderValidator.validate_id_token",
         new=AsyncMock(return_value=_VALID_ID_TOKEN_CLAIMS),
     ), patch(
         "app.routes.sso.SSOService.resolve_user",
@@ -430,34 +430,44 @@ def test_sso_callback_success_issues_fieldops_tokens(db):
     """
     A fully valid SSO callback must:
 
-    a) Return 200 with FieldOps access_token + refresh_token.
-    b) Set token_type = "bearer".
-    c) Derive role and tenant_id from the FieldOps User record, NOT from
-       Google ID token claims.
-
-    The test deliberately injects a fake role ("super_admin") and
-    tenant_id ("attacker-tenant") into the mocked Google claims to prove
-    that the FieldOps DB values are used instead.
+    a) Redirect to the frontend with HTTP 302.
+    b) Set the FieldOps access-token cookie.
+    c) Set the FieldOps refresh-token cookie.
+    d) Derive role and tenant_id from the FieldOps User record,
+       NOT from Google claims.
     """
-    organization = _make_org(db)
-    user = _make_user(db, organization, role="technician")
 
-    # Inject attacker-controlled values into Google claims — must be ignored.
+    organization = _make_org(db)
+
+    user = _make_user(
+        db,
+        organization,
+        role="technician",
+    )
+
+    # Inject attacker-controlled values into Google claims.
+    # These values must NOT control FieldOps authorization.
     google_claims_with_injected_values = {
         **_VALID_ID_TOKEN_CLAIMS,
-        "role": "super_admin",        # must be overridden
-        "tenant_id": "attacker-tenant",  # must be overridden
+        "role": "super_admin",
+        "tenant_id": "attacker-tenant",
     }
 
     with patch(
         "app.routes.sso.SSOService.consume_state",
-        new=AsyncMock(return_value=_VALID_STATE_DATA),
+        new=AsyncMock(
+            return_value=_VALID_STATE_DATA
+        ),
     ), patch(
-        "app.routes.sso.GoogleOIDCValidator.exchange_authorization_code",
-        new=AsyncMock(return_value=_GOOGLE_TOKEN_RESPONSE),
+        "app.routes.sso.OIDCProviderValidator.exchange_authorization_code",
+        new=AsyncMock(
+            return_value=_GOOGLE_TOKEN_RESPONSE
+        ),
     ), patch(
-        "app.routes.sso.GoogleOIDCValidator.validate_id_token",
-        new=AsyncMock(return_value=google_claims_with_injected_values),
+        "app.routes.sso.OIDCProviderValidator.validate_id_token",
+        new=AsyncMock(
+            return_value=google_claims_with_injected_values
+        ),
     ), patch(
         "app.routes.sso.SSOService.resolve_user",
         return_value=user,
@@ -470,18 +480,71 @@ def test_sso_callback_success_issues_fieldops_tokens(db):
             },
         )
 
-    assert response.status_code == 200
+    # ---------------------------------------------------------
+    # Successful SSO redirects the browser to the frontend.
+    # ---------------------------------------------------------
 
-    body = response.json()
+    assert response.status_code == 302
 
-    # Tokens must be present and well-formed.
-    assert "access_token" in body
-    assert "refresh_token" in body
-    assert body["token_type"] == "bearer"
-    assert body["expires_in"] > 0
+    location = response.headers["location"]
 
-    # User identity must reflect FieldOps DB values, never Google claims.
-    assert body["user"]["id"] == user.id
-    assert body["user"]["role"] == "technician"         # not "super_admin"
-    assert body["user"]["tenant_id"] == organization.id  # not "attacker-tenant"
+    assert location == "http://localhost:5173/auth/sso/callback"
 
+    # ---------------------------------------------------------
+    # Tokens must NOT be returned in the URL.
+    # ---------------------------------------------------------
+
+    assert "access_token" not in location
+    assert "refresh_token" not in location
+
+    # ---------------------------------------------------------
+    # Tokens must be stored in secure cookies.
+    # ---------------------------------------------------------
+
+    set_cookie_headers = response.headers.get_list("set-cookie")
+
+    assert any(
+        "fieldops_access_token=" in cookie
+        for cookie in set_cookie_headers
+    )
+
+    assert any(
+        "fieldops_refresh_token=" in cookie
+        for cookie in set_cookie_headers
+    )
+
+    # ---------------------------------------------------------
+    # Cookies must be HttpOnly.
+    # ---------------------------------------------------------
+
+    access_cookie = next(
+        cookie
+        for cookie in set_cookie_headers
+        if "fieldops_access_token=" in cookie
+    )
+
+    refresh_cookie = next(
+        cookie
+        for cookie in set_cookie_headers
+        if "fieldops_refresh_token=" in cookie
+    )
+
+    assert "HttpOnly" in access_cookie
+    assert "HttpOnly" in refresh_cookie
+
+    # ---------------------------------------------------------
+    # Google claims must NOT control authorization.
+    #
+    # The mocked Google claims contain:
+    #
+    #     role = super_admin
+    #     tenant_id = attacker-tenant
+    #
+    # But SSO must use the FieldOps database user.
+    # ---------------------------------------------------------
+
+    assert user.role == "technician"
+    assert user.tenant_id == organization.id
+
+    assert "super_admin" not in location
+    assert "attacker-tenant" not in location

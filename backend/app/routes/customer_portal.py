@@ -19,8 +19,8 @@ from math import radians, sin, cos, asin, sqrt
 from typing import Optional
 
 from ..database import get_db
-from ..auth.dependencies import AuthenticatedUser, require_role
-from ..auth.rbac import UserRole
+from ..auth.dependencies import AuthenticatedUser, require_permission
+from ..auth.rbac import Permission
 from ..auth.password import hash_password, verify_password
 from ..models import (
     Job, Technician, InAppNotification, ServiceRequest, Organization,
@@ -134,7 +134,7 @@ def geocode_customer_location(address: str):
 @router.get("/profile", response_model=CustomerProfileResponse)
 async def get_customer_profile(
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.CUSTOMER)
+        require_permission(Permission.CUSTOMERS_VIEW_OWN)
     ),
     db: Session = Depends(get_db),
 ):
@@ -189,7 +189,7 @@ async def create_customer_profile(
     data: CustomerProfileCreate,
     request: Request,
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.CUSTOMER)
+        require_permission(Permission.CUSTOMERS_VIEW_OWN)
     ),
     db: Session = Depends(get_db),
 ):
@@ -269,7 +269,7 @@ async def update_customer_profile(
     data: CustomerProfileUpdate,
     request: Request,
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.CUSTOMER)
+        require_permission(Permission.CUSTOMERS_VIEW_OWN)
     ),
     db: Session = Depends(get_db),
 ):
@@ -342,7 +342,7 @@ async def change_password(
     data: ChangePasswordRequest,
     request: Request,
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.CUSTOMER)
+        require_permission(Permission.CUSTOMERS_VIEW_OWN)
     ),
     db: Session = Depends(get_db),
 ):
@@ -415,7 +415,7 @@ async def list_service_requests(
         alias="status",
     ),
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.CUSTOMER)
+        require_permission(Permission.JOBS_VIEW_OWN)
     ),
     db: Session = Depends(get_db),
 ):
@@ -466,7 +466,7 @@ async def create_service_request(
     data: ServiceRequestCreate,
     request: Request,
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.CUSTOMER)
+        require_permission(Permission.CUSTOMERS_CREATE_REQUEST)
     ),
     db: Session = Depends(get_db),
 ):
@@ -755,7 +755,7 @@ async def create_service_request(
 async def get_service_request(
     sr_id: int,
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.CUSTOMER)
+        require_permission(Permission.JOBS_VIEW_OWN)
     ),
     db: Session = Depends(get_db),
 ):
@@ -787,7 +787,7 @@ async def update_service_request(
     data: ServiceRequestUpdate,
     request: Request,
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.CUSTOMER)
+        require_permission(Permission.CUSTOMERS_CREATE_REQUEST)
     ),
     db: Session = Depends(get_db),
 ):
@@ -849,7 +849,7 @@ async def cancel_service_request(
     sr_id: int,
     request: Request,
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.CUSTOMER)
+        require_permission(Permission.CUSTOMERS_CREATE_REQUEST)
     ),
     db: Session = Depends(get_db),
 ):
@@ -907,7 +907,7 @@ async def cancel_service_request(
 )
 async def track_customer_jobs(
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.CUSTOMER)
+        require_permission(Permission.JOBS_VIEW_OWN)
     ),
     db: Session = Depends(get_db),
 ):
@@ -1049,7 +1049,7 @@ async def track_customer_jobs(
 async def get_customer_job_detail(
     job_id: int,
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.CUSTOMER)
+        require_permission(Permission.JOBS_VIEW_OWN)
     ),
     db: Session = Depends(get_db),
 ):
@@ -1162,7 +1162,7 @@ async def get_customer_job_detail(
 )
 async def get_service_history(
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.CUSTOMER)
+        require_permission(Permission.JOBS_VIEW_OWN)
     ),
     db: Session = Depends(get_db),
 ):
@@ -1193,7 +1193,7 @@ async def get_service_history(
 @router.get("/notifications")
 async def get_notifications(
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.CUSTOMER)
+        require_permission(Permission.NOTIFICATIONS_VIEW_OWN)
     ),
     db: Session = Depends(get_db),
 ):
@@ -1247,7 +1247,7 @@ async def get_notifications(
 async def mark_notification_read(
     notification_id: str,
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.CUSTOMER)
+        require_permission(Permission.NOTIFICATIONS_VIEW_OWN)
     ),
     db: Session = Depends(get_db),
 ):
@@ -1301,7 +1301,7 @@ async def mark_notification_read(
 )
 async def mark_all_read(
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.CUSTOMER)
+        require_permission(Permission.NOTIFICATIONS_VIEW_OWN)
     ),
     db: Session = Depends(get_db),
 ):
@@ -1341,7 +1341,7 @@ async def mark_all_read(
 )
 async def get_customer_dashboard(
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.CUSTOMER)
+        require_permission(Permission.DASHBOARD_CUSTOMER_VIEW)
     ),
     db: Session = Depends(get_db),
 ):

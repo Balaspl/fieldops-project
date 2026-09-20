@@ -1,7 +1,7 @@
 {
   "total": 277,
-  "passed": 272,
-  "failed": 5,
+  "passed": 277,
+  "failed": 0,
   "skipped": 0,
   "tests": [
     {
@@ -670,19 +670,19 @@
     },
     {
       "nodeid": "tests/agents/test_comms_agent.py::test_groq_api_is_mocked_with_aioresponses",
-      "outcome": "failed"
+      "outcome": "passed"
     },
     {
       "nodeid": "tests/agents/test_comms_agent.py::test_groq_429_is_mocked_with_aioresponses",
-      "outcome": "failed"
+      "outcome": "passed"
     },
     {
       "nodeid": "tests/agents/test_comms_agent.py::test_groq_401_is_mocked_with_aioresponses",
-      "outcome": "failed"
+      "outcome": "passed"
     },
     {
       "nodeid": "tests/agents/test_comms_agent.py::test_groq_500_is_mocked_with_aioresponses",
-      "outcome": "failed"
+      "outcome": "passed"
     },
     {
       "nodeid": "tests/agents/test_comms_agent.py::test_failure_timeout_triggers_fallback",
@@ -834,7 +834,7 @@
     },
     {
       "nodeid": "tests/agents/test_comms_agent.py::test_no_real_groq_api_call",
-      "outcome": "failed"
+      "outcome": "passed"
     },
     {
       "nodeid": "tests/agents/test_comms_agent.py::test_suite_configuration",

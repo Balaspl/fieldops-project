@@ -1401,7 +1401,6 @@ class NotificationRouter:
             CommunicationMessageCategory.STANDARD
         ),
     ) -> bool:
-
         _ = payload
 
         if recipient_type not in {
@@ -1427,13 +1426,9 @@ class NotificationRouter:
             return False
 
         output = communication.decision.output
-
         message_body = output.text
 
-        if not isinstance(
-            message_body,
-            str,
-        ):
+        if not isinstance(message_body, str):
             logger.error(
                 "SMS communication body is invalid. "
                 "job_id=%s",
@@ -1446,7 +1441,6 @@ class NotificationRouter:
         # ------------------------------------------------
 
         if len(message_body) > 160:
-
             logger.error(
                 "Final SMS content exceeds the transport "
                 "limit. Delivery was skipped. job_id=%s",
@@ -1459,7 +1453,6 @@ class NotificationRouter:
         # ------------------------------------------------
 
         if recipient_type == "technician":
-
             if not event.technician_id:
                 logger.warning(
                     "Technician SMS skipped because technician "
@@ -1471,42 +1464,26 @@ class NotificationRouter:
             db = SessionLocal()
 
             try:
-
                 delivery_result = await self.sms(
                     db,
                     event.job_id,
                     event.job_title,
                     event.job_location,
                     "HIGH",
-                    [
-                        event.technician_id,
-                    ],
+                    [event.technician_id],
                     correlation_id_ctx.get(),
                     effective_message=message_body,
                     category=category,
                 )
 
-                if isinstance(
-                    delivery_result,
-                    dict,
-                ):
-
+                if isinstance(delivery_result, dict):
                     return (
-                        int(
-                            delivery_result.get(
-                                "sent",
-                                0,
-                            )
-                        )
-                        > 0
+                        int(delivery_result.get("sent", 0)) > 0
                     )
 
-                return bool(
-                    delivery_result
-                )
+                return bool(delivery_result)
 
             except Exception:
-
                 logger.error(
                     "Technician SMS delivery failed. "
                     "job_id=%s",
@@ -1521,26 +1498,29 @@ class NotificationRouter:
         # Customer SMS
         # ------------------------------------------------
 
-        if not event.customer_phone:
+        # Normalize before checking. Whitespace-only values such as
+        # "   " must be treated as a missing phone number.
+        customer_phone = (event.customer_phone or "").strip()
 
+        if not customer_phone:
             logger.warning(
                 "Customer SMS skipped because the phone "
                 "number is missing. job_id=%s",
                 event.job_id,
             )
-
             return False
 
-        decision = (
-            self._evaluate_customer_delivery_policy(
-                event=event,
-                channel="SMS",
-                category=category,
-            )
+        # ------------------------------------------------
+        # Customer delivery policy
+        # ------------------------------------------------
+
+        decision = self._evaluate_customer_delivery_policy(
+            event=event,
+            channel="SMS",
+            category=category,
         )
 
         if not decision.allowed:
-
             logger.warning(
                 "Customer SMS delivery blocked by policy. "
                 "reason_code=%s",
@@ -1555,6 +1535,10 @@ class NotificationRouter:
                 decision,
             )
 
+        # ------------------------------------------------
+        # Twilio
+        # ------------------------------------------------
+
         from .twilio_sms import (
             TWILIO_ACCOUNT_SID,
             dispatch_twilio_message,
@@ -1562,14 +1546,11 @@ class NotificationRouter:
 
         local_mock_mode = (
             not TWILIO_ACCOUNT_SID
-            or "dummy"
-            in TWILIO_ACCOUNT_SID.lower()
-            or "mock"
-            in TWILIO_ACCOUNT_SID.lower()
+            or "dummy" in TWILIO_ACCOUNT_SID.lower()
+            or "mock" in TWILIO_ACCOUNT_SID.lower()
         )
 
         if local_mock_mode:
-
             logger.info(
                 "Customer SMS delivery simulated. "
                 "job_id=%s",
@@ -1578,16 +1559,13 @@ class NotificationRouter:
             return True
 
         try:
-
-            loop = (
-                asyncio.get_running_loop()
-            )
+            loop = asyncio.get_running_loop()
 
             await loop.run_in_executor(
                 None,
                 lambda: dispatch_twilio_message(
                     body=message_body,
-                    to_phone=event.customer_phone,
+                    to_phone=customer_phone,
                 ),
             )
 
@@ -1600,18 +1578,12 @@ class NotificationRouter:
             return True
 
         except Exception:
-
             logger.error(
                 "Customer SMS delivery failed. "
                 "job_id=%s",
                 event.job_id,
             )
-
             return False
-
-    # ==================================================
-    # Email Delivery
-    # ==================================================
 
     async def _send_email(
         self,

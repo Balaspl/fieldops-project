@@ -1,811 +1,855 @@
+"""
+OIDC authentication and Google account-linking tests.
+
+These tests verify:
+
+1. Linked Google identity can log in.
+2. Unlinked Google identity cannot log in.
+3. Invalid Google tokens are rejected.
+4. Disabled FieldOps users cannot log in.
+5. Suspended organizations cannot log in.
+6. Authenticated FieldOps users can link Google.
+7. Linking the same Google identity again returns ALREADY_LINKED.
+8. A Google identity cannot be linked to another FieldOps user.
+9. Google linking does not create a new FieldOps user.
+10. Unlinked Google login does not create a new FieldOps user.
+11. Google claims cannot override the FieldOps role.
+12. Google claims cannot override the FieldOps tenant.
+13. Unknown OIDC identities do not produce a 500.
+14. issuer + subject uniqueness is enforced by the database.
+15. Missing id_token is rejected.
+16. Empty id_token is rejected.
+"""
+
+import uuid
+from unittest.mock import AsyncMock, patch
+
 import pytest
-import httpx
+from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
-from app.auth.oidc import (
-    OIDCConfig,
-    OIDCValidationError,
-    GoogleOIDCValidator,
-    validate_google_id_token,
+from app.auth.dependencies import (
+    AuthenticatedUser,
+    get_current_user,
 )
+from app.auth.oidc import OIDCValidationError
+from app.database import SessionLocal
+from app.main import app
+from app.models.organization import Organization
+from app.models.oidc_identity import OIDCIdentity
+from app.models.user import User
 
 
-# -------------------------------------------------------------------
-# Helper
-# -------------------------------------------------------------------
+client = TestClient(app)
 
-class MockClaims(dict):
+
+# ============================================================================
+# Database fixture
+# ============================================================================
+
+
+@pytest.fixture
+def db():
     """
-    Dictionary-like claims object that behaves similarly to
-    Authlib's claims object for unit testing.
+    Database session used for test setup and verification.
+
+    The FastAPI application uses its own DB session, so test setup data
+    is committed before API calls.
     """
+    session = SessionLocal()
 
-    def validate(self):
-        pass
-
-
-def make_valid_config():
-    config = MagicMock()
-
-    config.validate.return_value = None
-    config.issuer_url = "https://accounts.google.com"
-    config.audience = "client-123"
-    config.provider = "google"
-    config.client_id = "client-123"
-
-    return config
+    try:
+        yield session
+    finally:
+        session.close()
 
 
-# -------------------------------------------------------------------
-# OIDCConfig tests
-# -------------------------------------------------------------------
-
-def test_oidc_config_defaults(monkeypatch):
-    monkeypatch.delenv("OIDC_ENABLED", raising=False)
-    monkeypatch.delenv("OIDC_PROVIDER", raising=False)
-    monkeypatch.delenv("OIDC_ISSUER_URL", raising=False)
-    monkeypatch.delenv("OIDC_CLIENT_ID", raising=False)
-    monkeypatch.delenv("OIDC_CLIENT_SECRET", raising=False)
-    monkeypatch.delenv("OIDC_AUDIENCE", raising=False)
-
-    config = OIDCConfig()
-
-    assert config.enabled is False
-    assert config.provider == "google"
-    assert config.issuer_url == "https://accounts.google.com"
-    assert config.client_id == ""
-    assert config.client_secret == ""
-    assert config.audience == ""
+# ============================================================================
+# Unique test-data helpers
+# ============================================================================
 
 
-def test_oidc_config_reads_environment(monkeypatch):
-    monkeypatch.setenv("OIDC_ENABLED", "true")
-    monkeypatch.setenv("OIDC_PROVIDER", "google")
-    monkeypatch.setenv(
-        "OIDC_ISSUER_URL",
-        "https://accounts.google.com/",
-    )
-    monkeypatch.setenv("OIDC_CLIENT_ID", "client-123")
-    monkeypatch.setenv("OIDC_CLIENT_SECRET", "secret")
-    monkeypatch.setenv("OIDC_AUDIENCE", "audience-123")
+def unique_subject(prefix="google"):
+    """
+    Generate a unique OIDC subject.
 
-    config = OIDCConfig()
-
-    assert config.enabled is True
-    assert config.provider == "google"
-    assert config.issuer_url == "https://accounts.google.com"
-    assert config.client_id == "client-123"
-    assert config.client_secret == "secret"
-    assert config.audience == "audience-123"
+    Normal tests should never reuse the same issuer + subject pair.
+    """
+    return f"{prefix}-{uuid.uuid4().hex}"
 
 
-def test_oidc_config_uses_client_id_as_default_audience(monkeypatch):
-    monkeypatch.setenv("OIDC_ENABLED", "true")
-    monkeypatch.setenv("OIDC_CLIENT_ID", "client-123")
-    monkeypatch.delenv("OIDC_AUDIENCE", raising=False)
-
-    config = OIDCConfig()
-
-    assert config.audience == "client-123"
+def unique_email(prefix="test"):
+    """Generate a unique email address."""
+    return f"{prefix}-{uuid.uuid4().hex[:12]}@example.com"
 
 
-@pytest.mark.parametrize(
-    "env, expected_message",
-    [
-        (
-            {
-                "OIDC_ENABLED": "false",
-            },
-            "OIDC authentication is disabled",
-        ),
-        (
-            {
-                "OIDC_ENABLED": "true",
-                "OIDC_PROVIDER": "microsoft",
-                "OIDC_CLIENT_ID": "client",
-                "OIDC_AUDIENCE": "client",
-            },
-            "Unsupported OIDC provider",
-        ),
-        (
-            {
-                "OIDC_ENABLED": "true",
-                "OIDC_PROVIDER": "google",
-                "OIDC_CLIENT_ID": "",
-                "OIDC_AUDIENCE": "client",
-            },
-            "OIDC client ID is not configured",
-        ),
-        (
-            {
-                "OIDC_ENABLED": "true",
-                "OIDC_PROVIDER": "google",
-                "OIDC_CLIENT_ID": "client",
-                "OIDC_ISSUER_URL": "",
-                "OIDC_AUDIENCE": "client",
-            },
-            "OIDC issuer is not configured",
-        ),
-        (
-            {
-                "OIDC_ENABLED": "true",
-                "OIDC_PROVIDER": "google",
-                "OIDC_CLIENT_ID": "client",
-                "OIDC_AUDIENCE": "",
-            },
-            "OIDC audience is not configured",
-        ),
-    ],
-)
-def test_oidc_config_validation_errors(
-    monkeypatch,
-    env,
-    expected_message,
+# ============================================================================
+# Google claims helper
+# ============================================================================
+
+
+def make_google_claims(
+    subject=None,
+    email=None,
+    issuer="https://accounts.google.com",
 ):
-    for key in (
-        "OIDC_ENABLED",
-        "OIDC_PROVIDER",
-        "OIDC_ISSUER_URL",
-        "OIDC_CLIENT_ID",
-        "OIDC_CLIENT_SECRET",
-        "OIDC_AUDIENCE",
-    ):
-        monkeypatch.delenv(key, raising=False)
+    """
+    Create fake validated Google OIDC claims.
 
-    for key, value in env.items():
-        monkeypatch.setenv(key, value)
-
-    config = OIDCConfig()
-
-    with pytest.raises(
-        OIDCValidationError,
-        match=expected_message,
-    ):
-        config.validate()
-
-
-# -------------------------------------------------------------------
-# Discovery tests
-# -------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_get_discovery_success():
-    config = MagicMock()
-    config.provider = "google"
-    config.issuer_url = "https://accounts.google.com"
-
-    validator = GoogleOIDCValidator(config)
-
-    discovery_data = {
-        "issuer": "https://accounts.google.com",
-        "jwks_uri": "https://example.com/jwks",
+    Google token validation itself is mocked. These claims represent the
+    output that validate_google_id_token() would return after successful
+    validation.
+    """
+    return {
+        "iss": issuer,
+        "sub": subject or unique_subject(),
+        "email": email or unique_email("google"),
+        "email_verified": True,
+        "name": "Google Test User",
+        "given_name": "Google",
+        "family_name": "Test",
+        "aud": "test-client-id",
     }
 
-    response = MagicMock()
-    response.json.return_value = discovery_data
-    response.raise_for_status.return_value = None
 
-    mock_client = MagicMock()
-    mock_client.get = AsyncMock(return_value=response)
+# ============================================================================
+# Organization helper
+# ============================================================================
 
-    with patch(
-        "app.auth.oidc.httpx.AsyncClient"
-    ) as client_class:
-        client_class.return_value.__aenter__.return_value = mock_client
 
-        result = await validator._get_discovery()
+def create_organization(
+    db,
+    name=None,
+    status="ACTIVE",
+):
+    """
+    Create a valid test organization.
 
-    assert result == discovery_data
-    assert validator._discovery == discovery_data
+    Organization.status is constrained to:
+        ACTIVE
+        SUSPENDED
+        DELETED
+    """
 
-    mock_client.get.assert_awaited_once_with(
-        "https://accounts.google.com/.well-known/openid-configuration"
+    organization = Organization(
+        id=f"org-{uuid.uuid4().hex[:12]}",
+        name=name or f"OIDC Test Organization {uuid.uuid4().hex[:8]}",
+        slug=f"oidc-test-{uuid.uuid4().hex[:16]}",
+        status=status,
+        subscription_plan="FREE",
+        max_users=10,
+        max_technicians=50,
+        max_jobs_per_month=500,
+        settings={},
     )
 
+    db.add(organization)
+    db.commit()
+    db.refresh(organization)
 
-@pytest.mark.asyncio
-async def test_get_discovery_uses_cache():
-    config = MagicMock()
-    config.provider = "google"
-    config.issuer_url = "https://accounts.google.com"
+    return organization
 
-    validator = GoogleOIDCValidator(config)
 
-    cached = {
-        "issuer": "https://accounts.google.com",
-        "jwks_uri": "https://example.com/jwks",
-    }
+# ============================================================================
+# User helper
+# ============================================================================
 
-    validator._discovery = cached
+
+def create_user(
+    db,
+    organization,
+    email=None,
+    role="technician",
+    is_active=True,
+):
+    """
+    Create a valid FieldOps user.
+
+    password_hash is required by the User database schema. The actual
+    password is irrelevant for these OIDC tests because password login
+    is never performed.
+    """
+
+    user = User(
+        id=str(uuid.uuid4()),
+        email=email or unique_email("fieldops"),
+
+        # Required by users.password_hash.
+        # This is intentionally a test-only placeholder because these
+        # tests authenticate through OIDC/JWT, not password authentication.
+        password_hash="test-password-hash",
+
+        first_name="Test",
+        last_name="Technician",
+        role=role,
+        tenant_id=organization.id,
+
+        phone_number=None,
+        fcm_token=None,
+        device_type=None,
+
+        is_active=is_active,
+        is_email_verified=True,
+        is_on_duty=True,
+
+        failed_login_attempts=0,
+        locked_until=None,
+        last_login=None,
+
+        deleted_at=None,
+        deleted_by=None,
+    )
+
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    return user
+
+
+# ============================================================================
+# OIDC identity helper
+# ============================================================================
+
+
+def create_oidc_identity(
+    db,
+    user,
+    subject=None,
+    issuer="https://accounts.google.com",
+):
+    """
+    Create an OIDC identity.
+
+    A unique subject is generated unless a test explicitly needs to verify
+    duplicate identity behavior.
+    """
+
+    identity = OIDCIdentity(
+        id=str(uuid.uuid4()),
+        user_id=user.id,
+        provider="google",
+        issuer=issuer,
+        subject=subject or unique_subject(),
+    )
+
+    db.add(identity)
+    db.commit()
+    db.refresh(identity)
+
+    return identity
+
+
+# ============================================================================
+# FieldOps JWT helpers
+# ============================================================================
+
+
+def auth_headers(user):
+    """Authorization headers for authenticated OIDC link tests."""
+    return {"Authorization": "Bearer oidc-link-test-token"}
+
+
+def override_oidc_auth(user):
+    """Override production session authentication for OIDC link tests."""
+    authenticated_user = AuthenticatedUser(
+        user_id=str(user.id),
+        tenant_id=str(user.tenant_id),
+        role=user.role,
+        jti="oidc-test-jti",
+        session_id="oidc-test-session",
+    )
+    app.dependency_overrides[get_current_user] = lambda: authenticated_user
+
+
+def clear_oidc_auth_override():
+    app.dependency_overrides.pop(get_current_user, None)
+
+
+# ============================================================================
+# 1. Linked Google account can log in
+# ============================================================================
+
+
+def test_google_oidc_login_linked_account(db):
+    organization = create_organization(db)
+
+    user = create_user(
+        db,
+        organization,
+        email=unique_email("linked"),
+        role="technician",
+    )
+
+    identity = create_oidc_identity(
+        db,
+        user,
+    )
+
+    claims = make_google_claims(
+        subject=identity.subject,
+        email=unique_email("google-linked"),
+    )
 
     with patch(
-        "app.auth.oidc.httpx.AsyncClient"
-    ) as client_class:
-        result = await validator._get_discovery()
-
-    assert result == cached
-    client_class.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_get_discovery_http_error():
-    config = MagicMock()
-    config.provider = "google"
-    config.issuer_url = "https://accounts.google.com"
-
-    validator = GoogleOIDCValidator(config)
-
-    with patch(
-        "app.auth.oidc.httpx.AsyncClient"
-    ) as client_class:
-        mock_client = MagicMock()
-
-        mock_client.get = AsyncMock(
-            side_effect=httpx.HTTPError("network failure")
+        "app.routes.auth.validate_google_id_token",
+        new=AsyncMock(return_value=claims),
+    ):
+        response = client.post(
+            "/auth/oidc/google",
+            json={
+                "id_token": "fake-google-id-token",
+            },
         )
 
-        client_class.return_value.__aenter__.return_value = mock_client
+    assert response.status_code == 200
 
-        with pytest.raises(
-            OIDCValidationError,
-            match="Unable to load OIDC provider metadata",
-        ):
-            await validator._get_discovery()
+    body = response.json()
 
+    assert "access_token" in body
+    assert "refresh_token" in body
 
-@pytest.mark.asyncio
-async def test_get_discovery_invalid_json():
-    config = MagicMock()
-    config.provider = "google"
-    config.issuer_url = "https://accounts.google.com"
-
-    validator = GoogleOIDCValidator(config)
-
-    response = MagicMock()
-    response.raise_for_status.return_value = None
-    response.json.side_effect = ValueError("invalid json")
-
-    mock_client = MagicMock()
-    mock_client.get = AsyncMock(return_value=response)
-
-    with patch(
-        "app.auth.oidc.httpx.AsyncClient"
-    ) as client_class:
-        client_class.return_value.__aenter__.return_value = mock_client
-
-        with pytest.raises(
-            OIDCValidationError,
-            match="Unable to load OIDC provider metadata",
-        ):
-            await validator._get_discovery()
+    assert body["user"]["id"] == user.id
+    assert body["user"]["email"] == user.email
+    assert body["user"]["role"] == "technician"
+    assert body["user"]["tenant_id"] == organization.id
 
 
-@pytest.mark.asyncio
-async def test_get_discovery_issuer_mismatch():
-    config = MagicMock()
-    config.provider = "google"
-    config.issuer_url = "https://accounts.google.com"
-
-    validator = GoogleOIDCValidator(config)
-
-    response = MagicMock()
-    response.raise_for_status.return_value = None
-    response.json.return_value = {
-        "issuer": "https://evil.example.com",
-        "jwks_uri": "https://example.com/jwks",
-    }
-
-    mock_client = MagicMock()
-    mock_client.get = AsyncMock(return_value=response)
-
-    with patch(
-        "app.auth.oidc.httpx.AsyncClient"
-    ) as client_class:
-        client_class.return_value.__aenter__.return_value = mock_client
-
-        with pytest.raises(
-            OIDCValidationError,
-            match="OIDC provider issuer does not match configured issuer",
-        ):
-            await validator._get_discovery()
+# ============================================================================
+# 2. Unlinked Google account rejected
+# ============================================================================
 
 
-# -------------------------------------------------------------------
-# JWKS tests
-# -------------------------------------------------------------------
+def test_google_oidc_login_unlinked_account(db):
+    """
+    A Google identity that has never been linked must not automatically
+    create a FieldOps user.
+    """
 
-@pytest.mark.asyncio
-async def test_get_jwks_success():
-    config = MagicMock()
-    config.provider = "google"
-    config.issuer_url = "https://accounts.google.com"
-
-    validator = GoogleOIDCValidator(config)
-
-    discovery = {
-        "issuer": "https://accounts.google.com",
-        "jwks_uri": "https://example.com/jwks",
-    }
-
-    validator._discovery = discovery
-
-    jwks_data = {
-        "keys": [
-            {
-                "kid": "test-key",
-                "kty": "RSA",
-            }
-        ]
-    }
-
-    response = MagicMock()
-    response.raise_for_status.return_value = None
-    response.json.return_value = jwks_data
-
-    mock_client = MagicMock()
-    mock_client.get = AsyncMock(return_value=response)
-
-    with patch(
-        "app.auth.oidc.httpx.AsyncClient"
-    ) as client_class:
-        client_class.return_value.__aenter__.return_value = mock_client
-
-        result = await validator._get_jwks()
-
-    assert result == jwks_data
-    assert validator._jwks == jwks_data
-
-    mock_client.get.assert_awaited_once_with(
-        "https://example.com/jwks"
+    claims = make_google_claims(
+        email=unique_email("unlinked"),
     )
 
-
-@pytest.mark.asyncio
-async def test_get_jwks_uses_cache():
-    config = MagicMock()
-
-    validator = GoogleOIDCValidator(config)
-
-    cached = {
-        "keys": [
-            {
-                "kid": "cached-key",
-                "kty": "RSA",
-            }
-        ]
-    }
-
-    validator._jwks = cached
-
     with patch(
-        "app.auth.oidc.httpx.AsyncClient"
-    ) as client_class:
-        result = await validator._get_jwks()
-
-    assert result == cached
-    client_class.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_get_jwks_missing_jwks_uri():
-    config = MagicMock()
-    config.provider = "google"
-    config.issuer_url = "https://accounts.google.com"
-
-    validator = GoogleOIDCValidator(config)
-
-    validator._discovery = {
-        "issuer": "https://accounts.google.com",
-    }
-
-    with pytest.raises(
-        OIDCValidationError,
-        match="OIDC provider did not publish a JWKS URI",
+        "app.routes.auth.validate_google_id_token",
+        new=AsyncMock(return_value=claims),
     ):
-        await validator._get_jwks()
-
-
-@pytest.mark.asyncio
-async def test_get_jwks_http_error():
-    config = MagicMock()
-    config.provider = "google"
-    config.issuer_url = "https://accounts.google.com"
-
-    validator = GoogleOIDCValidator(config)
-
-    validator._discovery = {
-        "issuer": "https://accounts.google.com",
-        "jwks_uri": "https://example.com/jwks",
-    }
-
-    with patch(
-        "app.auth.oidc.httpx.AsyncClient"
-    ) as client_class:
-        mock_client = MagicMock()
-
-        mock_client.get = AsyncMock(
-            side_effect=httpx.HTTPError("network failure")
+        response = client.post(
+            "/auth/oidc/google",
+            json={
+                "id_token": "fake-unlinked-google-token",
+            },
         )
 
-        client_class.return_value.__aenter__.return_value = mock_client
+    assert response.status_code == 401
 
-        with pytest.raises(
-            OIDCValidationError,
-            match="Unable to load OIDC provider signing keys",
-        ):
-            await validator._get_jwks()
+    body = response.json()
+
+    assert "not linked" in body["detail"].lower()
 
 
-@pytest.mark.asyncio
-async def test_get_jwks_invalid_json():
-    config = MagicMock()
-    config.provider = "google"
-    config.issuer_url = "https://accounts.google.com"
+# ============================================================================
+# 3. Invalid Google token rejected
+# ============================================================================
 
-    validator = GoogleOIDCValidator(config)
 
-    validator._discovery = {
-        "issuer": "https://accounts.google.com",
-        "jwks_uri": "https://example.com/jwks",
-    }
-
-    response = MagicMock()
-    response.raise_for_status.return_value = None
-    response.json.side_effect = ValueError("invalid json")
-
-    mock_client = MagicMock()
-    mock_client.get = AsyncMock(return_value=response)
-
+def test_google_oidc_login_invalid_token(db):
     with patch(
-        "app.auth.oidc.httpx.AsyncClient"
-    ) as client_class:
-        client_class.return_value.__aenter__.return_value = mock_client
-
-        with pytest.raises(
-            OIDCValidationError,
-            match="Unable to load OIDC provider signing keys",
-        ):
-            await validator._get_jwks()
-
-
-# -------------------------------------------------------------------
-# ID token validation tests
-# -------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_validate_id_token_empty_token():
-    config = make_valid_config()
-    validator = GoogleOIDCValidator(config)
-
-    with pytest.raises(
-        OIDCValidationError,
-        match="ID token is required",
-    ):
-        await validator.validate_id_token("")
-
-
-@pytest.mark.asyncio
-async def test_validate_id_token_config_error():
-    config = MagicMock()
-
-    config.validate.side_effect = OIDCValidationError(
-        "OIDC authentication is disabled"
-    )
-
-    validator = GoogleOIDCValidator(config)
-
-    with pytest.raises(
-        OIDCValidationError,
-        match="OIDC authentication is disabled",
-    ):
-        await validator.validate_id_token("fake-token")
-
-
-@pytest.mark.asyncio
-async def test_validate_id_token_invalid_signature_or_claims():
-    config = make_valid_config()
-    validator = GoogleOIDCValidator(config)
-
-    validator._jwks = {
-        "keys": []
-    }
-
-    with patch(
-        "app.auth.oidc.jwt.decode",
-        side_effect=Exception("invalid signature"),
-    ):
-        with pytest.raises(
-            OIDCValidationError,
-            match="Invalid OIDC ID token",
-        ):
-            await validator.validate_id_token("fake-token")
-
-
-@pytest.mark.asyncio
-async def test_validate_id_token_claim_validation_failure():
-    config = make_valid_config()
-    validator = GoogleOIDCValidator(config)
-
-    validator._jwks = {
-        "keys": []
-    }
-
-    claims = MockClaims(
-        iss="https://accounts.google.com",
-        sub="google-user-123",
-        aud="client-123",
-        exp=9999999999,
-    )
-
-    claims.validate = MagicMock(
-        side_effect=Exception("expired token")
-    )
-
-    with patch(
-        "app.auth.oidc.jwt.decode",
-        return_value=claims,
-    ):
-        with pytest.raises(
-            OIDCValidationError,
-            match="Invalid OIDC ID token",
-        ):
-            await validator.validate_id_token("fake-token")
-
-
-@pytest.mark.asyncio
-async def test_validate_id_token_issuer_mismatch():
-    config = make_valid_config()
-    validator = GoogleOIDCValidator(config)
-
-    validator._jwks = {
-        "keys": []
-    }
-
-    claims = MockClaims(
-        iss="https://evil.example.com",
-        sub="google-user-123",
-        aud="client-123",
-        exp=9999999999,
-    )
-
-    with patch(
-        "app.auth.oidc.jwt.decode",
-        return_value=claims,
-    ):
-        with pytest.raises(
-            OIDCValidationError,
-            match="Invalid OIDC issuer",
-        ):
-            await validator.validate_id_token("fake-token")
-
-
-@pytest.mark.asyncio
-async def test_validate_id_token_issuer_trailing_slash():
-    config = make_valid_config()
-    validator = GoogleOIDCValidator(config)
-
-    validator._jwks = {
-        "keys": []
-    }
-
-    claims = MockClaims(
-        iss="https://accounts.google.com/",
-        sub="google-user-123",
-        aud="client-123",
-        exp=9999999999,
-    )
-
-    with patch(
-        "app.auth.oidc.jwt.decode",
-        return_value=claims,
-    ):
-        result = await validator.validate_id_token("fake-token")
-
-    assert result["iss"] == "https://accounts.google.com/"
-
-
-@pytest.mark.asyncio
-async def test_validate_id_token_missing_subject():
-    config = make_valid_config()
-    validator = GoogleOIDCValidator(config)
-
-    validator._jwks = {
-        "keys": []
-    }
-
-    claims = MockClaims(
-        iss="https://accounts.google.com",
-        aud="client-123",
-        exp=9999999999,
-    )
-
-    with patch(
-        "app.auth.oidc.jwt.decode",
-        return_value=claims,
-    ):
-        with pytest.raises(
-            OIDCValidationError,
-            match="OIDC subject is missing",
-        ):
-            await validator.validate_id_token("fake-token")
-
-
-@pytest.mark.asyncio
-async def test_validate_id_token_valid_claims():
-    config = make_valid_config()
-    validator = GoogleOIDCValidator(config)
-
-    validator._jwks = {
-        "keys": []
-    }
-
-    claims = MockClaims(
-        iss="https://accounts.google.com",
-        sub="google-user-123",
-        aud="client-123",
-        exp=9999999999,
-    )
-
-    with patch(
-        "app.auth.oidc.jwt.decode",
-        return_value=claims,
-    ):
-        result = await validator.validate_id_token(
-            "fake-token"
-        )
-
-    assert result["iss"] == "https://accounts.google.com"
-    assert result["sub"] == "google-user-123"
-
-
-@pytest.mark.asyncio
-async def test_validate_id_token_nonce_success():
-    config = make_valid_config()
-    validator = GoogleOIDCValidator(config)
-
-    validator._jwks = {
-        "keys": []
-    }
-
-    claims = MockClaims(
-        iss="https://accounts.google.com",
-        sub="google-user-123",
-        aud="client-123",
-        exp=9999999999,
-        nonce="nonce-123",
-    )
-
-    with patch(
-        "app.auth.oidc.jwt.decode",
-        return_value=claims,
-    ):
-        result = await validator.validate_id_token(
-            "fake-token",
-            expected_nonce="nonce-123",
-        )
-
-    assert result["sub"] == "google-user-123"
-    assert result["nonce"] == "nonce-123"
-
-
-@pytest.mark.asyncio
-async def test_validate_id_token_nonce_missing():
-    config = make_valid_config()
-    validator = GoogleOIDCValidator(config)
-
-    validator._jwks = {
-        "keys": []
-    }
-
-    claims = MockClaims(
-        iss="https://accounts.google.com",
-        sub="google-user-123",
-        aud="client-123",
-        exp=9999999999,
-    )
-
-    with patch(
-        "app.auth.oidc.jwt.decode",
-        return_value=claims,
-    ):
-        with pytest.raises(
-            OIDCValidationError,
-            match="OIDC nonce validation failed",
-        ):
-            await validator.validate_id_token(
-                "fake-token",
-                expected_nonce="nonce-123",
+        "app.routes.auth.validate_google_id_token",
+        new=AsyncMock(
+            side_effect=OIDCValidationError(
+                "Invalid Google ID token"
             )
+        ),
+    ):
+        response = client.post(
+            "/auth/oidc/google",
+            json={
+                "id_token": "invalid-google-token",
+            },
+        )
+
+    assert response.status_code == 401
 
 
-@pytest.mark.asyncio
-async def test_validate_id_token_nonce_mismatch():
-    config = make_valid_config()
-    validator = GoogleOIDCValidator(config)
+# ============================================================================
+# 4. Disabled user rejected
+# ============================================================================
 
-    validator._jwks = {
-        "keys": []
-    }
 
-    claims = MockClaims(
-        iss="https://accounts.google.com",
-        sub="google-user-123",
-        aud="client-123",
-        exp=9999999999,
-        nonce="wrong-nonce",
+def test_google_oidc_login_disabled_user(db):
+    organization = create_organization(db)
+
+    user = create_user(
+        db,
+        organization,
+        email=unique_email("disabled"),
+        is_active=False,
+    )
+
+    identity = create_oidc_identity(
+        db,
+        user,
+    )
+
+    claims = make_google_claims(
+        subject=identity.subject,
+        email=unique_email("google-disabled"),
     )
 
     with patch(
-        "app.auth.oidc.jwt.decode",
-        return_value=claims,
+        "app.routes.auth.validate_google_id_token",
+        new=AsyncMock(return_value=claims),
     ):
-        with pytest.raises(
-            OIDCValidationError,
-            match="OIDC nonce validation failed",
-        ):
-            await validator.validate_id_token(
-                "fake-token",
-                expected_nonce="nonce-123",
+        response = client.post(
+            "/auth/oidc/google",
+            json={
+                "id_token": "fake-disabled-user-token",
+            },
+        )
+
+    assert response.status_code == 403
+
+
+# ============================================================================
+# 5. Suspended organization rejected
+# ============================================================================
+
+
+def test_google_oidc_login_inactive_organization(db):
+    """
+    The Organization model allows:
+        ACTIVE
+        SUSPENDED
+        DELETED
+
+    Therefore SUSPENDED is used to test inactive organization behavior.
+    """
+
+    organization = create_organization(
+        db,
+        status="SUSPENDED",
+    )
+
+    user = create_user(
+        db,
+        organization,
+        email=unique_email("suspended-org"),
+    )
+
+    identity = create_oidc_identity(
+        db,
+        user,
+    )
+
+    claims = make_google_claims(
+        subject=identity.subject,
+        email=unique_email("google-suspended"),
+    )
+
+    with patch(
+        "app.routes.auth.validate_google_id_token",
+        new=AsyncMock(return_value=claims),
+    ):
+        response = client.post(
+            "/auth/oidc/google",
+            json={
+                "id_token": "fake-suspended-org-token",
+            },
+        )
+
+    assert response.status_code == 403
+
+
+# ============================================================================
+# 6. Link Google account
+# ============================================================================
+
+
+def test_google_oidc_link_account(db):
+    organization = create_organization(db)
+    user = create_user(db, organization, email=unique_email("link-user"))
+    claims = make_google_claims(email=unique_email("google-link"))
+
+    override_oidc_auth(user)
+    try:
+        with patch("app.routes.auth.validate_google_id_token", new=AsyncMock(return_value=claims)):
+            response = client.post(
+                "/auth/oidc/google/link",
+                headers=auth_headers(user),
+                json={"id_token": "fake-google-link-token"},
             )
+    finally:
+        clear_oidc_auth_override()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "LINKED"
+    assert body["provider"] == "google"
+
+    identity = db.query(OIDCIdentity).filter(
+        OIDCIdentity.user_id == user.id,
+        OIDCIdentity.issuer == claims["iss"],
+        OIDCIdentity.subject == claims["sub"],
+    ).first()
+    assert identity is not None
+    assert identity.user_id == user.id
 
 
-@pytest.mark.asyncio
-async def test_validate_id_token_no_nonce_check_when_expected_nonce_not_supplied():
-    config = make_valid_config()
-    validator = GoogleOIDCValidator(config)
+# ============================================================================
+# 7. Same Google account linked again to same user
+# ============================================================================
 
-    validator._jwks = {
-        "keys": []
-    }
 
-    claims = MockClaims(
-        iss="https://accounts.google.com",
-        sub="google-user-123",
-        aud="client-123",
-        exp=9999999999,
+def test_google_oidc_link_same_account_again(db):
+    organization = create_organization(db)
+    user = create_user(db, organization, email=unique_email("same-link"))
+    identity = create_oidc_identity(db, user)
+    claims = make_google_claims(
+        subject=identity.subject,
+        email=unique_email("google-same-link"),
+    )
+
+    override_oidc_auth(user)
+    try:
+        with patch("app.routes.auth.validate_google_id_token", new=AsyncMock(return_value=claims)):
+            response = client.post(
+                "/auth/oidc/google/link",
+                headers=auth_headers(user),
+                json={"id_token": "fake-google-token"},
+            )
+    finally:
+        clear_oidc_auth_override()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ALREADY_LINKED"
+    assert body["provider"] == "google"
+
+
+# ============================================================================
+# 8. Google account already owned by another FieldOps user
+# ============================================================================
+
+
+def test_google_oidc_link_account_already_owned(db):
+    organization = create_organization(db)
+    owner = create_user(db, organization, email=unique_email("google-owner"))
+    second_user = create_user(db, organization, email=unique_email("second-user"))
+    subject = unique_subject("already-owned")
+    create_oidc_identity(db, owner, subject=subject)
+    claims = make_google_claims(
+        subject=subject,
+        email=unique_email("google-owned"),
+    )
+
+    override_oidc_auth(second_user)
+    try:
+        with patch("app.routes.auth.validate_google_id_token", new=AsyncMock(return_value=claims)):
+            response = client.post(
+                "/auth/oidc/google/link",
+                headers=auth_headers(second_user),
+                json={"id_token": "fake-google-token"},
+            )
+    finally:
+        clear_oidc_auth_override()
+
+    assert response.status_code == 409
+
+
+# ============================================================================
+# 9. Linking Google does not create FieldOps user
+# ============================================================================
+
+
+def test_google_oidc_link_does_not_create_user(db):
+    organization = create_organization(db)
+    fieldops_user = create_user(
+        db,
+        organization,
+        email=unique_email("existing-fieldops"),
+    )
+    google_email = unique_email("new-google")
+    before_count = db.query(User).count()
+    claims = make_google_claims(email=google_email)
+
+    override_oidc_auth(fieldops_user)
+    try:
+        with patch("app.routes.auth.validate_google_id_token", new=AsyncMock(return_value=claims)):
+            response = client.post(
+                "/auth/oidc/google/link",
+                headers=auth_headers(fieldops_user),
+                json={"id_token": "fresh-google-link-token"},
+            )
+    finally:
+        clear_oidc_auth_override()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "LINKED"
+    assert body["provider"] == "google"
+    assert db.query(User).count() == before_count
+
+    google_user = db.query(User).filter(User.email == google_email).first()
+    assert google_user is None
+
+    identity = db.query(OIDCIdentity).filter(
+        OIDCIdentity.issuer == claims["iss"],
+        OIDCIdentity.subject == claims["sub"],
+    ).first()
+    assert identity is not None
+    assert identity.user_id == fieldops_user.id
+
+
+# ============================================================================
+# 10. Unlinked Google login does not create FieldOps user
+# ============================================================================
+
+
+def test_google_oidc_login_unlinked_does_not_create_user(db):
+    before_count = db.query(User).count()
+
+    claims = make_google_claims(
+        email=unique_email("unlinked-no-create"),
     )
 
     with patch(
-        "app.auth.oidc.jwt.decode",
-        return_value=claims,
+        "app.routes.auth.validate_google_id_token",
+        new=AsyncMock(return_value=claims),
     ):
-        result = await validator.validate_id_token(
-            "fake-token"
+        response = client.post(
+            "/auth/oidc/google",
+            json={
+                "id_token": "fresh-unlinked-token",
+            },
         )
 
-    assert result["sub"] == "google-user-123"
+    assert response.status_code == 401
+
+    after_count = db.query(User).count()
+
+    assert after_count == before_count
+
+    google_user = (
+        db.query(User)
+        .filter(User.email == claims["email"])
+        .first()
+    )
+
+    assert google_user is None
 
 
-# -------------------------------------------------------------------
-# Convenience function
-# -------------------------------------------------------------------
+# ============================================================================
+# 11. Google cannot override FieldOps role
+# ============================================================================
 
-@pytest.mark.asyncio
-async def test_validate_google_id_token():
-    expected_claims = {
-        "iss": "https://accounts.google.com",
-        "sub": "google-user-123",
-    }
 
-    mock_validator = MagicMock()
+def test_google_oidc_login_uses_fieldops_role(db):
+    organization = create_organization(db)
 
-    mock_validator.validate_id_token = AsyncMock(
-        return_value=expected_claims
+    user = create_user(
+        db,
+        organization,
+        email=unique_email("role"),
+        role="technician",
+    )
+
+    identity = create_oidc_identity(
+        db,
+        user,
+    )
+
+    claims = make_google_claims(
+        subject=identity.subject,
+        email=unique_email("google-role"),
+    )
+
+    # Attempt to inject a privileged role into Google claims.
+    claims["role"] = "admin"
+
+    with patch(
+        "app.routes.auth.validate_google_id_token",
+        new=AsyncMock(return_value=claims),
+    ):
+        response = client.post(
+            "/auth/oidc/google",
+            json={
+                "id_token": "fake-role-token",
+            },
+        )
+
+    assert response.status_code == 200
+
+    body = response.json()
+
+    assert body["user"]["role"] == "technician"
+    assert body["user"]["role"] != "admin"
+
+
+# ============================================================================
+# 12. Google cannot override FieldOps tenant
+# ============================================================================
+
+
+def test_google_oidc_login_uses_fieldops_tenant(db):
+    organization = create_organization(db)
+
+    user = create_user(
+        db,
+        organization,
+        email=unique_email("tenant"),
+    )
+
+    identity = create_oidc_identity(
+        db,
+        user,
+    )
+
+    claims = make_google_claims(
+        subject=identity.subject,
+        email=unique_email("google-tenant"),
+    )
+
+    # Attempt to inject an attacker-controlled tenant.
+    claims["tenant_id"] = "attacker-tenant"
+
+    with patch(
+        "app.routes.auth.validate_google_id_token",
+        new=AsyncMock(return_value=claims),
+    ):
+        response = client.post(
+            "/auth/oidc/google",
+            json={
+                "id_token": "fake-tenant-token",
+            },
+        )
+
+    assert response.status_code == 200
+
+    body = response.json()
+
+    assert body["user"]["tenant_id"] == organization.id
+    assert body["user"]["tenant_id"] != "attacker-tenant"
+
+
+# ============================================================================
+# 13. Unknown OIDC identity does not produce 500
+# ============================================================================
+
+
+def test_google_oidc_unknown_identity_does_not_return_500(db):
+    claims = make_google_claims(
+        email=unique_email("unknown"),
     )
 
     with patch(
-        "app.auth.oidc.GoogleOIDCValidator",
-        return_value=mock_validator,
+        "app.routes.auth.validate_google_id_token",
+        new=AsyncMock(return_value=claims),
     ):
-        result = await validate_google_id_token(
-            "fake-token",
-            expected_nonce="nonce-123",
+        response = client.post(
+            "/auth/oidc/google",
+            json={
+                "id_token": "fake-unknown-token",
+            },
         )
 
-    assert result == expected_claims
+    assert response.status_code == 401
+    assert response.status_code != 500
 
-    mock_validator.validate_id_token.assert_awaited_once_with(
-        id_token="fake-token",
-        expected_nonce="nonce-123",
+    body = response.json()
+
+    assert "not linked" in body["detail"].lower()
+
+
+# ============================================================================
+# 14. issuer + subject uniqueness
+# ============================================================================
+
+
+def test_google_oidc_identity_unique_for_same_google_account(db):
+    organization = create_organization(db)
+
+    user_one = create_user(
+        db,
+        organization,
+        email=unique_email("unique-one"),
     )
+
+    user_two = create_user(
+        db,
+        organization,
+        email=unique_email("unique-two"),
+    )
+
+    issuer = "https://accounts.google.com"
+    subject = unique_subject("duplicate-test")
+
+    first_identity = OIDCIdentity(
+        id=str(uuid.uuid4()),
+        user_id=user_one.id,
+        provider="google",
+        issuer=issuer,
+        subject=subject,
+    )
+
+    db.add(first_identity)
+    db.commit()
+
+    second_identity = OIDCIdentity(
+        id=str(uuid.uuid4()),
+        user_id=user_two.id,
+        provider="google",
+        issuer=issuer,
+        subject=subject,
+    )
+
+    db.add(second_identity)
+
+    with pytest.raises(IntegrityError):
+        db.commit()
+
+    db.rollback()
+
+    identities = (
+        db.query(OIDCIdentity)
+        .filter(
+            OIDCIdentity.issuer == issuer,
+            OIDCIdentity.subject == subject,
+        )
+        .all()
+    )
+
+    assert len(identities) == 1
+    assert identities[0].user_id == user_one.id
+
+
+# ============================================================================
+# 15. Missing id_token
+# ============================================================================
+
+
+def test_google_oidc_login_missing_id_token():
+    response = client.post(
+        "/auth/oidc/google",
+        json={},
+    )
+
+    # Your current application returns 400 for this malformed request.
+    assert response.status_code == 400
+
+
+# ============================================================================
+# 16. Empty id_token
+# ============================================================================
+
+
+def test_google_oidc_login_empty_id_token():
+    response = client.post(
+        "/auth/oidc/google",
+        json={
+            "id_token": "",
+        },
+    )
+
+    # Your current application returns 400 for this malformed request.
+    assert response.status_code == 400

@@ -209,7 +209,7 @@ def test_duplicate_completion_rejected(setup_db):
             user_role="TECHNICIAN"
         )
     assert exc_info.value.status_code == 400
-    assert "already completed" in exc_info.value.detail
+    assert "already completed" in exc_info.value.detail.lower()
 
 
 def test_unauthorized_user_rejected(setup_db):
