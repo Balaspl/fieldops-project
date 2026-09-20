@@ -138,12 +138,7 @@ def get_planning_kpi(
         Job.status.notin_(EXCLUDED_FROM_PENDING)
     ).count()
 
-    # --- TODAY vs YESTERDAY trend ---
-    def count_today(q, filters):
-        return today_q.filter(*filters).count() if filters else today_q.count()
 
-    def count_yesterday(q, filters):
-        return yesterday_q.filter(*filters).count() if filters else yesterday_q.count()
 
     # Today/yesterday dispatched (same corrected rules)
     t_dispatched = today_q.filter(Job.assigned_technician_id.isnot(None)).count()
@@ -182,12 +177,8 @@ def get_planning_kpi(
         Job.status.notin_(EXCLUDED_FROM_PENDING)
     ).count()
 
-    def safe_change_pct(today_val: int, yesterday_val: int):
-        """Return percentage change, or None when comparison is not meaningful."""
+    def safe_change_pct(today_val, yesterday_val):
         if yesterday_val == 0:
-            # No yesterday baseline — cannot compute meaningful trend
-            return None
-        if today_val == 0 and yesterday_val == 0:
             return None
         return round(((today_val - yesterday_val) / yesterday_val) * 100, 1)
 
