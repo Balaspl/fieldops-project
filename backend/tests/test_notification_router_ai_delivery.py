@@ -210,6 +210,11 @@ async def test_customer_sms_uses_safe_communication(
 
     # The configured local Twilio account is already treated as
     # mock mode, so no network request is made.
+    monkeypatch.setattr(
+        "app.services.twilio_sms.TWILIO_ACCOUNT_SID",
+        "mock",
+    )
+
     delivered = await router._send_sms(
         build_event(),
         "customer",

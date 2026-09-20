@@ -81,6 +81,14 @@ class OIDCConfig:
                 "OIDC provider is not configured"
             )
 
+        # FieldOps currently supports Google as the configured OIDC
+        # provider. Reject unsupported providers before attempting
+        # discovery, token exchange, or ID-token validation.
+        if self.provider not in {"google"}:
+            raise OIDCValidationError(
+                f"Unsupported OIDC provider: {self.provider}"
+            )
+
         if not self.client_id:
             raise OIDCValidationError(
                 "OIDC client ID is not configured"

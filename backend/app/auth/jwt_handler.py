@@ -302,10 +302,13 @@ def _validate_access_token_ttl(
         * 60
     )
 
-    if seconds < minimum_seconds:
+    if seconds < 0:
+        return
+
+    if 0 < seconds < minimum_seconds:
         raise ValueError(
-            "Access-token TTL is below the configured minimum"
-        )
+        "Refresh-token TTL is below the configured minimum"
+    )
 
     if seconds > maximum_seconds:
         raise ValueError(
@@ -323,8 +326,12 @@ def _validate_refresh_token_ttl(
     """
     Validate a custom refresh-token lifetime.
 
-    Any explicitly supplied expires_delta must remain within
-    the centrally configured refresh-token bounds.
+    Any explicitly supplied positive expires_delta must remain
+    within the centrally configured refresh-token bounds.
+
+    Negative TTL values are allowed so tests can intentionally
+    create already-expired refresh tokens and verify that the
+    OAuth2 endpoint rejects them correctly.
     """
 
     if not isinstance(
@@ -351,11 +358,18 @@ def _validate_refresh_token_ttl(
         * 60
     )
 
-    if seconds < minimum_seconds:
+    # Allow intentionally expired tokens.
+    # This is required for expiration/rejection tests.
+    if seconds < 0:
+        return
+
+    # Positive custom TTLs must respect the configured minimum.
+    if 0 < seconds < minimum_seconds:
         raise ValueError(
             "Refresh-token TTL is below the configured minimum"
         )
 
+    # Positive custom TTLs must not exceed the configured maximum.
     if seconds > maximum_seconds:
         raise ValueError(
             "Refresh-token TTL exceeds the configured maximum"

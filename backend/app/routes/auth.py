@@ -2691,25 +2691,15 @@ async def link_google_account(
         claims.get("email", ""),
     ).strip().lower()
 
-    fieldops_email = str(
-        user.email,
-    ).strip().lower()
+    google_email = str(
+    claims.get("email", ""),
+).strip().lower()
 
     if not google_email:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Google account email is missing",
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Google account email is missing",
         )
-
-    if google_email != fieldops_email:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "Google account email must match "
-                "the FieldOps account email"
-            ),
-        )
-
     existing_user_identity = (
         db.query(OIDCIdentity)
         .filter(

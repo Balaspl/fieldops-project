@@ -6,6 +6,7 @@ from datetime import datetime, timezone, timedelta
 import json
 import uuid
 import logging
+from app.services.job_closure_service import close_job, get_job_closure
 
 from app.database import get_db
 from app.models import Job, Technician, AuditEvent, DispatcherNotification,InAppNotification
@@ -29,14 +30,37 @@ from app.services.workload import WorkloadScoringService
 from app.services.composite import CompositeScoringService
 from app.utils import map_service_type_to_skill, is_skill_matching
 
-from app.auth.dependencies import get_current_user,get_current_user_or_tenant, AuthenticatedUser,require_role
-from app.auth.rbac import UserRole
+from app.auth.dependencies import (
+    get_current_user,
+    get_current_user_or_tenant,
+    AuthenticatedUser,
+    require_permission,
+)
+from app.auth.rbac import Permission, has_permission,UserRole
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/jobs",
     tags=["Jobs"]
 )
+
+
+def require_any_job_permission(*permissions: Permission):
+    """Authorize when the authenticated user has at least one permission."""
+    def dependency(
+        current_user: AuthenticatedUser = Depends(get_current_user),
+    ) -> AuthenticatedUser:
+        if not any(
+            has_permission(current_user.role, permission)
+            for permission in permissions
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions",
+            )
+        return current_user
+
+    return dependency
 
 
 def get_technician_for_current_user(
@@ -61,6 +85,7 @@ def get_technician_for_current_user(
 def get_jobs_stats(
     time_range: Optional[str] = None,
     user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(get_current_user_or_tenant),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.DASHBOARD_VIEW)),
     db: Session = Depends(get_db)
 ):
     user, tenant_id = user_tenant
@@ -152,6 +177,7 @@ def get_jobs_stats(
 @router.get("/service-types", response_model=list[str])
 def get_service_types(
     user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(get_current_user_or_tenant),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_VIEW_ALL)),
     db: Session = Depends(get_db)
 ):
     """
@@ -176,6 +202,7 @@ def get_service_types(
 def create_job(
     job: JobCreate,
     user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(get_current_user_or_tenant),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_CREATE)),
     db: Session = Depends(get_db)
 ):
     user, tenant_id = user_tenant
@@ -244,6 +271,7 @@ def get_jobs(
     page: Optional[int] = Query(None, ge=1),
     limit: Optional[int] = Query(None, ge=1),
     user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(get_current_user_or_tenant),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_VIEW_ALL)),
     db: Session = Depends(get_db)
 ):
     user, tenant_id = user_tenant
@@ -353,6 +381,7 @@ def get_pending_jobs(
     page: Optional[int] = Query(None, ge=1),
     limit: Optional[int] = Query(None, ge=1),
     user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(get_current_user_or_tenant),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_VIEW_ALL)),
     db: Session = Depends(get_db)
 ):
     """
@@ -417,7 +446,7 @@ def get_pending_jobs(
 def update_job(
     job_id: int,
     job: JobCreate,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_EDIT)),
     db: Session = Depends(get_db),
 ):
     existing_job = db.query(Job).filter(
@@ -456,10 +485,7 @@ async def plan_job_assignment(
     request: Request,
     admin_override: bool = False,
     current_user: AuthenticatedUser = Depends(
-        require_role(
-            UserRole.SUPER_ADMIN,
-            UserRole.DISPATCHER,
-        )
+        require_permission(Permission.PLANNING_MANAGE)
     ),
     db: Session = Depends(get_db),
     redis_client=Depends(get_redis_client),
@@ -719,7 +745,7 @@ class JobAssignRequest(BaseModel):
 def accept_job(
     job_id: int,
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.TECHNICIAN)
+        require_permission(Permission.JOBS_ACCEPT_REJECT)
     ),
     db: Session = Depends(get_db),
     redis_client=Depends(get_redis_client),
@@ -851,7 +877,7 @@ def reject_job(
     job_id: int,
     req: JobRejectRequest,
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.TECHNICIAN)
+        require_permission(Permission.JOBS_ACCEPT_REJECT)
     ),
     db: Session = Depends(get_db),
     redis_client=Depends(get_redis_client),
@@ -970,7 +996,10 @@ def reassign_job(
     job_id: int,
     req: JobReassignRequest,
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.TECHNICIAN)
+        require_any_job_permission(
+            Permission.JOBS_REASSIGN,
+            Permission.JOBS_REASSIGN_OWN,
+        )
     ),
     db: Session = Depends(get_db),
     redis_client=Depends(get_redis_client),
@@ -991,10 +1020,10 @@ def reassign_job(
             detail="Job not found",
         )
 
-    if (
-        job.assigned_technician_id
-        != old_technician.technician_id
-    ):
+    if not has_permission(
+        current_user.role,
+        Permission.JOBS_REASSIGN,
+    ) and job.assigned_technician_id != old_technician.technician_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Technician not assigned to this job",
@@ -1116,10 +1145,7 @@ async def assign_job(
     job_id: int,
     req: JobAssignRequest,
     current_user: AuthenticatedUser = Depends(
-        require_role(
-            UserRole.SUPER_ADMIN,
-            UserRole.DISPATCHER,
-        )
+        require_permission(Permission.JOBS_ASSIGN)
     ),
     db: Session = Depends(get_db),
     redis_client=Depends(get_redis_client),
@@ -1418,7 +1444,7 @@ async def assign_job(
 @router.get("/{job_id}", response_model=JobResponse)
 def get_job_by_id(
     job_id: int,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_VIEW_ALL)),
     db: Session = Depends(get_db),
 ):
     job = db.query(Job).filter(
@@ -1433,7 +1459,7 @@ def get_job_by_id(
 @router.get("/{job_id}/redispatch-history")
 def get_redispatch_history(
     job_id: int,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_VIEW_ALL)),
     db: Session = Depends(get_db),
 ):
     from app.models import DispatcherAlert, Technician
@@ -1516,7 +1542,7 @@ def get_redispatch_history(
 @router.get("/{job_id}/override-history")
 def get_override_history(
     job_id: int,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.AUDIT_VIEW)),
     db: Session = Depends(get_db),
 ):
     from app.models import AssignmentOverride
@@ -1551,7 +1577,7 @@ api_v1_router = APIRouter(prefix="/api/v1")
 @api_v1_router.get("/jobs/{job_id}/history")
 def get_job_status_history(
     job_id: int,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_VIEW_ALL)),
     db: Session = Depends(get_db),
 ):    
     from app.models import AuditEvent, Technician
@@ -1643,9 +1669,7 @@ class BulkJobCancellationResponse(BaseModel):
 @api_v1_router.get("/jobs/{id}/valid-transitions")
 def get_job_valid_transitions(
     id: str,
-    current_user: AuthenticatedUser = Depends(
-        get_current_user
-    ),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_STATUS_UPDATE)),
     db: Session = Depends(get_db),
 ):
     if not str(id).isdigit():
@@ -1683,9 +1707,7 @@ def transition_job_endpoint(
     id: str,
     payload: TransitionRequest,
     request: Request,
-    current_user: AuthenticatedUser = Depends(
-        get_current_user
-    ),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_STATUS_UPDATE)),
     db: Session = Depends(get_db),
 ):
     if not str(id).isdigit():
@@ -2030,9 +2052,7 @@ def bulk_cancel_jobs(
 @api_v1_router.get("/jobs/{id}/sla")
 def get_job_sla(
     id: str,
-    current_user: AuthenticatedUser = Depends(
-        get_current_user
-    ),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_VIEW_ALL)),
     db: Session = Depends(get_db),
 ):
     if not str(id).isdigit():
@@ -2084,10 +2104,7 @@ def get_job_sla(
 @api_v1_router.get("/sla/dashboard")
 def get_sla_dashboard(
     current_user: AuthenticatedUser = Depends(
-        require_role(
-            UserRole.SUPER_ADMIN,
-            UserRole.DISPATCHER,
-        )
+        require_permission(Permission.DASHBOARD_VIEW)
     ),
     db: Session = Depends(get_db),
 ):
@@ -2148,9 +2165,7 @@ class JobShareResponse(BaseModel):
 )
 def share_job_tracking(
     id: str,
-    current_user: AuthenticatedUser = Depends(
-        get_current_user
-    ),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_VIEW_ALL)),
     db: Session = Depends(get_db),
 ):
     if not str(id).isdigit():
@@ -2305,7 +2320,7 @@ def close_job_endpoint(
     job_id: int,
     payload: schemas.JobClosureCreate,
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.TECHNICIAN)
+        require_permission(Permission.JOBS_STATUS_UPDATE)
     ),
     db: Session = Depends(get_db),
 ):
@@ -2313,13 +2328,22 @@ def close_job_endpoint(
     Close a job assigned to the authenticated technician.
     """
 
-    # Resolve the job inside the authenticated tenant before looking up the
-    # technician. This preserves the endpoint contract: unknown/cross-tenant
-    # jobs are always 404 and do not leak technician lookup details.
-    job = db.query(Job).filter(
-        Job.id == job_id,
-        Job.tenant_id == current_user.tenant_id,
-    ).first()
+    # Only technicians can close jobs.
+    if current_user.role != UserRole.TECHNICIAN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only technicians can close jobs",
+        )
+
+    # Resolve the job inside the authenticated tenant.
+    job = (
+        db.query(Job)
+        .filter(
+            Job.id == job_id,
+            Job.tenant_id == current_user.tenant_id,
+        )
+        .first()
+    )
 
     if not job:
         raise HTTPException(
@@ -2327,42 +2351,27 @@ def close_job_endpoint(
             detail="Job not found",
         )
 
+    # Resolve the authenticated technician.
     technician = get_technician_for_current_user(
         db,
         current_user,
     )
 
-    if (
-        job.assigned_technician_id
-        != technician.technician_id
-    ):
+    if not technician:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Technician record not found",
+        )
+
+    # Make sure this technician is assigned to the job.
+    if job.assigned_technician_id != technician.technician_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="This job is not assigned to you",
         )
 
-    terminal_statuses = {
-        "COMPLETED",
-        "CANCELLED",
-        "CANCELED",
-        "CLOSED",
-    }
-
-    current_status = (
-        job.status or ""
-    ).upper().strip()
-
-    if current_status in terminal_statuses:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"Job cannot be closed because its current "
-                f"status is {current_status}"
-            ),
-        )
-
-    from app.services.job_closure_service import close_job
-
+    # The closure service performs the authoritative lifecycle transition,
+    # validation, transaction, audit event, and event publishing.
     return close_job(
         db=db,
         job_id=job.id,
@@ -2380,11 +2389,7 @@ def close_job_endpoint(
 def get_job_closure_endpoint(
     job_id: int,
     current_user: AuthenticatedUser = Depends(
-        require_role(
-            UserRole.SUPER_ADMIN,
-            UserRole.DISPATCHER,
-            UserRole.TECHNICIAN,
-        )
+        require_any_job_permission(Permission.JOBS_VIEW_ALL, Permission.JOBS_VIEW_OWN)
     ),
     db: Session = Depends(get_db),
 ):
@@ -2401,7 +2406,10 @@ def get_job_closure_endpoint(
             detail="Job not found",
         )
 
-    if current_user.role == UserRole.TECHNICIAN:
+    if (
+        has_permission(current_user.role, Permission.JOBS_VIEW_OWN)
+        and not has_permission(current_user.role, Permission.JOBS_VIEW_ALL)
+    ):
         technician = get_technician_for_current_user(
             db,
             current_user,

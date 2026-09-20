@@ -109,7 +109,7 @@ class ReDispatchTriggerService:
                     }
 
             else:
-                # Timer exists, check pre-alert
+                # Timer exists, check pre-alert.
                 if 0 < timer_ttl <= rules["pre_alert_seconds"]:
                     return {
                         "type": "pre_alert",

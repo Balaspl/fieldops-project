@@ -362,8 +362,11 @@ def test_get_planning_kpi():
     assert "trends" in data
 
     assert "dispatched" in data["trends"]
+
     assert "pending" in data["trends"]
+
     assert "expired" in data["trends"]
+
     assert "redispatched" in data["trends"]
 
     for key in [

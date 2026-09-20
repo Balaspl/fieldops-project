@@ -503,7 +503,7 @@ class BrandSafetyValidator:
             "BRAND_POLITICAL_CONTENT"
         ),
         BrandSafetyRuleCategory.OFF_BRAND: (
-            "BRAND_TONE_VIOLATION"
+            "BRAND_OFF_BRAND_LANGUAGE"
         ),
         BrandSafetyRuleCategory.BLOCKED_PHRASE: (
             "BRAND_BLOCKED_PHRASE"

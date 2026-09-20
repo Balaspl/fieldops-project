@@ -36,7 +36,9 @@ SQLALCHEMY_DATABASE_URL = "sqlite://"
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False},
+    connect_args={
+        "check_same_thread": False,
+    },
     poolclass=StaticPool,
 )
 
@@ -62,10 +64,19 @@ client = TestClient(app)
 # Fixtures
 # ---------------------------------------------------------------------------
 
+# ============================================================
+# Database Fixture
+# ============================================================
+
 @pytest.fixture(autouse=True)
 def setup_db():
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
+    Base.metadata.drop_all(
+        bind=engine
+    )
+
+    Base.metadata.create_all(
+        bind=engine
+    )
 
     db = TestingSessionLocal()
 
@@ -73,6 +84,10 @@ def setup_db():
 
     db.close()
 
+
+# ============================================================
+# FastAPI Dependency Overrides
+# ============================================================
 
 @pytest.fixture(autouse=True)
 def apply_overrides():
@@ -171,7 +186,9 @@ def create_declined_job(
     )
 
     db.add(job)
+
     db.commit()
+
     db.refresh(job)
 
     return job
@@ -338,7 +355,9 @@ def test_reassign_declined_job_wrong_status(setup_db):
     )
 
     db.add(job)
+
     db.commit()
+
     db.refresh(job)
 
     response = client.post(

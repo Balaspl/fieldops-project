@@ -463,3 +463,88 @@ def generation_service(db_session):
         )
 
     return _make_service
+
+from app.auth.dependencies import (
+    AuthenticatedUser,
+    get_current_user,
+    get_current_user_or_tenant,
+)
+from app.auth.rbac import UserRole
+
+
+def make_test_user(role=UserRole.DISPATCHER):
+    """
+    Create a valid AuthenticatedUser for tests.
+
+    AuthenticatedUser expects role to be a UserRole enum,
+    not a plain string.
+    """
+    if isinstance(role, str):
+        role = UserRole(role)
+
+    return AuthenticatedUser(
+        user_id="test-user",
+        tenant_id="tenant-1",
+        role=role,
+        jti="test-jti",
+        session_id="test-session",
+    )
+
+
+@pytest.fixture
+def authenticated_user():
+    """
+    Default authenticated user for tests that need
+    a normal dispatcher-level authenticated user.
+    """
+    return make_test_user(UserRole.DISPATCHER)
+
+
+@pytest.fixture
+def technician_user():
+    """
+    Authenticated technician for technician-specific tests.
+    """
+    return make_test_user(UserRole.TECHNICIAN)
+
+
+@pytest.fixture
+def super_admin_user():
+    """
+    Authenticated super admin for admin-specific tests.
+    """
+    return make_test_user(UserRole.SUPER_ADMIN)
+
+
+@pytest.fixture
+def override_auth():
+    """
+    Override FastAPI authentication dependencies for a test.
+
+    Usage:
+
+        def test_something(override_auth, technician_user):
+            override_auth(technician_user)
+            ...
+    """
+
+    def _override(user: AuthenticatedUser):
+        app.main.app.dependency_overrides[get_current_user] = (
+            lambda: user
+        )
+
+        app.main.app.dependency_overrides[get_current_user_or_tenant] = (
+            lambda: (user, user.tenant_id)
+        )
+
+    yield _override
+
+    app.main.app.dependency_overrides.pop(
+        get_current_user,
+        None,
+    )
+
+    app.main.app.dependency_overrides.pop(
+        get_current_user_or_tenant,
+        None,
+    )

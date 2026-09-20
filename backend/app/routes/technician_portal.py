@@ -18,8 +18,8 @@ from sqlalchemy import func
 from typing import Optional
 
 from ..database import get_db
-from ..auth.dependencies import AuthenticatedUser, require_role
-from ..auth.rbac import UserRole
+from ..auth.dependencies import AuthenticatedUser, require_permission
+from ..auth.rbac import Permission
 from ..auth.password import hash_password, verify_password
 from ..models import (
     Job, Technician, InAppNotification,
@@ -52,7 +52,7 @@ def _get_tech_for_user(
     db: Session,
     user_id: str,
     tenant_id: str,
-    #current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    #current_user: AuthenticatedUser = Depends(require_permission(Permission.TECHNICIANS_VIEW_OWN)),
 ) -> Optional[Technician]:
     logger.warning(
     "TECH LOOKUP: user_id=%s tenant_id=%s",
@@ -154,7 +154,7 @@ def _get_notification_recipient_ids(
 
 @router.get("/profile", response_model=TechnicianProfileResponse)
 async def get_technician_profile(
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.TECHNICIANS_VIEW_OWN)),
     db: Session = Depends(get_db),
 ):
     """Get the current technician's profile."""
@@ -216,7 +216,7 @@ async def get_technician_profile(
 async def create_technician_profile(
     data: TechnicianProfileCreate,
     request: Request,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.TECHNICIANS_VIEW_OWN)),
     db: Session = Depends(get_db),
 ):
     """Create technician profile (first-time setup)."""
@@ -343,7 +343,7 @@ async def create_technician_profile(
 async def update_technician_profile(
     data: TechnicianProfileUpdate,
     request: Request,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.TECHNICIANS_VIEW_OWN)),
     db: Session = Depends(get_db),
 ):
     """Update technician profile."""
@@ -457,7 +457,7 @@ async def update_technician_profile(
 async def change_password(
     data: ChangePasswordRequest,
     request: Request,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.TECHNICIANS_VIEW_OWN)),
     db: Session = Depends(get_db),
 ):
     """Change technician password."""
@@ -507,7 +507,7 @@ def _get_assigned_jobs_query(db: Session, user_id: str, tenant_id: str):
 @router.get("/jobs", response_model=list[TechnicianJobResponse])
 async def get_assigned_jobs(
     status_filter: Optional[str] = Query(None, alias="status"),
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_VIEW_OWN)),
     db: Session = Depends(get_db),
 ):
     """List jobs assigned to the current technician."""
@@ -526,7 +526,7 @@ async def get_assigned_jobs(
 
 @router.get("/jobs/history", response_model=list[TechnicianJobResponse])
 async def get_job_history(
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_VIEW_OWN)),
     db: Session = Depends(get_db),
 ):
     """List completed/closed jobs for this technician."""
@@ -540,7 +540,7 @@ async def get_job_history(
 @router.get("/jobs/{job_id}", response_model=TechnicianJobResponse)
 async def get_job_detail(
     job_id: int,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_VIEW_OWN)),
     db: Session = Depends(get_db),
 ):
     """View a specific job (only if assigned to this technician)."""
@@ -563,7 +563,7 @@ async def get_job_detail(
 async def accept_job(
     job_id: int,
     request: Request,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_ACCEPT_REJECT)),
     db: Session = Depends(get_db),
 ):
     """Accept an assigned job without starting the journey."""
@@ -630,7 +630,7 @@ async def reject_job(
     job_id: int,
     data: TechnicianJobRejectRequest,
     request: Request,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_ACCEPT_REJECT)),
     db: Session = Depends(get_db),
 ):
     """
@@ -706,7 +706,7 @@ async def reject_job(
 async def start_job(
     job_id: int,
     request: Request,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_STATUS_UPDATE)),
     db: Session = Depends(get_db),
 ):
     """Start working on a job."""
@@ -749,7 +749,7 @@ async def start_job(
 async def on_site_job(
     job_id: int,
     request: Request,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_STATUS_UPDATE)),
     db: Session = Depends(get_db),
 ):
     """Mark an en-route job as on-site.
@@ -814,7 +814,7 @@ async def on_site_job(
 async def pause_job(
     job_id: int,
     request: Request,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_STATUS_UPDATE)),
     db: Session = Depends(get_db),
 ):
     """Pause a job in progress."""
@@ -847,7 +847,7 @@ async def pause_job(
 async def resume_job(
     job_id: int,
     request: Request,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_STATUS_UPDATE)),
     db: Session = Depends(get_db),
 ):
     """Resume a paused job."""
@@ -881,7 +881,7 @@ async def complete_job(
     job_id: int,
     data: TechnicianJobCompleteRequest,
     request: Request,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_STATUS_UPDATE)),
     db: Session = Depends(get_db),
 ):
     """Complete a job with notes, photos, and optional signature."""
@@ -936,7 +936,7 @@ async def complete_job(
 @router.get("/notifications")
 async def get_notifications(
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.TECHNICIAN)
+        require_permission(Permission.NOTIFICATIONS_VIEW_OWN)
     ),
     db: Session = Depends(get_db),
 ):
@@ -1157,7 +1157,7 @@ async def get_notifications(
 async def mark_notification_read(
     notification_id: str,
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.TECHNICIAN)
+        require_permission(Permission.NOTIFICATIONS_VIEW_OWN)
     ),
     db: Session = Depends(get_db),
 ):
@@ -1202,7 +1202,7 @@ async def mark_notification_read(
 @router.put("/notifications/read-all")
 async def mark_all_notifications_read(
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.TECHNICIAN)
+        require_permission(Permission.NOTIFICATIONS_VIEW_OWN)
     ),
     db: Session = Depends(get_db),
 ):
@@ -1245,7 +1245,7 @@ async def mark_all_notifications_read(
 async def update_my_technician_status(
     data: TechnicianAvailabilityUpdate,
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.TECHNICIAN)
+        require_permission(Permission.TECHNICIANS_VIEW_OWN)
     ),
     db: Session = Depends(get_db),
 ):
@@ -1289,7 +1289,7 @@ async def update_my_technician_status(
 
 @router.get("/billing-reports")
 async def get_billing_reports(
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.REPORTS_VIEW)),
     db: Session = Depends(get_db),
 ):
     """Return billing reports submitted by the authenticated technician."""
@@ -1336,7 +1336,7 @@ async def get_billing_reports(
 @router.get("/billing-reports/{closure_id}/pdf")
 async def download_billing_report_pdf(
     closure_id: int,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.TECHNICIAN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.REPORTS_DOWNLOAD)),
     db: Session = Depends(get_db),
 ):
     """Generate and download a PDF billing report for one submitted closure."""
@@ -1438,7 +1438,7 @@ async def download_billing_report_pdf(
 @router.get("/dashboard", response_model=TechnicianDashboardResponse)
 async def get_technician_dashboard(
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.TECHNICIAN)
+        require_permission(Permission.DASHBOARD_TECH_VIEW)
     ),
     db: Session = Depends(get_db),
 ):

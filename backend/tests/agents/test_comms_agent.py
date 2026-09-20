@@ -2128,8 +2128,8 @@ def test_validation_brand_compliance_fails():
 
     codes = {v.code for v in result.pipeline_result.violations}
     assert (
-        "BRAND_TONE_VIOLATION" in codes
-        or "COMPLIANCE_LANGUAGE_VIOLATION" in codes
+        "BRAND_OFF_BRAND_LANGUAGE" in codes
+    or "COMPLIANCE_LANGUAGE_VIOLATION" in codes
     )
 
 
