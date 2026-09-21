@@ -103,6 +103,13 @@ services:
       KAFKA_BILLING_EVENTS_PARTITIONS: "${KAFKA_BILLING_EVENTS_PARTITIONS:-3}"
       KAFKA_PAYMENT_EVENTS_PARTITIONS: "${KAFKA_PAYMENT_EVENTS_PARTITIONS:-3}"
       KAFKA_AUDIT_EVENTS_PARTITIONS: "${KAFKA_AUDIT_EVENTS_PARTITIONS:-6}"
+      KAFKA_JOB_EVENTS_RETENTION_MS: "${KAFKA_JOB_EVENTS_RETENTION_MS:-2592000000}"
+      KAFKA_GPS_EVENTS_RETENTION_MS: "${KAFKA_GPS_EVENTS_RETENTION_MS:-604800000}"
+      KAFKA_SLA_EVENTS_RETENTION_MS: "${KAFKA_SLA_EVENTS_RETENTION_MS:-2592000000}"
+      KAFKA_NOTIFICATION_EVENTS_RETENTION_MS: "${KAFKA_NOTIFICATION_EVENTS_RETENTION_MS:-1209600000}"
+      KAFKA_BILLING_EVENTS_RETENTION_MS: "${KAFKA_BILLING_EVENTS_RETENTION_MS:-7776000000}"
+      KAFKA_PAYMENT_EVENTS_RETENTION_MS: "${KAFKA_PAYMENT_EVENTS_RETENTION_MS:-7776000000}"
+      KAFKA_AUDIT_EVENTS_RETENTION_MS: "${KAFKA_AUDIT_EVENTS_RETENTION_MS:-15552000000}"
 
     entrypoint: ["/bin/sh", "-c"]
 
@@ -122,7 +129,30 @@ services:
             *) echo "Unknown topic: $$1" >&2; return 1 ;;
           esac
         }
-
+        get_retention_ms() {
+          case "$$1" in
+            fieldops.job.events) echo "$$KAFKA_JOB_EVENTS_RETENTION_MS" ;;
+            fieldops.gps.events) echo "$$KAFKA_GPS_EVENTS_RETENTION_MS" ;;
+            fieldops.sla.events) echo "$$KAFKA_SLA_EVENTS_RETENTION_MS" ;;
+            fieldops.notification.events) echo "$$KAFKA_NOTIFICATION_EVENTS_RETENTION_MS" ;;
+            fieldops.billing.events) echo "$$KAFKA_BILLING_EVENTS_RETENTION_MS" ;;
+            fieldops.payment.events) echo "$$KAFKA_PAYMENT_EVENTS_RETENTION_MS" ;;
+            fieldops.audit.events) echo "$$KAFKA_AUDIT_EVENTS_RETENTION_MS" ;;
+            *) echo "Unknown topic: $$1" >&2; return 1 ;;
+          esac
+        }
+        validate_retention() {
+          case "$$1" in
+            ''|*[!0-9]*)
+              echo "Invalid retention.ms value: $$1" >&2
+              return 1
+              ;;
+            0)
+              echo "retention.ms must be greater than zero." >&2
+              return 1
+              ;;
+          esac
+        }
         IFS=','
         for topic in $$KAFKA_TOPICS; do
           topic=$$(echo "$$topic" | xargs)
@@ -132,6 +162,8 @@ services:
           fi
 
           partitions=$$(get_partitions "$$topic")
+          retention_ms=$$(get_retention_ms "$$topic")
+          validate_retention "$$retention_ms"
 
           if /opt/kafka/bin/kafka-topics.sh \
               --bootstrap-server kafka:9092 \
@@ -147,6 +179,12 @@ services:
                 --topic "$$topic" \
                 --partitions "$$partitions"
             fi
+            /opt/kafka/bin/kafka-configs.sh \
+              --bootstrap-server kafka:9092 \
+              --entity-type topics \
+              --entity-name "$$topic" \
+              --alter \
+              --add-config "retention.ms=$$retention_ms"
           else
             /opt/kafka/bin/kafka-topics.sh \
               --bootstrap-server kafka:9092 \
@@ -154,7 +192,8 @@ services:
               --if-not-exists \
               --topic "$$topic" \
               --partitions "$$partitions" \
-              --replication-factor "$$KAFKA_REPLICATION_FACTOR"
+              --replication-factor "$$KAFKA_REPLICATION_FACTOR" \
+              --config "retention.ms=$$retention_ms"
           fi
         done
 
