@@ -17,7 +17,34 @@ logger = logging.getLogger(__name__)
 
 from .database import SessionLocal
 from app.routes import admin_dlq
-from .routes import jobs, technicians, dispatcher, assignment, planning, dispatch, notifications, in_app_notifications, templates, escalations, alerts, audit, dispatch_queue, dispatch_metrics, gps, admin_gps, eta, tracking, brand_safety_admin, admin_prompts, admin_communication_configuration, message_preview, admin_retention, admin_queue, admin_metrics, admin_tools
+from .routes import (
+    jobs,
+    technicians,
+    dispatcher,
+    assignment,
+    planning,
+    dispatch,
+    notifications,
+    in_app_notifications,
+    templates,
+    escalations,
+    alerts,
+    audit,
+    dispatch_queue,
+    dispatch_metrics,
+    gps,
+    admin_gps,
+    eta,
+    tracking,
+    brand_safety_admin,
+    admin_prompts,
+    admin_communication_configuration,
+    message_preview,
+    admin_retention,
+    admin_queue,
+    admin_metrics,
+    admin_tools,
+)
 from .routes import auth as auth_routes
 from .routes.organizations import org_router, platform_router
 from .routes import sentiment_escalations
@@ -30,8 +57,9 @@ from .routes.tracking import redis_gps_listener
 from .runtime.metrics import runtime_metrics_collector
 from .services.default_template import seed_default_templates
 from .services.kafka.producer import KafkaProducer
+from .services.kafka.monitoring import kafka_monitoring
 from app.sentiment.dashboard import router as sentiment_dashboard_router
-from .routes import oauth2,sso
+from .routes import oauth2, sso
 
 scheduler = None
 redis_async_client = None
@@ -39,66 +67,168 @@ redis_pubsub_client = None
 listener_task = None
 kafka_producer = None
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global scheduler, redis_async_client, redis_pubsub_client, listener_task, kafka_producer
+
     start_scheduler()
+
     try:
-        kafka_producer = KafkaProducer()
+        kafka_producer = KafkaProducer(
+            monitoring=kafka_monitoring,
+        )
         await kafka_producer.start()
         logger.info("Kafka producer connected successfully.")
     except Exception:
         kafka_producer = None
-        logger.warning("Kafka unavailable. Kafka publishing is disabled.")
+        logger.warning(
+            "Kafka unavailable. Kafka publishing is disabled."
+        )
+
     await runtime_metrics_collector.start()
 
     # Ensure all tables & missing columns exist
     try:
         from .database import engine, Base
         from sqlalchemy import text
+
         Base.metadata.create_all(bind=engine)
+
         with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS rejection_reason TEXT;"))
-            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMP WITH TIME ZONE;"))
-            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS rejected_by_tech_id VARCHAR(50);"))
-            conn.execute(text("ALTER TABLE sla_escalations ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(50);"))
-            conn.execute(text("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS variables JSON DEFAULT '[]';"))
-            conn.execute(text("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(50) DEFAULT 'tenant-1';"))
-            conn.execute(text("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) DEFAULT 'CommsAgent';"))
-            conn.execute(text("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE;"))
-            conn.execute(text("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;"))
-            conn.execute(text("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS deleted_by VARCHAR(50);"))
-            conn.execute(text("UPDATE jobs SET required_skill = 'Plumbing' WHERE LOWER(service_type) LIKE '%plumb%';"))
-            conn.execute(text("UPDATE jobs SET required_skill = 'Electrical' WHERE LOWER(service_type) LIKE '%elec%';"))
-            conn.execute(text("UPDATE jobs SET required_skill = 'HVAC' WHERE LOWER(service_type) LIKE '%hvac%' OR LOWER(service_type) LIKE '%ac%';"))
+            conn.execute(
+                text(
+                    "ALTER TABLE jobs "
+                    "ADD COLUMN IF NOT EXISTS rejection_reason TEXT;"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE jobs "
+                    "ADD COLUMN IF NOT EXISTS rejected_at "
+                    "TIMESTAMP WITH TIME ZONE;"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE jobs "
+                    "ADD COLUMN IF NOT EXISTS rejected_by_tech_id "
+                    "VARCHAR(50);"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE sla_escalations "
+                    "ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(50);"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE notification_templates "
+                    "ADD COLUMN IF NOT EXISTS variables JSON DEFAULT '[]';"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE notification_templates "
+                    "ADD COLUMN IF NOT EXISTS tenant_id "
+                    "VARCHAR(50) DEFAULT 'tenant-1';"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE notification_templates "
+                    "ADD COLUMN IF NOT EXISTS agent_type "
+                    "VARCHAR(50) DEFAULT 'CommsAgent';"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE notification_templates "
+                    "ADD COLUMN IF NOT EXISTS is_deleted "
+                    "BOOLEAN DEFAULT FALSE;"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE notification_templates "
+                    "ADD COLUMN IF NOT EXISTS deleted_at "
+                    "TIMESTAMP WITH TIME ZONE;"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE notification_templates "
+                    "ADD COLUMN IF NOT EXISTS deleted_by "
+                    "VARCHAR(50);"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE jobs SET required_skill = 'Plumbing' "
+                    "WHERE LOWER(service_type) LIKE '%plumb%';"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE jobs SET required_skill = 'Electrical' "
+                    "WHERE LOWER(service_type) LIKE '%elec%';"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE jobs SET required_skill = 'HVAC' "
+                    "WHERE LOWER(service_type) LIKE '%hvac%' "
+                    "OR LOWER(service_type) LIKE '%ac%';"
+                )
+            )
             conn.commit()
+
     except Exception as e:
-        logger.warning(f"Could not auto-create tables or columns: {e}")
+        logger.warning(
+            f"Could not auto-create tables or columns: {e}"
+        )
 
     redis_host = os.getenv("REDIS_HOST", "localhost")
     redis_port = int(os.getenv("REDIS_PORT", 6379))
 
     try:
-        redis_async_client = aioredis.Redis(host=redis_host, port=redis_port, decode_responses=True)
+        redis_async_client = aioredis.Redis(
+            host=redis_host,
+            port=redis_port,
+            decode_responses=True,
+        )
+
         # Test the connection before proceeding
         await redis_async_client.ping()
 
-        # Pubsub listener needs decode_responses=False since GPS payloads are MsgPack binary
-        redis_pubsub_client = aioredis.Redis(host=redis_host, port=redis_port, decode_responses=False)
+        # Pubsub listener needs decode_responses=False since GPS
+        # payloads are MsgPack binary
+        redis_pubsub_client = aioredis.Redis(
+            host=redis_host,
+            port=redis_port,
+            decode_responses=False,
+        )
+
         await redis_pubsub_client.ping()
 
-        listener_task = asyncio.create_task(redis_gps_listener(redis_pubsub_client))
+        listener_task = asyncio.create_task(
+            redis_gps_listener(redis_pubsub_client)
+        )
 
         scheduler = BroadcastScheduler(
             db_factory=SessionLocal,
             redis_async=redis_async_client,
-            manager=connection_manager
+            manager=connection_manager,
         )
+
         await scheduler.start()
         print("Redis connected successfully")
+
     except Exception as e:
-        print(f"Redis not available ({e}). GPS broadcast & pub/sub features are disabled.")
+        print(
+            f"Redis not available ({e}). "
+            "GPS broadcast & pub/sub features are disabled."
+        )
         redis_async_client = None
         redis_pubsub_client = None
         listener_task = None
@@ -106,69 +236,101 @@ async def lifespan(app: FastAPI):
 
     # Seed default notification templates, organizations, and users
     db = SessionLocal()
+
     try:
         # Skip default seeding while running pytest
         if os.getenv("PYTEST_CURRENT_TEST") is None:
             seed_default_templates(db)
-            print("Default notification templates seeded successfully.")
+            print(
+                "Default notification templates seeded successfully."
+            )
 
         from .seed_users import seed_organizations_and_users
+
         seed_organizations_and_users(db)
-        print("Default organizations and users seeded successfully.")
+        print(
+            "Default organizations and users seeded successfully."
+        )
 
     except Exception as e:
         print(f"Failed to seed default data: {e}")
+
     finally:
         db.close()
 
     try:
-        from app.services.ai.FieldOpsAI.runtime.orchestrator import ai_orchestrator
+        from app.services.ai.FieldOpsAI.runtime.orchestrator import (
+            ai_orchestrator,
+        )
+
         await ai_orchestrator.provider_health_monitor.start()
+
     except Exception:
-        logger.warning("ProviderHealthMonitor failed to start.")
+        logger.warning(
+            "ProviderHealthMonitor failed to start."
+        )
 
     try:
         yield
+
     finally:
         if kafka_producer:
             await kafka_producer.stop()
             kafka_producer = None
 
         await runtime_metrics_collector.stop()
+
         try:
-            from app.services.ai.FieldOpsAI.runtime.orchestrator import ai_orchestrator
+            from app.services.ai.FieldOpsAI.runtime.orchestrator import (
+                ai_orchestrator,
+            )
+
             await ai_orchestrator.provider_health_monitor.stop()
+
         except Exception:
-            logger.warning("ProviderHealthMonitor failed to stop.")
+            logger.warning(
+                "ProviderHealthMonitor failed to stop."
+            )
 
         if scheduler:
             await scheduler.stop()
+
         if listener_task:
             listener_task.cancel()
+
             try:
                 await listener_task
             except asyncio.CancelledError:
                 pass
+
         if redis_async_client:
             await redis_async_client.aclose()
+
         if redis_pubsub_client:
             await redis_pubsub_client.aclose()
 
         stop_scheduler()
 
 
-
 app = FastAPI(
     title="FieldOps Commander API",
     description="Backend API for managing field operation jobs",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 
 # CORS — handles configured origins or development wildcard
-cors_origins_raw = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000,*").split(",")
-cors_origins = [origin.strip() for origin in cors_origins_raw if origin.strip()]
+cors_origins_raw = os.getenv(
+    "CORS_ALLOWED_ORIGINS",
+    "http://localhost:5173,http://localhost:3000,*",
+).split(",")
+
+cors_origins = [
+    origin.strip()
+    for origin in cors_origins_raw
+    if origin.strip()
+]
 
 if "*" in cors_origins:
     app.add_middleware(
@@ -187,6 +349,7 @@ else:
         allow_headers=["*"],
     )
 
+
 # Security headers middleware
 from .middleware.tenant import (
     SecurityHeadersMiddleware,
@@ -198,36 +361,51 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(RequestSizeLimitMiddleware)
 
+
 from .context import correlation_id_ctx
 import uuid
 
+
 @app.middleware("http")
 async def add_correlation_id(request: Request, call_next):
-    correlation_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
+    correlation_id = request.headers.get(
+        "X-Correlation-ID",
+        str(uuid.uuid4()),
+    )
+
     token = correlation_id_ctx.set(correlation_id)
+
     try:
         response = await call_next(request)
         response.headers["X-Correlation-ID"] = correlation_id
         return response
+
     finally:
         correlation_id_ctx.reset(token)
 
 
-
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+
 @app.exception_handler(StarletteHTTPException)
-async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+async def http_exception_handler(
+    request: Request,
+    exc: StarletteHTTPException,
+):
     """
     Globally format HTTP exceptions to {"error": "message"}
     """
     return JSONResponse(
         status_code=exc.status_code,
-        content={"detail": exc.detail}
+        content={"detail": exc.detail},
     )
 
+
 @app.exception_handler(JustificationValidationError)
-async def justification_validation_exception_handler(request: Request, exc: JustificationValidationError):
+async def justification_validation_exception_handler(
+    request: Request,
+    exc: JustificationValidationError,
+):
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
         content={
@@ -236,16 +414,20 @@ async def justification_validation_exception_handler(request: Request, exc: Just
             "message": exc.message,
             "current_length": exc.current_length,
             "min_length": exc.min_length,
-            "max_length": exc.max_length
-        }
+            "max_length": exc.max_length,
+        },
     )
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
+async def validation_exception_handler(
+    request: Request,
+    exc: RequestValidationError,
+):
     errors = exc.errors()
 
     sanitized_errors = []
+
     for err in errors:
         loc = err.get("loc", [])
         is_priority = "priority" in loc
@@ -254,21 +436,29 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         if is_priority or "Invalid priority value" in msg:
             return JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                content={"error": "Invalid priority value"}
+                content={"error": "Invalid priority value"},
             )
 
         if "Field cannot be empty" in msg:
-             field = loc[-1] if loc else "field"
-             return JSONResponse(
-                 status_code=status.HTTP_400_BAD_REQUEST,
-                 content={"error": f"{str(field).replace('_', ' ').capitalize()} cannot be empty"}
-              )
+            field = loc[-1] if loc else "field"
 
-        sanitized_errors.append({
-            "loc": err.get("loc"),
-            "msg": err.get("msg"),
-            "type": err.get("type")
-        })
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={
+                    "error": (
+                        f"{str(field).replace('_', ' ').capitalize()} "
+                        "cannot be empty"
+                    )
+                },
+            )
+
+        sanitized_errors.append(
+            {
+                "loc": err.get("loc"),
+                "msg": err.get("msg"),
+                "type": err.get("type"),
+            }
+        )
 
     # Fallback for other validation errors
     return JSONResponse(
@@ -278,7 +468,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "detail": sanitized_errors,
         },
     )
-
 
 
 # ──── Multi-Tenant Auth Routes ────
@@ -315,18 +504,21 @@ app.include_router(admin_queue.router)
 app.include_router(admin_dlq.router)
 app.include_router(admin_metrics.router)
 app.include_router(admin_tools.router)
+
 # ──── Portal Routes ────
 from .routes import technician_portal, customer_portal
+
 app.include_router(technician_portal.router)
 app.include_router(customer_portal.router)
 
 from .services.socket_manager import sio_app
+
 app.mount("/socket.io", sio_app)
 
-#----------Message Preview--------------------
+# ----------Message Preview--------------------
 app.include_router(message_preview.router)
 
-#----------Sentiment Dashboard---------------
+# ----------Sentiment Dashboard---------------
 app.include_router(sentiment_dashboard_router)
 
 app.include_router(oauth2.router)
