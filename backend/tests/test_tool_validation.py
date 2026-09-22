@@ -2,9 +2,26 @@ import logging
 
 import fakeredis
 import pytest
+import logging
 
 from app.tools.validation import ToolInputValidator
+@pytest.fixture(autouse=True)
+def reset_validation_logger():
+    logger = logging.getLogger("app.tools.validation")
 
+    old_level = logger.level
+    old_propagate = logger.propagate
+    old_disabled = logger.disabled
+
+    logger.setLevel(logging.WARNING)
+    logger.propagate = True
+    logger.disabled = False
+
+    yield
+
+    logger.setLevel(old_level)
+    logger.propagate = old_propagate
+    logger.disabled = old_disabled
 
 @pytest.fixture
 def redis_client():

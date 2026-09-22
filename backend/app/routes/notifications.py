@@ -970,6 +970,9 @@ async def twilio_inbound_webhook(
                 "user_id=%s",
                 customer.id,
             )
+    return {
+        "status": "ok",
+    }
 
 
 @router.post("/sms/preview")

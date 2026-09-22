@@ -2,6 +2,7 @@ import pytest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from app.models.trust_device import TrustedDevice
 
 from fastapi import HTTPException
 from starlette.requests import Request
@@ -76,6 +77,9 @@ class FakeQuery:
     def update(self, *args, **kwargs):
         return self.update_result
 
+    def delete(self, synchronize_session=False):
+        return 1
+
 
 class FakeDB:
     def __init__(self, token=None, user=None):
@@ -93,6 +97,8 @@ class FakeDB:
         if model is RefreshToken:
             self.refresh_update_calls += 1
             return FakeQuery(update_result=1)
+        if model is TrustedDevice:
+            return FakeQuery(None)
         raise AssertionError(f"Unexpected model queried: {model}")
 
     def add(self, obj):
@@ -280,7 +286,8 @@ async def test_repeated_reset_requests_create_reset_tokens():
                 return count
 
             return 0
-
+        def delete(self, synchronize_session=False):
+            return 1
     class FakeDB:
         def query(self, model):
             return FakeQuery(model)

@@ -1,4 +1,5 @@
 import pytest
+import logging
 from unittest.mock import MagicMock, patch
 import os
 from app.services.sms.twilio_service import TwilioSMSService, SMSResult
@@ -14,8 +15,18 @@ def test_service_handles_redis_initialization_failure():
             raise Exception("Redis unavailable")
         return original_import(name, *args, **kwargs)
 
-    with patch("builtins.__import__", side_effect=failing_import):
-        service = TwilioSMSService()
+    with patch.dict(
+        os.environ,
+    {
+        "TWILIO_DRY_RUN": "true",
+        "TWILIO_TEST_MODE": "false",
+    },
+):
+        with patch(
+            "builtins.__import__",
+            side_effect=failing_import,
+    ):
+            service = TwilioSMSService()
 
     assert service.redis is None
 
@@ -486,6 +497,11 @@ def test_send_sms_rate_limit_allows_normal_request():
     mock_redis = MagicMock()
     mock_redis.get.return_value = None
     service.redis = mock_redis
+    mock_message = MagicMock()
+    mock_message.sid = "SM_RATE_LIMIT_TEST"
+    mock_message.status = "queued"
+
+    service.client.messages.create.return_value = mock_message
 
     result = service.send_sms(
         to_number="+919876543210",
@@ -1624,7 +1640,10 @@ def test_logging_captures_required_sms_fields(caplog):
 
     service.dry_run = True
 
-    with caplog.at_level("INFO"):
+    with caplog.at_level(
+    logging.INFO,
+    logger="app.services.sms.twilio_service",
+    ):
         result = service.send_sms(
             to_number="+919876543210",
             body="Logging verification test",

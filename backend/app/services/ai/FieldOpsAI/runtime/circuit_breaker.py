@@ -274,7 +274,7 @@ class CircuitBreaker:
         try:
             state_val = self.redis.get(state_key)
             state = CircuitState(state_val) if state_val else CircuitState.CLOSED
-
+            print(f"[DEBUG CIRCUIT] namespace={self.config.namespace_version} state={state}")
             if state == CircuitState.OPEN:
                 opened_at_val = self.redis.get(opened_at_key)
                 opened_at = float(opened_at_val) if opened_at_val else 0.0

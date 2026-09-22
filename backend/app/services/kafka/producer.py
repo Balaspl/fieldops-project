@@ -57,14 +57,40 @@ class KafkaProducer:
         if self._producer is not None:
             return
 
+        security_protocol = os.getenv(
+            "KAFKA_SECURITY_PROTOCOL",
+            "SASL_PLAINTEXT",
+        )
+        sasl_mechanism = os.getenv(
+            "KAFKA_SASL_MECHANISM",
+            "PLAIN",
+        )
+        sasl_username = os.getenv(
+            "KAFKA_PRODUCER_USERNAME"
+        ) or os.getenv("KAFKA_SASL_USERNAME")
+
+        sasl_password = os.getenv(
+            "KAFKA_PRODUCER_PASSWORD"
+        ) or os.getenv("KAFKA_SASL_PASSWORD")
+
+        producer_kwargs = {
+            "bootstrap_servers": self.bootstrap_servers,
+            "request_timeout_ms": 5000,
+            "acks": os.getenv("KAFKA_ACKS", "all"),
+        }
+
+        if sasl_username and sasl_password:
+            producer_kwargs.update(
+                {
+                    "security_protocol": security_protocol,
+                    "sasl_mechanism": sasl_mechanism,
+                    "sasl_plain_username": sasl_username,
+                    "sasl_plain_password": sasl_password,
+                }
+            )
+
         self._producer = AIOKafkaProducer(
-            bootstrap_servers=self.bootstrap_servers,
-            request_timeout_ms=5000,
-            acks=os.getenv("KAFKA_ACKS", "all"),
-            security_protocol=os.getenv("KAFKA_SECURITY_PROTOCOL", "SASL_PLAINTEXT"),
-            sasl_mechanism=os.getenv("KAFKA_SASL_MECHANISM", "PLAIN"),
-            sasl_plain_username=os.getenv("KAFKA_PRODUCER_USERNAME"),
-            sasl_plain_password=os.getenv("KAFKA_PRODUCER_PASSWORD"),
+            **producer_kwargs,
         )
 
         try:

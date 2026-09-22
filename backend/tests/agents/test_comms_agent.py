@@ -53,11 +53,52 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import inspect
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
-
 import pytest
 from aioresponses import aioresponses
+import aioresponses.core as _aioresponses_core
+from aiohttp import ClientResponse as _AiohttpClientResponse
+
+
+class _MockStreamWriter:
+    buffer_size = 0
+    output_size = 0
+    length = 0
+
+    async def write(self, chunk):
+        pass
+
+    async def write_eof(self, chunk=b""):
+        pass
+
+    async def drain(self):
+        pass
+
+    def enable_compression(self, encoding="deflate", strategy=None):
+        pass
+
+    def enable_chunking(self):
+        pass
+
+    async def write_headers(self, status_line, headers):
+        pass
+
+    def send_headers(self):
+        pass
+
+
+class _Aiohttp314CompatibleClientResponse(_AiohttpClientResponse):
+    def __init__(self, method, url, **kwargs):
+        kwargs.setdefault("stream_writer", _MockStreamWriter())
+        super().__init__(method, url, **kwargs)
+
+
+_aioresponses_core.ClientResponse = (
+    _Aiohttp314CompatibleClientResponse
+)
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError

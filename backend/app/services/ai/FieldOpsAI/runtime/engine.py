@@ -1109,7 +1109,7 @@ class AIRuntimeEngine:
         await self._semaphore.acquire()
 
         started_at = datetime.now(timezone.utc)
-        started_monotonic = time.monotonic()
+        started_monotonic = time.perf_counter()
 
         current_task = asyncio.current_task()
 
@@ -1144,7 +1144,7 @@ class AIRuntimeEngine:
 
         except asyncio.CancelledError:
             finished_at = datetime.now(timezone.utc)
-            duration = time.monotonic() - started_monotonic
+            duration = time.perf_counter() - started_monotonic
 
             result = TaskResult(
                 task_id=spec.task_id,
@@ -1172,7 +1172,7 @@ class AIRuntimeEngine:
             self._semaphore.release()
 
         finished_at = datetime.now(timezone.utc)
-        duration = time.monotonic() - started_monotonic
+        duration = time.perf_counter() - started_monotonic
 
         result = TaskResult(
             task_id=spec.task_id,

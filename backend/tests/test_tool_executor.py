@@ -940,7 +940,7 @@ def test_structured_error_contains_required_fields():
     # Ensure previous tests cannot leave this tool's
     # circuit breaker open in Redis.
     executor.error_handler.circuit_breaker.reset(
-        "permanent_failure_tool"
+        "failing_tool"
     )
 
     parameters = {
