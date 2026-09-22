@@ -4,6 +4,7 @@ import os
 from typing import Any, Awaitable, Callable, Optional
 
 from aiokafka import AIOKafkaConsumer
+from .monitoring import KafkaMonitoring
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ class KafkaConsumerManager:
         topic: Optional[str] = None,
         group_id: Optional[str] = None,
         bootstrap_servers: Optional[str] = None,
+        monitoring: Optional[KafkaMonitoring] = None,
     ):
         self.bootstrap_servers = bootstrap_servers or os.getenv(
             "KAFKA_BOOTSTRAP_SERVERS",
@@ -113,6 +115,7 @@ class KafkaConsumerManager:
                     "sasl_plain_password": sasl_password,
                 }
             )
+        self.monitoring = monitoring
 
         self.consumer = AIOKafkaConsumer(
             self.topic,
@@ -150,7 +153,21 @@ class KafkaConsumerManager:
         try:
             async for message in self.consumer:
                 await handler(message.value)
-        except Exception:
+
+                if self.monitoring:
+                    self.monitoring.record_consume(
+                        True,
+                        self.topic,
+                    )
+
+        except Exception as exc:
+            if self.monitoring:
+                self.monitoring.record_consume(
+                    False,
+                    self.topic,
+                )
+                self.monitoring.record_error(exc)
+
             logger.exception("Kafka consumer processing failed.")
             raise
 

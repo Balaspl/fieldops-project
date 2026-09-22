@@ -7,18 +7,23 @@ from typing import Optional
 from aiokafka import AIOKafkaProducer
 from aiokafka.errors import KafkaError
 
+from .monitoring import KafkaMonitoring
 from app.services.ai.FieldOpsAI.schemas.agent_messages import MessageEnvelope
 
 logger = logging.getLogger(__name__)
 
 
 class KafkaProducer:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        monitoring: Optional[KafkaMonitoring] = None,
+    ) -> None:
         self.bootstrap_servers = os.getenv(
             "KAFKA_BOOTSTRAP_SERVERS",
             "localhost:9092",
         )
         self._producer: Optional[AIOKafkaProducer] = None
+        self.monitoring = monitoring
 
     @staticmethod
     def _get_partition_key(
@@ -137,6 +142,9 @@ class KafkaProducer:
                 timeout=5.0,
             )
 
+            if self.monitoring:
+                self.monitoring.record_publish(True, target_topic)
+
             logger.info(
                 "Kafka event published: topic=%s message_id=%s",
                 target_topic,
@@ -145,6 +153,12 @@ class KafkaProducer:
             return True
 
         except (KafkaError, asyncio.TimeoutError):
+            if self.monitoring:
+                self.monitoring.record_publish(False, target_topic)
+                self.monitoring.record_error(
+                    "Kafka publication failed"
+                )
+
             logger.exception(
                 "Kafka event publication failed: topic=%s message_id=%s",
                 target_topic,
