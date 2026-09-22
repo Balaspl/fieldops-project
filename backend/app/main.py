@@ -1,7 +1,7 @@
 from dotenv import load_dotenv
 
 load_dotenv()
-
+from app.routes import completion_documents
 from fastapi import FastAPI, Request, HTTPException
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
@@ -477,6 +477,7 @@ app.include_router(platform_router)
 
 # ──── Existing Routes ────
 app.include_router(jobs.router)
+app.include_router(completion_documents.router)
 app.include_router(jobs.api_v1_router)
 app.include_router(assignment.router)
 app.include_router(dispatch.router)

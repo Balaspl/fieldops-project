@@ -51,7 +51,7 @@ from .user import User, RefreshToken  # noqa: F401
 from .organization import Organization  # noqa: F401
 from .enterprise_audit import EnterpriseAuditLog  # noqa: F401
 from .job_closure import JobClosure  # noqa: F401
-
+from .completion_document import CompletionDocument
 # Portal models
 from .technician_profile import TechnicianProfile  # noqa: F401
 from .customer_profile import CustomerProfileModel  # noqa: F401

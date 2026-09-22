@@ -6,7 +6,7 @@ Service for processing job completion and fetching job closure details.
 from datetime import datetime, timezone
 from typing import Optional
 import logging
-
+from ..context import correlation_id_ctx
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -141,7 +141,10 @@ def close_job(
     if current_status == "COMPLETED":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Job is already COMPLETED",
+            detail=(
+                "Job cannot be closed because its current status is "
+                f"{current_status}"
+            ),
         )
     if current_status in {"CANCELLED", "CANCELED", "CLOSED"}:
         raise HTTPException(
@@ -308,15 +311,23 @@ def close_job(
         from .event_publisher import publish_dispatch_event
 
         publish_dispatch_event(
-            get_redis_client(),
-            event_type="JOB_COMPLETED",
-            job_id=str(job.id),
-            old_status=old_status,
-            new_status="COMPLETED",
-            tenant_id=tenant_id,
-            technician_id=str(tech.tech_id),
-            technician_name=tech.technician_name,
-        )
+        get_redis_client(),
+        event_type="JOB_COMPLETED",
+        job_id=str(job.id),
+        old_status=old_status,
+        new_status="COMPLETED",
+        tenant_id=tenant_id,
+        technician_id=str(tech.tech_id),
+        technician_name=tech.technician_name,
+        completed_at=closure_record.completed_at,
+        correlation_id=correlation_id_ctx.get() or None,
+        event_id=(
+            f"JOB_COMPLETED:"
+            f"{tenant_id}:"
+            f"{job.id}:"
+            f"{closure_record.id}"
+        ),
+    )
     except Exception:
         logger.exception("Failed to publish JOB_COMPLETED event for job %s", job.id)
 

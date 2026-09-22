@@ -578,3 +578,394 @@ def test_job_closure_schema_uses_canonical_completion_notes():
     )
 
     assert payload.work_summary == "Replaced valve & verified pressure."
+
+
+# ---------------------------------------------------------------------------
+# 4.4.6 - Validate current job status before completion
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "current_status",
+    ["COMPLETED", "CANCELLED", "CANCELED", "CLOSED"],
+)
+def test_close_endpoint_rejects_terminal_job_status(current_status):
+    db = TestingSessionLocal()
+    _, job = _create_tech_and_job(db, status=current_status)
+    job_id = job.id
+    db.close()
+
+    response = client.post(
+        f"/jobs/{job_id}/close",
+        json=completion_payload(),
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 400
+
+    detail = response.json()["detail"]
+
+    assert detail == (
+    f"Job cannot be closed because its current status is "
+    f"{current_status}"
+    )
+
+    db = TestingSessionLocal()
+    unchanged_job = db.query(Job).filter(Job.id == job_id).one()
+
+    # Current status must remain unchanged.
+    assert unchanged_job.status == current_status
+
+    # Completion fields must not be created or modified.
+    assert unchanged_job.completed_at is None
+    assert unchanged_job.completed_by is None
+
+    # No closure record should be created.
+    assert (
+        db.query(JobClosure)
+        .filter(JobClosure.job_id == job_id)
+        .count()
+        == 0
+    )
+
+    db.close()
+
+
+@pytest.mark.parametrize(
+    "current_status",
+    ["CREATED", "ASSIGNED", "EN_ROUTE"],
+)
+def test_close_endpoint_rejects_incomplete_lifecycle_status(current_status):
+    db = TestingSessionLocal()
+    _, job = _create_tech_and_job(db, status=current_status)
+    job_id = job.id
+    db.close()
+
+    response = client.post(
+        f"/jobs/{job_id}/close",
+        json=completion_payload(),
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 400
+
+    detail = response.json()["detail"]
+
+    assert isinstance(detail, dict)
+    assert detail["error"] == "INVALID_TRANSITION"
+    assert detail["error_code"] == "FORBIDDEN_JUMP"
+
+    db = TestingSessionLocal()
+    unchanged_job = db.query(Job).filter(Job.id == job_id).one()
+
+    # The job must remain in its original lifecycle state.
+    assert unchanged_job.status == current_status
+
+    # No completion timestamp or completion actor may be written.
+    assert unchanged_job.completed_at is None
+    assert unchanged_job.completed_by is None
+
+    # No closure record may be created.
+    assert (
+        db.query(JobClosure)
+        .filter(JobClosure.job_id == job_id)
+        .count()
+        == 0
+    )
+
+    db.close()
+
+
+def test_close_endpoint_allows_completion_only_from_on_site():
+    db = TestingSessionLocal()
+    _, job = _create_tech_and_job(db, status="ON_SITE")
+    job_id = job.id
+    db.close()
+
+    response = client.post(
+        f"/jobs/{job_id}/close",
+        json=completion_payload(),
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["job_id"] == job_id
+    assert data["completed_at"]
+
+    db = TestingSessionLocal()
+    completed_job = db.query(Job).filter(Job.id == job_id).one()
+
+    assert completed_job.status == "COMPLETED"
+    assert completed_job.completed_at is not None
+    assert completed_job.completed_by is not None
+
+    assert (
+        db.query(JobClosure)
+        .filter(JobClosure.job_id == job_id)
+        .count()
+        == 1
+    )
+
+    db.close()
+
+
+# ---------------------------------------------------------------------------
+# 4.4.11 - Comprehensive completion API regression coverage
+# ---------------------------------------------------------------------------
+
+def test_close_endpoint_returns_complete_response_contract():
+    db = TestingSessionLocal()
+    tech, job = _create_tech_and_job(db)
+    job_id = job.id
+    tech_id = tech.tech_id
+    db.close()
+
+    with patch(
+        "app.services.event_publisher.publish_dispatch_event"
+    ) as publish_event:
+        response = client.post(
+            f"/jobs/{job_id}/close",
+            json=completion_payload(),
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    # Required response fields.
+    assert data["id"]
+    assert data["job_id"] == job_id
+    assert data["technician_id"] == tech_id
+    assert data["work_summary"] == completion_payload()["work_summary"]
+    assert data["completion_notes"] == completion_payload()["work_summary"]
+    assert data["before_images"] == ["/uploads/before.jpg"]
+    assert data["after_images"] == ["/uploads/after.jpg"]
+    assert data["labour_cost"] == 150.0
+    assert data["material_cost"] == 75.5
+    assert data["subtotal"] == 225.5
+    assert data["completed_at"]
+
+    # The canonical event must be published after successful completion.
+    assert publish_event.call_count == 1
+
+    call = publish_event.call_args.kwargs
+
+    assert call["event_type"] == "JOB_COMPLETED"
+    assert call["job_id"] == str(job_id)
+    assert call["tenant_id"] == "tenant-1"
+    assert call["old_status"] == "ON_SITE"
+    assert call["new_status"] == "COMPLETED"
+
+    # Event must use the authoritative completion timestamp.
+    assert call["completed_at"] is not None
+
+    db = TestingSessionLocal()
+    completed_job = db.query(Job).filter(Job.id == job_id).one()
+    closure = (
+        db.query(JobClosure)
+        .filter(JobClosure.job_id == job_id)
+        .one()
+    )
+
+    assert completed_job.status == "COMPLETED"
+    assert completed_job.completed_by == tech_id
+    assert completed_job.completed_at == closure.completed_at
+    assert closure.id == data["id"]
+
+    db.close()
+
+
+def test_close_endpoint_updates_technician_workload_and_status():
+    db = TestingSessionLocal()
+    tech, job = _create_tech_and_job(db)
+    tech_id = tech.technician_id
+    job_id = job.id
+
+    assert tech.current_jobs == 1
+    assert tech.technician_status == "BUSY"
+
+    db.close()
+
+    with patch(
+        "app.services.event_publisher.publish_dispatch_event"
+    ):
+        response = client.post(
+            f"/jobs/{job_id}/close",
+            json=completion_payload(),
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+    assert response.status_code == 200
+
+    db = TestingSessionLocal()
+    updated_tech = (
+        db.query(Technician)
+        .filter(Technician.technician_id == tech_id)
+        .one()
+    )
+
+    assert updated_tech.technician_status == "AVAILABLE"
+    assert updated_tech.current_jobs == 0
+
+    db.close()
+
+
+def test_close_endpoint_does_not_publish_event_after_database_rollback():
+    db = TestingSessionLocal()
+    _, job = _create_tech_and_job(db)
+    job_id = job.id
+    db.close()
+
+    with patch(
+        "app.services.event_publisher.publish_dispatch_event"
+    ) as publish_event:
+        with patch.object(
+            __import__("sqlalchemy.orm", fromlist=["Session"]).Session,
+            "commit",
+            side_effect=Exception("db failure"),
+        ):
+            response = client.post(
+                f"/jobs/{job_id}/close",
+                json=completion_payload(),
+                headers={"Authorization": "Bearer test-token"},
+            )
+
+    assert response.status_code == 500
+
+    # Database failure must not publish a successful completion event.
+    publish_event.assert_not_called()
+
+    db = TestingSessionLocal()
+
+    unchanged_job = (
+        db.query(Job)
+        .filter(Job.id == job_id)
+        .one()
+    )
+
+    assert unchanged_job.status == "ON_SITE"
+    assert unchanged_job.completed_at is None
+    assert unchanged_job.completed_by is None
+
+    assert (
+        db.query(JobClosure)
+        .filter(JobClosure.job_id == job_id)
+        .count()
+        == 0
+    )
+
+    db.close()
+
+
+def test_close_endpoint_duplicate_completion_creates_one_closure_and_one_event():
+    db = TestingSessionLocal()
+    _, job = _create_tech_and_job(db)
+    job_id = job.id
+    db.close()
+
+    with patch(
+        "app.services.event_publisher.publish_dispatch_event"
+    ) as publish_event:
+
+        first_response = client.post(
+            f"/jobs/{job_id}/close",
+            json=completion_payload(),
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        assert first_response.status_code == 200
+        assert publish_event.call_count == 1
+
+        second_response = client.post(
+            f"/jobs/{job_id}/close",
+            json=completion_payload(),
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        assert second_response.status_code == 400
+
+        # The duplicate request must not publish another completion event.
+        assert publish_event.call_count == 1
+
+    db = TestingSessionLocal()
+
+    assert (
+        db.query(JobClosure)
+        .filter(JobClosure.job_id == job_id)
+        .count()
+        == 1
+    )
+
+    assert (
+        db.query(AuditEvent)
+        .filter(
+            AuditEvent.job_id == str(job_id),
+            AuditEvent.event_type == "JOB_COMPLETED",
+        )
+        .count()
+        == 1
+    )
+
+    completed_job = (
+        db.query(Job)
+        .filter(Job.id == job_id)
+        .one()
+    )
+
+    assert completed_job.status == "COMPLETED"
+
+    db.close()
+
+
+def test_close_endpoint_failed_validation_creates_no_event_or_closure():
+    db = TestingSessionLocal()
+    _, job = _create_tech_and_job(db)
+    job_id = job.id
+    db.close()
+
+    payload = completion_payload()
+    payload["after_images"] = []
+
+    with patch(
+        "app.services.event_publisher.publish_dispatch_event"
+    ) as publish_event:
+        response = client.post(
+            f"/jobs/{job_id}/close",
+            json=payload,
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+    assert response.status_code == 400
+
+    publish_event.assert_not_called()
+
+    db = TestingSessionLocal()
+
+    unchanged_job = (
+        db.query(Job)
+        .filter(Job.id == job_id)
+        .one()
+    )
+
+    assert unchanged_job.status == "ON_SITE"
+    assert unchanged_job.completed_at is None
+    assert unchanged_job.completed_by is None
+
+    assert (
+        db.query(JobClosure)
+        .filter(JobClosure.job_id == job_id)
+        .count()
+        == 0
+    )
+
+    assert (
+        db.query(AuditEvent)
+        .filter(AuditEvent.job_id == str(job_id))
+        .count()
+        == 0
+    )
+
+    db.close()

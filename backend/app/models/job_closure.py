@@ -65,6 +65,13 @@ class JobClosure(Base):
         backref="closure",
     )
 
+    completion_documents = relationship(
+        "CompletionDocument",
+        back_populates="job_closure",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
     @property
     def completion_notes(self) -> str:
         """Canonical completion-note alias for API/reporting consumers."""
