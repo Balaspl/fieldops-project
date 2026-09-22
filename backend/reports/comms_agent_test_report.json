@@ -1,7 +1,7 @@
 {
   "total": 277,
-  "passed": 277,
-  "failed": 0,
+  "passed": 276,
+  "failed": 1,
   "skipped": 0,
   "tests": [
     {
@@ -62,7 +62,7 @@
     },
     {
       "nodeid": "tests/agents/test_bus.py::test_sync_handler_non_blocking",
-      "outcome": "passed"
+      "outcome": "failed"
     },
     {
       "nodeid": "tests/agents/test_bus.py::test_deep_copy_payload_isolation",

@@ -339,6 +339,7 @@ if "*" in cors_origins:
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Correlation-ID"],
     )
 else:
     app.add_middleware(
@@ -347,6 +348,7 @@ else:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Correlation-ID"],
     )
 
 

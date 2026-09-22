@@ -1,12 +1,16 @@
-import React, { useEffect, useState, useMemo } from "react";
-import LoadingSpinner from "../components/ui/LoadingSpinner";
-import { Eye, Trash2, History, Search, ChevronDown, Share2, Loader2, Check } from "lucide-react";
-import EmptyState from "../components/ui/EmptyState";
-import OverrideModal from "../components/notifications/OverrideModal";
-import OverrideHistory from "../components/notifications/OverrideHistory";
-import OverrideWarning from "../components/notifications/OverrideWarning";
-import MetricsCards from "../components/dispatch/MetricsCards";
-import DispatchQueueTable from "../components/dispatch/DispatchQueueTable";
+import React, {
+  useEffect,
+  useState,
+  useMemo,
+  useRef,
+} from "react";
+import {
+  GoogleMap,
+  DirectionsRenderer,
+  MarkerF,
+  useLoadScript,
+} from "@react-google-maps/api";
+import { io, Socket } from "socket.io-client";
 import {
   getTechnicians,
   getAvailableTechnicians,
@@ -21,6 +25,16 @@ import {
   getAuditOverrides,
   assignJobDirect,
 } from "../services/planningService";
+import { getTechnicianETA } from "../services/etaService";
+import LoadingSpinner from "../components/ui/LoadingSpinner";
+import { Eye, Trash2, History, Search, ChevronDown, Share2, Loader2, Check, MapPin } from "lucide-react";
+import EmptyState from "../components/ui/EmptyState";
+import OverrideModal from "../components/notifications/OverrideModal";
+import OverrideHistory from "../components/notifications/OverrideHistory";
+import OverrideWarning from "../components/notifications/OverrideWarning";
+import MetricsCards from "../components/dispatch/MetricsCards";
+import DispatchQueueTable from "../components/dispatch/DispatchQueueTable";
+
 import { getDispatchQueue } from "../services/dispatchQueueService";
 import {
   extendSLA,
@@ -37,6 +51,163 @@ import { getDeclinedJobs, reassignDeclinedJob } from "../services/customerPortal
 const PAGE_SIZE = 8;
 
 const normalizeStatus = (s: string) => (s || "").toLowerCase();
+
+type DispatchRealtimeEvent = {
+  job_id?: string | number;
+  tenant_id?: string | number;
+  old_status?: string | null;
+  new_status?: string | null;
+  timestamp?: string;
+  technician?: {
+    tech_id?: string | number;
+    name?: string;
+  };
+};
+
+type DispatchSocketStatus =
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "error"
+  | "disabled";
+  
+const escapeCsvValue = (value: unknown): string => {
+  const text = value == null ? "" : String(value);
+  return `"${text.replace(/"/g, '""')}"`;
+};
+
+const getDispatchCorrelationId = (error: any): string | null => {
+  const headers = error?.response?.headers;
+
+  if (!headers) {
+    return null;
+  }
+
+  const correlationId =
+    typeof headers.get === "function"
+      ? headers.get("X-Correlation-ID")
+      : headers["x-correlation-id"] ||
+        headers["X-Correlation-ID"];
+
+  return typeof correlationId === "string" && correlationId.trim()
+    ? correlationId.trim()
+    : null;
+};
+
+const getDispatchBackendDetail = (error: any): string | null => {
+  const detail =
+    error?.response?.data?.detail ??
+    error?.response?.data?.message ??
+    error?.response?.data?.error;
+
+  if (typeof detail === "string" && detail.trim()) {
+    return detail.trim();
+  }
+
+  if (
+    detail &&
+    typeof detail === "object" &&
+    typeof detail.message === "string" &&
+    detail.message.trim()
+  ) {
+    return detail.message.trim();
+  }
+
+  return null;
+};
+
+const formatDispatchFailure = (
+  error: any,
+  action: string,
+  fallback: string
+): string => {
+  const status = error?.response?.status;
+  const detail = getDispatchBackendDetail(error);
+
+  let message: string;
+
+  switch (status) {
+    case 400:
+    case 422:
+      message = detail
+        ? `${action} was rejected by backend validation: ${detail}`
+        : `${action} could not be completed because the request failed backend validation.`;
+      break;
+
+    case 403:
+      message =
+        `You do not have permission to perform ${action.toLowerCase()}.`;
+      break;
+
+    case 404:
+      message =
+        `The job or technician required for ${action.toLowerCase()} ` +
+        `could not be found or is no longer available.`;
+      break;
+
+    case 409:
+      message = detail
+        ? `${action} could not be completed because of a dispatch conflict: ${detail}`
+        : `${action} could not be completed because the job state has changed.`;
+      break;
+
+    case 429:
+      message =
+        `The dispatch service is temporarily rate-limited. ` +
+        `Please wait and try ${action.toLowerCase()} again.`;
+      break;
+
+    default:
+      if (!error?.response) {
+        message =
+          `The dispatch service could not be reached while attempting ` +
+          `${action.toLowerCase()}. Please check the connection and try again.`;
+      } else if (status >= 500) {
+        message =
+          `The dispatch service could not complete ${action.toLowerCase()} ` +
+          `because of a server error. Please try again.`;
+      } else {
+        message = detail || fallback;
+      }
+  }
+
+  const correlationId = getDispatchCorrelationId(error);
+
+  return correlationId
+    ? `${message} Reference ID: ${correlationId}`
+    : message;
+};
+
+type DispatchConfirmationAction =
+  | "ASSIGN"
+  | "CANCEL"
+  | "REASSIGN"
+  | "OVERRIDE";
+
+interface DispatchConfirmationState {
+  action: DispatchConfirmationAction;
+  jobIds: number[];
+  technicianName?: string;
+  technicianId?: number | string;
+  reason?: string;
+}
+
+const getDispatchActionLabel = (
+  action: DispatchConfirmationAction
+): string => {
+  switch (action) {
+    case "ASSIGN":
+      return "Assignment";
+    case "CANCEL":
+      return "Cancellation";
+    case "REASSIGN":
+      return "Reassignment";
+    case "OVERRIDE":
+      return "Manual Override";
+    default:
+      return "Dispatch Action";
+  }
+};
 
 const getPriorityStyle = (priority: string): React.CSSProperties => {
   const p = (priority || "").toUpperCase();
@@ -110,21 +281,13 @@ interface PlannedAssignment {
 
 interface Technician {
   technician_id: number;
+  tech_id?: string;
   technician_name: string;
   technician_skill: string;
   technician_status: string;
+  technician_location?: string;
   current_jobs?: number;
   max_jobs?: number;
-}
-
-interface TechnicianStatus {
-  technician_id: number;
-  technician_name: string;
-  technician_skill: string;
-  status: string;
-  current_jobs: number;
-  max_jobs: number;
-  eligible_for_assignment?: boolean;
 }
 
 interface ScoreData {
@@ -1000,17 +1163,16 @@ const ShareTrackingLinkButton = ({ jobId }: { jobId: string | number }) => {
 function PlanningDashboard() {
   const [pendingJobs, setPendingJobs] = useState<PendingJob[]>([]);
   const [plannedAssignments, setPlannedAssignments] = useState<PlannedAssignment[]>([]);
-  const [allTechsStatus, setAllTechsStatus] = useState<TechnicianStatus[]>([]);
   const [allTechsList, setAllTechsList] = useState<Technician[]>([]);
   const [totalPendingCount, setTotalPendingCount] = useState(0);
   const [totalPlannedCount, setTotalPlannedCount] = useState(0);
 
   const [jobsLoading, setJobsLoading] = useState(false);
   const [assignmentsLoading, setAssignmentsLoading] = useState(false);
-  const [techStatusLoading, setTechStatusLoading] = useState(false);
 
   const [selectedTechs, setSelectedTechs] = useState<Record<number, string>>({});
   const [assigningJobId, setAssigningJobId] = useState<number | null>(null);
+  const [manualOverrideJobId, setManualOverrideJobId] = useState<number | null>(null);
   const [selectedJobIds, setSelectedJobIds] = useState<number[]>([]);
   const [bulkAssigning, setBulkAssigning] = useState(false);
   const [bulkTechnicianId, setBulkTechnicianId] = useState<string>("");
@@ -1030,15 +1192,31 @@ function PlanningDashboard() {
   const [showOverrideHistoryForJob, setShowOverrideHistoryForJob] = useState<OverrideHistoryItem | null>(null);
   const [viewAssignmentOverride, setViewAssignmentOverride] = useState<any>(null);
   const [showOverrideHistoryForView, setShowOverrideHistoryForView] = useState(false);
+  const {
+    isLoaded: isRouteMapLoaded,
+    loadError: routeMapLoadError,
+  } = useLoadScript({
+    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "",
+  });
 
-  const handleManualAssign = async (jobId: number, techId: number) => {
+  const handleManualAssign = async (
+    jobId: number,
+    techId: number
+  ) => {
     try {
       await manualAssign(jobId, techId);
-      showAssignSuccess("Job assigned manually successfully!");
+      showAssignSuccess(
+        "Job assigned manually successfully!"
+      );
       fetchAllData();
     } catch (err: any) {
-      const msg = err.response?.data?.detail || "Failed to manually assign job.";
+      const msg =
+        err?.response?.data?.detail ||
+        err?.response?.data?.error ||
+        "Failed to manually assign job.";
+
       setError(msg);
+      throw err;
     }
   };
 
@@ -1048,9 +1226,49 @@ function PlanningDashboard() {
   const [plannedPage, setPlannedPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
   const [debSearchQuery, setDebSearchQuery] = useState("");
-  const [viewAssignment, setViewAssignment] = useState<PlannedAssignment | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [dispatchSocketStatus, setDispatchSocketStatus] =
+    useState<DispatchSocketStatus>("connecting");
 
+  const [dispatchSocketError, setDispatchSocketError] =
+    useState("");
+
+  const dispatchSocketRef = useRef<Socket | null>(null);
+
+  const dispatchRefreshTimerRef =
+    useRef<number | null>(null);
+
+  const seenDispatchEventsRef =
+    useRef<Set<string>>(new Set());
+
+  const latestDispatchTimestampRef =
+    useRef<Map<string, number>>(new Map());
+
+  const refreshDashboardFromRealtimeRef =
+    useRef<() => void>(() => {});
+
+  const scheduleRealtimeRefreshRef =
+    useRef<() => void>(() => {});
+  const [viewAssignment, setViewAssignment] = useState<PlannedAssignment | null>(null);
+  const [routeAssignment, setRouteAssignment] =
+    useState<PlannedAssignment | null>(null);
+
+  const [routeLoading, setRouteLoading] = useState(false);
+
+  const [routeError, setRouteError] = useState("");
+
+  const [routeEta, setRouteEta] = useState<{
+    eta: string;
+    duration_minutes: number;
+    distance_meters: number;
+    origin: { lat: number; lng: number };
+    destination: { lat: number; lng: number };
+  } | null>(null);
+
+  const [routeDirections, setRouteDirections] = useState<any>(null);
+  const [showJobMap, setShowJobMap] = useState(false);
   const [activeMetricFilter, setActiveMetricFilter] = useState("all");
+  
   const [dispatchQueueCount, setDispatchQueueCount] = useState(0);
 
   const [declinedJobsList, setDeclinedJobsList] = useState<any[]>([]);
@@ -1058,6 +1276,103 @@ function PlanningDashboard() {
   const [reassignModalJob, setReassignModalJob] = useState<any>(null);
   const [selectedReassignTechId, setSelectedReassignTechId] = useState<number | null>(null);
   const [reassigning, setReassigning] = useState(false);
+  const eligibleReassignTechnicians = useMemo(
+    () =>
+      allTechsList.filter((tech) => {
+        const status = normalizeStatus(
+          tech.technician_status || ""
+        );
+
+        const currentJobs = Number(tech.current_jobs ?? 0);
+        const maxJobs = Number(tech.max_jobs ?? 5);
+
+        return (
+          status === "available" &&
+          currentJobs < maxJobs
+        );
+      }),
+    [allTechsList]
+  );
+
+  type DispatchConfirmation = {
+  action: string;
+  jobIds: number[];
+  technician?: string;
+  technicianId?: number | string;
+  details?: string;
+  reasonRequired?: boolean;
+  reasonPlaceholder?: string;
+  confirmLabel: string;
+  execute: (reason?: string) => Promise<void>;
+};
+
+  const [dispatchConfirmation, setDispatchConfirmation] =
+    useState<DispatchConfirmation | null>(null);
+
+  const [dispatchConfirmationReason, setDispatchConfirmationReason] =
+    useState("");
+
+  const [dispatchConfirmationLoading, setDispatchConfirmationLoading] =
+    useState(false);
+
+  const [dispatchConfirmationError, setDispatchConfirmationError] =
+    useState("");
+
+  const openDispatchConfirmation = (
+    confirmation: DispatchConfirmation
+  ) => {
+    if (!confirmation.jobIds.length) {
+      setError("At least one job must be selected for this dispatch action.");
+      return;
+    }
+
+    setDispatchConfirmationReason("");
+    setDispatchConfirmationError("");
+    setDispatchConfirmation(confirmation);
+  };
+
+  const closeDispatchConfirmation = () => {
+    if (dispatchConfirmationLoading) return;
+
+    setDispatchConfirmation(null);
+    setDispatchConfirmationReason("");
+    setDispatchConfirmationError("");
+  };
+
+  const confirmDispatchAction = async () => {
+    if (!dispatchConfirmation || dispatchConfirmationLoading) {
+      return;
+    }
+
+    const reason = dispatchConfirmationReason.trim();
+
+    if (dispatchConfirmation.reasonRequired && !reason) {
+      setDispatchConfirmationError(
+        "A reason is required before confirming this action."
+      );
+      return;
+    }
+
+    try {
+      setDispatchConfirmationLoading(true);
+      setDispatchConfirmationError("");
+      setError("");
+
+      await dispatchConfirmation.execute(
+        dispatchConfirmation.reasonRequired ? reason : undefined
+      );
+
+      closeDispatchConfirmation();
+    } catch (err: any) {
+      const message = formatDispatchFailure(
+        err,
+        dispatchConfirmation.action,
+        "The dispatch action could not be completed."
+      );
+
+      setDispatchConfirmationError(message);
+    }
+  };
 
   const fetchDeclinedJobsList = async () => {
     try {
@@ -1171,21 +1486,6 @@ function PlanningDashboard() {
     }
   };
 
-  const fetchTechnicianStatus = async () => {
-    try {
-      setTechStatusLoading(true);
-      const [res] = await Promise.all([
-        getAvailableTechnicians(),
-        new Promise(resolve => setTimeout(resolve, 1000))
-      ]);
-      setAllTechsStatus(res.data);
-    } catch {
-      setError("Failed to load technician status. Please try again.");
-    } finally {
-      setTechStatusLoading(false);
-    }
-  };
-
   const fetchTechniciansList = async () => {
     try {
       const res = await getTechnicians();
@@ -1211,14 +1511,205 @@ function PlanningDashboard() {
     setSuccessMsg("");
     fetchPendingJobs(debSearchQuery);
     fetchPlannedAssignments(debSearchQuery);
-    fetchTechnicianStatus();
     fetchTechniciansList();
     fetchDispatchQueueCount();
     fetchDeclinedJobsList();
   };
 
+  const refreshDashboardFromRealtime = () => {
+    fetchPendingJobs(debSearchQuery);
+    fetchPlannedAssignments(debSearchQuery);
+    fetchTechniciansList();
+    fetchDispatchQueueCount();
+    fetchDeclinedJobsList();
+  };
+
+  refreshDashboardFromRealtimeRef.current =
+    refreshDashboardFromRealtime;
+
+  const scheduleRealtimeRefresh = () => {
+    if (dispatchRefreshTimerRef.current !== null) {
+      return;
+    }
+
+    dispatchRefreshTimerRef.current =
+      window.setTimeout(() => {
+        dispatchRefreshTimerRef.current = null;
+        refreshDashboardFromRealtimeRef.current();
+      }, 250);
+  };
+
+  scheduleRealtimeRefreshRef.current =
+    scheduleRealtimeRefresh;
+
+  const parseCoordinates = (
+    value?: string
+  ): { lat: number; lng: number } | null => {
+    if (!value || typeof value !== "string") {
+      return null;
+    }
+    const parts = value.split(",").map((part) => part.trim());
+
+    if (parts.length !== 2) {
+      return null;
+    }
+
+    const lat = Number(parts[0]);
+    const lng = Number(parts[1]);
+
+    if (
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lng) ||
+      lat < -90 ||
+      lat > 90 ||
+      lng < -180 ||
+      lng > 180
+    ) {
+      return null;
+    }
+
+    return { lat, lng };
+  };
+
+  const handleViewRoute = async (assignment: PlannedAssignment) => {
+    setRouteAssignment(assignment);
+    setRouteLoading(true);
+    setRouteError("");
+    setRouteEta(null);
+    setRouteDirections(null);
+
+    try {
+      const technician = allTechsList.find(
+        (tech) =>
+          String(tech.technician_name).trim().toLowerCase() ===
+          String(assignment.technician).trim().toLowerCase()
+      );
+
+      if (!technician) {
+        throw new Error(
+          "Technician details are unavailable. Please refresh the technician data and try again."
+        );
+      }
+
+      const technicianIdentifier =
+        technician.tech_id || String(technician.technician_id);
+
+      if (!technicianIdentifier) {
+        throw new Error(
+          "Technician route identifier is unavailable."
+        );
+      }
+
+      const origin = parseCoordinates(technician.technician_location);
+      const destination = parseCoordinates(assignment.location);
+
+      if (!origin) {
+        throw new Error(
+          "Technician location is missing or invalid. The route cannot be displayed."
+        );
+      }
+
+      if (!destination) {
+        throw new Error(
+          "Job location is missing or invalid. The route cannot be displayed."
+        );
+      }
+
+      if (!isRouteMapLoaded) {
+        throw new Error(
+          "Google Maps is not ready yet. Please try again in a moment."
+        );
+      }
+
+      if (typeof google === "undefined" || !google.maps) {
+        throw new Error(
+          "Google Maps is unavailable. Please verify the Maps configuration."
+        );
+      }
+
+      const etaResult = await getTechnicianETA(
+        String(technicianIdentifier),
+        Number(assignment.job_id)
+      );
+
+      const etaData: any =
+        (etaResult as any)?.data ??
+        (etaResult as any) ??
+        {};
+
+      const rawDuration = Number(
+        etaData?.duration_minutes ??
+        etaData?.duration ??
+        etaData?.eta_minutes ??
+        0
+      );
+
+      const durationMinutes =
+        rawDuration > 0
+          ? rawDuration > 300
+            ? Math.ceil(rawDuration / 60)
+            : Math.ceil(rawDuration)
+          : 0;
+
+      const etaText =
+        typeof etaData?.eta === "string" && etaData.eta.trim()
+          ? etaData.eta
+          : durationMinutes > 0
+          ? `${durationMinutes} min`
+          : "ETA unavailable";
+
+      setRouteEta({
+        eta: etaText,
+        duration_minutes: durationMinutes,
+        distance_meters: Number(etaData?.distance_meters ?? 0),
+        origin,
+        destination,
+      });
+
+      const directionsService = new google.maps.DirectionsService();
+
+      directionsService.route(
+        {
+          origin,
+          destination,
+          travelMode: google.maps.TravelMode.DRIVING,
+        },
+        (result, status) => {
+          if (
+            status !== google.maps.DirectionsStatus.OK ||
+            !result
+          ) {
+            setRouteDirections(null);
+            setRouteError(
+              "Google Maps could not calculate a route for these locations."
+            );
+            return;
+          }
+
+          setRouteDirections(result);
+        }
+      );
+    } catch (err: any) {
+      console.error("Failed to load technician route:", err);
+
+      setRouteEta(null);
+      setRouteDirections(null);
+
+      const detail =
+        err?.response?.data?.detail ||
+        err?.response?.data?.message ||
+        err?.message;
+
+      setRouteError(
+        detail ||
+          "Failed to load route information. Please try again."
+      );
+    } finally {
+      setRouteLoading(false);
+    }
+  };
+
   useEffect(() => {
-    fetchTechnicianStatus();
     fetchTechniciansList();
     fetchDispatchQueueCount();
   }, []);
@@ -1235,6 +1726,212 @@ function PlanningDashboard() {
   useEffect(() => {
     fetchPlannedAssignments(debSearchQuery);
   }, [debSearchQuery, plannedPage]);
+
+  useEffect(() => {
+    const tenantId =
+      (typeof window !== "undefined"
+        ? window.localStorage.getItem("tenant_id")
+        : null) ||
+      import.meta.env.VITE_TENANT_ID ||
+      "";
+
+    if (!tenantId) {
+      setDispatchSocketStatus("disabled");
+      setDispatchSocketError(
+        "Live dashboard updates are unavailable because no tenant context is available."
+      );
+      return;
+    }
+
+    const socketBaseUrl = (
+      import.meta.env.VITE_DISPATCH_SOCKET_URL ||
+      "http://localhost:4000"
+    ).replace(/\/$/, "");
+
+    const socket = io(
+      `${socketBaseUrl}/dispatch-dashboard`,
+      {
+        auth: {
+          tenant_id: tenantId,
+        },
+        transports: ["websocket", "polling"],
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 10000,
+        timeout: 10000,
+      }
+    );
+
+    dispatchSocketRef.current = socket;
+
+    setDispatchSocketStatus("connecting");
+    setDispatchSocketError("");
+
+    const onConnect = () => {
+      setDispatchSocketStatus("connected");
+      setDispatchSocketError("");
+    };
+
+    const onDisconnect = (reason?: string) => {
+      if (reason === "io client disconnect") {
+        return;
+      }
+
+      setDispatchSocketStatus("reconnecting");
+    };
+
+    const onConnectError = (socketError: Error) => {
+      setDispatchSocketStatus("error");
+      setDispatchSocketError(
+        socketError?.message ||
+          "Unable to connect to live dashboard updates."
+      );
+    };
+
+    const onDispatchEvent = (
+      eventName: string,
+      rawPayload: unknown
+    ) => {
+      if (
+        !rawPayload ||
+        typeof rawPayload !== "object" ||
+        Array.isArray(rawPayload)
+      ) {
+        return;
+      }
+
+      const payload =
+        rawPayload as DispatchRealtimeEvent;
+
+      const jobId = payload.job_id;
+      const eventTenantId = payload.tenant_id;
+
+      if (
+        jobId === undefined ||
+        jobId === null ||
+        eventTenantId === undefined ||
+        eventTenantId === null
+      ) {
+        return;
+      }
+
+      if (
+        String(eventTenantId) !== String(tenantId)
+      ) {
+        return;
+      }
+
+      const jobKey = String(jobId);
+
+      const timestampMs = payload.timestamp
+        ? Date.parse(payload.timestamp)
+        : Number.NaN;
+
+      if (Number.isFinite(timestampMs)) {
+        const latestTimestamp =
+          latestDispatchTimestampRef.current.get(
+            jobKey
+          );
+
+        if (
+          latestTimestamp !== undefined &&
+          timestampMs < latestTimestamp
+        ) {
+          return;
+        }
+
+        latestDispatchTimestampRef.current.set(
+          jobKey,
+          timestampMs
+        );
+      }
+
+      const eventKey = [
+        eventName,
+        jobKey,
+        payload.timestamp || "",
+        payload.old_status || "",
+        payload.new_status || "",
+        payload.technician?.tech_id ?? "",
+      ].join("|");
+
+      if (
+        seenDispatchEventsRef.current.has(eventKey)
+      ) {
+        return;
+      }
+
+      seenDispatchEventsRef.current.add(eventKey);
+
+      if (
+        seenDispatchEventsRef.current.size > 500
+      ) {
+        const oldestKey =
+          seenDispatchEventsRef.current
+            .values()
+            .next()
+            .value;
+
+        if (oldestKey !== undefined) {
+          seenDispatchEventsRef.current.delete(
+            oldestKey
+          );
+        }
+      }
+
+      if (
+        latestDispatchTimestampRef.current.size > 500
+      ) {
+        const oldestJobId =
+          latestDispatchTimestampRef.current
+            .keys()
+            .next()
+            .value;
+
+        if (oldestJobId !== undefined) {
+          latestDispatchTimestampRef.current.delete(
+            oldestJobId
+          );
+        }
+      }
+
+      scheduleRealtimeRefreshRef.current();
+    };
+
+    socket.on("connect", onConnect);
+    socket.on("disconnect", onDisconnect);
+    socket.on("connect_error", onConnectError);
+    socket.onAny(onDispatchEvent);
+
+    return () => {
+      if (
+        dispatchRefreshTimerRef.current !== null
+      ) {
+        window.clearTimeout(
+          dispatchRefreshTimerRef.current
+        );
+
+        dispatchRefreshTimerRef.current = null;
+      }
+
+      socket.off("connect", onConnect);
+      socket.off("disconnect", onDisconnect);
+      socket.off(
+        "connect_error",
+        onConnectError
+      );
+      socket.offAny(onDispatchEvent);
+
+      socket.disconnect();
+
+      if (
+        dispatchSocketRef.current === socket
+      ) {
+        dispatchSocketRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (viewAssignment) {
@@ -1419,15 +2116,91 @@ function PlanningDashboard() {
       showAssignSuccess(`${techName} has been assigned to this work.`);
       fetchAllData();
     } catch (err: any) {
-      const msg =
-        err.response?.data?.detail ||
-        err.response?.data?.error ||
-        "Failed to assign technician.";
-      setError(msg);
+      const message = formatDispatchFailure(
+        err,
+        "Job assignment",
+        "Failed to assign technician."
+      );
+
+      setError(message);
+      throw err;
     } finally {
       setAssigningJobId(null);
     }
   };
+
+
+  const requestAssignJob = (jobId: number) => {
+    const techId = selectedTechs[jobId];
+
+    if (!techId) return;
+
+    const technicianId = parseInt(techId, 10);
+
+    if (Number.isNaN(technicianId)) {
+      setError("Please select a valid technician.");
+      return;
+    }
+
+    const tech = allTechsList.find(
+      (t) => t.technician_id === technicianId
+    );
+
+    if (!tech) {
+      setError("Selected technician is no longer available.");
+      return;
+    }
+
+    openDispatchConfirmation({
+      action: "Assign Job",
+      jobIds: [jobId],
+      technician: tech.technician_name,
+      technicianId,
+      details:
+        `Job #${jobId} will be assigned to ${tech.technician_name}. ` +
+        "The existing backend assignment API will perform the final validation.",
+      confirmLabel: "Confirm Assignment",
+      execute: async () => {
+        await handleAssignJob(jobId);
+      },
+    });
+  };
+
+  const requestBulkAssign = () => {
+    if (selectedJobIds.length === 0 || !bulkTechnicianId) return;
+
+    const technicianId = parseInt(bulkTechnicianId, 10);
+
+    if (Number.isNaN(technicianId)) {
+      setError("Please select a valid technician.");
+      return;
+    }
+
+    const technician = allTechsList.find(
+      (t) => t.technician_id === technicianId
+    );
+
+    if (!technician) {
+      setError("Selected technician is no longer available.");
+      return;
+    }
+
+    openDispatchConfirmation({
+      action: "Bulk Job Assignment",
+      jobIds: [...selectedJobIds],
+      technician: technician.technician_name,
+      technicianId,
+      details:
+        `${selectedJobIds.length} selected job(s) will be assigned to ` +
+        `${technician.technician_name}. The existing backend assignment API ` +
+        "will perform the final validation.",
+      confirmLabel: "Confirm Assignment",
+      execute: async () => {
+        await handleBulkAssign();
+      },
+    });
+  };
+
 
   const handleBulkAssign = async () => {
     if (selectedJobIds.length === 0 || !bulkTechnicianId) return;
@@ -1458,37 +2231,21 @@ function PlanningDashboard() {
 
       fetchAllData();
     } catch (err: any) {
-      const msg =
-        err.response?.data?.detail ||
-        err.response?.data?.error ||
-        "Failed to assign selected jobs.";
+      const message = formatDispatchFailure(
+        err,
+        "Bulk job assignment",
+        "Failed to assign selected jobs."
+      );
 
-      setError(msg);
+      setError(message);
+      throw err;
     } finally {
       setBulkAssigning(false);
     }
   };
 
 
-  const handleBulkCancel = async () => {
-    if (selectedJobIds.length === 0) return;
-
-    const confirmed = window.confirm(
-      `Are you sure you want to cancel ${selectedJobIds.length} selected job(s)?`
-    );
-
-    if (!confirmed) return;
-
-    const reason = window.prompt(
-      "Enter cancellation reason:",
-      "Dispatcher bulk cancellation"
-    );
-
-    if (!reason || !reason.trim()) {
-      setError("Cancellation reason is required.");
-      return;
-    }
-
+  const executeBulkCancel = async (reason: string) => {
     try {
       setBulkCancelling(true);
       setError("");
@@ -1500,22 +2257,110 @@ function PlanningDashboard() {
       );
 
       setSelectedJobIds([]);
-
       fetchAllData();
     } catch (err: any) {
-      const detail = err.response?.data?.detail;
+      const message = formatDispatchFailure(
+        err,
+        "Bulk job cancellation",
+        "Failed to cancel selected jobs."
+      );
 
-      const msg =
-        typeof detail === "string"
-          ? detail
-          : detail?.message ||
-            err.response?.data?.error ||
-            "Failed to cancel selected jobs.";
-
-      setError(msg);
+      setError(message);
+      throw err;
     } finally {
       setBulkCancelling(false);
     }
+  };
+
+  const handleBulkCancel = () => {
+    if (selectedJobIds.length === 0) return;
+
+    openDispatchConfirmation({
+      action: "Bulk Job Cancellation",
+      jobIds: [...selectedJobIds],
+      details:
+        `${selectedJobIds.length} selected job(s) will be cancelled. ` +
+        "The existing backend cancellation API will perform the final validation.",
+      reasonRequired: true,
+      reasonPlaceholder: "Enter cancellation reason",
+      confirmLabel: "Confirm Cancellation",
+      execute: async (reason) => {
+        if (!reason?.trim()) {
+          setError("Cancellation reason is required.");
+          return;
+        }
+
+        await executeBulkCancel(reason);
+      },
+    });
+  };
+
+  const requestForceAssignEscalation = (
+    jobId: number,
+    techId: string | number
+  ) => {
+    if (manualOverrideJobId !== null) {
+      return;
+    }
+    const technician = allTechsList.find(
+      (t) => String(t.technician_id) === String(techId)
+    );
+
+    openDispatchConfirmation({
+      action: "Manual Override",
+      jobIds: [jobId],
+      technician:
+        technician?.technician_name ||
+        `Technician #${techId}`,
+      details:
+        `Job #${jobId} will be force-assigned to ${
+          technician?.technician_name || `Technician #${techId}`
+        }. The existing backend override API will validate and persist this action.`,
+      reasonRequired: true,
+      reasonPlaceholder: "Enter force-assignment justification",
+      confirmLabel: "Confirm Manual Override",
+      execute: async (reason) => {
+        if (!reason?.trim()) {
+          setError("Force-assignment justification is required.");
+          return;
+        }
+
+        try {
+          setManualOverrideJobId(jobId);
+
+          await forceAssignEscalation(
+            jobId,
+            String(technician?.technician_id || techId),
+            reason.trim()
+          );
+
+          showSuccess(
+            `Job #${jobId} force-assigned to ${
+              technician?.technician_name || techId
+            }.`
+          );
+
+          setSelectedTechs((prev) => {
+            const next = { ...prev };
+            delete next[jobId];
+            return next;
+          });
+
+          fetchAllData();
+        } catch (err: any) {
+          const message = formatDispatchFailure(
+            err,
+            "Manual Override",
+            "Manual override failed."
+          );
+
+          setError(message);
+          throw err;
+        } finally {
+          setManualOverrideJobId(null);
+        }
+      },
+    });
   };
 
 
@@ -1548,7 +2393,7 @@ function PlanningDashboard() {
     setTimeout(() => setAssignSuccessMsg(""), 4500);
   };
 
-  const isGlobalLoading = jobsLoading || assignmentsLoading || techStatusLoading;
+  const isGlobalLoading = jobsLoading || assignmentsLoading;
 
   const escalatedJobs = useMemo(() => {
     return pendingJobs.filter(job => {
@@ -1563,6 +2408,30 @@ function PlanningDashboard() {
       return status !== "ESCALATED" && status !== "ESCALATED_TO_CTO";
     });
   }, [pendingJobs]);
+
+  const mapEligibleJobs = useMemo(() => {
+    return normalPendingJobs
+      .map((job) => {
+        const coordinates = parseCoordinates(job.location);
+
+        if (!coordinates) {
+          return null;
+        }
+
+        return {
+          job,
+          coordinates,
+        };
+      })
+      .filter(
+        (
+          item
+        ): item is {
+          job: PendingJob;
+          coordinates: { lat: number; lng: number };
+        } => item !== null
+      );
+  }, [normalPendingJobs]);
 
   const filteredPendingJobs = normalPendingJobs;
 
@@ -1588,6 +2457,109 @@ function PlanningDashboard() {
   const safePlannedPage = Math.min(plannedPage, plannedTotalPages);
   const paginatedPlannedAssignments = filteredPlannedAssignments;
 
+  const handleExport = () => {
+    if (exporting) return;
+
+    const rows =
+      activeTab === "pending"
+        ? paginatedPendingJobs
+        : activeTab === "planned"
+          ? paginatedPlannedAssignments
+          : [];
+
+    if (rows.length === 0) {
+      setError("There is no visible data available to export.");
+      return;
+    }
+
+    setExporting(true);
+    setError("");
+
+    try {
+      let headers: string[];
+      let data: unknown[][];
+
+      if (activeTab === "pending") {
+        headers = [
+          "Job ID",
+          "Customer",
+          "Location",
+          "Priority",
+          "Service Type",
+          "Required Skill",
+          "Issue Description",
+          "Status",
+          "SLA Deadline",
+          "Attempt Count",
+        ];
+
+        data = paginatedPendingJobs.map((job) => [
+          job.id,
+          job.customer_name,
+          job.location,
+          job.priority,
+          job.service_type,
+          job.required_skill,
+          job.issue_description,
+          job.job_status || job.status,
+          job.sla_deadline,
+          job.attempt_count,
+        ]);
+      } else {
+        headers = [
+          "Job ID",
+          "Technician",
+          "Skill",
+          "Customer",
+          "Location",
+          "Priority",
+          "Status",
+          "Current Jobs",
+          "Max Jobs",
+        ];
+
+        data = paginatedPlannedAssignments.map((assignment) => [
+          assignment.job_id,
+          assignment.technician,
+          assignment.skill,
+          assignment.customer,
+          assignment.location,
+          assignment.priority,
+          assignment.status,
+          assignment.current_jobs,
+          assignment.max_jobs,
+        ]);
+      }
+
+      const csv = [
+        headers.map(escapeCsvValue).join(","),
+        ...data.map((row) => row.map(escapeCsvValue).join(",")),
+      ].join("\r\n");
+
+      const blob = new Blob(["\uFEFF" + csv], {
+        type: "text/csv;charset=utf-8;",
+      });
+
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+
+      link.href = url;
+      link.download =
+        activeTab === "pending"
+          ? "dispatcher-unassigned-jobs.csv"
+          : "dispatcher-planned-assignments.csv";
+
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch {
+      setError("Failed to export the visible dispatcher data. Please try again.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const getPageNums = (currentPage: number, totalPages: number) => {
     const nums: number[] = [];
     const delta = 2;
@@ -1603,13 +2575,26 @@ function PlanningDashboard() {
       <div style={{ marginBottom: "10px" }}>
         <MetricsCards onFilterChange={handleMetricFilterChange} />
       </div>
+
       <AlertBanner
         onViewHistory={(jobId: number, jobTitle: string) => {
           setShowHistoryJobId(jobId);
           setShowHistoryJobTitle(jobTitle);
         }}
         onManualAssignClick={(jobId: number, jobTitle: string) => {
-          setForceAssignJob({ id: jobId, title: jobTitle });
+          openDispatchConfirmation({
+            action: "Manual Override",
+            jobIds: [jobId],
+            details:
+              `${jobTitle} will enter the authorized manual override workflow. The backend will remain responsible for validation and persistence.`,
+            confirmLabel: "Continue to Manual Override",
+            execute: async () => {
+              setForceAssignJob({
+                id: jobId,
+                title: jobTitle,
+              });
+            },
+          });
         }}
         currentUserRole="dispatcher"
       />
@@ -1693,8 +2678,29 @@ function PlanningDashboard() {
                         return;
                       }
                       handleTechSelect(jobToAssign.id, String(techId));
+
+                      const technician = allTechsList.find(
+                        (t) => t.technician_id === techId
+                      );
+
                       handleTopThreeClose();
-                      await handleAssignJob(jobToAssign.id, String(techId));
+
+                      openDispatchConfirmation({
+                        action: "Assign Job",
+                        jobIds: [jobToAssign.id],
+                        technician:
+                          technician?.technician_name ||
+                          `Technician #${techId}`,
+                        details:
+                          "The selected technician will be assigned to this job through the existing backend assignment workflow.",
+                        confirmLabel: "Confirm Assignment",
+                        execute: async () => {
+                          await handleAssignJob(
+                            jobToAssign.id,
+                            String(techId)
+                          );
+                        },
+                      });
                     }}
                     onClose={handleTopThreeClose}
                     hideHeader={true}
@@ -1875,6 +2881,145 @@ function PlanningDashboard() {
             }}>{declinedJobsList.length}</span>
           </button>
         </div>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            marginLeft: "10px",
+            flexShrink: 0,
+          }}
+        >
+          <div
+            role="status"
+            aria-live="polite"
+            aria-label={`Live dashboard updates: ${
+              dispatchSocketStatus === "connected"
+                ? "Connected"
+                : dispatchSocketStatus === "connecting"
+                  ? "Connecting"
+                  : dispatchSocketStatus === "reconnecting"
+                    ? "Reconnecting"
+                    : "Unavailable"
+            }`}
+            title={
+              dispatchSocketError ||
+              "Dashboard data is refreshed from the authoritative backend after realtime events."
+            }
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "6px",
+              padding: "7px 10px",
+              borderRadius: "8px",
+              border: "1px solid #E3ECE7",
+              background: "#FFFFFF",
+              color: "#475569",
+              fontSize: "11px",
+              fontWeight: 600,
+              whiteSpace: "nowrap",
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                width: "7px",
+                height: "7px",
+                borderRadius: "50%",
+                background:
+                  dispatchSocketStatus === "connected"
+                    ? "#10B981"
+                    : dispatchSocketStatus === "connecting" ||
+                        dispatchSocketStatus === "reconnecting"
+                      ? "#F59E0B"
+                      : "#EF4444",
+              }}
+            />
+
+            {dispatchSocketStatus === "connected"
+              ? "Live"
+              : dispatchSocketStatus === "connecting"
+                ? "Connecting..."
+                : dispatchSocketStatus === "reconnecting"
+                  ? "Reconnecting..."
+                  : "Live unavailable"}
+          </div>
+
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={
+              exporting ||
+              !["pending", "planned"].includes(activeTab) ||
+              (activeTab === "pending"
+                ? paginatedPendingJobs.length === 0
+                : paginatedPlannedAssignments.length === 0)
+            }
+            style={{
+              ...styles.refreshIconBtn,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "6px",
+              opacity:
+                exporting ||
+                !["pending", "planned"].includes(activeTab) ||
+                (activeTab === "pending"
+                  ? paginatedPendingJobs.length === 0
+                  : paginatedPlannedAssignments.length === 0)
+                  ? 0.6
+                  : 1,
+              cursor:
+                exporting ||
+                !["pending", "planned"].includes(activeTab) ||
+                (activeTab === "pending"
+                  ? paginatedPendingJobs.length === 0
+                  : paginatedPlannedAssignments.length === 0)
+                  ? "not-allowed"
+                  : "pointer",
+              whiteSpace: "nowrap",
+            }}
+            aria-label="Export visible dispatcher data"
+            title={
+              !["pending", "planned"].includes(activeTab)
+                ? "Export is available for job and assignment tables"
+                : "Export currently visible filtered data"
+            }
+          >
+            <span aria-hidden="true">↓</span>
+            {exporting ? "Exporting..." : "Export"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowJobMap(true)}
+            disabled={!isRouteMapLoaded && !routeMapLoadError}
+            style={{
+              ...styles.refreshIconBtn,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "6px",
+              opacity:
+                isRouteMapLoaded || routeMapLoadError ? 1 : 0.6,
+              cursor:
+                isRouteMapLoaded || routeMapLoadError
+                  ? "pointer"
+                  : "not-allowed",
+              whiteSpace: "nowrap",
+            }}
+            aria-label="Open job map"
+            title={
+              isRouteMapLoaded
+                ? "View eligible jobs on map"
+                : routeMapLoadError
+                ? "Google Maps configuration error"
+                : "Loading Google Maps"
+            }
+          >
+            <MapPin size={15} />
+            Map View
+          </button>
+        </div>
       </div>
 
       {/* ── Tab Content ── */}
@@ -1970,7 +3115,15 @@ function PlanningDashboard() {
                           >
                             <option value="">Select technician</option>
 
-                            {allTechsList.map((tech) => (
+                            {allTechsList
+                              .filter((tech) => {
+                                const status = normalizeStatus(
+                                  tech.technician_status || ""
+                                );
+
+                                return status === "available";
+                              })
+                              .map((tech) => (
                               <option
                                 key={tech.technician_id}
                                 value={tech.technician_id}
@@ -1982,13 +3135,16 @@ function PlanningDashboard() {
 
                           <button
                             type="button"
-                            onClick={handleBulkAssign}
-                            disabled={bulkAssigning || !bulkTechnicianId}
+                            onClick={requestBulkAssign}
+                            disabled={bulkAssigning || bulkCancelling || !bulkTechnicianId}
                             style={{
                               ...styles.assignBtn,
-                              opacity: bulkAssigning || !bulkTechnicianId ? 0.6 : 1,
+                              opacity:
+                                bulkAssigning || bulkCancelling || !bulkTechnicianId
+                                  ? 0.6
+                                  : 1,
                               cursor:
-                                bulkAssigning || !bulkTechnicianId
+                                bulkAssigning || bulkCancelling || !bulkTechnicianId
                                   ? "not-allowed"
                                   : "pointer",
                             }}
@@ -2181,7 +3337,7 @@ function PlanningDashboard() {
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     if (selectedTechs[job.id]) {
-                                      handleAssignJob(job.id);
+                                      requestAssignJob(job.id);
                                     }
                                   }}
                                   disabled={!selectedTechs[job.id] || assigningJobId === job.id}
@@ -2367,16 +3523,26 @@ function PlanningDashboard() {
                                 onMouseLeave={(e) => {
                                   e.currentTarget.style.backgroundColor = '#EF4444';
                                 }}
-                                onClick={async () => {
-                                  const reason = prompt("Enter cancellation reason:", "SLA breach - cancel job");
-                                  if (!reason) return;
-                                  try {
-                                    await cancelEscalatedJob(job.id, reason);
-                                    showSuccess(`Job #${job.id} cancelled successfully.`);
-                                    fetchAllData();
-                                  } catch (err: any) {
-                                    alert(err.response?.data?.detail || "Failed to cancel job");
-                                  }
+                                onClick={() => {
+                                  openDispatchConfirmation({
+                                    action: "Cancel Escalated Job",
+                                    jobIds: [job.id],
+                                    details:
+                                      `${job.customer_name || "This job"} will be cancelled through the existing backend escalation cancellation workflow. The backend will perform the final validation.`,
+                                    reasonRequired: true,
+                                    reasonPlaceholder: "Enter cancellation reason",
+                                    confirmLabel: "Confirm Cancellation",
+                                    execute: async (reason) => {
+                                      if (!reason?.trim()) {
+                                        throw new Error("Cancellation reason is required.");
+                                      }
+
+                                      await cancelEscalatedJob(job.id, reason.trim());
+
+                                      showSuccess(`Job #${job.id} cancelled successfully.`);
+                                      fetchAllData();
+                                    },
+                                  });
                                 }}
                               >
                                 Cancel Job
@@ -2429,23 +3595,71 @@ function PlanningDashboard() {
                                     }
                                   }}
                                   disabled={!selectedTechs[job.id]}
-                                  onClick={async () => {
-                                    const reason = prompt("Enter force-assignment justification:", "Manager escalation override");
-                                    if (!reason) return;
+                                  onClick={() => {
                                     const techId = selectedTechs[job.id];
-                                    const tech = allTechsList.find(t => String(t.technician_id) === String(techId));
-                                    try {
-                                      await forceAssignEscalation(job.id, String(tech?.technician_id || techId), reason);
-                                      showSuccess(`Job #${job.id} force-assigned to ${tech?.technician_name || techId}.`);
-                                      setSelectedTechs(prev => {
-                                        const next = { ...prev };
-                                        delete next[job.id];
-                                        return next;
-                                      });
-                                      fetchAllData();
-                                    } catch (err: any) {
-                                      alert(err.response?.data?.detail || "Failed to force assign job");
+
+                                    if (!techId) {
+                                      setError(
+                                        "Please select a technician before using Force Assign."
+                                      );
+                                      return;
                                     }
+
+                                    const tech = allTechsList.find(
+                                      (t) =>
+                                        String(t.technician_id) ===
+                                        String(techId)
+                                    );
+
+                                    openDispatchConfirmation({
+                                      action: "Manual Override",
+                                      jobIds: [job.id],
+                                      technician:
+                                        tech?.technician_name ||
+                                        `Technician #${techId}`,
+                                      details:
+                                        `${job.customer_name || "Customer job"} will be force-assigned through the manual override workflow. ` +
+                                        "This is a dispatcher decision separate from AI technician recommendations. " +
+                                        "The existing backend override API will perform authorization, validation, audit recording, and persistence.",
+                                      reasonRequired: true,
+                                      reasonPlaceholder:
+                                        "Enter force-assignment justification",
+                                      confirmLabel:
+                                        "Confirm Manual Override",
+                                      execute: async (reason) => {
+                                        if (!reason?.trim()) {
+                                          throw new Error(
+                                            "A reason is required before confirming this action."
+                                          );
+                                        }
+
+                                        try {
+                                          await forceAssignEscalation(
+                                            job.id,
+                                            String(
+                                              tech?.technician_id || techId
+                                            ),
+                                            reason.trim()
+                                          );
+
+                                          showSuccess(
+                                            `Job #${job.id} force-assigned to ${
+                                              tech?.technician_name || techId
+                                            }.`
+                                          );
+
+                                          setSelectedTechs((prev) => {
+                                            const next = { ...prev };
+                                            delete next[job.id];
+                                            return next;
+                                          });
+
+                                          fetchAllData();
+                                        } catch (err: any) {
+                                          throw err;
+                                        }
+                                      },
+                                    });
                                   }}
                                 >
                                   Force Assign
@@ -2567,6 +3781,24 @@ function PlanningDashboard() {
                                   aria-label="View assignment"
                                 >
                                   <Eye size={15} />
+                                </button>
+                                <button
+                                  className="icon-action-btn-style"
+                                  style={{ ...styles.iconActionBtn, color: '#2563eb' }}
+                                  onClick={() => handleViewRoute(item)}
+                                  disabled={
+                                    routeLoading &&
+                                    routeAssignment?.job_id === item.job_id
+                                  }
+                                  title="View technician route"
+                                  aria-label="View technician route"
+                                >
+                                  {routeLoading &&
+                                  routeAssignment?.job_id === item.job_id ? (
+                                    <Loader2 size={15} className="animate-spin" />
+                                  ) : (
+                                    <MapPin size={15} />
+                                  )}
                                 </button>
                                 <ShareTrackingLinkButton jobId={item.job_id} />
                                 <button
@@ -2726,12 +3958,33 @@ function PlanningDashboard() {
                 onChange={(e) => setSelectedReassignTechId(Number(e.target.value))}
               >
                 <option value="">-- Choose a Technician --</option>
-                {allTechsList.map((t) => (
-                  <option key={t.technician_id} value={t.technician_id}>
-                    {t.technician_name} ({t.technician_skill}) - {t.technician_status} ({t.current_jobs ?? 0}/{t.max_jobs ?? 5})
+
+                {eligibleReassignTechnicians.map((t) => (
+                  <option
+                    key={t.technician_id}
+                    value={t.technician_id}
+                  >
+                    {t.technician_name} ({t.technician_skill}) -{" "}
+                    {t.technician_status} ({t.current_jobs ?? 0}/{t.max_jobs ?? 5})
                   </option>
                 ))}
               </select>
+
+              {eligibleReassignTechnicians.length === 0 && (
+                <div
+                  style={{
+                    marginTop: "8px",
+                    padding: "10px 12px",
+                    borderRadius: "6px",
+                    background: "#FEF2F2",
+                    border: "1px solid #FECACA",
+                    color: "#991B1B",
+                    fontSize: "12px",
+                  }}
+                >
+                  No eligible technicians are currently available for reassignment.
+                </div>
+              )}
             </div>
             <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}>
               <button
@@ -2741,6 +3994,7 @@ function PlanningDashboard() {
                 Cancel
               </button>
               <button
+                type="button"
                 style={{
                   padding: "8px 16px",
                   border: "none",
@@ -2749,36 +4003,928 @@ function PlanningDashboard() {
                   color: "#fff",
                   fontWeight: 700,
                   fontSize: "13px",
-                  cursor: "pointer",
-                  opacity: !selectedReassignTechId || reassigning ? 0.6 : 1,
-                }}
-                disabled={!selectedReassignTechId || reassigning}
-                onClick={async () => {
+                  cursor:
+                    !selectedReassignTechId ||
+                    !eligibleReassignTechnicians.some(
+                      (tech) => tech.technician_id === selectedReassignTechId
+                    ) ||
+                    reassigning
+                      ? "not-allowed"
+                      : "pointer",
+                  opacity:
+                    !selectedReassignTechId ||
+                    !eligibleReassignTechnicians.some(
+                      (tech) => tech.technician_id === selectedReassignTechId
+                    ) ||
+                    reassigning
+                      ? 0.6
+                      : 1,
+                  }}
+                  disabled={
+                  !selectedReassignTechId ||
+                  !eligibleReassignTechnicians.some(
+                    (tech) => tech.technician_id === selectedReassignTechId
+                  ) ||
+                  reassigning
+                }
+                onClick={() => {
                   if (!selectedReassignTechId) return;
-                  setReassigning(true);
-                  try {
-                    await reassignDeclinedJob(reassignModalJob.id, selectedReassignTechId);
-                    setSuccessMsg(`Job #${reassignModalJob.id} reassigned successfully!`);
-                    setReassignModalJob(null);
-                    fetchDeclinedJobsList();
-                    fetchAllData();
-                  } catch (err: any) {
-                    alert(err.response?.data?.detail || "Reassignment failed");
-                  } finally {
-                    setReassigning(false);
+
+                  const technician = eligibleReassignTechnicians.find(
+                    (t) =>
+                      t.technician_id === selectedReassignTechId
+                  );
+
+                  if (!technician) {
+                    setError(
+                      "The selected technician is no longer eligible for reassignment. Please refresh and try again."
+                    );
+                    setSelectedReassignTechId(null);
+                    return;
                   }
+
+                  openDispatchConfirmation({
+                    action: "Reassign Job",
+                    jobIds: [reassignModalJob.id],
+                    technician:
+                      technician?.technician_name ||
+                      `Technician #${selectedReassignTechId}`,
+                    technicianId: selectedReassignTechId,
+                    details:
+                      `Job #${reassignModalJob.id} (${reassignModalJob.customer_name || "Customer job"}) ` +
+                      `will be reassigned to ${
+                        technician?.technician_name ||
+                        `Technician #${selectedReassignTechId}`
+                      }. The existing backend reassignment API will perform the final validation.`,
+                    confirmLabel: "Confirm Reassignment",
+                    execute: async () => {
+                      setReassigning(true);
+
+                      try {
+                        await reassignDeclinedJob(
+                          reassignModalJob.id,
+                          selectedReassignTechId
+                        );
+
+                        setSuccessMsg(
+                          `Job #${reassignModalJob.id} reassigned successfully!`
+                        );
+
+                        setReassignModalJob(null);
+                        fetchDeclinedJobsList();
+                        fetchAllData();
+                      } catch (err: any) {
+                        const message = formatDispatchFailure(
+                          err,
+                          "Job reassignment",
+                          "Reassignment failed."
+                        );
+
+                        setError(message);
+                        throw err;
+                      } finally {
+                        setReassigning(false);
+                      }
+                    },
+                  });
                 }}
               >
-                {reassigning ? "Reassigning..." : "Confirm Reassign"}
+                {reassigning
+                  ? "Reassigning..."
+                  : "Confirm Reassign"}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* View Assignment Modal */}
+      {/* Route Display Modal */}
+      {routeAssignment && (
+        <div
+          style={styles.centeredModalOverlay}
+          onClick={() => {
+            if (!routeLoading) {
+              setRouteAssignment(null);
+              setRouteError("");
+              setRouteEta(null);
+              setRouteDirections(null);
+            }
+          }}
+        >
+          <div
+            style={{
+              ...styles.viewJobModal,
+              width: "min(900px, 95vw)",
+              maxWidth: "900px",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={styles.viewModalHeader}>
+              <div>
+                <h3 style={styles.viewModalHeaderH3}>
+                  Technician Route
+                </h3>
+                <p
+                  style={{
+                    margin: "4px 0 0",
+                    fontSize: "11px",
+                    color: "#6B7280",
+                  }}
+                >
+                  {routeAssignment.technician} → Job #
+                  {routeAssignment.job_id}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (!routeLoading) {
+                    setRouteAssignment(null);
+                    setRouteError("");
+                    setRouteEta(null);
+                    setRouteDirections(null);
+                  }
+                }}
+                disabled={routeLoading}
+                style={{
+                  background: "none",
+                  border: "none",
+                  fontSize: 22,
+                  cursor: routeLoading ? "not-allowed" : "pointer",
+                  color: "#6b7280",
+                }}
+                aria-label="Close route"
+              >
+                ×
+              </button>
+            </div>
+
+            <div style={{ padding: "16px" }}>
+              {routeLoading && (
+                <div
+                  style={{
+                    minHeight: "360px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: "#F8FAFC",
+                    borderRadius: "10px",
+                  }}
+                >
+                  <LoadingSpinner message="Loading technician route..." />
+                </div>
+              )}
+
+              {!routeLoading && routeError && (
+                <div
+                  role="alert"
+                  style={{
+                    minHeight: "180px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexDirection: "column",
+                    gap: "8px",
+                    padding: "24px",
+                    background: "#FEF2F2",
+                    border: "1px solid #FECACA",
+                    borderRadius: "10px",
+                    textAlign: "center",
+                  }}
+                >
+                  <MapPin size={24} color="#DC2626" />
+
+                  <strong
+                    style={{
+                      color: "#991B1B",
+                      fontSize: "14px",
+                    }}
+                  >
+                    Route unavailable
+                  </strong>
+
+                  <span
+                    style={{
+                      color: "#7F1D1D",
+                      fontSize: "12px",
+                    }}
+                  >
+                    {routeError}
+                  </span>
+                </div>
+              )}
+
+              {!routeLoading &&
+                !routeError &&
+                routeMapLoadError && (
+                  <div
+                    role="alert"
+                    style={{
+                      padding: "18px",
+                      background: "#FEF2F2",
+                      border: "1px solid #FECACA",
+                      borderRadius: "10px",
+                      color: "#991B1B",
+                      fontSize: "13px",
+                    }}
+                  >
+                    Google Maps could not be loaded. Please verify the
+                    Maps API configuration.
+                  </div>
+                )}
+
+              {!routeLoading &&
+                !routeError &&
+                !routeMapLoadError &&
+                routeEta &&
+                isRouteMapLoaded && (
+                  <>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns:
+                          "repeat(auto-fit, minmax(140px, 1fr))",
+                        gap: "10px",
+                        marginBottom: "12px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          padding: "10px 12px",
+                          background: "#F8FAFC",
+                          border: "1px solid #E2E8F0",
+                          borderRadius: "8px",
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontSize: "10px",
+                            color: "#64748B",
+                            fontWeight: 600,
+                          }}
+                        >
+                          ETA
+                        </div>
+                        <div
+                          style={{
+                            marginTop: "3px",
+                            fontSize: "14px",
+                            fontWeight: 700,
+                            color: "#1F2937",
+                          }}
+                        >
+                          {routeEta.eta}
+                        </div>
+                      </div>
+
+                      <div
+                        style={{
+                          padding: "10px 12px",
+                          background: "#F8FAFC",
+                          border: "1px solid #E2E8F0",
+                          borderRadius: "8px",
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontSize: "10px",
+                            color: "#64748B",
+                            fontWeight: 600,
+                          }}
+                        >
+                          Duration
+                        </div>
+                        <div
+                          style={{
+                            marginTop: "3px",
+                            fontSize: "14px",
+                            fontWeight: 700,
+                            color: "#1F2937",
+                          }}
+                        >
+                          {routeEta.duration_minutes > 0
+                            ? `${routeEta.duration_minutes} min`
+                            : "Unavailable"}
+                        </div>
+                      </div>
+
+                      {routeEta.distance_meters > 0 && (
+                        <div
+                          style={{
+                            padding: "10px 12px",
+                            background: "#F8FAFC",
+                            border: "1px solid #E2E8F0",
+                            borderRadius: "8px",
+                          }}
+                        >
+                          <div
+                            style={{
+                              fontSize: "10px",
+                              color: "#64748B",
+                              fontWeight: 600,
+                            }}
+                          >
+                            Distance
+                          </div>
+                          <div
+                            style={{
+                              marginTop: "3px",
+                              fontSize: "14px",
+                              fontWeight: 700,
+                              color: "#1F2937",
+                            }}
+                          >
+                            {(
+                              routeEta.distance_meters / 1000
+                            ).toFixed(1)}{" "}
+                            km
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div
+                      data-testid="technician-job-route-map"
+                      style={{
+                        width: "100%",
+                        height: "460px",
+                        borderRadius: "10px",
+                        overflow: "hidden",
+                        border: "1px solid #E2E8F0",
+                      }}
+                    >
+                      <GoogleMap
+                        mapContainerStyle={{
+                          width: "100%",
+                          height: "100%",
+                        }}
+                        center={routeEta.origin}
+                        zoom={12}
+                        options={{
+                          fullscreenControl: false,
+                          streetViewControl: false,
+                          mapTypeControl: false,
+                        }}
+                      >
+                        {routeDirections && (
+                          <DirectionsRenderer
+                            directions={routeDirections}
+                            options={{
+                              suppressMarkers: false,
+                              preserveViewport: false,
+                              polylineOptions: {
+                                strokeColor: "#2563EB",
+                                strokeOpacity: 0.85,
+                                strokeWeight: 5,
+                              },
+                            }}
+                          />
+                        )}
+                      </GoogleMap>
+                    </div>
+                  </>
+                )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Job Map View Modal */}
+      {showJobMap && (
+        <div
+          style={styles.centeredModalOverlay}
+          onClick={() => setShowJobMap(false)}
+        >
+          <div
+            style={{
+              ...styles.viewJobModal,
+              width: "94%",
+              maxWidth: "1100px",
+              maxHeight: "90vh",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={styles.viewModalHeader}>
+              <div>
+                <h3 style={styles.viewModalHeaderH3}>
+                  Eligible Jobs Map
+                </h3>
+                <div
+                  style={{
+                    fontSize: "11px",
+                    color: "#64748B",
+                    marginTop: "3px",
+                  }}
+                >
+                  {mapEligibleJobs.length} job(s) with valid coordinates
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowJobMap(false)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  fontSize: 22,
+                  cursor: "pointer",
+                  color: "#6B7280",
+                }}
+                aria-label="Close job map"
+              >
+                ×
+              </button>
+            </div>
+
+            <div
+              style={{
+                padding: "16px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "12px",
+              }}
+            >
+              {routeMapLoadError ? (
+                <div
+                  role="alert"
+                  style={{
+                    padding: "14px",
+                    borderRadius: "8px",
+                    background: "#FEF2F2",
+                    border: "1px solid #FECACA",
+                    color: "#991B1B",
+                    fontSize: "13px",
+                  }}
+                >
+                  Google Maps is unavailable. Please verify the Maps
+                  configuration and try again.
+                </div>
+              ) : !isRouteMapLoaded ? (
+                <div
+                  style={{
+                    minHeight: "460px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <LoadingSpinner message="Loading job map..." />
+                </div>
+              ) : mapEligibleJobs.length === 0 ? (
+                <div
+                  data-testid="job-map-empty"
+                  style={{
+                    minHeight: "160px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    padding: "20px",
+                  }}
+                >
+                  <EmptyState
+                    title="No mappable jobs"
+                    description="There are no eligible jobs with valid coordinate data available for the map."
+                  />
+                </div>
+              ) : (
+                <>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "10px",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: "12px",
+                        color: "#475569",
+                        fontWeight: 600,
+                      }}
+                    >
+                      Showing eligible jobs from the current backend job data.
+                    </div>
+
+                    <div
+                      style={{
+                        fontSize: "11px",
+                        color: "#64748B",
+                      }}
+                    >
+                      Jobs without valid coordinates are not plotted.
+                    </div>
+                  </div>
+
+                  <div
+                    data-testid="dispatcher-job-map"
+                    style={{
+                      width: "100%",
+                      height: "520px",
+                      borderRadius: "10px",
+                      overflow: "hidden",
+                      border: "1px solid #E2E8F0",
+                    }}
+                  >
+                    <GoogleMap
+                      mapContainerStyle={{
+                        width: "100%",
+                        height: "100%",
+                      }}
+                      center={mapEligibleJobs[0].coordinates}
+                      zoom={11}
+                      options={{
+                        fullscreenControl: false,
+                        streetViewControl: false,
+                        mapTypeControl: false,
+                      }}
+                    >
+                      {mapEligibleJobs.map(({ job, coordinates }) => (
+                        <MarkerF
+                          key={job.id}
+                          position={coordinates}
+                          title={`Job #${job.id}`}
+                        />
+                      ))}
+                    </GoogleMap>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: "8px",
+                    }}
+                  >
+                    {mapEligibleJobs.map(({ job }) => (
+                      <div
+                        key={job.id}
+                        data-testid={`job-map-item-${job.id}`}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "6px",
+                          padding: "5px 9px",
+                          borderRadius: "7px",
+                          background: "#F8FAFC",
+                          border: "1px solid #E2E8F0",
+                          fontSize: "11px",
+                          color: "#475569",
+                          fontWeight: 600,
+                        }}
+                      >
+                        <MapPin size={12} />
+                        Job #{job.id}
+                        {job.priority ? ` · ${job.priority}` : ""}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Dispatch Confirmation Dialog */}
+      {dispatchConfirmation && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="dispatch-confirmation-title"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 5000,
+            background: "rgba(15, 23, 42, 0.55)",
+            backdropFilter: "blur(4px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "20px",
+            boxSizing: "border-box",
+          }}
+          onClick={closeDispatchConfirmation}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(520px, 95vw)",
+              maxHeight: "90vh",
+              overflowY: "auto",
+              background: "#FFFFFF",
+              borderRadius: "14px",
+              boxShadow: "0 24px 60px rgba(15, 23, 42, 0.22)",
+              border: "1px solid #E2E8F0",
+            }}
+          >
+            <div
+              style={{
+                padding: "18px 20px",
+                borderBottom: "1px solid #E2E8F0",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "12px",
+              }}
+            >
+              <div>
+                <h3
+                  id="dispatch-confirmation-title"
+                  style={{
+                    margin: 0,
+                    fontSize: "16px",
+                    fontWeight: 700,
+                    color: "#1F2937",
+                  }}
+                >
+                  Confirm Dispatch Action
+                </h3>
+
+                <p
+                  style={{
+                    margin: "4px 0 0",
+                    fontSize: "11px",
+                    color: "#64748B",
+                  }}
+                >
+                  Review the action before submitting it.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeDispatchConfirmation}
+                disabled={dispatchConfirmationLoading}
+                aria-label="Close dispatch confirmation"
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "#64748B",
+                  fontSize: "22px",
+                  cursor: dispatchConfirmationLoading
+                    ? "not-allowed"
+                    : "pointer",
+                  padding: "2px 6px",
+                  opacity: dispatchConfirmationLoading ? 0.5 : 1,
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div
+              style={{
+                padding: "20px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "14px",
+              }}
+            >
+              <div
+                style={{
+                  padding: "12px",
+                  borderRadius: "9px",
+                  background: "#F8FAFC",
+                  border: "1px solid #E2E8F0",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: "10px",
+                    color: "#64748B",
+                    fontWeight: 700,
+                    textTransform: "uppercase",
+                    marginBottom: "5px",
+                  }}
+                >
+                  Intended Action
+                </div>
+
+                <div
+                  style={{
+                    fontSize: "14px",
+                    color: "#1F2937",
+                    fontWeight: 700,
+                  }}
+                >
+                  {dispatchConfirmation.action}
+                </div>
+              </div>
+
+              <div>
+                <div
+                  style={{
+                    fontSize: "11px",
+                    color: "#64748B",
+                    fontWeight: 700,
+                    marginBottom: "7px",
+                  }}
+                >
+                  Affected Job{dispatchConfirmation.jobIds.length > 1 ? "s" : ""}
+                </div>
+
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: "6px",
+                  }}
+                >
+                  {dispatchConfirmation.jobIds.map((jobId) => (
+                    <span
+                      key={jobId}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        padding: "5px 9px",
+                        borderRadius: "6px",
+                        background: "#EEF6F1",
+                        border: "1px solid #CFE2D5",
+                        color: "#2F4F3E",
+                        fontSize: "11px",
+                        fontWeight: 700,
+                      }}
+                    >
+                      Job #{jobId}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {dispatchConfirmation.technician && (
+                <div>
+                  <div
+                    style={{
+                      fontSize: "11px",
+                      color: "#64748B",
+                      fontWeight: 700,
+                      marginBottom: "5px",
+                    }}
+                  >
+                    Technician
+                  </div>
+
+                  <div
+                    style={{
+                      fontSize: "13px",
+                      color: "#1F2937",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {dispatchConfirmation.technician}
+                  </div>
+                </div>
+              )}
+
+              {dispatchConfirmation.action === "Manual Override" && (
+                <div
+                  role="note"
+                  aria-label="Manual override notice"
+                  style={{
+                    padding: "10px 12px",
+                    borderRadius: "8px",
+                    background: "#FFF7ED",
+                    border: "1px solid #FED7AA",
+                    color: "#9A3412",
+                    fontSize: "11px",
+                    lineHeight: 1.5,
+                    fontWeight: 600,
+                  }}
+                >
+                  Manual dispatcher decision. This action is separate from AI technician
+                  recommendations and requires justification. Authorization, validation,
+                  audit recording, and persistence are enforced by the backend.
+                </div>
+              )}
+
+              {dispatchConfirmation.reasonRequired && (
+                <div>
+                  <label
+                    htmlFor="dispatch-confirmation-reason"
+                    style={{
+                      display: "block",
+                      fontSize: "11px",
+                      fontWeight: 700,
+                      color: "#475569",
+                      marginBottom: "6px",
+                    }}
+                  >
+                    Reason *
+                  </label>
+
+                  <textarea
+                    id="dispatch-confirmation-reason"
+                    value={dispatchConfirmationReason}
+                    onChange={(e) => {
+                      setDispatchConfirmationReason(e.target.value);
+                      setDispatchConfirmationError("");
+                    }}
+                    placeholder={
+                      dispatchConfirmation.reasonPlaceholder ||
+                      "Enter reason"
+                    }
+                    disabled={dispatchConfirmationLoading}
+                    rows={3}
+                    style={{
+                      width: "100%",
+                      boxSizing: "border-box",
+                      resize: "vertical",
+                      border: "1px solid #CBD5E1",
+                      borderRadius: "7px",
+                      padding: "9px 10px",
+                      fontSize: "12px",
+                      color: "#1F2937",
+                      outline: "none",
+                    }}
+                  />
+                </div>
+              )}
+
+              {dispatchConfirmationError && (
+                <div
+                  role="alert"
+                  style={{
+                    padding: "10px 12px",
+                    borderRadius: "7px",
+                    background: "#FEF2F2",
+                    border: "1px solid #FECACA",
+                    color: "#B91C1C",
+                    fontSize: "12px",
+                    lineHeight: 1.4,
+                  }}
+                >
+                  {dispatchConfirmationError}
+                </div>
+              )}
+            </div>
+
+            <div
+              style={{
+                padding: "14px 20px 18px",
+                borderTop: "1px solid #E2E8F0",
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: "8px",
+              }}
+            >
+              <button
+                type="button"
+                onClick={closeDispatchConfirmation}
+                disabled={dispatchConfirmationLoading}
+                style={{
+                  height: "36px",
+                  padding: "0 14px",
+                  border: "1px solid #CBD5E1",
+                  borderRadius: "7px",
+                  background: "#FFFFFF",
+                  color: "#475569",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  cursor: dispatchConfirmationLoading
+                    ? "not-allowed"
+                    : "pointer",
+                  opacity: dispatchConfirmationLoading ? 0.6 : 1,
+                }}
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={confirmDispatchAction}
+                disabled={dispatchConfirmationLoading}
+                style={{
+                  height: "36px",
+                  padding: "0 16px",
+                  border: "none",
+                  borderRadius: "7px",
+                  background: "#2F6F44",
+                  color: "#FFFFFF",
+                  fontSize: "12px",
+                  fontWeight: 700,
+                  cursor: dispatchConfirmationLoading
+                    ? "not-allowed"
+                    : "pointer",
+                  opacity: dispatchConfirmationLoading ? 0.65 : 1,
+                }}
+              >
+                {dispatchConfirmationLoading
+                  ? "Processing..."
+                  : dispatchConfirmation.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {viewAssignment && (
-        <div style={styles.centeredModalOverlay} onClick={() => setViewAssignment(null)}>
+        <div
+          style={styles.centeredModalOverlay}
+          onClick={() => setViewAssignment(null)}
+        >
           <div style={styles.viewJobModal} onClick={e => e.stopPropagation()}>
             <div style={styles.viewModalHeader}>
               <h3 style={styles.viewModalHeaderH3}>Assignment Details</h3>
@@ -2817,29 +4963,93 @@ function PlanningDashboard() {
             setShowHistoryJobId(null);
             setShowHistoryJobTitle("");
           }}
-          onManualAssign={handleManualAssign}
+          onManualAssign={async (jobId, techId) => {
+            const technician = allTechsList.find(
+              (t) => t.technician_id === techId
+            );
+
+            openDispatchConfirmation({
+              action: "Manual Assignment",
+              jobIds: [jobId],
+              technician:
+                technician?.technician_name ||
+                `Technician #${techId}`,
+              details:
+                "This manual assignment will be submitted through the existing backend assignment workflow.",
+              confirmLabel: "Confirm Manual Assignment",
+              execute: async () => {
+                await handleManualAssign(jobId, techId);
+              },
+            });
+          }}
           technicians={allTechsList}
           onForceAssignClick={(jobId, jobTitle) => {
-            setForceAssignJob({ id: jobId, title: jobTitle });
-          }}
-          currentUserRole="dispatcher"
-        />
-      )}
+            const selectedTechId = selectedTechs[jobId];
 
-      {forceAssignJob && (
-        <OverrideModal
-          jobId={forceAssignJob.id}
-          jobTitle={forceAssignJob.title}
-          initialJobLocation={forceAssignJob.location}
-          currentUserRole="dispatcher"
-          onClose={() => setForceAssignJob(null)}
-          onSuccess={() => {
-            setSuccessMsg(`Job #${forceAssignJob.id} has been force-assigned successfully!`);
-            setTimeout(() => setSuccessMsg(""), 4000);
-            fetchAllData();
-            setShowHistoryJobId(null);
-            setShowHistoryJobTitle("");
+            const technician = allTechsList.find(
+              (t) =>
+                String(t.technician_id) ===
+                String(selectedTechId)
+            );
+
+            openDispatchConfirmation({
+              action: "Manual Override",
+              jobIds: [jobId],
+              technician:
+                technician?.technician_name ||
+                (selectedTechId
+                  ? `Technician #${selectedTechId}`
+                  : undefined),
+              details:
+                `${jobTitle} will be submitted to the existing backend manual override workflow. The backend remains responsible for authorization, validation and persistence.`,
+              reasonRequired: true,
+              reasonPlaceholder:
+                "Enter manual override justification",
+              confirmLabel: "Confirm Manual Override",
+              execute: async (reason) => {
+                if (!reason?.trim()) {
+                  throw new Error(
+                    "A reason is required before confirming this action."
+                  );
+                }
+
+                if (!selectedTechId) {
+                  throw new Error(
+                    "Please select a technician before performing a manual override."
+                  );
+                }
+
+                try {
+                  await forceAssignEscalation(
+                    jobId,
+                    String(
+                      technician?.technician_id ||
+                        selectedTechId
+                    ),
+                    reason.trim()
+                  );
+
+                  showSuccess(
+                    `Job #${jobId} force-assigned to ${
+                      technician?.technician_name ||
+                      selectedTechId
+                    }.`
+                  );
+
+                  setSelectedTechs((prev) => {
+                    const next = { ...prev };
+                    delete next[jobId];
+                    return next;
+                  });
+
+                  fetchAllData();
+                } catch (err: any) {
+                  throw err;
+                }
+              },
+            });
           }}
+          currentUserRole="dispatcher"
         />
       )}
 
