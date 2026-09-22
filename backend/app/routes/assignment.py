@@ -9,6 +9,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from ..database import get_db
 from .. import models, schemas, utils
 from ..auth.dependencies import get_current_user_or_tenant, AuthenticatedUser
+from ..redis_client import get_redis_client
+from ..services.timer_service import TimerService
+
 
 router = APIRouter(
     tags=["Assignment"]
@@ -39,8 +42,6 @@ def match_skill(
         models.Technician.technician_skill.ilike(pattern)
     )
 
-    # Normal users are restricted to their tenant.
-    # Super Admin can see technicians across tenants.
     if not user or not user.is_super_admin:
         tech_query = tech_query.filter(
             models.Technician.tenant_id == tenant_id
@@ -82,8 +83,6 @@ def get_nearest_technician(
         models.Job.id == job_id
     )
 
-    # Normal users can only access jobs from their tenant.
-    # Super Admin can access jobs across tenants.
     if not user or not user.is_super_admin:
         job_query = job_query.filter(
             models.Job.tenant_id == tenant_id
@@ -97,8 +96,6 @@ def get_nearest_technician(
             detail="Job not found"
         )
 
-    # For Super Admin, technicians can come from any tenant.
-    # For normal users, restrict technicians to their tenant.
     tech_query = db.query(models.Technician).filter(
         models.Technician.technician_skill == job.required_skill,
         models.Technician.technician_status.in_(
@@ -123,7 +120,6 @@ def get_nearest_technician(
             )
         )
 
-    # Calculate distances.
     tech_distances = []
 
     for tech in technicians:
@@ -134,7 +130,6 @@ def get_nearest_technician(
 
         tech_distances.append((tech, dist))
 
-    # Sort by distance.
     tech_distances.sort(
         key=lambda x: x[1]
     )
@@ -154,7 +149,8 @@ def assign_job(
     user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(
         get_current_user_or_tenant
     ),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    redis_client=Depends(get_redis_client),
 ):
     """
     Assign a technician to a job.
@@ -165,6 +161,7 @@ def assign_job(
     - Duplicate assignments are prevented.
     - Technician availability/workload is validated.
     - Assignment notification is created for the technician.
+    - Assignment timer is started after successful DB commit.
     """
 
     user, tenant_id = user_tenant
@@ -190,8 +187,6 @@ def assign_job(
             models.Job.id == job_id
         )
 
-        # Super Admin can access jobs across tenants.
-        # Normal users remain tenant-isolated.
         if not user or not user.is_super_admin:
             job_query = job_query.filter(
                 models.Job.tenant_id == tenant_id
@@ -244,10 +239,6 @@ def assign_job(
                     models.Technician.technician_id == int(tech_val)
                 )
 
-                # IMPORTANT:
-                # Super Admin can assign across tenants.
-                # Normal users can only assign technicians
-                # from their own tenant.
                 if not user or not user.is_super_admin:
                     t_q = t_q.filter(
                         models.Technician.tenant_id == tenant_id
@@ -265,9 +256,6 @@ def assign_job(
                     models.Technician.tech_id == str(tech_val)
                 )
 
-                # IMPORTANT:
-                # Super Admin can assign across tenants.
-                # Normal users remain tenant restricted.
                 if not user or not user.is_super_admin:
                     t_q = t_q.filter(
                         models.Technician.tenant_id == tenant_id
@@ -301,8 +289,6 @@ def assign_job(
                 < models.Technician.max_jobs
             )
 
-            # Normal users remain tenant restricted.
-            # Super Admin can auto-assign across tenants.
             if not user or not user.is_super_admin:
                 t_q = t_q.filter(
                     models.Technician.tenant_id == tenant_id
@@ -360,7 +346,7 @@ def assign_job(
         if service_request:
             service_request.status = "ASSIGNED"
 
-        # Assignment metadata.
+        # Assignment metadata
         if hasattr(job, "assigned_at"):
             job.assigned_at = datetime.now(timezone.utc)
 
@@ -406,15 +392,10 @@ def assign_job(
         notification = models.InAppNotification(
             id=str(uuid.uuid4()),
 
-            # IMPORTANT:
-            # Notification belongs to the technician's tenant,
-            # not the customer's job tenant.
             tenant_id=technician.tenant_id,
 
-            # This identifies the technician account.
             tech_id=technician.tech_id,
 
-            # The actual job being assigned.
             job_id=str(job.id),
 
             type="JOB_ASSIGNED",
@@ -463,7 +444,22 @@ def assign_job(
         print("Job status:", job.status)
 
         # ============================================================
-        # 12. Return Response
+        # 12. START ASSIGNMENT TIMER
+        # ============================================================
+
+        timer_started = TimerService.start_timer(
+            redis_client,
+            str(job.id),
+            technician.tech_id,
+        )
+
+        print("========== ASSIGNMENT TIMER ==========")
+        print("Job ID:", job.id)
+        print("Technician tech_id:", technician.tech_id)
+        print("Timer started:", timer_started)
+
+        # ============================================================
+        # 13. Return Response
         # ============================================================
 
         return {
@@ -535,6 +531,7 @@ def assign_jobs_bulk(
     user, tenant_id = user_tenant
 
     try:
+
         # ============================================================
         # 1. Validate request
         # ============================================================
@@ -545,7 +542,6 @@ def assign_jobs_bulk(
                 detail="At least one job must be selected"
             )
 
-        # Remove duplicate job IDs while preserving order.
         parsed_job_ids = []
 
         for raw_job_id in assignment.job_ids:
@@ -732,10 +728,6 @@ def assign_jobs_bulk(
 
             job.status = "ASSIGNED"
 
-            # --------------------------------------------------------
-            # Customer ServiceRequest
-            # --------------------------------------------------------
-
             service_request = db.query(
                 models.ServiceRequest
             ).filter(
@@ -745,29 +737,17 @@ def assign_jobs_bulk(
             if service_request:
                 service_request.status = "ASSIGNED"
 
-            # --------------------------------------------------------
-            # Assignment metadata
-            # --------------------------------------------------------
-
             if hasattr(job, "assigned_at"):
                 job.assigned_at = assigned_at
 
             if hasattr(job, "assigned_by") and user:
                 job.assigned_by = str(user.user_id)
 
-            # --------------------------------------------------------
-            # Technician workload
-            # --------------------------------------------------------
-
             update_workload_count(
                 db,
                 technician.technician_id,
                 1
             )
-
-            # --------------------------------------------------------
-            # Technician notification
-            # --------------------------------------------------------
 
             notification = models.InAppNotification(
                 id=str(uuid.uuid4()),

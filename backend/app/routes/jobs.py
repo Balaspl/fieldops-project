@@ -1415,6 +1415,18 @@ async def assign_job(
             str(job.id),
             recipient_tech_id,
         )
+        TimerService.start_timer(
+        redis_client,
+        str(job.id),
+        recipient_tech_id,)
+
+        logger.info(
+            "DEBUG TIMER AFTER START: job=%s exists=%s ttl=%s value=%s",
+            job.id,
+            redis_client.exists(f"job:timer:{job.id}"),
+            redis_client.ttl(f"job:timer:{job.id}"),
+            redis_client.get(f"job:timer:{job.id}"),
+        )
 
         CooldownService.clear_cooldown(
             redis_client,
