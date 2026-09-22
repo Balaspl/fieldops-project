@@ -79,19 +79,44 @@ class KafkaConsumerManager:
             ("KAFKA_SASL_USERNAME", "KAFKA_SASL_PASSWORD"),
         )
         
-        self.consumer = AIOKafkaConsumer(
-            self.topic,
-            bootstrap_servers=self.bootstrap_servers,
-            group_id=self.group_id,
-            enable_auto_commit=True,
-            auto_offset_reset="earliest",
-            security_protocol=os.getenv("KAFKA_SECURITY_PROTOCOL", "SASL_PLAINTEXT"),
-            sasl_mechanism=os.getenv("KAFKA_SASL_MECHANISM", "PLAIN"),
-            sasl_plain_username=os.getenv(username_env),
-            sasl_plain_password=os.getenv(password_env),
-            value_deserializer=lambda value: json.loads(
+        security_protocol = os.getenv(
+            "KAFKA_SECURITY_PROTOCOL",
+            "SASL_PLAINTEXT",
+        )
+        sasl_mechanism = os.getenv(
+            "KAFKA_SASL_MECHANISM",
+            "PLAIN",
+        )
+        sasl_username = os.getenv(username_env) or os.getenv(
+            "KAFKA_SASL_USERNAME"
+        )
+        sasl_password = os.getenv(password_env) or os.getenv(
+            "KAFKA_SASL_PASSWORD"
+        )
+
+        consumer_kwargs = {
+            "bootstrap_servers": self.bootstrap_servers,
+            "group_id": self.group_id,
+            "enable_auto_commit": True,
+            "auto_offset_reset": "earliest",
+            "value_deserializer": lambda value: json.loads(
                 value.decode("utf-8")
             ),
+        }
+
+        if sasl_username and sasl_password:
+            consumer_kwargs.update(
+                {
+                    "security_protocol": security_protocol,
+                    "sasl_mechanism": sasl_mechanism,
+                    "sasl_plain_username": sasl_username,
+                    "sasl_plain_password": sasl_password,
+                }
+            )
+
+        self.consumer = AIOKafkaConsumer(
+            self.topic,
+            **consumer_kwargs,
         )
 
     def _group_env_var_name(self) -> str:

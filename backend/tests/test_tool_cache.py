@@ -117,6 +117,9 @@ def test_non_cacheable_tool_skips_cache():
     class FakeTool:
         cacheable = False
         cache_ttl = 60
+        fallback_tool_id = None
+        fallback_value = None
+        has_fallback_value = False
         schema = FakeSchema()
         handler = staticmethod(fake_handler)
 
@@ -125,19 +128,34 @@ def test_non_cacheable_tool_skips_cache():
             return FakeTool()
 
     from app.tools.executor import ToolExecutor
+    from unittest.mock import patch
 
-    executor = ToolExecutor(
+    with patch.object(
+    ToolExecutor,
+    "_run_in_subprocess",
+    return_value={
+        "success": True,
+        "result": {"result": "fresh"},
+    },
+), patch.object(
+    ToolExecutor,
+    "_validate_output",
+    return_value=(True, None),
+):
+        executor = ToolExecutor(
         registry=FakeRegistry(),
         cache=FakeCache(),
     )
 
-    result = executor.execute(
+        result = executor.execute(
         "live_gps",
         {},
         "tenant-1",
     )
-
-    assert result == {"result": "fresh"}
+        
+        assert result.success is True
+        assert result.result == {"result": "fresh"}
+        assert result.cached is False
 
 def test_cache_metrics():
     class FakeRedis:

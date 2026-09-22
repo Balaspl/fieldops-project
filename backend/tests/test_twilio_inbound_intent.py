@@ -14,7 +14,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.main import app
 from app.database import get_db
-from app.models import User, EnterpriseAuditLog
+from app.models import User, EnterpriseAuditLog, Job
 from app.services.enterprise_audit import AuditAction
 
 
@@ -36,6 +36,10 @@ User.__table__.create(
 )
 
 EnterpriseAuditLog.__table__.create(
+    bind=TestingEngine
+)
+
+Job.__table__.create(
     bind=TestingEngine
 )
 
