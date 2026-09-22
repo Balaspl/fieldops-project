@@ -127,6 +127,7 @@ def setup_db():
             assigned_technician_id=1,
             sla_deadline=now + timedelta(minutes=10),
         ),
+
         Job(
             id=103,
             tenant_id="tenant-1",
@@ -2540,16 +2541,32 @@ def test_get_jobs_filter_sla(monkeypatch):
 
     # ---------------------------------------------------------
     # 6. BREACHED
-    # Job 103 -> -600 seconds
+    # Job 103 -> -600 seconds but is COMPLETED.
+    # Completed jobs must be excluded from SLA filters.
     # ---------------------------------------------------------
+    def mocked_breached_state(self, job_id):
+        if str(job_id) == "103":
+            return {
+                "job_id": "103",
+                "remaining_seconds": -600,
+            }
+
+        return None
+
+
+    monkeypatch.setattr(
+        SLAService,
+        "get_sla_state",
+        mocked_breached_state,
+    )
+
     response = client.get("/jobs/?sla=BREACHED")
 
     assert response.status_code == 200
 
     data = response.json()
 
-    assert len(data) == 1
-    assert data[0]["id"] == 103
+    assert data == []
 
     # ---------------------------------------------------------
     # 7. Missing SLA state
@@ -2599,20 +2616,16 @@ def test_get_jobs_filter_sla(monkeypatch):
     # 9. Exactly 0 seconds
     # 0 belongs to BREACHED
     # ---------------------------------------------------------
-    def mocked_zero_state(self, job_id):
-        if str(job_id) == "101":
-            return {
-                "job_id": "101",
-                "remaining_seconds": 0,
-            }
+    db = TestingSessionLocal()
 
-        return None
+    try:
+        job = db.query(Job).filter(Job.id == 101).first()
+        assert job is not None
 
-    monkeypatch.setattr(
-        SLAService,
-        "get_sla_state",
-        mocked_zero_state,
-    )
+        job.sla_deadline = datetime.now(timezone.utc)
+        db.commit()
+    finally:
+        db.close()
 
     response = client.get("/jobs/?sla=BREACHED")
 
@@ -2627,20 +2640,27 @@ def test_get_jobs_filter_sla(monkeypatch):
     # 10. Exactly 899 seconds
     # 899 belongs to APPROACHING_BREACH
     # ---------------------------------------------------------
-    def mocked_899_state(self, job_id):
-        if str(job_id) == "101":
-            return {
-                "job_id": "101",
-                "remaining_seconds": 899,
-            }
+    db = TestingSessionLocal()
 
-        return None
+    try:
+        job_101 = db.query(Job).filter(Job.id == 101).first()
+        job_102 = db.query(Job).filter(Job.id == 102).first()
 
-    monkeypatch.setattr(
-        SLAService,
-        "get_sla_state",
-        mocked_899_state,
-    )
+        assert job_101 is not None
+        assert job_102 is not None
+
+        now_utc = datetime.now(timezone.utc)
+
+        # Job 101 -> 899 seconds -> APPROACHING_BREACH
+        job_101.sla_deadline = now_utc + timedelta(seconds=899)
+
+        # Move Job 102 outside the approaching window so this test
+        # isolates the 899-second boundary for Job 101.
+        job_102.sla_deadline = now_utc + timedelta(minutes=30)
+
+        db.commit()
+    finally:
+        db.close()
 
     response = client.get("/jobs/?sla=APPROACHING_BREACH")
 

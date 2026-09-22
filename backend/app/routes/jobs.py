@@ -335,24 +335,59 @@ def get_jobs(
                     detail="Invalid SLA filter"
                 )
 
+            now_utc = datetime.now(timezone.utc)
             matching_job_ids = []
 
-            for job in query.all():
-                state = sla_service.get_sla_state(str(job.id))
+            TERMINAL_STATUSES = {
+                "COMPLETED",
+                "CANCELLED",
+                "CANCELED",
+            }
 
-                if not state:
+            for job in query.all():
+                # Completed/cancelled jobs no longer have an active SLA.
+                if (job.status or "").strip().upper() in TERMINAL_STATUSES:
                     continue
 
-                remaining_seconds = state["remaining_seconds"]
+                # Prefer the authoritative SLA deadline stored on the job.
+                deadline = job.sla_deadline
 
-                if sla == "BREACHED" and remaining_seconds <= 0:
-                    matching_job_ids.append(job.id)
+                # Existing jobs may not have an SLA timer/deadline.
+                # Use the stored preferred service date as the bounded fallback.
+                if deadline is None and job.preferred_service_date is not None:
+                    preferred_date = job.preferred_service_date
 
-                elif sla == "APPROACHING_BREACH" and 0 < remaining_seconds < 900:
-                    matching_job_ids.append(job.id)
+                    if isinstance(preferred_date, datetime):
+                        deadline = preferred_date
+                    else:
+                        deadline = datetime.combine(
+                            preferred_date,
+                            datetime.max.time()
+                        )
 
-                elif sla == "WITHIN_SLA" and remaining_seconds >= 900:
-                    matching_job_ids.append(job.id)
+                if deadline is None:
+                    continue
+
+                if deadline.tzinfo is None:
+                    deadline = deadline.replace(tzinfo=timezone.utc)
+                else:
+                    deadline = deadline.astimezone(timezone.utc)
+
+                remaining_seconds = (
+                    deadline - now_utc
+                ).total_seconds()
+
+                if sla == "BREACHED":
+                    if remaining_seconds <= 0:
+                        matching_job_ids.append(job.id)
+
+                elif sla == "APPROACHING_BREACH":
+                    if 0 < remaining_seconds < 900:
+                        matching_job_ids.append(job.id)
+
+                elif sla == "WITHIN_SLA":
+                    if remaining_seconds >= 900:
+                        matching_job_ids.append(job.id)
 
             query = query.filter(Job.id.in_(matching_job_ids))
             

@@ -153,7 +153,7 @@ describe("Dashboard KPI Cards - Task 7", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText("Failed to load dashboard data.")
+        screen.getByText("Failed to load dashboard data")
       ).toBeTruthy();
     });
   });
