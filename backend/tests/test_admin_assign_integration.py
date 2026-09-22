@@ -92,6 +92,11 @@ class MockRedis:
     def exists(self, key):
         return key in self.data
 
+    def ttl(self, key):
+        if key in self.data:
+            return 600
+        return -2
+
     def delete(self, key):
         if key in self.data:
             del self.data[key]

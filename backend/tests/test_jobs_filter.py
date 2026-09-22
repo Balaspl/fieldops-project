@@ -627,6 +627,9 @@ def test_plan_job_redis_rate_limit_none():
             def get(self, key):
                 return None
 
+            def exists(self, *args, **kwargs):
+                return False
+
         request = Request(
             scope={
                 "type": "http",
@@ -683,6 +686,9 @@ def test_plan_job_rate_limit_exceeded():
 
             def get(self, key):
                 return None
+            
+            def exists(self, *args, **kwargs):
+                return False
 
         request = Request(
             scope={
@@ -757,6 +763,9 @@ def test_plan_job_cache_hit():
             def setex(self, key, ttl, value):
                 return True
 
+            def exists(self, *args, **kwargs):
+                return False
+
         request = Request(
             scope={
                 "type": "http",
@@ -810,6 +819,9 @@ def test_plan_job_no_available_technicians(monkeypatch):
 
             def get(self, key):
                 return None
+
+            def exists(self, *args, **kwargs):
+                return False
 
         request = Request(
             scope={
@@ -934,6 +946,9 @@ def test_plan_job_admin_override_success(monkeypatch):
 
             def setex(self, key, ttl, value):
                 return True
+
+            def exists(self, *args, **kwargs):
+                return False
 
         monkeypatch.setattr(
             "app.routes.jobs.CooldownService.check_cooldown",
@@ -1068,6 +1083,9 @@ def test_plan_job_invalid_technician_location(monkeypatch):
             def setex(self, key, ttl, value):
                 return True
 
+            def exists(self, *args, **kwargs):
+                return False
+
         validator = type(
             "FakeValidator",
             (),
@@ -1184,6 +1202,9 @@ def test_plan_job_technician_location_without_coordinates(monkeypatch):
             def setex(self, key, ttl, value):
                 return True
 
+            def exists(self, *args, **kwargs):
+                return False
+
         validator = type(
             "FakeValidator",
             (),
@@ -1288,6 +1309,9 @@ def test_plan_job_certification_disqualified(monkeypatch):
             def setex(self, key, ttl, value):
                 return True
 
+            def exists(self, *args, **kwargs):
+                return False
+
         validator = type(
             "FakeValidator",
             (),
@@ -1369,6 +1393,8 @@ def test_plan_job_cooldown_disqualified(monkeypatch):
 
             def setex(self, key, ttl, value):
                 return True
+            def exists(self, *args, **kwargs):
+                return False
 
         # Certification must pass so execution reaches cooldown.
         validator = type(
@@ -1454,6 +1480,9 @@ def test_plan_job_certification_warnings(monkeypatch):
             def setex(self, key, ttl, value):
                 return True
 
+            def exists(self, *args, **kwargs):
+                return False
+
         validator = type(
             "FakeValidator",
             (),
@@ -1530,6 +1559,8 @@ def test_plan_job_exclusion_disqualified(monkeypatch):
                 return None
             def setex(self, key, ttl, value):
                 return True
+            def exists(self, *args, **kwargs):
+                return False
 
         validator = type(
             "FakeValidator",
@@ -1621,6 +1652,8 @@ def test_plan_job_missing_prerequisite(monkeypatch):
                 return None
             def setex(self, key, ttl, value):
                 return True
+            def exists(self, *args, **kwargs):
+                return False
 
         validator = type(
             "FakeValidator",
@@ -1718,6 +1751,9 @@ def test_plan_job_max_capacity_disqualified(monkeypatch):
 
             def setex(self, key, ttl, value):
                 return True
+
+            def exists(self, *args, **kwargs):
+                return False
 
         validator = type(
             "FakeValidator",
@@ -3546,6 +3582,8 @@ class FakeAcceptRedis:
     def exists(self, key):
         return self.timer_exists
 
+    
+
     def delete(self, key):
         self.deleted_keys.append(key)
         return 1
@@ -4386,6 +4424,11 @@ def test_assign_job_success(monkeypatch):
 
             def set(self, *args, **kwargs):
                 return True
+            def exists(self, *args, **kwargs):
+                return False
+
+            def ttl(self, *args, **kwargs):
+                return 600
 
         monkeypatch.setattr(
             "app.routes.jobs.is_skill_matching",
@@ -4498,6 +4541,8 @@ def test_assign_job_invalid_status():
 
             def set(self, *args, **kwargs):
                 return True
+            def exists(self, *args, **kwargs):
+                return False
 
         with pytest.raises(HTTPException) as exc_info:
             __import__("asyncio").run(
@@ -6265,6 +6310,12 @@ def test_assign_job_numeric_technician_fallback(monkeypatch):
             def set(self, *args, **kwargs):
                 return True
 
+            def exists(self, *args, **kwargs):
+                return False
+
+            def ttl(self, *args, **kwargs):
+                return 600
+
         async def fake_emit(*args, **kwargs):
             return None
 
@@ -6974,6 +7025,15 @@ def test_assign_job_numeric_lookup_direct(monkeypatch):
 
             def setex(self, *args, **kwargs):
                 return True
+
+            def exists(self, *args, **kwargs):
+                return False
+
+            def ttl(self, *args, **kwargs):
+                return 600
+
+            def get(self, *args, **kwargs):
+                return None
 
         
 

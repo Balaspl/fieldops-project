@@ -89,16 +89,28 @@ class _MockStreamWriter:
         pass
 
 
-class _Aiohttp314CompatibleClientResponse(_AiohttpClientResponse):
+class _AiohttpCompatibleClientResponse(_AiohttpClientResponse):
     def __init__(self, method, url, **kwargs):
-        kwargs.setdefault("stream_writer", _MockStreamWriter())
+        # aioresponses may pass stream_writer on newer aiohttp versions.
+        # Only pass it when the installed aiohttp ClientResponse supports it.
+        params = inspect.signature(
+            _AiohttpClientResponse.__init__
+        ).parameters
+
+        if "stream_writer" in params:
+            kwargs.setdefault(
+                "stream_writer",
+                _MockStreamWriter()
+            )
+        else:
+            kwargs.pop("stream_writer", None)
+
         super().__init__(method, url, **kwargs)
 
 
 _aioresponses_core.ClientResponse = (
-    _Aiohttp314CompatibleClientResponse
+    _AiohttpCompatibleClientResponse
 )
-
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
