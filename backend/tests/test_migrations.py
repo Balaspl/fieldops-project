@@ -11,7 +11,7 @@ from sqlalchemy import create_engine, text
 # CURRENT MIGRATION
 # ============================================================
 
-CURRENT_HEAD = "0e98d23f998c"
+CURRENT_HEAD = "1a02f91166b3"
 
 
 # ============================================================
@@ -90,12 +90,10 @@ def test_task_5_2_migration(alembic_config, engine):
 
     Current repository state:
 
-        004554449425 (head)
+        1a02f91166b3 (head)
 
-    This test does NOT reference:
-        c5618b3bdac0
-        1ad86b0a4f3f
-        b15cb1f9d24e
+    This test verifies that the repository migration graph
+    and the PostgreSQL database are both at the same head.
     """
 
     # --------------------------------------------------------
@@ -297,11 +295,13 @@ def test_current_migration_downgrade_and_upgrade(
     """
     Verify that the current migration is already at HEAD.
 
-    Since 004554449425 is currently the HEAD, there is no
-    later migration to downgrade from.
+    The current repository HEAD is:
 
-    Therefore this test verifies the HEAD state instead of
-    trying to downgrade to an old/non-existent revision.
+        1a02f91166b3
+
+    This test verifies that upgrading to HEAD leaves the
+    database at the expected revision and that a second
+    upgrade remains idempotent.
     """
 
     # --------------------------------------------------------
