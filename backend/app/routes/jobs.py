@@ -14,6 +14,11 @@ from app.schemas import (
     JobCreate, JobResponse, PlanResponse, RankedTechnician, DisqualifiedTechnician, ScoringWeights,
     JobClosureCreate, JobClosureResponse
 )
+from app.services.ai.FieldOpsAI.schemas.agent_messages import (
+    AgentAddress,
+    MessageEnvelope,
+    MessageType,
+)
 from app.services.job_closure_service import get_job_closure
 from app import schemas
 
@@ -199,7 +204,8 @@ def get_service_types(
 
 
 @router.post("", response_model=JobResponse, status_code=201)
-def create_job(
+async def create_job(
+    request: Request,
     job: JobCreate,
     user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(get_current_user_or_tenant),
     current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_CREATE)),
@@ -250,6 +256,52 @@ def create_job(
             )
             db.add(audit)
             db.commit()
+            
+
+        kafka_producer = getattr(request.app.state, "kafka_producer", None)
+
+        if kafka_producer is not None:
+            try:
+                event_id = f"job-created:{new_job.tenant_id}:{new_job.id}"
+
+                event = MessageEnvelope(
+                    sender=AgentAddress(
+                        agent_type="dispatch",
+                        agent_id="job-created-producer",
+                        tenant_id=str(new_job.tenant_id),
+                    ),
+                    message_type=MessageType.EVENT,
+                    payload={
+                        "event_type": "job-created",
+                        "event_id": event_id,
+                        "job_id": str(new_job.id),
+                        "tenant_id": str(new_job.tenant_id),
+                        "schema_version": 1,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    },
+                    topic="fieldops.job.events",
+                )
+
+                published = await kafka_producer.publish(event)
+
+                if published:
+                    logger.info(
+                        "Published job-created event: job_id=%s event_id=%s",
+                        new_job.id,
+                        event_id,
+                    )
+                else:
+                    logger.error(
+                        "Failed to publish job-created event: job_id=%s event_id=%s",
+                        new_job.id,
+                        event_id,
+                    )
+
+            except Exception:
+                logger.exception(
+                    "Unexpected error while publishing job-created event: job_id=%s",
+                    new_job.id,
+                )
 
         return new_job
 

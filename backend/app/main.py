@@ -78,9 +78,11 @@ async def lifespan(app: FastAPI):
             monitoring=kafka_monitoring,
         )
         await kafka_producer.start()
+        app.state.kafka_producer = kafka_producer
         logger.info("Kafka producer connected successfully.")
     except Exception:
         kafka_producer = None
+        app.state.kafka_producer = None
         logger.warning(
             "Kafka unavailable. Kafka publishing is disabled."
         )

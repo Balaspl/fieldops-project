@@ -240,3 +240,278 @@ def test_create_job_with_attempt_count():
     data_up = response.json()
 
     assert data_up["attempt_count"] == 5
+    
+def test_create_job_with_required_skill():
+    payload = {
+        "customer_name": "Test Required Skill",
+        "location": "Test Location",
+        "issue_description": "Test Issue",
+        "priority": "HIGH",
+        "service_type": "HVAC Repair",
+        "contact_number": "9876543210",
+        "preferred_service_date": "2026-06-15",
+        "status": "QUEUED",
+        "tenant_id": "tenant-skill",
+        "required_skill": "HVAC Specialist",
+    }
+
+    response = client.post("/jobs/", json=payload)
+
+    assert response.status_code == 201
+
+    data = response.json()
+
+    db = TestingSessionLocal()
+    job = (
+        db.query(Job)
+        .filter(Job.id == data["id"])
+        .first()
+    )
+
+    assert job is not None
+    assert job.required_skill == "HVAC Specialist"
+
+    db.close()
+    
+def test_create_job_uses_authenticated_tenant_for_non_platform_user():
+    test_user = AuthenticatedUser(
+        user_id="tenant-user",
+        tenant_id="tenant-authenticated",
+        role=UserRole.DISPATCHER,
+        jti="test-jti",
+        session_id="test-session",
+    )
+
+    def override_tenant_user():
+        return test_user, test_user.tenant_id
+
+    app.dependency_overrides[get_current_user_or_tenant] = (
+        override_tenant_user
+    )
+
+    payload = {
+        "customer_name": "Authenticated Tenant Customer",
+        "location": "Test Location",
+        "issue_description": "Test Issue",
+        "priority": "HIGH",
+        "service_type": "HVAC Repair",
+        "contact_number": "9876543210",
+        "preferred_service_date": "2026-06-15",
+        "status": "QUEUED",
+        "tenant_id": "different-tenant",
+    }
+
+    response = client.post("/jobs/", json=payload)
+
+    assert response.status_code == 201
+
+    data = response.json()
+
+    db = TestingSessionLocal()
+    job = (
+        db.query(Job)
+        .filter(Job.id == data["id"])
+        .first()
+    )
+
+    assert job is not None
+    assert job.tenant_id == "tenant-authenticated"
+
+    db.close()
+
+def test_create_job_uses_authenticated_tenant_when_platform_tenant_id_is_missing():
+    payload = {
+        "customer_name": "Platform Fallback Customer",
+        "location": "Test Location",
+        "issue_description": "Test Issue",
+        "priority": "HIGH",
+        "service_type": "HVAC Repair",
+        "contact_number": "9876543210",
+        "preferred_service_date": "2026-06-15",
+        "status": "QUEUED",
+    }
+
+    response = client.post("/jobs/", json=payload)
+
+    assert response.status_code == 201
+
+    data = response.json()
+
+    db = TestingSessionLocal()
+    job = (
+        db.query(Job)
+        .filter(Job.id == data["id"])
+        .first()
+    )
+
+    assert job is not None
+    assert job.tenant_id == "__platform__"
+
+    db.close()
+
+def test_create_job_maps_service_type_when_required_skill_is_blank():
+    payload = {
+        "customer_name": "Test Skill Mapping",
+        "location": "Test Location",
+        "issue_description": "Test Issue",
+        "priority": "MEDIUM",
+        "service_type": "HVAC Repair",
+        "contact_number": "9876543210",
+        "preferred_service_date": "2026-06-15",
+        "status": "QUEUED",
+        "tenant_id": "tenant-skill-map",
+        "required_skill": "   ",
+    }
+
+    response = client.post("/jobs/", json=payload)
+
+    assert response.status_code == 201
+
+    data = response.json()
+
+    db = TestingSessionLocal()
+    job = (
+        db.query(Job)
+        .filter(Job.id == data["id"])
+        .first()
+    )
+
+    assert job is not None
+    assert job.required_skill
+    assert job.required_skill != "   "
+
+    db.close()
+    
+class FakeKafkaProducer:
+    def __init__(self, result=True):
+        self.result = result
+        self.published_messages = []
+
+    async def publish(self, message):
+        self.published_messages.append(message)
+        return self.result
+
+
+def test_create_job_publishes_job_created_event():
+    fake_producer = FakeKafkaProducer(result=True)
+    app.state.kafka_producer = fake_producer
+
+    payload = {
+        "customer_name": "Kafka Event Customer",
+        "location": "Test Location",
+        "issue_description": "Test Issue",
+        "priority": "HIGH",
+        "service_type": "HVAC Repair",
+        "contact_number": "9876543210",
+        "preferred_service_date": "2026-06-15",
+        "status": "QUEUED",
+        "tenant_id": "tenant-kafka",
+    }
+
+    response = client.post(
+        "/jobs/",
+        json=payload,
+        headers={"X-Correlation-ID": "corr-job-created-test"},
+    )
+
+    assert response.status_code == 201
+
+    data = response.json()
+
+    assert len(fake_producer.published_messages) == 1
+
+    event = fake_producer.published_messages[0]
+
+    assert event.message_type.value == "EVENT"
+    assert event.topic == "fieldops.job.events"
+    assert event.correlation_id == "corr-job-created-test"
+
+    assert event.payload["event_type"] == "job-created"
+    assert event.payload["event_id"] == (
+        f"job-created:tenant-kafka:{data['id']}"
+    )
+    assert event.payload["job_id"] == str(data["id"])
+    assert event.payload["tenant_id"] == "tenant-kafka"
+    assert event.payload["schema_version"] == 1
+    assert event.payload["timestamp"]
+
+
+def test_create_job_succeeds_when_kafka_publish_fails():
+    fake_producer = FakeKafkaProducer(result=False)
+    app.state.kafka_producer = fake_producer
+
+    payload = {
+        "customer_name": "Kafka Failure Customer",
+        "location": "Test Location",
+        "issue_description": "Test Issue",
+        "priority": "MEDIUM",
+        "service_type": "Electrical Service",
+        "contact_number": "9876543210",
+        "preferred_service_date": "2026-06-15",
+        "status": "QUEUED",
+        "tenant_id": "tenant-kafka-failure",
+    }
+
+    response = client.post(
+        "/jobs/",
+        json=payload,
+    )
+
+    assert response.status_code == 201
+
+    data = response.json()
+
+    db = TestingSessionLocal()
+
+    job = (
+        db.query(Job)
+        .filter(Job.id == data["id"])
+        .first()
+    )
+
+    assert job is not None
+    assert job.tenant_id == "tenant-kafka-failure"
+    assert job.status == "QUEUED"
+
+    assert len(fake_producer.published_messages) == 1
+
+    db.close()
+    
+def test_create_job_succeeds_when_kafka_publish_raises():
+    class FailingKafkaProducer:
+        async def publish(self, message):
+            raise RuntimeError("Kafka connection failed")
+
+    app.state.kafka_producer = FailingKafkaProducer()
+
+    payload = {
+        "customer_name": "Kafka Exception Customer",
+        "location": "Test Location",
+        "issue_description": "Test Issue",
+        "priority": "HIGH",
+        "service_type": "HVAC Repair",
+        "contact_number": "9876543210",
+        "preferred_service_date": "2026-06-15",
+        "status": "QUEUED",
+        "tenant_id": "tenant-kafka-exception",
+    }
+
+    response = client.post("/jobs/", json=payload)
+
+    assert response.status_code == 201
+
+    data = response.json()
+
+    db = TestingSessionLocal()
+
+    job = (
+        db.query(Job)
+        .filter(Job.id == data["id"])
+        .first()
+    )
+
+    assert job is not None
+    assert job.tenant_id == "tenant-kafka-exception"
+    assert job.status == "QUEUED"
+
+    db.close()
