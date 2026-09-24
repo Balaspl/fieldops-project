@@ -301,6 +301,40 @@ function JobCreationForm() {
 
   const [isClosureModalOpen, setIsClosureModalOpen] = useState(false);
   const [closureDetails, setClosureDetails] = useState<any>(null);
+  const [timelineRefreshKey, setTimelineRefreshKey] = useState(0);
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedImageName, setSelectedImageName] = useState("");
+
+  const getImageExtension = (image: string) => {
+    const dataUrlMatch = image.match(/^data:image\/([a-zA-Z0-9.+-]+);base64,/i);
+
+    if (dataUrlMatch?.[1]) {
+      const extension = dataUrlMatch[1].toLowerCase();
+      return extension === "jpeg" ? "jpg" : extension;
+    }
+
+    const cleanUrl = image.split("?")[0].split("#")[0];
+    const fileName = cleanUrl.split("/").pop() || "";
+    const extensionMatch = fileName.match(/\.([a-zA-Z0-9]+)$/);
+
+    return extensionMatch?.[1]?.toLowerCase() || "jpg";
+  };
+
+  const getImageName = (image: string, type: "before" | "after", index: number) => {
+    const cleanUrl = image.split("?")[0].split("#")[0];
+    const fileName = cleanUrl.split("/").pop() || "";
+
+    if (fileName && !fileName.startsWith("data:") && /\.[a-zA-Z0-9]+$/.test(fileName)) {
+      return fileName;
+    }
+
+    return `${type}-image-${index + 1}.${getImageExtension(image)}`;
+  };
+
+  const openImagePreview = (image: string, type: "before" | "after", index: number) => {
+    setSelectedImage(image);
+    setSelectedImageName(getImageName(image, type, index));
+  };
 
   useEffect(() => {
     if (viewJob) {
@@ -320,8 +354,14 @@ function JobCreationForm() {
     if (viewJob) {
       const updatedJob = { ...viewJob, status: "COMPLETED" };
       setViewJob(updatedJob);
-      getJobClosure(viewJob.id).then((data) => setClosureDetails(data)).catch(() => {});
+
+      getJobClosure(viewJob.id)
+        .then((data) => setClosureDetails(data))
+        .catch(() => {});
+
+      setTimelineRefreshKey((value) => value + 1);
     }
+
     fetchJobs();
   };
 
@@ -1230,35 +1270,196 @@ function JobCreationForm() {
                     {closureDetails?.before_images && closureDetails.before_images.length > 0 && (
                       <div style={{ marginTop: "6px" }}>
                         <span style={styles.viewLabel}>Before Images</span>
-                        <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", marginTop: "2px" }}>
-                          {closureDetails.before_images.map((img: string, i: number) => (
-                            <span key={i} style={{ fontSize: "11px", background: "#e2e8f0", padding: "2px 6px", borderRadius: "4px" }}>{img}</span>
-                          ))}
+                        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "6px" }}>
+                          {closureDetails.before_images.map((img: string, i: number) => {
+                            const imageName = getImageName(img, "before", i);
+
+                            return (
+                              <button
+                                key={`${imageName}-${i}`}
+                                type="button"
+                                onClick={() => openImagePreview(img, "before", i)}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "8px",
+                                  padding: "5px 8px 5px 5px",
+                                  background: "#f8fafc",
+                                  border: "1px solid #dbe4ea",
+                                  borderRadius: "8px",
+                                  cursor: "pointer",
+                                  textAlign: "left",
+                                  maxWidth: "100%",
+                                }}
+                              >
+                                <img
+                                  src={img}
+                                  alt={imageName}
+                                  style={{
+                                    width: "52px",
+                                    height: "52px",
+                                    objectFit: "cover",
+                                    borderRadius: "6px",
+                                    border: "1px solid #e2e8f0",
+                                    flexShrink: 0,
+                                  }}
+                                />
+                                <span style={{ fontSize: "11px", color: "#334155", fontWeight: 600, overflowWrap: "anywhere" }}>
+                                  {imageName}
+                                </span>
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
                     {closureDetails?.after_images && closureDetails.after_images.length > 0 && (
                       <div style={{ marginTop: "6px" }}>
                         <span style={styles.viewLabel}>After Images</span>
-                        <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", marginTop: "2px" }}>
-                          {closureDetails.after_images.map((img: string, i: number) => (
-                            <span key={i} style={{ fontSize: "11px", background: "#dcfce7", color: "#166534", padding: "2px 6px", borderRadius: "4px" }}>{img}</span>
-                          ))}
+                        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "6px" }}>
+                          {closureDetails.after_images.map((img: string, i: number) => {
+                            const imageName = getImageName(img, "after", i);
+
+                            return (
+                              <button
+                                key={`${imageName}-${i}`}
+                                type="button"
+                                onClick={() => openImagePreview(img, "after", i)}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "8px",
+                                  padding: "5px 8px 5px 5px",
+                                  background: "#f0fdf4",
+                                  border: "1px solid #bbf7d0",
+                                  borderRadius: "8px",
+                                  cursor: "pointer",
+                                  textAlign: "left",
+                                  maxWidth: "100%",
+                                }}
+                              >
+                                <img
+                                  src={img}
+                                  alt={imageName}
+                                  style={{
+                                    width: "52px",
+                                    height: "52px",
+                                    objectFit: "cover",
+                                    borderRadius: "6px",
+                                    border: "1px solid #bbf7d0",
+                                    flexShrink: 0,
+                                  }}
+                                />
+                                <span style={{ fontSize: "11px", color: "#166534", fontWeight: 600, overflowWrap: "anywhere" }}>
+                                  {imageName}
+                                </span>
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
-                    <div style={{ display: "flex", gap: "8px", marginTop: "8px", paddingTop: "6px", borderTop: "1px dashed #cbd5e1", fontSize: "12px" }}>
-                      <div><span style={styles.viewLabel}>Labour: </span><strong>${closureDetails?.labour_cost ?? 0}</strong></div>
-                      <div><span style={styles.viewLabel}>Material: </span><strong>${closureDetails?.material_cost ?? 0}</strong></div>
-                      <div><span style={styles.viewLabel}>Subtotal: </span><strong style={{ color: "#166534" }}>${closureDetails?.subtotal ?? 0}</strong></div>
-                    </div>
                   </div>
                 )}
               </div>
               
               {/* Right Column: Interactive vertical Timeline */}
               <div style={{ flex: 1, minWidth: "300px", padding: "18px 22px 22px" }} className="flex flex-col">
-                <JobStatusTimeline jobId={viewJob.id} currentStatus={viewJob.status} />
+                <JobStatusTimeline
+                jobId={viewJob.id}
+                currentStatus={viewJob.status}
+                refreshKey={timelineRefreshKey}
+              />
+
+                {/* Cost Details */}
+                {closureDetails && (
+                  (() => {
+                    const labour = Number(closureDetails?.labour_cost ?? 0);
+                    const material = Number(closureDetails?.material_cost ?? 0);
+                    const subtotal = Number(
+                      closureDetails?.subtotal ?? labour + material
+                    );
+                    const gstRate = Number(
+                      closureDetails?.gst_rate ?? 18
+                    );
+                    const gstAmount = Number(
+                      closureDetails?.gst_amount ??
+                      closureDetails?.gst ??
+                      ((subtotal * gstRate) / 100)
+                    );
+                    const total = Number(
+                      closureDetails?.total_amount ??
+                      closureDetails?.total ??
+                      (subtotal + gstAmount)
+                    );
+
+                    const formatCurrency = (value: number) =>
+                      new Intl.NumberFormat("en-IN", {
+                        style: "currency",
+                        currency: "INR",
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      }).format(Number.isFinite(value) ? value : 0);
+
+                    return (
+                      <div
+                        style={{
+                          marginTop: "14px",
+                          padding: "14px",
+                          backgroundColor: "#ffffff",
+                          border: "1px solid #dbe4ea",
+                          borderRadius: "10px",
+                          boxShadow: "0 4px 14px rgba(15, 23, 42, 0.04)",
+                        }}
+                      >
+                        <h4
+                          style={{
+                            fontSize: "13px",
+                            fontWeight: 700,
+                            color: "#2F4F3E",
+                            marginBottom: "10px",
+                          }}
+                        >
+                          Cost Details
+                        </h4>
+
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "7px",
+                            fontSize: "12px",
+                          }}
+                        >
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: "12px" }}>
+                            <span style={styles.viewLabel}>Labour Cost</span>
+                            <strong style={{ color: "#334155" }}>{formatCurrency(labour)}</strong>
+                          </div>
+
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: "12px" }}>
+                            <span style={styles.viewLabel}>Material Cost</span>
+                            <strong style={{ color: "#334155" }}>{formatCurrency(material)}</strong>
+                          </div>
+
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", paddingTop: "7px", borderTop: "1px dashed #cbd5e1" }}>
+                            <span style={styles.viewLabel}>Subtotal</span>
+                            <strong style={{ color: "#166534" }}>{formatCurrency(subtotal)}</strong>
+                          </div>
+
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: "12px" }}>
+                            <span style={styles.viewLabel}>GST ({gstRate}% )</span>
+                            <strong style={{ color: "#334155" }}>{formatCurrency(gstAmount)}</strong>
+                          </div>
+
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", marginTop: "2px", paddingTop: "9px", borderTop: "1px solid #dbe4ea" }}>
+                            <span style={{ ...styles.viewLabel, color: "#166534", fontWeight: 800 }}>Total</span>
+                            <strong style={{ color: "#166534", fontSize: "14px" }}>{formatCurrency(total)}</strong>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()
+                )}
               </div>
             </div>
 
@@ -1269,6 +1470,108 @@ function JobCreationForm() {
               onClose={() => setIsClosureModalOpen(false)}
               onSuccess={handleClosureSuccess}
             />
+          </div>
+        </div>
+      )}
+
+      {selectedImage && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10000,
+            background: "rgba(15, 23, 42, 0.82)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "24px",
+          }}
+          onClick={() => setSelectedImage(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label={selectedImageName}
+        >
+          <div
+            style={{
+              position: "relative",
+              width: "min(92vw, 1000px)",
+              height: "min(88vh, 820px)",
+              background: "#ffffff",
+              borderRadius: "14px",
+              boxShadow: "0 24px 70px rgba(0,0,0,.35)",
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "12px",
+                padding: "12px 16px",
+                borderBottom: "1px solid #e2e8f0",
+                background: "#f8fafc",
+              }}
+            >
+              <span
+                style={{
+                  fontSize: "13px",
+                  fontWeight: 700,
+                  color: "#334155",
+                  overflowWrap: "anywhere",
+                }}
+              >
+                {selectedImageName}
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedImage(null)}
+                aria-label="Close image preview"
+                style={{
+                  width: "32px",
+                  height: "32px",
+                  borderRadius: "50%",
+                  border: "none",
+                  background: "#e2e8f0",
+                  color: "#334155",
+                  fontSize: "20px",
+                  lineHeight: 1,
+                  cursor: "pointer",
+                  flexShrink: 0,
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div
+              style={{
+                flex: 1,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "18px",
+                background: "#0f172a",
+                overflow: "auto",
+              }}
+            >
+              <img
+                src={selectedImage}
+                alt={selectedImageName}
+                style={{
+                  maxWidth: "100%",
+                  maxHeight: "100%",
+                  width: "auto",
+                  height: "auto",
+                  objectFit: "contain",
+                  borderRadius: "8px",
+                  display: "block",
+                }}
+              />
+            </div>
           </div>
         </div>
       )}

@@ -6,6 +6,7 @@ Service for processing job completion and fetching job closure details.
 from datetime import datetime, timezone
 from typing import Optional
 import logging
+
 from ..context import correlation_id_ctx
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
@@ -61,6 +62,7 @@ def validate_completion_checklist(
             },
         )
 
+
 def close_job(
     db: Session,
     job_id: int,
@@ -98,6 +100,7 @@ def close_job(
         .with_for_update()
         .first()
     )
+
     if not job:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -121,6 +124,7 @@ def close_job(
         )
         .first()
     )
+
     if not tech:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -131,6 +135,7 @@ def close_job(
         str(tech.technician_id),
         str(tech.tech_id),
     }
+
     if technician_identifier not in identifier_matches:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -138,14 +143,16 @@ def close_job(
         )
 
     current_status = (job.status or "").upper().strip()
+
     if current_status == "COMPLETED":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "Job cannot be closed because its current status is "
-                f"{current_status}"
+                "Job is already completed "
+                f"(current status is {current_status})"
             ),
         )
+
     if current_status in {"CANCELLED", "CANCELED", "CLOSED"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -163,12 +170,14 @@ def close_job(
         )
         .first()
     )
+
     if existing_closure:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Job closure record already exists for this job",
         )
-            # Validate the completion checklist before any job state mutation.
+
+    # Validate the completion checklist before any job state mutation.
     validate_completion_checklist(closure_data.checklist)
 
     # Pydantic has already validated the completion payload before this
@@ -219,6 +228,7 @@ def close_job(
         )
 
         completed_at = job.completed_at
+
         if completed_at is None:
             raise RuntimeError(
                 "Completion transition did not set the authoritative completion timestamp"
@@ -230,22 +240,23 @@ def close_job(
         )
 
         closure_record = JobClosure(
-        job_id=job.id,
-        tenant_id=tenant_id,
-        work_summary=closure_data.work_summary,
-        work_report=canonical_work_report,
-        completion_checklist=(
-            {"items": [item.model_dump() for item in closure_data.checklist.items]}
-            if closure_data.checklist is not None
-            else None
-        ),
-        before_images=closure_data.before_images or [],
-        after_images=closure_data.after_images,
-        labour_cost=closure_data.labour_cost,
-        material_cost=closure_data.material_cost,
-        subtotal=subtotal,
-        completed_at=completed_at,
+            job_id=job.id,
+            tenant_id=tenant_id,
+            work_summary=closure_data.work_summary,
+            work_report=canonical_work_report,
+            completion_checklist=(
+                {"items": [item.model_dump() for item in closure_data.checklist.items]}
+                if closure_data.checklist is not None
+                else None
+            ),
+            before_images=closure_data.before_images or [],
+            after_images=closure_data.after_images,
+            labour_cost=closure_data.labour_cost,
+            material_cost=closure_data.material_cost,
+            subtotal=subtotal,
+            completed_at=completed_at,
         )
+
         db.add(closure_record)
         db.flush()
 
@@ -264,6 +275,7 @@ def close_job(
             },
             timestamp=completed_at,
         )
+
         db.add(audit_event)
 
         # Keep the technician available after the final completion is staged.
@@ -273,31 +285,47 @@ def close_job(
         db.commit()
         db.refresh(closure_record)
 
-    except (InvalidTransitionError, PermissionDeniedError, ReasonRequiredError) as exc:
+    except (
+        InvalidTransitionError,
+        PermissionDeniedError,
+        ReasonRequiredError,
+    ) as exc:
         db.rollback()
+
         # Restore the in-memory prerequisite field before exposing the error to
         # callers; the rollback already restores the DB state.
         job.work_report = previous_work_report
+
         if isinstance(exc, PermissionDeniedError):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=str(exc),
             )
+
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=exc.to_dict() if isinstance(exc, InvalidTransitionError) else str(exc),
+            detail=(
+                exc.to_dict()
+                if isinstance(exc, InvalidTransitionError)
+                else str(exc)
+            ),
         )
+
     except SideEffectError as exc:
         db.rollback()
         job.work_report = previous_work_report
+
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         )
+
     except Exception as exc:
         db.rollback()
         job.work_report = previous_work_report
+
         logger.exception("Failed to close job %s", job_id)
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to close job due to database error",
@@ -311,25 +339,29 @@ def close_job(
         from .event_publisher import publish_dispatch_event
 
         publish_dispatch_event(
-        get_redis_client(),
-        event_type="JOB_COMPLETED",
-        job_id=str(job.id),
-        old_status=old_status,
-        new_status="COMPLETED",
-        tenant_id=tenant_id,
-        technician_id=str(tech.tech_id),
-        technician_name=tech.technician_name,
-        completed_at=closure_record.completed_at,
-        correlation_id=correlation_id_ctx.get() or None,
-        event_id=(
-            f"JOB_COMPLETED:"
-            f"{tenant_id}:"
-            f"{job.id}:"
-            f"{closure_record.id}"
-        ),
-    )
+            get_redis_client(),
+            event_type="JOB_COMPLETED",
+            job_id=str(job.id),
+            old_status=old_status,
+            new_status="COMPLETED",
+            tenant_id=tenant_id,
+            technician_id=str(tech.tech_id),
+            technician_name=tech.technician_name,
+            completed_at=closure_record.completed_at,
+            correlation_id=correlation_id_ctx.get() or None,
+            event_id=(
+                f"JOB_COMPLETED:"
+                f"{tenant_id}:"
+                f"{job.id}:"
+                f"{closure_record.id}"
+            ),
+        )
+
     except Exception:
-        logger.exception("Failed to publish JOB_COMPLETED event for job %s", job.id)
+        logger.exception(
+            "Failed to publish JOB_COMPLETED event for job %s",
+            job.id,
+        )
 
     return closure_record
 
@@ -339,16 +371,22 @@ def get_job_closure(db: Session, job_id: int) -> JobClosure:
     Fetch closure details for a given job.
     """
     job = db.query(Job).filter(Job.id == job_id).first()
+
     if not job:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Job not found",
         )
 
-    closure = db.query(JobClosure).filter(
-        JobClosure.job_id == job_id,
-        JobClosure.tenant_id == job.tenant_id,
-    ).first()
+    closure = (
+        db.query(JobClosure)
+        .filter(
+            JobClosure.job_id == job_id,
+            JobClosure.tenant_id == job.tenant_id,
+        )
+        .first()
+    )
+
     if not closure:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
