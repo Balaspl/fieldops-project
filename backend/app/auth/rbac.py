@@ -90,6 +90,12 @@ class Permission(str, Enum):
     JOBS_STATUS_UPDATE = "jobs:status_update"
 
     # --------------------------------------------------
+    # Completion Documents
+    # --------------------------------------------------
+
+    COMPLETION_DOCUMENTS_MANAGE = "completion_documents:manage"
+
+    # --------------------------------------------------
     # Technicians
     # --------------------------------------------------
 
@@ -346,6 +352,8 @@ ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
 
         # Users can be viewed but not arbitrarily created.
         Permission.USERS_VIEW,
+        Permission.USERS_CREATE,
+
     },
 
     # ==================================================
@@ -358,6 +366,8 @@ ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
         Permission.JOBS_ACCEPT_REJECT,
         Permission.JOBS_STATUS_UPDATE,
         Permission.JOBS_REASSIGN_OWN,
+        Permission.COMPLETION_DOCUMENTS_MANAGE,
+        Permission.REPORTS_VIEW,
 
         # Own profile
         Permission.TECHNICIANS_VIEW_OWN,

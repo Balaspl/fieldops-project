@@ -62,7 +62,7 @@ def _get_tech_for_user(
     """Find the technician record belonging to this user and organization."""
 
     query = db.query(Technician).filter(
-        Technician.tech_id == user_id
+        Technician.tenant_id == tenant_id
     )
 
     # 1. Direct match by tech_id or integer technician_id
@@ -494,13 +494,9 @@ def _get_assigned_jobs_query(db: Session, user_id: str, tenant_id: str):
     tech = _get_tech_for_user(db, user_id, tenant_id)
     if not tech:
         return db.query(Job).filter(Job.id < 0)  # empty query
-    # Jobs are owned by the customer tenant, but access here is based on
-    # the authenticated technician's assigned_technician_id.
-    # This allows Super Admin to dispatch a customer job to a technician
-    # from another tenant while keeping technician access restricted to
-    # jobs explicitly assigned to that technician.
     return db.query(Job).filter(
-        Job.assigned_technician_id == tech.technician_id
+        Job.tenant_id == tenant_id,
+        Job.assigned_technician_id == tech.technician_id,
     )
 
 
@@ -550,6 +546,7 @@ async def get_job_detail(
 
     job = db.query(Job).filter(
         Job.id == job_id,
+        Job.tenant_id == current_user.tenant_id,
         Job.assigned_technician_id == tech.technician_id,
     ).first()
 
@@ -573,6 +570,7 @@ async def accept_job(
 
     job = db.query(Job).filter(
         Job.id == job_id,
+        Job.tenant_id == current_user.tenant_id,
         Job.assigned_technician_id == tech.technician_id,
     ).first()
 
@@ -647,6 +645,7 @@ async def reject_job(
 
     job = db.query(Job).filter(
         Job.id == job_id,
+        Job.tenant_id == current_user.tenant_id,
         Job.assigned_technician_id == tech.technician_id,
     ).first()
 
@@ -716,6 +715,7 @@ async def start_job(
 
     job = db.query(Job).filter(
         Job.id == job_id,
+        Job.tenant_id == current_user.tenant_id,
         Job.assigned_technician_id == tech.technician_id,
     ).first()
     if not job:
@@ -763,6 +763,7 @@ async def on_site_job(
 
     job = db.query(Job).filter(
         Job.id == job_id,
+        Job.tenant_id == current_user.tenant_id,
         Job.assigned_technician_id == tech.technician_id,
     ).first()
 
@@ -824,6 +825,7 @@ async def pause_job(
 
     job = db.query(Job).filter(
         Job.id == job_id,
+        Job.tenant_id == current_user.tenant_id,
         Job.assigned_technician_id == tech.technician_id,
     ).first()
     if not job:
@@ -857,6 +859,7 @@ async def resume_job(
 
     job = db.query(Job).filter(
         Job.id == job_id,
+        Job.tenant_id == current_user.tenant_id,
         Job.assigned_technician_id == tech.technician_id,
     ).first()
     if not job:
@@ -891,6 +894,7 @@ async def complete_job(
 
     job = db.query(Job).filter(
         Job.id == job_id,
+        Job.tenant_id == current_user.tenant_id,
         Job.assigned_technician_id == tech.technician_id,
     ).first()
     if not job:
@@ -979,6 +983,7 @@ async def get_notifications(
     # Create missing notifications for pending jobs.
     if tech:
         pending_jobs = db.query(Job).filter(
+            Job.tenant_id == current_user.tenant_id,
             Job.assigned_technician_id == tech.technician_id,
             # func.lower(Job.status).in_(
             #     ["assigned", "active", "planned", "queued"]
@@ -1301,7 +1306,6 @@ async def get_billing_reports(
         db.query(JobClosure, Job)
         .join(Job, Job.id == JobClosure.job_id)
         .filter(
-            JobClosure.tenant_id == current_user.tenant_id,
             Job.assigned_technician_id == tech.technician_id,
         )
         .order_by(JobClosure.completed_at.desc())
@@ -1349,7 +1353,6 @@ async def download_billing_report_pdf(
         .join(Job, Job.id == JobClosure.job_id)
         .filter(
             JobClosure.id == closure_id,
-            JobClosure.tenant_id == current_user.tenant_id,
             Job.assigned_technician_id == tech.technician_id,
         )
         .first()
@@ -1449,6 +1452,7 @@ async def get_technician_dashboard(
         current_user.user_id,
         current_user.tenant_id,
     )
+    
 
     profile = db.query(TechnicianProfile).filter(
         TechnicianProfile.user_id == current_user.user_id,
@@ -1466,6 +1470,7 @@ async def get_technician_dashboard(
         )
 
     base = db.query(Job).filter(
+        Job.tenant_id == current_user.tenant_id,
         Job.assigned_technician_id == tech.technician_id,
     )
 
@@ -1491,6 +1496,7 @@ async def get_technician_dashboard(
     ).count()
 
     rejected_jobs = db.query(Job).filter(
+        Job.tenant_id == current_user.tenant_id,
         Job.rejected_by_tech_id
         == (tech.tech_id or str(tech.technician_id)),
         func.lower(Job.status)

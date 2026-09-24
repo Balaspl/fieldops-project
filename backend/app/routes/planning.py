@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Header, Response, Query, Request
+from fastapi import APIRouter, Depends, Response, Query, Request, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import datetime, timezone, timedelta
@@ -8,7 +8,9 @@ from ..database import get_db
 from ..models import Job, Technician
 from .. import schemas
 
-from app.auth.dependencies import get_current_user_or_tenant, AuthenticatedUser
+from app.auth.dependencies import AuthenticatedUser, require_permission
+
+from app.auth.rbac import Permission
 
 router = APIRouter(
     tags=["Planning"]
@@ -20,13 +22,15 @@ def get_planned_assignments(
     search: Optional[str] = None,
     page: Optional[int] = Query(None, ge=1),
     limit: Optional[int] = Query(None, ge=1),
-    user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(get_current_user_or_tenant),
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.PLANNING_VIEW)
+    ),
     db: Session = Depends(get_db)
 ):
     """
     Fetch all jobs that are assigned to a technician.
     """
-    user, tenant_id = user_tenant
+    tenant_id = current_user.tenant_id
     query = db.query(
         Job.id.label("job_id"),
         Technician.technician_name.label("technician"),
@@ -39,8 +43,11 @@ def get_planned_assignments(
         Technician.max_jobs
     ).join(Technician, Job.assigned_technician_id == Technician.technician_id)
     
-    if not user or not user.is_super_admin:
-        query = query.filter(Job.tenant_id == tenant_id)
+    if not current_user.is_super_admin:
+        query = query.filter(
+            Job.tenant_id == current_user.tenant_id,
+            Technician.tenant_id == current_user.tenant_id
+        )
         
     if search:
         search_pattern = f"%{search}%"
@@ -77,7 +84,9 @@ def get_planned_assignments(
 
 @router.get("/planning/kpi")
 def get_planning_kpi(
-    user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(get_current_user_or_tenant),
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.PLANNING_VIEW)
+    ),
     db: Session = Depends(get_db)
 ):
     """
@@ -85,15 +94,15 @@ def get_planning_kpi(
     Counts are calculated from ALL jobs (not date-filtered) for always-meaningful numbers.
     Also provides yesterday-vs-today trend for jobs created today vs yesterday.
     """
-    user, tenant_id = user_tenant
+    tenant_id = current_user.tenant_id
     now_utc = datetime.now(timezone.utc)
     today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
     yesterday_start = today_start - timedelta(days=1)
 
     # Base query - filter by tenant
     base = db.query(Job)
-    if not user or not user.is_super_admin:
-        base = base.filter(Job.tenant_id == tenant_id)
+    if not current_user.is_super_admin:
+        base = base.filter(Job.tenant_id == current_user.tenant_id)
 
     today_q = base.filter(Job.created_at >= today_start)
     yesterday_q = base.filter(
@@ -196,8 +205,10 @@ def get_planning_kpi(
 
     # --- Technician availability ---
     tech_base = db.query(Technician)
-    if tenant_id:
-        tech_base = tech_base.filter(Technician.tenant_id == tenant_id)
+    if not current_user.is_super_admin:
+        tech_base = tech_base.filter(
+            Technician.tenant_id == current_user.tenant_id
+        )
 
     total_techs = tech_base.count()
     available_techs = tech_base.filter(
@@ -260,8 +271,7 @@ def get_planning_kpi(
 # Technician Declined Jobs
 # ──────────────────────────────────────────────────
 
-from app.auth.dependencies import require_role, get_current_user
-from app.auth.rbac import UserRole
+from app.auth.rbac import Permission
 from app.services.enterprise_audit import audit_log, AuditAction
 from app.models import InAppNotification
 import uuid as uuid_mod
@@ -270,7 +280,7 @@ import uuid as uuid_mod
 @router.get("/planning/declined-jobs")
 def get_declined_jobs(
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.SUPER_ADMIN, UserRole.SUPER_ADMIN, UserRole.DISPATCHER)
+        require_permission(Permission.JOBS_VIEW_ALL)
     ),
     db: Session = Depends(get_db),
 ):
@@ -304,7 +314,8 @@ def get_declined_jobs(
         tech_name = None
         if row.rejected_by_tech_id:
             tech = db.query(Technician).filter(
-                Technician.tech_id == row.rejected_by_tech_id
+                Technician.tech_id == row.rejected_by_tech_id,
+                Technician.tenant_id == current_user.tenant_id
             ).first()
             if tech:
                 tech_name = tech.technician_name
@@ -332,7 +343,7 @@ def reassign_declined_job(
     request: Request,
     new_technician_id: int = Query(..., description="ID of the new technician"),
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.SUPER_ADMIN, UserRole.SUPER_ADMIN, UserRole.DISPATCHER)
+        require_permission(Permission.JOBS_REASSIGN)
     ),
     db: Session = Depends(get_db),
 ):
@@ -343,7 +354,14 @@ def reassign_declined_job(
     - Logs the audit event
     - Removes from declined list
     """
-    job = db.query(Job).filter(Job.id == job_id).first()
+    job_query = db.query(Job).filter(Job.id == job_id)
+
+    if not current_user.is_super_admin:
+        job_query = job_query.filter(
+            Job.tenant_id == current_user.tenant_id
+        )
+
+    job = job_query.first()
     if not job:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Job not found")
@@ -353,7 +371,8 @@ def reassign_declined_job(
         raise HTTPException(status_code=400, detail="Job is not in declined status")
 
     new_tech = db.query(Technician).filter(
-        Technician.technician_id == new_technician_id
+        Technician.technician_id == new_technician_id,
+        Technician.tenant_id == job.tenant_id
     ).first()
     if not new_tech:
         from fastapi import HTTPException

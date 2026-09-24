@@ -7705,6 +7705,67 @@ def test_get_jobs_technician_id_filter():
     assert data[0]["assigned_technician_id"] == 1
 
 
+def test_technician_job_list_and_direct_id_reads_are_assignment_and_tenant_scoped():
+    db = TestingSessionLocal()
+    try:
+        db.add(Technician(
+            technician_id=2,
+            tech_id="tech-2",
+            technician_name="Bob Wilson",
+            technician_skill="HVAC Repair",
+            technician_location="South Zone",
+            technician_status="Available",
+            current_jobs=0,
+            max_jobs=5,
+            tenant_id="tenant-1",
+        ))
+        db.add_all([
+            Job(id=105, tenant_id="tenant-1", customer_name="Other Technician Job",
+                status="ASSIGNED", priority="LOW", service_type="HVAC Repair",
+                location="South Zone", issue_description="Other technician",
+                contact_number="5550000105",
+                preferred_service_date=date.today(),
+                assigned_technician_id=2),
+            Job(id=106, tenant_id="tenant-2", customer_name="Other Tenant Job",
+                status="ASSIGNED", priority="LOW", service_type="HVAC Repair",
+                location="Other Tenant", issue_description="Other tenant",
+                contact_number="5550000106",
+                preferred_service_date=date.today(),
+                assigned_technician_id=1),
+        ])
+        db.commit()
+    finally:
+        db.close()
+
+    technician_user = AuthenticatedUser(
+        user_id="tech-1",
+        tenant_id="tenant-1",
+        role=UserRole.TECHNICIAN,
+        jti="tech-jti",
+        session_id="tech-session",
+    )
+    app.dependency_overrides[get_current_user] = lambda: technician_user
+    try:
+        listing = client.get("/jobs/")
+        assert listing.status_code == 200
+        assert {job["id"] for job in listing.json()} == {102}
+
+        own_job = client.get("/jobs/102")
+        assert own_job.status_code == 200
+        assert own_job.json()["id"] == 102
+
+        for job_id in (101, 105, 106):
+            denied = client.get(f"/jobs/{job_id}")
+            assert denied.status_code == 404
+
+        # Query parameters cannot broaden a technician's access.
+        filtered = client.get("/jobs/?technician_id=2")
+        assert filtered.status_code == 200
+        assert filtered.json() == []
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
 # ---------------------------------------------------------------------------
 # 100% coverage - bulk cancellation
 # ---------------------------------------------------------------------------
@@ -7721,11 +7782,6 @@ def _bulk_cancel_test_user(role="dispatcher", tenant_id="tenant-1"):
 
 
 def test_bulk_cancel_forbidden_role():
-    from app.routes.jobs import (
-        bulk_cancel_jobs,
-        BulkJobCancellationRequest,
-    )
-
     user = AuthenticatedUser(
         user_id="test-user",
         tenant_id="tenant-1",
@@ -7734,20 +7790,23 @@ def test_bulk_cancel_forbidden_role():
         session_id="test-session",
     )
 
-    payload = BulkJobCancellationRequest(
-        job_ids=[101],
-        reason="Test cancellation",
-    )
+    app.dependency_overrides[get_current_user] = lambda: user
 
-    with pytest.raises(HTTPException) as exc_info:
-        bulk_cancel_jobs(
-            payload=payload,
-            request=None,
-            current_user=user,
-            db=TestingSessionLocal(),
+    try:
+        response = client.post(
+            "/api/v1/jobs/bulk-cancel",
+            headers={
+                "X-Tenant-ID": "tenant-1",
+            },
+            json={
+                "job_ids": [101],
+                "reason": "Unauthorized cancellation attempt",
+            },
         )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
 
-    assert exc_info.value.status_code == 403
+    assert response.status_code == 403
 
 
 def test_bulk_cancel_missing_job():

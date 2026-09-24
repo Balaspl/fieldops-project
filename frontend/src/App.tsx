@@ -47,6 +47,7 @@ import { getAllTechnicians } from "./services/technicianService";
 import { getTechnicianNotifications } from "./services/technicianPortalService";
 import { ToastProvider, useToast } from "./hooks/useToast";
 import LoadingSpinner from "./components/ui/LoadingSpinner";
+import TechnicianLocationTracker from "./components/technician/TechnicianLocationTracker";
 
 // Lazy load page components
 const LoginPage = lazy(() => import("./pages/LoginPage"));
@@ -1000,17 +1001,6 @@ function AppInner() {
     startHeartbeatLoop(
       String(activeTechId),
       30000,
-      () => ({
-        last_lat:
-          13.0827 +
-          (Math.random() - 0.5) *
-            0.01,
-
-        last_lng:
-          80.2707 +
-          (Math.random() - 0.5) *
-            0.01,
-      }),
     );
 
     const socketHandlers = {
@@ -2796,6 +2786,7 @@ function AppInner() {
                 : "hidden",
           }}
         >
+          {isTechnician && <TechnicianLocationTracker user={user} />}
           {selectedNotification && (
             <NotificationDetail
               notification={

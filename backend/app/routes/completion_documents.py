@@ -17,8 +17,9 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import (
     AuthenticatedUser,
     get_current_user,
+    require_permission
 )
-from app.auth.rbac import UserRole
+from app.auth.rbac import UserRole,Permission
 from app.context import correlation_id_ctx
 from app.database import get_db
 from app.models import AuditEvent, CompletionDocument, Job
@@ -64,17 +65,13 @@ def upload_completion_photo(
     job_id: int,
     category: str = Form(...),
     file: UploadFile = File(...),
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.COMPLETION_DOCUMENTS_MANAGE)),
     db: Session = Depends(get_db),
 ):
     # ---------------------------------------------------------------
     # Technician role check
     # ---------------------------------------------------------------
-    if current_user.role != UserRole.TECHNICIAN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Technician role required",
-        )
+ 
 
     # ---------------------------------------------------------------
     # Resolve authenticated technician
@@ -279,18 +276,12 @@ def upload_completion_photo(
 def download_completion_photo(
     job_id: int,
     document_id: int,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.COMPLETION_DOCUMENTS_MANAGE)),
     db: Session = Depends(get_db),
 ):
     # ---------------------------------------------------------------
     # Technician role check
     # ---------------------------------------------------------------
-    if current_user.role != UserRole.TECHNICIAN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Technician role required",
-        )
-
     technician = get_technician_for_current_user(
         db,
         current_user,
@@ -381,17 +372,12 @@ def download_completion_photo(
 def delete_completion_photo(
     job_id: int,
     document_id: int,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.COMPLETION_DOCUMENTS_MANAGE)),
     db: Session = Depends(get_db),
 ):
     # ---------------------------------------------------------------
     # Technician role check
     # ---------------------------------------------------------------
-    if current_user.role != UserRole.TECHNICIAN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Technician role required",
-        )
 
     technician = get_technician_for_current_user(
         db,

@@ -11,6 +11,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import sessionmaker
 from app.redis_client import get_redis_client
+from app.auth.dependencies import get_current_user, AuthenticatedUser
+from app.auth.rbac import UserRole
 
 # Setup test DB
 SQLALCHEMY_DATABASE_URL = "sqlite://"
@@ -28,6 +30,9 @@ fake_redis = FakeRedis(decode_responses=True)
 
 def override_get_redis():
     return fake_redis
+
+def override_current_user():
+    return AuthenticatedUser("test-admin", "tenant-1", UserRole.SUPER_ADMIN, "test-session")
 
 client = TestClient(app)
 
@@ -53,6 +58,7 @@ def setup_db():
 def apply_overrides():
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_redis_client] = override_get_redis
+    app.dependency_overrides[get_current_user] = override_current_user
     yield
     app.dependency_overrides.clear()
 

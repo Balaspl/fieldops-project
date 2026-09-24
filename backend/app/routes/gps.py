@@ -13,11 +13,29 @@ from ..redis_client import get_redis_client
 from ..logger import logger
 from .. import models, schemas
 from .dispatch import verify_jwt_token
+from ..auth.dependencies import AuthenticatedUser, get_current_user
+from ..auth.rbac import Permission
 
 router = APIRouter(
     prefix="/api/v1/gps",
     tags=["GPS"]
 )
+
+
+def _enforce_gps_actor(current_user: AuthenticatedUser, tenant_id: str, technician) -> None:
+    """Bind GPS access to the signed-in tenant and, for technicians, identity."""
+    if current_user.tenant_id != tenant_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant access denied")
+    if current_user.has_permission(Permission.GPS_TRACK):
+        return
+    if not current_user.has_permission(Permission.GPS_TRACK_OWN):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+    numeric_user_id = int(current_user.user_id) if str(current_user.user_id).isdigit() else -1
+    if technician.tenant_id != current_user.tenant_id or not (
+        technician.tech_id == str(current_user.user_id)
+        or technician.technician_id == numeric_user_id
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Technician GPS access denied")
 
 def check_sliding_window_rate_limit(redis_client, technician_id: str, tenant_id: str) -> bool:
     """
@@ -118,11 +136,28 @@ def get_gps_history(
     end_time: Optional[str] = None,
     x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID"),
     db: Session = Depends(get_db),
-    authorization: str = Depends(verify_jwt_token)
+    authorization: str = Depends(verify_jwt_token),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ):
-    query = db.query(models.GPSPing).filter(models.GPSPing.technician_id == technician_id)
-    if x_tenant_id:
-        query = query.filter(models.GPSPing.tenant_id == x_tenant_id)
+    if current_user.tenant_id != (x_tenant_id or current_user.tenant_id):
+        raise HTTPException(status_code=403, detail="Tenant access denied")
+    technician = db.query(models.Technician).filter(
+        models.Technician.tech_id == technician_id,
+        models.Technician.tenant_id == current_user.tenant_id,
+    ).first()
+    if technician is None and technician_id.isdigit():
+        technician = db.query(models.Technician).filter(
+            models.Technician.technician_id == int(technician_id),
+            models.Technician.tenant_id == current_user.tenant_id,
+        ).first()
+    if technician is None:
+        raise HTTPException(status_code=404, detail="Technician not found")
+    _enforce_gps_actor(current_user, current_user.tenant_id, technician)
+
+    query = db.query(models.GPSPing).filter(
+        models.GPSPing.technician_id == (technician.tech_id or str(technician.technician_id))
+    )
+    query = query.filter(models.GPSPing.tenant_id == current_user.tenant_id)
     
     if job_id:
         query = query.filter(models.GPSPing.job_id == job_id)
@@ -163,8 +198,11 @@ async def gps_ping(
     x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
     authorization: str = Depends(verify_jwt_token),
     redis_client = Depends(get_redis_client),
-    bypass_interval: bool = False
+    bypass_interval: bool = False,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ):
+    if current_user.tenant_id != x_tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant access denied")
     correlation_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
     log_extra = {"correlation_id": correlation_id, "tenant_id": x_tenant_id}
 
@@ -252,6 +290,8 @@ async def gps_ping(
             log_rejected_ping(db, payload.technician_id, payload.job_id, x_tenant_id, "Technician not found")
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Technician not found")
 
+        _enforce_gps_actor(current_user, x_tenant_id, tech)
+
         if tech.tenant_id and tech.tenant_id != x_tenant_id:
             logger.error(f"Access denied: technician {payload.technician_id} belongs to different tenant", extra=log_extra)
             log_rejected_ping(db, payload.technician_id, payload.job_id, x_tenant_id, "Access denied for technician")
@@ -275,7 +315,7 @@ async def gps_ping(
         is_legacy_active = (job.status.lower() == "active")
         
         if not is_legacy_active:
-            active_statuses = ["ASSIGNED", "EN_ROUTE", "ON_SITE"]
+            active_statuses = ["ASSIGNED", "EN_ROUTE", "ON_SITE", "IN_PROGRESS"]
             job_status_upper = job.status.upper().strip()
             if job_status_upper not in active_statuses:
                 logger.error(f"Job status outside active window: {job.status}", extra=log_extra)
@@ -476,8 +516,11 @@ async def gps_batch(
     request: Request,
     x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
     authorization: str = Depends(verify_jwt_token),
-    redis_client = Depends(get_redis_client)
+    redis_client = Depends(get_redis_client),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ):
+    if current_user.tenant_id != x_tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant access denied")
     correlation_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
     log_extra = {"correlation_id": correlation_id, "tenant_id": x_tenant_id}
 
@@ -637,6 +680,13 @@ async def gps_batch(
                 errors.append({"index": i, "reason": "Technician not found"})
                 continue
 
+            try:
+                _enforce_gps_actor(current_user, x_tenant_id, tech)
+            except HTTPException:
+                log_rejected_ping(db, payload.technician_id, payload.job_id, x_tenant_id, "Access denied for technician")
+                errors.append({"index": i, "reason": "Access denied for technician"})
+                continue
+
             if tech.tenant_id and tech.tenant_id != x_tenant_id:
                 log_rejected_ping(db, payload.technician_id, payload.job_id, x_tenant_id, "Access denied for technician")
                 errors.append({"index": i, "reason": "Access denied for technician"})
@@ -656,7 +706,7 @@ async def gps_batch(
             # Active Job Gating
             is_legacy_active = (job.status.lower() == "active")
             if not is_legacy_active:
-                active_statuses = ["ASSIGNED", "EN_ROUTE", "ON_SITE"]
+                active_statuses = ["ASSIGNED", "EN_ROUTE", "ON_SITE", "IN_PROGRESS"]
                 if job.status.upper().strip() not in active_statuses:
                     log_rejected_ping(db, payload.technician_id, payload.job_id, x_tenant_id, f"Job status is {job.status}")
                     errors.append({"index": i, "reason": "Job status is not active"})

@@ -31,6 +31,8 @@ from app.main import app
 from app.database import Base, get_db
 from app.models import Tenant, Technician, Job, GPSPing, SecurityAuditLog
 from app.redis_client import get_redis_client
+from app.auth.dependencies import get_current_user, AuthenticatedUser
+from app.auth.rbac import UserRole
 from app.services.tracking_manager import (
     ConnectionManager,
     TenantValidator,
@@ -48,6 +50,9 @@ def override_get_db():
         db.close()
 
 app.dependency_overrides[get_db] = override_get_db
+app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
+    "test-admin", "tenant-1", UserRole.SUPER_ADMIN, "test-session"
+)
 
 # Shared Redis Server for Pub/Sub synchrony
 shared_server = fakeredis.FakeServer()
@@ -73,6 +78,12 @@ def mock_deps():
 def setup_db():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+
+    # Other test modules clear FastAPI's shared dependency overrides. Reinstall
+    # the authenticated GPS test actor for every test in this module.
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
+        "test-admin", "tenant-1", UserRole.SUPER_ADMIN, "test-session"
+    )
     
     # Reset ConnectionManager registers between tests
     connection_manager.active_connections.clear()
@@ -181,30 +192,88 @@ def test_cross_tenant_subscription_rejection(setup_db):
     assert logs[0].action_taken == "subscription_rejected"
 
 
-def test_parent_child_tenant_admin_subscription(setup_db):
+def test_technician_tracking_subscriptions_are_assignment_scoped(setup_db):
     db = setup_db
+    db.add_all([
+        Technician(technician_id=1, tech_id="tech-1", tenant_id="tenant-1",
+                   technician_name="Alice", technician_skill="Plumber", technician_location="A"),
+        Technician(technician_id=2, tech_id="tech-2", tenant_id="tenant-1",
+                   technician_name="Bob", technician_skill="Plumber", technician_location="B"),
+        Job(id=10, tenant_id="tenant-1", customer_name="Customer", location="A",
+            issue_description="Leak", priority="HIGH", service_type="Plumbing",
+            contact_number="123", preferred_service_date=datetime.now().date(),
+            assigned_technician_id=1, status="ASSIGNED"),
+    ])
+    db.commit()
+
+    token = generate_token(tenant_id="tenant-1", role="technician", user_id="tech-1")
+    client = TestClient(app)
+    with client.websocket_connect(f"/ws/v1/tracking?token={token}") as websocket:
+        websocket.send_json({"type": "subscribe", "channel": "tenant:tenant-1:technician:tech-1"})
+        assert websocket.receive_json()["type"] == "subscribed"
+        websocket.send_json({"type": "subscribe", "channel": "tenant:tenant-1:job:10"})
+        assert websocket.receive_json()["type"] == "subscribed"
+        websocket.send_json({"type": "subscribe", "channel": "tenant:tenant-1:technician:tech-2"})
+        assert websocket.receive_json()["code"] == "RESOURCE_ACCESS_DENIED"
+        websocket.send_json({"type": "subscribe", "channel": "tenant:tenant-1:all"})
+        assert websocket.receive_json()["code"] == "RESOURCE_ACCESS_DENIED"
+
+
+def test_parent_child_tenant_cross_tenant_subscription_rejected(setup_db):
+    db = setup_db
+
     # Seed parent-child relationship
-    parent = Tenant(id="parent-tenant", name="Parent Inc")
-    child = Tenant(id="child-tenant", name="Child Inc", parent_tenant_id="parent-tenant")
+    parent = Tenant(
+        id="parent-tenant",
+        name="Parent Inc",
+    )
+    child = Tenant(
+        id="child-tenant",
+        name="Child Inc",
+        parent_tenant_id="parent-tenant",
+    )
+
     db.add(parent)
     db.add(child)
     db.commit()
 
-    # 1. Parent admin connects and subscribes to child-tenant -> Succeeds
-    token_admin = generate_token(tenant_id="parent-tenant", role="tenant_admin")
     client = TestClient(app)
-    with client.websocket_connect(f"/ws/v1/tracking?token={token_admin}") as websocket:
-        websocket.send_json({"type": "subscribe", "channel": "tenant:child-tenant:all"})
-        resp = websocket.receive_json()
-        assert resp["type"] == "subscribed"
 
-    # 2. Parent dispatcher connects and subscribes to child-tenant -> Fails
-    token_dispatcher = generate_token(tenant_id="parent-tenant", role="dispatcher")
-    with client.websocket_connect(f"/ws/v1/tracking?token={token_dispatcher}") as websocket:
-        websocket.send_json({"type": "subscribe", "channel": "tenant:child-tenant:all"})
+    # Parent dispatcher must NOT access child tenant
+    token_dispatcher = generate_token(
+        tenant_id="parent-tenant",
+        role="dispatcher",
+        user_id="dispatcher-1",
+    )
+
+    with client.websocket_connect(
+        f"/ws/v1/tracking?token={token_dispatcher}"
+    ) as websocket:
+
+        websocket.send_json({
+            "type": "subscribe",
+            "channel": "tenant:child-tenant:all",
+        })
+
         resp = websocket.receive_json()
+
         assert resp["type"] == "error"
         assert resp["code"] == "CROSS_TENANT_ACCESS"
+
+    # Verify security audit log
+    logs = (
+        db.query(SecurityAuditLog)
+        .filter(
+            SecurityAuditLog.event == "cross_tenant_access_attempt"
+        )
+        .all()
+    )
+
+    assert len(logs) == 1
+    assert logs[0].user_tenant == "parent-tenant"
+    assert logs[0].attempted_channel == "tenant:child-tenant:all"
+    assert logs[0].severity == "warning"
+    assert logs[0].action_taken == "subscription_rejected"
 
 
 def test_broadcast_tenant_mismatch(setup_db):

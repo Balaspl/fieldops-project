@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Header, Response, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Query
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from typing import List, Union, Optional
@@ -8,7 +8,9 @@ from ..database import get_db
 from .. import models, schemas
 import uuid
 
-from app.auth.dependencies import get_current_user_or_tenant, AuthenticatedUser
+from app.auth.dependencies import AuthenticatedUser, require_permission
+
+from app.auth.rbac import Permission
 
 router = APIRouter(
     prefix="/technicians",
@@ -18,14 +20,16 @@ router = APIRouter(
 @router.post("", response_model=Union[schemas.TechnicianResponse, List[schemas.TechnicianResponse]], status_code=status.HTTP_200_OK)
 def create_technician(
     technician: Union[schemas.TechnicianCreate, List[schemas.TechnicianCreate]],
-    user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(get_current_user_or_tenant),
+    current_user: AuthenticatedUser = Depends(
+    require_permission(Permission.TECHNICIANS_CREATE)
+),
     db: Session = Depends(get_db)
 ):
     """
     Register one or more new technicians.
     Prevents duplicate entries based on name and skill.
     """
-    user, tenant_id = user_tenant
+    tenant_id = current_user.tenant_id
     try:
         # Normalize to list for uniform processing
         tech_list = technician if isinstance(technician, list) else [technician]
@@ -99,24 +103,19 @@ def get_all_technicians(
     skill: Optional[str] = None,
     page: Optional[int] = Query(None, ge=1),
     limit: Optional[int] = Query(None, ge=1),
-    user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(get_current_user_or_tenant),
+    current_user: AuthenticatedUser = Depends(
+    require_permission(Permission.TECHNICIANS_VIEW_ALL)
+),
     db: Session = Depends(get_db)
 ):
     """
     Retrieve all registered technicians, optionally filtered.
     """
-    user, tenant_id = user_tenant
+    
     try:
         query = db.query(models.Technician)
-
-        if user:
-            query = query.filter(
-                models.Technician.tenant_id == user.tenant_id
-            )
-        else:
-            query = query.filter(
-                models.Technician.tenant_id == tenant_id
-            )
+        query = query.filter(
+    models.Technician.tenant_id == current_user.tenant_id)
         if search:
             search_pattern = f"%{search}%"
             query = query.filter(
@@ -150,11 +149,17 @@ def get_all_technicians(
         )
 
 @router.get("/workload", response_model=schemas.WorkloadResponse)
-def get_technician_workload(technician_id: int, db: Session = Depends(get_db)):
+def get_technician_workload(technician_id: int,
+    current_user: AuthenticatedUser = Depends(
+    require_permission(Permission.TECHNICIANS_VIEW_ALL)
+    ), db: Session = Depends(get_db)):
     """
     Retrieve workload details of a specific technician.
     """
-    tech = db.query(models.Technician).filter(models.Technician.technician_id == technician_id).first()
+    tech = db.query(models.Technician).filter(
+    models.Technician.technician_id == technician_id,
+    models.Technician.tenant_id == current_user.tenant_id
+).first()
     if not tech:
         raise HTTPException(status_code=404, detail="Technician not found")
     
@@ -166,13 +171,22 @@ def get_technician_workload(technician_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/update-workload", response_model=schemas.WorkloadResponse)
-def update_technician_workload(update: schemas.WorkloadUpdate, db: Session = Depends(get_db)):
+def update_technician_workload(
+    update: schemas.WorkloadUpdate,
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.TECHNICIANS_MANAGE)
+    ),
+    db: Session = Depends(get_db)
+):
     """
     Manually update technician workload and synchronize status.
     """
     from ..workload_utils import sync_technician_status
     
-    tech = db.query(models.Technician).filter(models.Technician.technician_id == update.technician_id).first()
+    tech = db.query(models.Technician).filter(
+        models.Technician.technician_id == update.technician_id,
+        models.Technician.tenant_id == current_user.tenant_id
+    ).first()
     if not tech:
         raise HTTPException(status_code=404, detail="Technician not found")
     
@@ -193,11 +207,20 @@ def update_technician_workload(update: schemas.WorkloadUpdate, db: Session = Dep
 
 
 @router.put("/update-status", response_model=schemas.TechnicianResponse)
-def update_technician_status(update: schemas.TechnicianStatusUpdate, db: Session = Depends(get_db)):
+def update_technician_status(
+    update: schemas.TechnicianStatusUpdate,
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.TECHNICIANS_MANAGE)
+    ),
+    db: Session = Depends(get_db)
+):
     """
     Manually update technician availability status.
     """
-    tech = db.query(models.Technician).filter(models.Technician.technician_id == update.technician_id).first()
+    tech = db.query(models.Technician).filter(
+        models.Technician.technician_id == update.technician_id,
+        models.Technician.tenant_id == current_user.tenant_id
+    ).first()
     if not tech:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Technician not found")
         
@@ -213,13 +236,22 @@ def update_technician_status(update: schemas.TechnicianStatusUpdate, db: Session
 
 
 @router.get("/validate-workload", response_model=schemas.WorkloadValidationResponse)
-def validate_technician_workload_api(technician_id: int, db: Session = Depends(get_db)):
+def validate_technician_workload_api(
+    technician_id: int,
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.TECHNICIANS_VIEW_ALL)
+    ),
+    db: Session = Depends(get_db)
+):
     """
     Validate technician workload conditions and return detailed status.
     """
     from ..validation import get_workload_validation_status
     
-    tech = db.query(models.Technician).filter(models.Technician.technician_id == technician_id).first()
+    tech = db.query(models.Technician).filter(
+        models.Technician.technician_id == technician_id,
+        models.Technician.tenant_id == current_user.tenant_id
+    ).first()
     if not tech:
         raise HTTPException(status_code=404, detail="Technician not found")
         
@@ -228,20 +260,18 @@ def validate_technician_workload_api(technician_id: int, db: Session = Depends(g
 
 @router.get("/available", response_model=List[schemas.AvailableTechnicianResponse])
 def get_available_technicians(
-    x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID"),
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.TECHNICIANS_VIEW_ALL)
+    ),
     db: Session = Depends(get_db)
 ):
     """
     Retrieve available technicians for assignment.
     Includes tenant isolation fallback and all candidate statuses so candidate selection is never empty.
     """
-    query = db.query(models.Technician)
-    if x_tenant_id:
-        query = query.filter(
-            (models.Technician.tenant_id == x_tenant_id) |
-            (models.Technician.tenant_id == "__platform__") |
-            (models.Technician.tenant_id.is_(None))
-        )
+    query = db.query(models.Technician).filter(
+        models.Technician.tenant_id == current_user.tenant_id
+    )
     
     # Try fetching available or assigned technicians first
     available_query = query.filter(
@@ -271,12 +301,21 @@ def get_available_technicians(
 
 
 @router.get("/zones", response_model=List[str])
-def get_all_zones(db: Session = Depends(get_db)):
+def get_all_zones(
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.TECHNICIANS_VIEW_ALL)
+    ),
+    db: Session = Depends(get_db)
+):
     """
     Retrieve all unique technician zones/locations.
     """
     try:
-        results = db.query(models.Technician.technician_location).distinct().all()
+        results = db.query(
+            models.Technician.technician_location
+        ).filter(
+            models.Technician.tenant_id == current_user.tenant_id
+        ).distinct().all()
         # Filter out empty or null locations, trim, and sort
         zones = sorted(list(set(r[0].strip() for r in results if r[0] and r[0].strip())))
         return zones
@@ -288,11 +327,20 @@ def get_all_zones(db: Session = Depends(get_db)):
 
 
 @router.get("/{technician_id}", response_model=schemas.TechnicianResponse)
-def get_technician_by_id(technician_id: int, db: Session = Depends(get_db)):
+def get_technician_by_id(
+    technician_id: int,
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.TECHNICIANS_VIEW_ALL)
+    ),
+    db: Session = Depends(get_db)
+):
     """
     Retrieve details of a specific technician.
     """
-    tech = db.query(models.Technician).filter(models.Technician.technician_id == technician_id).first()
+    tech = db.query(models.Technician).filter(
+        models.Technician.technician_id == technician_id,
+        models.Technician.tenant_id == current_user.tenant_id
+    ).first()
     if not tech:
         raise HTTPException(status_code=404, detail="Technician not found")
     return tech
@@ -302,6 +350,9 @@ def get_technician_by_id(technician_id: int, db: Session = Depends(get_db)):
 def update_technician_availability(
     id: str,
     update_data: schemas.TechnicianAvailabilityUpdate,
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.TECHNICIANS_MANAGE)
+    ),
     db: Session = Depends(get_db)
 ):
     """
@@ -309,9 +360,15 @@ def update_technician_availability(
     """
     tech = None
     if id.isdigit():
-        tech = db.query(models.Technician).filter(models.Technician.technician_id == int(id)).first()
+        tech = db.query(models.Technician).filter(
+            models.Technician.technician_id == int(id),
+            models.Technician.tenant_id == current_user.tenant_id
+        ).first()
     if not tech:
-        tech = db.query(models.Technician).filter(models.Technician.tech_id == id).first()
+        tech = db.query(models.Technician).filter(
+            models.Technician.tech_id == id,
+            models.Technician.tenant_id == current_user.tenant_id
+        ).first()
         
     if not tech:
         raise HTTPException(status_code=404, detail="Technician not found")
@@ -333,15 +390,23 @@ def update_technician_availability(
 
 from ..schemas import NotificationPreferencesInput, PreferencesUpdateResponse
 from ..services.preferences import get_technician_preferences, update_technician_preferences, DEFAULT_PREFS
-from .dispatch import verify_jwt_token
 from datetime import datetime, timezone
 
 @router.get("/{id}/preferences")
 async def get_preferences(
     id: str,
-    db: Session = Depends(get_db),
-    authorization: str = Depends(verify_jwt_token)
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.TECHNICIANS_VIEW_ALL)
+    ),
+    db: Session = Depends(get_db)
 ):
+    tech = db.query(models.Technician).filter(
+        models.Technician.tech_id == id,
+        models.Technician.tenant_id == current_user.tenant_id
+    ).first()
+    if not tech:
+        raise HTTPException(status_code=404, detail="Technician not found")
+
     prefs = get_technician_preferences(db, id)
     return {
         "tech_id": id,
@@ -354,10 +419,19 @@ async def get_preferences(
 async def update_preferences(
     id: str,
     payload: NotificationPreferencesInput,
-    db: Session = Depends(get_db),
-    authorization: str = Depends(verify_jwt_token)
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.TECHNICIANS_MANAGE)
+    ),
+    db: Session = Depends(get_db)
 ):
     try:
+        tech = db.query(models.Technician).filter(
+            models.Technician.tech_id == id,
+            models.Technician.tenant_id == current_user.tenant_id
+        ).first()
+        if not tech:
+            raise HTTPException(status_code=404, detail="Technician not found")
+
         updated_prefs = update_technician_preferences(
             db=db,
             tech_id=id,
@@ -379,9 +453,18 @@ async def update_preferences(
 @router.post("/{id}/preferences/reset", response_model=PreferencesUpdateResponse)
 async def reset_preferences(
     id: str,
-    db: Session = Depends(get_db),
-    authorization: str = Depends(verify_jwt_token)
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.TECHNICIANS_MANAGE)
+    ),
+    db: Session = Depends(get_db)
 ):
+    tech = db.query(models.Technician).filter(
+        models.Technician.tech_id == id,
+        models.Technician.tenant_id == current_user.tenant_id
+    ).first()
+    if not tech:
+        raise HTTPException(status_code=404, detail="Technician not found")
+
     updated_prefs = update_technician_preferences(
         db=db,
         tech_id=id,
@@ -399,11 +482,21 @@ async def reset_preferences(
     }
 
 @router.put("/{technician_id}", response_model=schemas.TechnicianResponse)
-def update_technician(technician_id: int, technician: schemas.TechnicianCreate, db: Session = Depends(get_db)):
+def update_technician(
+    technician_id: int,
+    technician: schemas.TechnicianCreate,
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.TECHNICIANS_MANAGE)
+    ),
+    db: Session = Depends(get_db)
+):
     """
     Update a technician's details.
     """
-    tech = db.query(models.Technician).filter(models.Technician.technician_id == technician_id).first()
+    tech = db.query(models.Technician).filter(
+        models.Technician.technician_id == technician_id,
+        models.Technician.tenant_id == current_user.tenant_id
+    ).first()
     if not tech:
         raise HTTPException(status_code=404, detail="Technician not found")
     
@@ -421,11 +514,20 @@ def update_technician(technician_id: int, technician: schemas.TechnicianCreate, 
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @router.delete("/{technician_id}", status_code=status.HTTP_200_OK)
-def delete_technician(technician_id: int, db: Session = Depends(get_db)):
+def delete_technician(
+    technician_id: int,
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.TECHNICIANS_MANAGE)
+    ),
+    db: Session = Depends(get_db)
+):
     """
     Delete a technician.
     """
-    tech = db.query(models.Technician).filter(models.Technician.technician_id == technician_id).first()
+    tech = db.query(models.Technician).filter(
+        models.Technician.technician_id == technician_id,
+        models.Technician.tenant_id == current_user.tenant_id
+    ).first()
     if not tech:
         raise HTTPException(status_code=404, detail="Technician not found")
     
@@ -441,12 +543,18 @@ def delete_technician(technician_id: int, db: Session = Depends(get_db)):
 def update_technician_status_by_id(
     technician_id: int,
     update_data: schemas.TechnicianAvailabilityUpdate,
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.TECHNICIANS_MANAGE)
+    ),
     db: Session = Depends(get_db)
 ):
     """
     Update the status of a technician.
     """
-    tech = db.query(models.Technician).filter(models.Technician.technician_id == technician_id).first()
+    tech = db.query(models.Technician).filter(
+        models.Technician.technician_id == technician_id,
+        models.Technician.tenant_id == current_user.tenant_id
+    ).first()
     if not tech:
         raise HTTPException(status_code=404, detail="Technician not found")
     

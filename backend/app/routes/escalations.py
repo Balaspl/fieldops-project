@@ -9,8 +9,8 @@ import uuid
 from app.database import get_db
 from app.models import Job, SLAEscalation, AuditEvent, Technician,InAppNotification
 from app.redis_client import get_redis_client
-from app.auth.dependencies import AuthenticatedUser, require_role
-from app.auth.rbac import UserRole
+from app.auth.dependencies import AuthenticatedUser, require_role,require_permission
+from app.auth.rbac import UserRole,Permission
 from app.services.timer_service import TimerService
 from app.services.socket_manager import sio, emit_notification
 logger = logging.getLogger(__name__)
@@ -79,9 +79,8 @@ def extend_sla(
     job_id: int,
     payload: ExtendSLARequest,
     current_user: AuthenticatedUser = Depends(
-        require_role(
-            UserRole.SUPER_ADMIN,
-            UserRole.DISPATCHER,
+        require_permission(
+            Permission.ESCALATIONS_MANAGE
         )
     ),
     db: Session = Depends(get_db),
@@ -163,9 +162,8 @@ def cancel_job(
     job_id: int,
     payload: CancelJobRequest,
     current_user: AuthenticatedUser = Depends(
-        require_role(
-            UserRole.SUPER_ADMIN,
-            UserRole.DISPATCHER,
+        require_permission(
+            Permission.ESCALATIONS_MANAGE
         )
     ),
     db: Session = Depends(get_db),
@@ -228,9 +226,8 @@ async def force_assign(
     job_id: int,
     payload: ForceAssignRequest,
     current_user: AuthenticatedUser = Depends(
-        require_role(
-            UserRole.SUPER_ADMIN,
-            UserRole.DISPATCHER,
+        require_permission(
+            Permission.ESCALATIONS_MANAGE
         )
     ),
     db: Session = Depends(get_db),
