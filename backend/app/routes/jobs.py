@@ -271,7 +271,9 @@ def get_jobs(
     page: Optional[int] = Query(None, ge=1),
     limit: Optional[int] = Query(None, ge=1),
     user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(get_current_user_or_tenant),
-    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_VIEW_ALL)),
+    current_user: AuthenticatedUser = Depends(
+        require_any_job_permission(Permission.JOBS_VIEW_ALL, Permission.JOBS_VIEW_OWN)
+    ),
     db: Session = Depends(get_db)
 ):
     user, tenant_id = user_tenant
@@ -279,6 +281,17 @@ def get_jobs(
         sla_service = SLAService()
         query = db.query(Job)
         query = query.filter(Job.tenant_id == tenant_id)
+
+        # Technicians may use this endpoint for their own assigned jobs only.
+        # Never trust the optional technician_id query parameter as authorization.
+        if has_permission(current_user.role, Permission.JOBS_VIEW_OWN) and not has_permission(
+            current_user.role, Permission.JOBS_VIEW_ALL
+        ):
+            technician = get_technician_for_current_user(db, current_user)
+            query = query.filter(
+                Job.tenant_id == current_user.tenant_id,
+                Job.assigned_technician_id == technician.technician_id,
+            )
         
         if search:
             search_pattern = f"%{search}%"
@@ -1039,11 +1052,6 @@ def reassign_job(
     db: Session = Depends(get_db),
     redis_client=Depends(get_redis_client),
 ):
-    old_technician = get_technician_for_current_user(
-        db,
-        current_user,
-    )
-
     job = db.query(Job).filter(
         Job.id == job_id,
         Job.tenant_id == current_user.tenant_id,
@@ -1055,13 +1063,34 @@ def reassign_job(
             detail="Job not found",
         )
 
-    if not has_permission(
+    has_full_reassign = has_permission(
         current_user.role,
         Permission.JOBS_REASSIGN,
-    ) and job.assigned_technician_id != old_technician.technician_id:
+    )
+
+    # Users with only JOBS_REASSIGN_OWN may reassign only jobs assigned
+    # to themselves. Dispatchers have JOBS_REASSIGN and therefore do not
+    # need a technician record linked to their user account.
+    if not has_full_reassign:
+        old_technician = get_technician_for_current_user(
+            db,
+            current_user,
+        )
+        if job.assigned_technician_id != old_technician.technician_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Technician not assigned to this job",
+            )
+
+    old_technician = db.query(Technician).filter(
+        Technician.technician_id == job.assigned_technician_id,
+        Technician.tenant_id == job.tenant_id,
+    ).first()
+
+    if not old_technician:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Technician not assigned to this job",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Current technician not found",
         )
 
     new_technician = db.query(Technician).filter(
@@ -1491,13 +1520,23 @@ async def assign_job(
 @router.get("/{job_id}", response_model=JobResponse)
 def get_job_by_id(
     job_id: int,
-    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_VIEW_ALL)),
+    current_user: AuthenticatedUser = Depends(
+        require_any_job_permission(Permission.JOBS_VIEW_ALL, Permission.JOBS_VIEW_OWN)
+    ),
     db: Session = Depends(get_db),
 ):
-    job = db.query(Job).filter(
+    query = db.query(Job).filter(
         Job.id == job_id,
         Job.tenant_id == current_user.tenant_id,
-    ).first()
+    )
+
+    if has_permission(current_user.role, Permission.JOBS_VIEW_OWN) and not has_permission(
+        current_user.role, Permission.JOBS_VIEW_ALL
+    ):
+        technician = get_technician_for_current_user(db, current_user)
+        query = query.filter(Job.assigned_technician_id == technician.technician_id)
+
+    job = query.first()
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -1836,6 +1875,11 @@ def get_job_valid_transitions(
             detail="Job not found",
         )
 
+    if current_user.role == UserRole.TECHNICIAN:
+        technician = get_technician_for_current_user(db, current_user)
+        if job.assigned_technician_id != technician.technician_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Technician not assigned to this job")
+
     from app.services.job_status_machine import (
         TransitionValidator,
     )
@@ -1897,6 +1941,11 @@ def transition_job_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Job not found",
         )
+
+    if current_user.role == UserRole.TECHNICIAN:
+        technician = get_technician_for_current_user(db, current_user)
+        if job.assigned_technician_id != technician.technician_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
     job._actor_id = actor_id
     job._actor_role = actor_role
@@ -1969,7 +2018,9 @@ def transition_job_endpoint(
 def bulk_cancel_jobs(
     payload: BulkJobCancellationRequest,
     request: Request,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.JOBS_CANCEL)
+    ),
     db: Session = Depends(get_db),
 ):
     """
@@ -1981,13 +2032,6 @@ def bulk_cancel_jobs(
 
     actor_id = current_user.user_id
     actor_role = current_user.role.value
-
-    # Only dispatcher/admin can perform bulk cancellation.
-    if actor_role not in {"dispatcher", "admin"}:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only dispatcher or admin can perform bulk cancellation",
-        )
 
     # Remove duplicate IDs while preserving order.
     job_ids = list(dict.fromkeys(payload.job_ids))

@@ -83,17 +83,21 @@ EXPECTED_PERMISSIONS = {
         Permission.ESCALATIONS_VIEW,
         Permission.ESCALATIONS_MANAGE,
         Permission.USERS_VIEW,
+        Permission.USERS_CREATE,
     },
+
     UserRole.TECHNICIAN: {
-    Permission.JOBS_VIEW_OWN,
-    Permission.JOBS_ACCEPT_REJECT,
-    Permission.JOBS_STATUS_UPDATE,
-    Permission.JOBS_REASSIGN_OWN,
-    Permission.TECHNICIANS_VIEW_OWN,
-    Permission.DASHBOARD_TECH_VIEW,
-    Permission.NOTIFICATIONS_VIEW_OWN,
-    Permission.GPS_TRACK_OWN,
-},
+        Permission.JOBS_VIEW_OWN,
+        Permission.JOBS_ACCEPT_REJECT,
+        Permission.JOBS_STATUS_UPDATE,
+        Permission.JOBS_REASSIGN_OWN,
+        Permission.TECHNICIANS_VIEW_OWN,
+        Permission.DASHBOARD_TECH_VIEW,
+        Permission.NOTIFICATIONS_VIEW_OWN,
+        Permission.GPS_TRACK_OWN,
+        Permission.COMPLETION_DOCUMENTS_MANAGE,
+        Permission.REPORTS_VIEW,
+    },
 
     UserRole.CUSTOMER: {
         Permission.JOBS_VIEW_OWN,
@@ -146,10 +150,13 @@ def test_get_permissions_returns_expected_permissions(role):
         (UserRole.DISPATCHER, Permission.JOBS_ASSIGN),
         (UserRole.DISPATCHER, Permission.DISPATCH_MANAGE),
         (UserRole.DISPATCHER, Permission.USERS_VIEW),
+        (UserRole.DISPATCHER, Permission.USERS_CREATE),
 
         (UserRole.TECHNICIAN, Permission.JOBS_VIEW_OWN),
         (UserRole.TECHNICIAN, Permission.JOBS_ACCEPT_REJECT),
         (UserRole.TECHNICIAN, Permission.GPS_TRACK_OWN),
+        (UserRole.TECHNICIAN, Permission.COMPLETION_DOCUMENTS_MANAGE),
+        (UserRole.TECHNICIAN, Permission.REPORTS_VIEW),
 
         (UserRole.CUSTOMER, Permission.JOBS_VIEW_OWN),
         (UserRole.CUSTOMER, Permission.CUSTOMERS_CREATE_REQUEST),
@@ -224,7 +231,10 @@ def test_denied_role_permission_pairs(role, permission):
     ],
 )
 def test_unknown_role_denied(unknown_role):
-    assert has_permission(unknown_role, Permission.JOBS_VIEW_ALL) is False
+    assert has_permission(
+        unknown_role,
+        Permission.JOBS_VIEW_ALL,
+    ) is False
 
 
 # ============================================================
@@ -242,7 +252,10 @@ def test_unknown_role_denied(unknown_role):
     ],
 )
 def test_unknown_permission_denied(unknown_permission):
-    assert has_permission(UserRole.TECHNICIAN, unknown_permission) is False
+    assert has_permission(
+        UserRole.TECHNICIAN,
+        unknown_permission,
+    ) is False
 
 
 # ============================================================
@@ -279,8 +292,9 @@ def test_get_permissions_returns_copy():
 
     permissions.clear()
 
-    # Original ROLE_PERMISSIONS must remain unchanged.
-    assert Permission.JOBS_VIEW_OWN in ROLE_PERMISSIONS[UserRole.TECHNICIAN]
+    assert Permission.JOBS_VIEW_OWN in ROLE_PERMISSIONS[
+        UserRole.TECHNICIAN
+    ]
 
 
 # ============================================================
@@ -290,11 +304,8 @@ def test_get_permissions_returns_copy():
 @pytest.mark.parametrize(
     "actor,target",
     [
-        # Super admin can manage dispatcher and technician
         (UserRole.SUPER_ADMIN, UserRole.DISPATCHER),
         (UserRole.SUPER_ADMIN, UserRole.TECHNICIAN),
-
-        # Dispatcher can manage technician
         (UserRole.DISPATCHER, UserRole.TECHNICIAN),
     ],
 )
@@ -305,22 +316,16 @@ def test_allowed_role_management(actor, target):
 @pytest.mark.parametrize(
     "actor,target",
     [
-        # HEAD cannot manage users
         (UserRole.HEAD, UserRole.TECHNICIAN),
         (UserRole.HEAD, UserRole.DISPATCHER),
 
-        # Dispatcher cannot manage dispatcher
         (UserRole.DISPATCHER, UserRole.DISPATCHER),
-
-        # Dispatcher cannot manage super admin
         (UserRole.DISPATCHER, UserRole.SUPER_ADMIN),
 
-        # Technician cannot manage anyone
         (UserRole.TECHNICIAN, UserRole.TECHNICIAN),
         (UserRole.TECHNICIAN, UserRole.DISPATCHER),
         (UserRole.TECHNICIAN, UserRole.SUPER_ADMIN),
 
-        # Customer cannot manage anyone
         (UserRole.CUSTOMER, UserRole.TECHNICIAN),
         (UserRole.CUSTOMER, UserRole.DISPATCHER),
         (UserRole.CUSTOMER, UserRole.SUPER_ADMIN),

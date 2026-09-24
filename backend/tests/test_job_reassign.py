@@ -640,14 +640,19 @@ def test_planned_assignments_super_admin(setup_db):
     db.add(job)
     db.commit()
 
+    super_admin_user = AuthenticatedUser(
+    user_id="super-admin",
+    tenant_id="tenant-1",
+    role=UserRole.SUPER_ADMIN,
+    jti="test-super-admin-jti",
+    session_id="test-super-admin-session",
+)
+
+    app.dependency_overrides[get_current_user] = lambda: super_admin_user
+    
     app.dependency_overrides[get_current_user_or_tenant] = (
         lambda: (
-            SimpleNamespace(
-                user_id="super-admin",
-                tenant_id="tenant-1",
-                role=UserRole.SUPER_ADMIN,
-                is_super_admin=True,
-            ),
+            super_admin_user,
             "tenant-1",
         )
     )

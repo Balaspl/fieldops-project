@@ -31,7 +31,12 @@ import uuid
 # ── JWT Configuration ─────────────────────────────────────────────────────────
 WS_JWT_SECRET = os.getenv("WS_JWT_SECRET", "dev-secret-key")
 WS_JWT_ALGORITHM = "HS256"
-ALLOWED_ROLES = {"dispatcher", "admin", "supervisor", "tenant_admin"}
+ALLOWED_ROLES = {
+    "head",
+    "super_admin",
+    "dispatcher",
+    "technician",
+}
 
 # ── Limits & Intervals ────────────────────────────────────────────────────────
 MAX_CONNECTIONS_PER_TENANT = 100
@@ -46,32 +51,17 @@ def decode_ws_token(token: str) -> dict[str, Any]:
     """
     Decode and validate a WebSocket JWT token.
 
-    Returns the claims dict on success.
-    Raises jwt.PyJWTError (or subclass) on failure, but falls back to mock claims for dev.
+    Invalid or missing tokens are rejected. There is no development/fake-token
+    fallback because this function is part of the authorization boundary.
     """
-    try:
-        return jwt.decode(token, WS_JWT_SECRET, algorithms=[WS_JWT_ALGORITHM])
-    except jwt.ExpiredSignatureError as e:
-        raise e
-    except jwt.PyJWTError as e:
-        # If it looks like a real JWT token, propagate the validation error
-        if token and len(token.split('.')) == 3:
-            raise e
-        
-        token_lower = (token or "").lower()
-        role = "dispatcher"
-        if "admin" in token_lower:
-            role = "admin"
-        elif "supervisor" in token_lower:
-            role = "supervisor"
-        elif "tenant_admin" in token_lower:
-            role = "tenant_admin"
-        
-        return {
-            "tenant_id": "tenant-1",
-            "user_id": "dev-user",
-            "role": role
-        }
+    if not token:
+        raise jwt.InvalidTokenError("Missing WebSocket token")
+
+    return jwt.decode(
+        token,
+        WS_JWT_SECRET,
+        algorithms=[WS_JWT_ALGORITHM],
+    )
 
 
 def log_security_event(db, event_type: str, severity: str, user_tenant: str | None, attempted_channel: str | None, ip_address: str | None, websocket_id: str | None, action_taken: str, payload_tenant: str | None = None, target_tenant: str | None = None, technician_id: str | None = None, job_id: str | None = None):
@@ -130,7 +120,7 @@ class TenantValidator:
     def __init__(self, db):
         self.db = db
     
-    async def validate_channel(self, websocket: WebSocket, channel: str, jwt_tenant_id: str, jwt_role: str) -> bool:
+    async def validate_channel(self, websocket: WebSocket, channel: str, jwt_tenant_id: str, jwt_role: str, user_id: str | None = None) -> bool:
         parts = channel.split(":")
         if len(parts) < 2 or parts[0] != "tenant":
             await websocket.send_json({
@@ -141,6 +131,42 @@ class TenantValidator:
             return False
         
         channel_tenant_id = parts[1]
+
+        # A technician can only receive their own GPS stream and jobs that
+        # are currently assigned to their tenant-scoped technician record.
+        if jwt_role == "technician":
+            user_id = str(user_id or "")
+            if channel_tenant_id != jwt_tenant_id or len(parts) != 4:
+                await websocket.send_json({
+                    "type": "error",
+                    "code": "RESOURCE_ACCESS_DENIED",
+                    "message": "Technicians may only access their own tracking resources",
+                })
+                return False
+
+            from ..models import Technician, Job
+            numeric_user_id = int(user_id) if user_id.isdigit() else -1
+            technician = self.db.query(Technician).filter(
+                Technician.tenant_id == jwt_tenant_id,
+                (Technician.tech_id == user_id) | (Technician.technician_id == numeric_user_id),
+            ).first()
+            authorized = False
+            if technician and parts[2] == "technician":
+                authorized = parts[3] in {str(technician.tech_id), str(technician.technician_id)}
+            elif technician and parts[2] == "job" and parts[3].isdigit():
+                authorized = self.db.query(Job.id).filter(
+                    Job.id == int(parts[3]),
+                    Job.tenant_id == jwt_tenant_id,
+                    Job.assigned_technician_id == technician.technician_id,
+                ).first() is not None
+
+            if not authorized:
+                await websocket.send_json({
+                    "type": "error",
+                    "code": "RESOURCE_ACCESS_DENIED",
+                    "message": "Technicians may only access their own tracking resources",
+                })
+            return authorized
         
         if channel_tenant_id == jwt_tenant_id:
             return True
@@ -271,7 +297,13 @@ class ConnectionManager:
             meta = self.connection_metadata.get(id(websocket), {})
             jwt_role = meta.get("role", "dispatcher")
             
-            allowed = await validator.validate_channel(websocket, channel, tenant_id, jwt_role)
+            allowed = await validator.validate_channel(
+                websocket,
+                channel,
+                tenant_id,
+                jwt_role,
+                user_id=meta.get("user_id"),
+            )
             if not allowed:
                 return False
         finally:
@@ -282,13 +314,42 @@ class ConnectionManager:
         logger.info(f"[ws:subscribe] channel={channel}")
         return True
 
-    async def unsubscribe(self, websocket: WebSocket, channel: str) -> None:
-        """Remove a WebSocket from a channel."""
+    async def unsubscribe(
+        self,
+        websocket: WebSocket,
+        channel: str,
+        tenant_id: str,
+    ) -> bool:
+        """Remove a WebSocket from a channel after authorization."""
+
+        db = SessionLocal()
+        try:
+            validator = TenantValidator(db)
+            meta = self.connection_metadata.get(id(websocket), {})
+
+            allowed = await validator.validate_channel(
+                websocket=websocket,
+                channel=channel,
+                jwt_tenant_id=tenant_id,
+                jwt_role=meta.get("role"),
+                user_id=meta.get("user_id"),
+            )
+
+            if not allowed:
+                return False
+        finally:
+            db.close()
+
         if channel in self.channel_subscriptions:
             self.channel_subscriptions[channel].discard(websocket)
             if not self.channel_subscriptions[channel]:
                 del self.channel_subscriptions[channel]
-        await websocket.send_json({"type": "unsubscribed", "channel": channel})
+
+        await websocket.send_json({
+            "type": "unsubscribed",
+            "channel": channel,
+        })
+        return True
 
     # ── Broadcasting ──────────────────────────────────────────────────────────
 

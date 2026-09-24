@@ -8,9 +8,9 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import (
     get_current_user,
     AuthenticatedUser,
-    require_role,
+    require_permission,
 )
-from app.auth.rbac import UserRole
+from app.auth.rbac import UserRole,Permission
 
 from ..database import get_db
 from ..models import Technician, InAppNotification
@@ -285,7 +285,7 @@ async def dismiss_notification(
 )
 async def cleanup_notifications(
     current_user: AuthenticatedUser = Depends(
-        require_role(UserRole.SUPER_ADMIN)
+        require_permission(Permission.NOTIFICATIONS_MANAGE)
     ),
     db: Session = Depends(get_db),
 ):

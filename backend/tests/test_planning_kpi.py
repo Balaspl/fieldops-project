@@ -7,7 +7,11 @@ from fastapi import HTTPException
 from app.main import app
 from app.models import Job, Technician, InAppNotification
 from app.database import Base, get_db
-from app.auth.dependencies import get_current_user_or_tenant
+from app.auth.dependencies import (
+    get_current_user,
+    get_current_user_or_tenant,
+    AuthenticatedUser,
+)
 from app.auth.rbac import UserRole
 from app.routes import planning as planning_route
 
@@ -50,11 +54,11 @@ client = TestClient(app)
 # AUTHENTICATED TEST USER
 # ============================================================
 
-TEST_USER = SimpleNamespace(
+TEST_USER = AuthenticatedUser(
     user_id="test-user",
     tenant_id="tenant-1",
-    role="dispatcher",
-    is_super_admin=False,
+    role=UserRole.DISPATCHER,
+    jti="test-jti",
 )
 
 
@@ -310,9 +314,119 @@ def apply_overrides():
         )
     )
 
+    # New RBAC route dependencies use get_current_user.
+    # Override it with the authenticated dispatcher used by these tests.
+    app.dependency_overrides[get_current_user] = lambda: TEST_USER
+
     yield
 
     app.dependency_overrides.clear()
+
+
+# ============================================================
+# RBAC / AUTHENTICATION TESTS
+# ============================================================
+
+def test_planning_kpi_dispatcher_allowed():
+    """Dispatcher has PLANNING_VIEW and can access the KPI endpoint."""
+    response = client.get("/planning/kpi")
+
+    assert response.status_code == 200
+
+
+def test_planned_assignments_dispatcher_allowed():
+    """Dispatcher has PLANNING_VIEW and can access planned assignments."""
+    response = client.get("/planned-assignments")
+
+    assert response.status_code == 200
+
+
+def test_planning_kpi_forbidden_for_technician():
+    """A technician must not access dispatcher planning KPI operations."""
+    technician_user = AuthenticatedUser(
+        user_id="technician-1",
+        tenant_id="tenant-1",
+        role=UserRole.TECHNICIAN,
+        jti="technician-test-jti",
+    )
+
+    app.dependency_overrides[get_current_user] = (
+        lambda: technician_user
+    )
+
+    response = client.get("/planning/kpi")
+
+    assert response.status_code == 403
+
+
+def test_planned_assignments_forbidden_for_technician():
+    """A technician must not access dispatcher planning assignments."""
+    technician_user = AuthenticatedUser(
+        user_id="technician-1",
+        tenant_id="tenant-1",
+        role=UserRole.TECHNICIAN,
+        jti="technician-test-jti",
+    )
+
+    app.dependency_overrides[get_current_user] = (
+        lambda: technician_user
+    )
+
+    response = client.get("/planned-assignments")
+
+    assert response.status_code == 403
+
+
+def test_planning_kpi_missing_token():
+    """
+    Authentication must be required by the real get_current_user dependency.
+
+    The get_current_user override is removed only for this test so the
+    endpoint receives no Authorization header and must return 401.
+    """
+    app.dependency_overrides.pop(get_current_user, None)
+
+    response = client.get("/planning/kpi")
+
+    assert response.status_code == 401
+
+
+def test_planned_assignments_missing_token():
+    """Missing authentication must return 401."""
+    app.dependency_overrides.pop(get_current_user, None)
+
+    response = client.get("/planned-assignments")
+
+    assert response.status_code == 401
+
+
+def test_planned_assignments_tenant_isolation():
+    """
+    Dispatcher from tenant-1 must not see tenant-2's planned assignment.
+
+    Job 109 belongs to tenant-2 and is therefore excluded.
+    """
+    response = client.get("/planned-assignments")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert all(item["job_id"] != 109 for item in data)
+
+
+def test_planning_kpi_tenant_isolation():
+    """
+    Planning KPI data must be calculated only for the authenticated tenant.
+    """
+    response = client.get("/planning/kpi")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    # Tenant-1 has exactly 3 technicians in the fixture.
+    assert data["technicians"]["total"] == 3
 
 
 # ============================================================
@@ -601,16 +715,21 @@ def test_get_planned_assignments_super_admin():
     is skipped.
     """
 
+    super_admin = AuthenticatedUser(
+        user_id="super-admin",
+        tenant_id="tenant-1",
+        role=UserRole.SUPER_ADMIN,
+        jti="super-admin-test-jti",
+    )
+
     app.dependency_overrides[get_current_user_or_tenant] = (
         lambda: (
-            SimpleNamespace(
-                user_id="super-admin",
-                tenant_id="tenant-1",
-                role="super_admin",
-                is_super_admin=True,
-            ),
+            super_admin,
             "tenant-1",
         )
+    )
+    app.dependency_overrides[get_current_user] = (
+        lambda: super_admin
     )
 
     response = client.get("/planned-assignments")

@@ -33,7 +33,7 @@ from sqlalchemy import func
 from ..database import get_db
 from ..auth.dependencies import (
     get_current_user, AuthenticatedUser,
-    require_role, require_permission,
+    require_permission,
 )
 from ..auth.rbac import UserRole, Permission
 from ..auth.password import hash_password, validate_password_strength, PasswordValidationError
@@ -552,7 +552,7 @@ async def complete_organization_onboarding(
 async def create_organization(
     payload: OrgCreateRequest,
     request: Request,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.SUPER_ADMIN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.ORG_CREATE)),
     db: Session = Depends(get_db),
 ):
     """Create a new organization. Super Admin only."""
@@ -611,7 +611,7 @@ async def list_organizations(
     limit: int = Query(20, ge=1, le=100),
     all_tenants: bool = Query(False, description="Platform admin only: view all tenants"),
 current_user: AuthenticatedUser = Depends(
-    require_role(UserRole.SUPER_ADMIN, UserRole.DISPATCHER)
+    require_permission(Permission.ORG_VIEW_ALL)
 ),
      db: Session = Depends(get_db),
 ):
@@ -732,7 +732,7 @@ async def get_current_organization(
 @org_router.get("/{org_id}")
 async def get_organization(
     org_id: str,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.SUPER_ADMIN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.ORG_VIEW_ALL)),
     db: Session = Depends(get_db),
 ):
     """Get organization details. Super Admin or own org Admin."""
@@ -777,7 +777,7 @@ async def update_organization(
     org_id: str,
     payload: OrgUpdateRequest,
     request: Request,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.SUPER_ADMIN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.ORG_MANAGE)),
     db: Session = Depends(get_db),
 ):
     """Update organization details. Super Admin only."""
@@ -824,7 +824,7 @@ async def suspend_organization(
     org_id: str,
     payload: OrgSuspendRequest,
     request: Request,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.SUPER_ADMIN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.ORG_SUSPEND)),
     db: Session = Depends(get_db),
 ):
     """Suspend an organization. All users lose access."""
@@ -868,7 +868,7 @@ async def suspend_organization(
 async def activate_organization(
     org_id: str,
     request: Request,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.SUPER_ADMIN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.ORG_MANAGE)),
     db: Session = Depends(get_db),
 ):
     """Reactivate a suspended organization."""
@@ -910,7 +910,7 @@ async def activate_organization(
 async def delete_organization(
     org_id: str,
     request: Request,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.SUPER_ADMIN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.ORG_DELETE)),
     db: Session = Depends(get_db),
 ):
     """Soft delete an organization. Super Admin only."""
@@ -957,7 +957,7 @@ async def create_org_admin(
     org_id: str,
     payload: OrgAdminCreateRequest,
     request: Request,
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.SUPER_ADMIN,  UserRole.DISPATCHER)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.USERS_CREATE)),
     db: Session = Depends(get_db),
 ):
     """Create an admin or user for an organization. Super Admin or Org Admin."""
@@ -1085,7 +1085,7 @@ platform_router = APIRouter(
 
 @platform_router.get("/health")
 async def platform_health(
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.SUPER_ADMIN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.PLATFORM_HEALTH)),
     db: Session = Depends(get_db),
 ):
     """System health check. Super Admin only."""
@@ -1134,7 +1134,7 @@ async def platform_health(
 
 @platform_router.get("/analytics")
 async def platform_analytics(
-    current_user: AuthenticatedUser = Depends(require_role(UserRole.SUPER_ADMIN)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.PLATFORM_ANALYTICS)),
     db: Session = Depends(get_db),
 ):
     """Cross-tenant analytics. Super Admin only."""

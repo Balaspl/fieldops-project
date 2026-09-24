@@ -2561,10 +2561,12 @@ def test_bulk_assignment_covers_empty_parsed_job_ids_branch(setup_db):
 
 
 def _bulk_cancel_user(role="dispatcher", tenant_id="tenant-1"):
-    return SimpleNamespace(
+    return AuthenticatedUser(
         user_id=f"bulk-cancel-{role}",
         tenant_id=tenant_id,
-        role=SimpleNamespace(value=role),
+        role=UserRole(role),
+        jti=f"bulk-cancel-{role}-jti",
+        session_id=f"bulk-cancel-{role}-session",
     )
 
 
@@ -2786,10 +2788,7 @@ def test_bulk_job_cancellation_rejects_unauthorized_role(setup_db):
         app.dependency_overrides.pop(get_current_user, None)
 
     assert response.status_code == 403
-    assert (
-        response.json()["detail"]
-        == "Only dispatcher or admin can perform bulk cancellation"
-    )
+    assert response.json()["detail"] == "Permission denied: jobs:cancel"
 
     db.refresh(job)
 

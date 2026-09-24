@@ -104,16 +104,17 @@ export const useTrackingStore = create<TrackingState>((set) => ({
       const existing = state.technicians[idStr] || {
         id: idStr,
         name: `Technician #${idStr.slice(0, 4)}`,
-        latitude: 13.0827,
-        longitude: 80.2707,
         status: 'Available',
-        lastPing: new Date().toISOString(),
       };
       
       const merged = {
         ...existing,
         ...data,
-        lastPing: data.lastPing || new Date().toISOString(),
+        lastPing: data.lastPing || (
+          data.latitude != null && data.longitude != null
+            ? new Date().toISOString()
+            : existing.lastPing
+        ),
       };
 
       // Recalculate status if assigned jobs changes or status is updated, provided jobs are loaded

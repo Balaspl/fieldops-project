@@ -14,7 +14,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.main import app
 from app.models import Technician
 from app.database import Base, get_db
-from app.auth.dependencies import get_current_user_or_tenant
+from app.auth.dependencies import get_current_user_or_tenant, get_current_user
+from app.auth.rbac import UserRole
 from app import schemas
 
 
@@ -46,6 +47,22 @@ def override_get_db():
 
 
 client = TestClient(app)
+
+TEST_USER = SimpleNamespace(
+    user_id="test-user",
+    tenant_id="tenant-1",
+    is_super_admin=False,
+    role=UserRole.DISPATCHER,
+    has_permission=lambda permission: True,
+)
+
+NO_PERMISSION_USER = SimpleNamespace(
+    user_id="no-permission-user",
+    tenant_id="tenant-1",
+    is_super_admin=False,
+    role=UserRole.TECHNICIAN,
+    has_permission=lambda permission: False,
+)
 
 
 # ============================================================
@@ -123,20 +140,8 @@ def setup_db():
 def apply_overrides():
     app.dependency_overrides[get_db] = override_get_db
 
-    app.dependency_overrides[get_current_user_or_tenant] = (
-        lambda: (
-            type(
-                "TestUser",
-                (),
-                {
-                    "is_super_admin": False,
-                    "user_id": "test-user",
-                    "tenant_id": "tenant-1",
-                },
-            )(),
-            "tenant-1",
-        )
-    )
+    app.dependency_overrides[get_current_user_or_tenant] = lambda: (TEST_USER, "tenant-1")
+    app.dependency_overrides[get_current_user] = lambda: TEST_USER
 
     yield
 
@@ -345,7 +350,7 @@ def test_get_all_technicians_user_branch(setup_db):
         response=response,
         page=None,
         limit=None,
-        user_tenant=(user, "tenant-1"),
+        current_user=TEST_USER,
         db=setup_db,
     )
 
@@ -366,7 +371,7 @@ def test_get_all_technicians_database_error():
     with pytest.raises(HTTPException) as exc_info:
         get_all_technicians(
             response=Response(),
-            user_tenant=(None, "tenant-1"),
+            current_user=TEST_USER,
             db=FailingDB(),
         )
 
@@ -500,7 +505,7 @@ def test_create_technician_sqlalchemy_error():
     with pytest.raises(HTTPException) as exc_info:
         create_technician(
             technician=payload,
-            user_tenant=(None, "tenant-1"),
+            current_user=TEST_USER,
             db=db,
         )
 
@@ -523,7 +528,7 @@ def test_create_technician_unexpected_error():
     with pytest.raises(HTTPException) as exc_info:
         create_technician(
             technician=technician_create(),
-            user_tenant=(None, "tenant-1"),
+            current_user=TEST_USER,
             db=FailingDB(),
         )
 
@@ -540,6 +545,7 @@ def test_get_technician_workload_success(setup_db):
 
     result = get_technician_workload(
         technician_id=1,
+        current_user=TEST_USER,
         db=setup_db,
     )
 
@@ -554,7 +560,8 @@ def test_get_technician_workload_not_found(setup_db):
     with pytest.raises(HTTPException) as exc_info:
         get_technician_workload(
             technician_id=999,
-            db=setup_db,
+            current_user=TEST_USER,
+        db=setup_db,
         )
 
     assert exc_info.value.status_code == 404
@@ -570,6 +577,7 @@ def test_update_technician_workload_success(setup_db):
 
     result = update_technician_workload(
         update=payload,
+        current_user=TEST_USER,
         db=setup_db,
     )
 
@@ -588,7 +596,8 @@ def test_update_technician_workload_not_found(setup_db):
     with pytest.raises(HTTPException) as exc_info:
         update_technician_workload(
             update=payload,
-            db=setup_db,
+            current_user=TEST_USER,
+        db=setup_db,
         )
 
     assert exc_info.value.status_code == 404
@@ -605,7 +614,8 @@ def test_update_technician_workload_negative(setup_db):
     with pytest.raises(HTTPException) as exc_info:
         update_technician_workload(
             update=payload,
-            db=setup_db,
+            current_user=TEST_USER,
+        db=setup_db,
         )
 
     assert exc_info.value.status_code == 400
@@ -626,6 +636,7 @@ def test_update_technician_status_success(setup_db):
 
     result = update_technician_status(
         update=payload,
+        current_user=TEST_USER,
         db=setup_db,
     )
 
@@ -643,7 +654,8 @@ def test_update_technician_status_not_found(setup_db):
     with pytest.raises(HTTPException) as exc_info:
         update_technician_status(
             update=payload,
-            db=setup_db,
+            current_user=TEST_USER,
+        db=setup_db,
         )
 
     assert exc_info.value.status_code == 404
@@ -669,7 +681,8 @@ def test_update_technician_status_database_error(setup_db):
         with pytest.raises(HTTPException) as exc_info:
             update_technician_status(
                 update=payload,
-                db=setup_db,
+                current_user=TEST_USER,
+        db=setup_db,
             )
 
         assert exc_info.value.status_code == 500
@@ -688,6 +701,7 @@ def test_validate_technician_workload_success(setup_db):
 
     result = validate_technician_workload_api(
         technician_id=1,
+        current_user=TEST_USER,
         db=setup_db,
     )
 
@@ -703,7 +717,8 @@ def test_validate_technician_workload_not_found(setup_db):
     with pytest.raises(HTTPException) as exc_info:
         validate_technician_workload_api(
             technician_id=999,
-            db=setup_db,
+            current_user=TEST_USER,
+        db=setup_db,
         )
 
     assert exc_info.value.status_code == 404
@@ -717,7 +732,7 @@ def test_get_available_technicians_with_tenant_filter(setup_db):
     from app.routes.technicians import get_available_technicians
 
     result = get_available_technicians(
-        x_tenant_id="tenant-1",
+        current_user=TEST_USER,
         db=setup_db,
     )
 
@@ -740,7 +755,7 @@ def test_get_available_technicians_without_tenant_filter(setup_db):
     from app.routes.technicians import get_available_technicians
 
     result = get_available_technicians(
-        x_tenant_id=None,
+        current_user=TEST_USER,
         db=setup_db,
     )
 
@@ -756,7 +771,7 @@ def test_get_available_technicians_fallback(setup_db):
     setup_db.commit()
 
     result = get_available_technicians(
-        x_tenant_id="tenant-1",
+        current_user=TEST_USER,
         db=setup_db,
     )
 
@@ -806,15 +821,13 @@ def test_get_available_technicians_platform_and_null_tenant():
         db.commit()
 
         result = get_available_technicians(
-            x_tenant_id="tenant-1",
+            current_user=TEST_USER,
             db=db,
         )
 
-        assert len(result) == 2
-        assert all(
-            item["eligible_for_assignment"] is True
-            for item in result
-        )
+        # Tenant isolation: platform and NULL-tenant records must not
+        # be returned to a tenant-scoped dispatcher.
+        assert result == []
 
     finally:
         db.close()
@@ -828,6 +841,9 @@ def test_get_all_zones_database_error():
     from app.routes.technicians import get_all_zones
 
     class FailingQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
         def distinct(self):
             return self
 
@@ -839,7 +855,7 @@ def test_get_all_zones_database_error():
             return FailingQuery()
 
     with pytest.raises(HTTPException) as exc_info:
-        get_all_zones(db=FailingDB())
+        get_all_zones(db=FailingDB(),current_user=TEST_USER)
 
     assert exc_info.value.status_code == 500
     assert "Database error while fetching zones" in str(
@@ -856,6 +872,7 @@ def test_get_technician_by_id_success(setup_db):
 
     result = get_technician_by_id(
         technician_id=1,
+        current_user=TEST_USER,
         db=setup_db,
     )
 
@@ -868,7 +885,8 @@ def test_get_technician_by_id_not_found(setup_db):
     with pytest.raises(HTTPException) as exc_info:
         get_technician_by_id(
             technician_id=999,
-            db=setup_db,
+            current_user=TEST_USER,
+        db=setup_db,
         )
 
     assert exc_info.value.status_code == 404
@@ -884,6 +902,7 @@ def test_update_technician_availability_numeric_id(setup_db):
     result = update_technician_availability(
         id="1",
         update_data=availability_update("Busy"),
+        current_user=TEST_USER,
         db=setup_db,
     )
 
@@ -898,6 +917,7 @@ def test_update_technician_availability_string_tech_id(setup_db):
     result = update_technician_availability(
         id="tech-1",
         update_data=availability_update("Assigned"),
+        current_user=TEST_USER,
         db=setup_db,
     )
 
@@ -912,7 +932,8 @@ def test_update_technician_availability_not_found(setup_db):
         update_technician_availability(
             id="missing-tech",
             update_data=availability_update(),
-            db=setup_db,
+            current_user=TEST_USER,
+        db=setup_db,
         )
 
     assert exc_info.value.status_code == 404
@@ -923,7 +944,7 @@ def test_update_technician_availability_not_found(setup_db):
 # ============================================================
 
 @pytest.mark.asyncio
-async def test_get_preferences():
+async def test_get_preferences(setup_db):
     from app.routes.technicians import get_preferences
 
     prefs = {
@@ -939,8 +960,8 @@ async def test_get_preferences():
     ):
         result = await get_preferences(
             id="tech-1",
-            db=None,
-            authorization="test-token",
+            current_user=TEST_USER,
+            db=setup_db,
         )
 
     assert result["tech_id"] == "tech-1"
@@ -949,7 +970,7 @@ async def test_get_preferences():
 
 
 @pytest.mark.asyncio
-async def test_update_preferences_success():
+async def test_update_preferences_success(setup_db):
     from app.routes.technicians import update_preferences
 
     payload = schemas.NotificationPreferencesInput(
@@ -973,8 +994,8 @@ async def test_update_preferences_success():
         result = await update_preferences(
             id="tech-1",
             payload=payload,
-            db=None,
-            authorization="test-token",
+            current_user=TEST_USER,
+            db=setup_db,
         )
 
     assert result["tech_id"] == "tech-1"
@@ -983,7 +1004,7 @@ async def test_update_preferences_success():
 
 
 @pytest.mark.asyncio
-async def test_update_preferences_not_found():
+async def test_update_preferences_not_found(setup_db):
     from app.routes.technicians import update_preferences
 
     payload = schemas.NotificationPreferencesInput(
@@ -1001,15 +1022,15 @@ async def test_update_preferences_not_found():
             await update_preferences(
                 id="missing-tech",
                 payload=payload,
-                db=None,
-                authorization="test-token",
+                db=setup_db,
+                current_user=TEST_USER,
             )
 
     assert exc_info.value.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_update_preferences_value_error():
+async def test_update_preferences_value_error(setup_db):
     from app.routes.technicians import update_preferences
 
     payload = schemas.NotificationPreferencesInput(
@@ -1027,8 +1048,8 @@ async def test_update_preferences_value_error():
             await update_preferences(
                 id="tech-1",
                 payload=payload,
-                db=None,
-                authorization="test-token",
+                db=setup_db,
+                current_user=TEST_USER,
             )
 
     assert exc_info.value.status_code == 400
@@ -1036,7 +1057,7 @@ async def test_update_preferences_value_error():
 
 
 @pytest.mark.asyncio
-async def test_reset_preferences_success():
+async def test_reset_preferences_success(setup_db):
     from app.routes.technicians import reset_preferences
 
     updated = {
@@ -1052,8 +1073,8 @@ async def test_reset_preferences_success():
     ):
         result = await reset_preferences(
             id="tech-1",
-            db=None,
-            authorization="test-token",
+            current_user=TEST_USER,
+            db=setup_db,
         )
 
     assert result["tech_id"] == "tech-1"
@@ -1062,7 +1083,7 @@ async def test_reset_preferences_success():
 
 
 @pytest.mark.asyncio
-async def test_reset_preferences_not_found():
+async def test_reset_preferences_not_found(setup_db):
     from app.routes.technicians import reset_preferences
 
     with patch(
@@ -1072,8 +1093,8 @@ async def test_reset_preferences_not_found():
         with pytest.raises(HTTPException) as exc_info:
             await reset_preferences(
                 id="missing-tech",
-                db=None,
-                authorization="test-token",
+                db=setup_db,
+                current_user=TEST_USER,
             )
 
     assert exc_info.value.status_code == 404
@@ -1097,6 +1118,7 @@ def test_update_technician_success(setup_db):
     result = update_technician(
         technician_id=1,
         technician=payload,
+        current_user=TEST_USER,
         db=setup_db,
     )
 
@@ -1115,7 +1137,8 @@ def test_update_technician_not_found(setup_db):
         update_technician(
             technician_id=999,
             technician=payload,
-            db=setup_db,
+            current_user=TEST_USER,
+        db=setup_db,
         )
 
     assert exc_info.value.status_code == 404
@@ -1138,7 +1161,8 @@ def test_update_technician_database_error(setup_db):
             update_technician(
                 technician_id=1,
                 technician=payload,
-                db=setup_db,
+                current_user=TEST_USER,
+        db=setup_db,
             )
 
         assert exc_info.value.status_code == 500
@@ -1157,6 +1181,7 @@ def test_delete_technician_success(setup_db):
 
     result = delete_technician(
         technician_id=4,
+        current_user=TEST_USER,
         db=setup_db,
     )
 
@@ -1176,7 +1201,8 @@ def test_delete_technician_not_found(setup_db):
     with pytest.raises(HTTPException) as exc_info:
         delete_technician(
             technician_id=999,
-            db=setup_db,
+            current_user=TEST_USER,
+        db=setup_db,
         )
 
     assert exc_info.value.status_code == 404
@@ -1196,7 +1222,8 @@ def test_delete_technician_database_error(setup_db):
         with pytest.raises(HTTPException) as exc_info:
             delete_technician(
                 technician_id=4,
-                db=setup_db,
+                current_user=TEST_USER,
+        db=setup_db,
             )
 
         assert exc_info.value.status_code == 500
@@ -1216,6 +1243,7 @@ def test_update_technician_status_by_id_success(setup_db):
     result = update_technician_status_by_id(
         technician_id=1,
         update_data=availability_update("On Site"),
+        current_user=TEST_USER,
         db=setup_db,
     )
 
@@ -1232,7 +1260,8 @@ def test_update_technician_status_by_id_not_found(setup_db):
         update_technician_status_by_id(
             technician_id=999,
             update_data=availability_update("Busy"),
-            db=setup_db,
+            current_user=TEST_USER,
+        db=setup_db,
         )
 
     assert exc_info.value.status_code == 404
@@ -1253,7 +1282,8 @@ def test_update_technician_status_by_id_database_error(setup_db):
             update_technician_status_by_id(
                 technician_id=1,
                 update_data=availability_update("Busy"),
-                db=setup_db,
+                current_user=TEST_USER,
+        db=setup_db,
             )
 
         assert exc_info.value.status_code == 500
@@ -1299,15 +1329,8 @@ def test_create_technician_empty_created_list_safety_branch(setup_db):
     try:
         result = create_technician(
             technician=technician,
-            user_tenant=(
-                SimpleNamespace(
-                    user_id="test-user",
-                    tenant_id="tenant-1",
-                    is_super_admin=False,
-                ),
-                "tenant-1",
-            ),
-            db=setup_db,
+            current_user=TEST_USER,
+        db=setup_db,
         )
 
         assert result is not None
@@ -1358,16 +1381,109 @@ def test_create_technician_empty_created_list_safety_branch(setup_db, monkeypatc
     with pytest.raises(HTTPException) as exc_info:
         technicians_route.create_technician(
             technician=technician,
-            user_tenant=(
-                SimpleNamespace(
-                    user_id="test-user",
-                    tenant_id="tenant-1",
-                    is_super_admin=False,
-                ),
-                "tenant-1",
-            ),
-            db=setup_db,
+            current_user=TEST_USER,
+        db=setup_db,
         )
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail == "Technician already exists"
+
+
+# ============================================================
+# DISPATCHER RBAC / AUTHORIZATION TESTS
+# ============================================================
+
+def test_dispatcher_can_view_all_technicians():
+    response = client.get("/technicians/")
+    assert response.status_code == 200
+    assert len(response.json()) == 4
+
+
+def test_missing_token_returns_401_for_technician_list():
+    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(get_current_user_or_tenant, None)
+    response = client.get("/technicians/")
+    assert response.status_code == 401
+
+
+def test_user_without_technician_view_permission_is_forbidden():
+    app.dependency_overrides[get_current_user] = lambda: NO_PERMISSION_USER
+    response = client.get("/technicians/")
+    assert response.status_code == 403
+
+
+def test_dispatcher_can_create_technician():
+    response = client.post("/technicians", json={
+        "tech_id": "rbac-create-tech",
+        "technician_name": "RBAC Technician",
+        "technician_skill": "HVAC Repair",
+        "technician_location": "RBAC Zone",
+        "technician_status": "Available",
+    })
+    assert response.status_code == 200
+    assert response.json()["tech_id"] == "rbac-create-tech"
+
+
+def test_user_without_create_permission_is_forbidden():
+    app.dependency_overrides[get_current_user] = lambda: NO_PERMISSION_USER
+    response = client.post("/technicians", json={
+        "tech_id": "forbidden-tech",
+        "technician_name": "Forbidden Technician",
+        "technician_skill": "HVAC Repair",
+        "technician_location": "RBAC Zone",
+        "technician_status": "Available",
+    })
+    assert response.status_code == 403
+
+
+def test_dispatcher_tenant_isolation_for_technician_list(setup_db):
+    setup_db.add(Technician(
+        technician_id=99, tech_id="tenant-2-tech",
+        technician_name="Tenant Two Technician",
+        technician_skill="HVAC Repair",
+        technician_location="Tenant 2 Zone",
+        technician_status="Available", current_jobs=0, max_jobs=5,
+        tenant_id="tenant-2",
+    ))
+    setup_db.commit()
+    response = client.get("/technicians/")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 4
+    assert all(item["technician_name"] != "Tenant Two Technician" for item in data)
+
+
+def test_dispatcher_cannot_access_other_tenant_technician(setup_db):
+    setup_db.add(Technician(
+        technician_id=100, tech_id="tenant-2-tech-by-id",
+        technician_name="Tenant Two By ID", technician_skill="Electrical",
+        technician_location="Tenant 2 Zone", technician_status="Available",
+        current_jobs=0, max_jobs=5, tenant_id="tenant-2",
+    ))
+    setup_db.commit()
+    response = client.get("/technicians/100")
+    assert response.status_code == 404
+
+
+def test_dispatcher_can_view_technician_workload():
+    response = client.get("/technicians/workload?technician_id=1")
+    assert response.status_code == 200
+    assert response.json()["technician"] == "Alice Smith"
+
+
+def test_dispatcher_can_validate_technician_workload():
+    response = client.get("/technicians/validate-workload?technician_id=1")
+    assert response.status_code == 200
+    assert response.json()["technician"] == "Alice Smith"
+
+
+def test_dispatcher_can_view_available_technicians():
+    response = client.get("/technicians/available")
+    assert response.status_code == 200
+    assert len(response.json()) == 2
+
+
+def test_dispatcher_can_manage_technician_status():
+    response = client.put("/technicians/1/status", json={"technician_status": "Busy"})
+    assert response.status_code == 200
+    assert response.json()["technician"]["technician_status"] == "Busy"

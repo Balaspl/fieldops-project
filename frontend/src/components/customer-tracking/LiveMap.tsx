@@ -102,14 +102,14 @@ export const LiveMap: React.FC<{ tenantId?: string }> = ({ tenantId = 'tenant-1'
       
       // Parse coordinates
       const mappedJobs = jobList
-        .filter((j: any) => j.location)
+        .filter((j: any) =>
+          j.location &&
+          Number.isFinite(Number(j.site_latitude ?? j.latitude)) &&
+          Number.isFinite(Number(j.site_longitude ?? j.longitude)),
+        )
         .map((j: any) => {
-          let lat = defaultCenter.lat;
-          let lng = defaultCenter.lng;
-          
-          const numId = Number(j.job_id || 100);
-          lat = 13.0827 + (numId % 20) * 0.004 - 0.03;
-          lng = 80.2707 + (numId % 15) * 0.003 - 0.02;
+          const lat = Number(j.site_latitude ?? j.latitude);
+          const lng = Number(j.site_longitude ?? j.longitude);
 
           return {
             job_id: String(j.job_id),

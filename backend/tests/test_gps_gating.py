@@ -13,6 +13,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import sessionmaker
 from app.celery_app import celery_app
+from app.auth.dependencies import get_current_user, AuthenticatedUser
+from app.auth.rbac import UserRole
 
 # Force celery tasks to run synchronously in tests
 celery_app.conf.update(task_always_eager=True)
@@ -111,6 +113,9 @@ mock_redis = MockRedis()
 def override_get_redis():
     return mock_redis
 
+def override_current_user():
+    return AuthenticatedUser("test-admin", "tenant-1", UserRole.SUPER_ADMIN, "test-session")
+
 client = TestClient(app)
 
 @pytest.fixture(autouse=True)
@@ -148,6 +153,7 @@ def setup_db(monkeypatch):
 def apply_overrides():
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_redis_client] = override_get_redis
+    app.dependency_overrides[get_current_user] = override_current_user
     yield
     app.dependency_overrides.clear()
 

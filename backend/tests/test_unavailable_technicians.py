@@ -445,6 +445,7 @@ def test_availability_endpoint(setup_db):
         technician_status="AVAILABLE",
         current_jobs=0,
         max_jobs=3,
+        tenant_id="tenant-1",
     )
 
     db.add(tech)

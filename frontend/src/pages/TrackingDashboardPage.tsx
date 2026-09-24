@@ -158,7 +158,6 @@ export const TrackingDashboardPage: React.FC = () => {
           activeJobs = jobList
             .filter((j: any) => j.location)
             .map((j: any) => {
-              const numId = Number(j.job_id || 100);
               const jobStatus = (j.status || '').toUpperCase();
               
               if (j.assigned_technician_id) {
@@ -183,8 +182,8 @@ export const TrackingDashboardPage: React.FC = () => {
                 location: j.location,
                 status: j.status || 'QUEUED',
                 sla_deadline: j.sla?.deadline || null,
-                latitude: 13.0827 + (numId % 20) * 0.004 - 0.03,
-                longitude: 80.2707 + (numId % 15) * 0.003 - 0.02,
+                latitude: j.site_latitude ?? j.latitude ?? undefined,
+                longitude: j.site_longitude ?? j.longitude ?? undefined,
               };
             });
 
@@ -210,14 +209,13 @@ export const TrackingDashboardPage: React.FC = () => {
             const name = t.technician_name || t.name || 'Unknown';
             let lat: number | undefined, lng: number | undefined;
 
-            if (t.technician_location && typeof t.technician_location === 'string') {
-              const parts = t.technician_location.split(',');
-              if (parts.length === 2) { lat = Number(parts[0]); lng = Number(parts[1]); }
-            } else if (t.latitude !== undefined && t.longitude !== undefined) {
+            // Profile/work-area text is not a live GPS fix. Only use explicit
+            // coordinate fields; actual device coordinates arrive by GPS stream.
+            if (t.latitude != null && t.longitude != null) {
               lat = Number(t.latitude); lng = Number(t.longitude);
             }
 
-            if (lat && lng && !isNaN(lat) && !isNaN(lng)) {
+            if (lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)) {
               updateTechnicianLocation(techId, {
                 id: techId,
                 name,
