@@ -198,6 +198,73 @@ export const getJob = async (jobId: string | number): Promise<any> => {
 };
 
 /**
+ * Categories supported by the authoritative job timeline.
+ */
+export type JobTimelineCategory =
+  | "CREATION"
+  | "ASSIGNMENT"
+  | "STATUS"
+  | "COMPLETION"
+  | "OTHER";
+
+/**
+ * Normalized event returned by the backend job timeline endpoint.
+ */
+export interface JobTimelineEvent {
+  id: string;
+  job_id: number;
+  event_type: string;
+  event_category: JobTimelineCategory;
+  title: string;
+  description: string;
+  timestamp: string;
+  from_status: string | null;
+  to_status: string | null;
+  actor_name: string;
+  actor_role: string;
+  source: string;
+  is_current: boolean;
+}
+
+/**
+ * Paginated job timeline response.
+ */
+export interface JobTimelineResponse {
+  job_id: number;
+  events: JobTimelineEvent[];
+  page: number;
+  page_size: number;
+  total: number;
+  has_more: boolean;
+}
+
+/**
+ * Fetch the authoritative chronological timeline for a job.
+ */
+export const getJobTimeline = async (
+  jobId: string | number,
+  params?: {
+    category?: JobTimelineCategory;
+    page?: number;
+    page_size?: number;
+  }
+): Promise<JobTimelineResponse> => {
+  try {
+    const response = await api.get<JobTimelineResponse>(
+      `/api/v1/jobs/${jobId}/timeline`,
+      {
+        params,
+      }
+    );
+
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+/**
  * Fetch manual override history for a job.
  */
 export const getOverrideHistory = async (jobId: string | number): Promise<any> => {

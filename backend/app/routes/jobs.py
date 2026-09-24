@@ -1695,6 +1695,104 @@ def get_job_status_history(
             
     return history
 
+
+@api_v1_router.get("/jobs/{job_id}/timeline")
+def get_job_timeline(
+    job_id: int,
+    category: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.JOBS_VIEW_ALL)
+    ),
+    db: Session = Depends(get_db),
+):
+    """
+    Return the authoritative chronological timeline for one job.
+
+    The endpoint only exposes timeline-safe normalized event fields.
+    Tenant isolation and job-level authorization are enforced here.
+    """
+
+    job = (
+        db.query(Job)
+        .filter(
+            Job.id == job_id,
+            Job.tenant_id == current_user.tenant_id,
+        )
+        .first()
+    )
+
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found",
+        )
+
+    normalized_category = (
+        category.strip().upper()
+        if category
+        else None
+    )
+
+    allowed_categories = {
+        "CREATION",
+        "ASSIGNMENT",
+        "STATUS",
+        "COMPLETION",
+        "OTHER",
+    }
+
+    if (
+        normalized_category
+        and normalized_category not in allowed_categories
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Invalid timeline category. "
+                "Allowed values: "
+                "CREATION, ASSIGNMENT, STATUS, "
+                "COMPLETION, OTHER"
+            ),
+        )
+
+    # Local import avoids introducing another top-level dependency cycle
+    # in the already-large jobs route module.
+    from app.services.job_timeline_service import (
+        build_job_timeline,
+    )
+
+    events = build_job_timeline(
+        db=db,
+        job=job,
+    )
+
+    if normalized_category:
+        events = [
+            event
+            for event in events
+            if event.get("event_category")
+            == normalized_category
+        ]
+
+    total = len(events)
+
+    start = (page - 1) * page_size
+    end = start + page_size
+
+    page_events = events[start:end]
+
+    return {
+        "job_id": job.id,
+        "events": page_events,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "has_more": end < total,
+    }
+
+
 class TransitionRequest(BaseModel):
     status: str
     reason: Optional[str] = None
