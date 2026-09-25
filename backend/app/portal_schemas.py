@@ -154,6 +154,8 @@ class ServiceRequestCreate(BaseModel):
 
 
 class ServiceRequestUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: Optional[str] = Field(None, min_length=10, max_length=200)
     description: Optional[str] = Field(None, min_length=25)
     service_type: Optional[str] = None

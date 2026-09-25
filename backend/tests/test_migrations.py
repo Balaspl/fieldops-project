@@ -8,10 +8,20 @@ from sqlalchemy import create_engine, text
 
 
 # ============================================================
-# CURRENT MIGRATION
+# ALEMBIC HELPERS
 # ============================================================
 
-CURRENT_HEAD = "1a02f91166b3"
+def get_current_alembic_heads(alembic_config):
+    """
+    Return the current Alembic migration heads from the
+    repository migration graph.
+
+    This is intentionally dynamic so that when a new migration
+    becomes the latest HEAD, these tests do not need to be
+    manually updated with the new revision ID.
+    """
+    script = ScriptDirectory.from_config(alembic_config)
+    return sorted(script.get_heads())
 
 
 # ============================================================
@@ -88,12 +98,20 @@ def test_task_5_2_migration(alembic_config, engine):
     """
     Verify the current Alembic migration state.
 
-    Current repository state:
+    The expected migration HEAD is obtained dynamically from
+    the Alembic migration graph, so this test does not need
+    to be changed whenever a new migration becomes HEAD.
 
-        1a02f91166b3 (head)
+    This test verifies that:
 
-    This test verifies that the repository migration graph
-    and the PostgreSQL database are both at the same head.
+    1. PostgreSQL is reachable.
+    2. Alembic has a valid current HEAD.
+    3. The database is at that HEAD.
+    4. notification_templates exists.
+    5. template_versions exists.
+    6. Required template_versions columns exist.
+    7. Required notification_templates columns exist.
+    8. Only one Alembic revision is present.
     """
 
     # --------------------------------------------------------
@@ -105,46 +123,76 @@ def test_task_5_2_migration(alembic_config, engine):
             text("SELECT current_database()")
         ).scalar()
 
-        assert database_name is not None
-
-    # --------------------------------------------------------
-    # 2. Verify Alembic actually knows the current head
-    # --------------------------------------------------------
-
-    script = ScriptDirectory.from_config(alembic_config)
-
-    heads = script.get_heads()
-
-    assert heads == [CURRENT_HEAD], (
-        f"Expected Alembic head "
-        f"{CURRENT_HEAD}, got {heads}"
+    assert database_name is not None, (
+        "Unable to determine PostgreSQL database name"
     )
 
     # --------------------------------------------------------
-    # 3. Verify database Alembic revision
+    # 2. Determine current Alembic HEAD dynamically
+    # --------------------------------------------------------
+
+    expected_heads = get_current_alembic_heads(
+        alembic_config
+    )
+
+    assert expected_heads, (
+        "No Alembic HEAD found in the migration graph"
+    )
+
+    # --------------------------------------------------------
+    # 3. Verify Alembic migration graph
+    # --------------------------------------------------------
+
+    script = ScriptDirectory.from_config(
+        alembic_config
+    )
+
+    heads = sorted(script.get_heads())
+
+    assert heads == expected_heads, (
+        f"Expected Alembic heads "
+        f"{expected_heads}, got {heads}"
+    )
+
+    # This project expects a single migration head.
+    assert len(expected_heads) == 1, (
+        f"Expected exactly one Alembic HEAD, "
+        f"got {expected_heads}"
+    )
+
+    current_head = expected_heads[0]
+
+    # --------------------------------------------------------
+    # 4. Verify database Alembic revision
     # --------------------------------------------------------
 
     with engine.connect() as conn:
-        revision = conn.execute(
+        revisions = conn.execute(
             text(
                 """
                 SELECT version_num
                 FROM public.alembic_version
                 """
             )
-        ).scalar()
+        ).scalars().all()
 
-    assert revision == CURRENT_HEAD, (
-        f"Expected Alembic revision "
-        f"{CURRENT_HEAD}, got {revision}"
+    assert len(revisions) == 1, (
+        "Expected exactly one Alembic revision in "
+        "public.alembic_version"
+    )
+
+    revision = revisions[0]
+
+    assert revision == current_head, (
+        f"Expected database Alembic revision "
+        f"{current_head}, got {revision}"
     )
 
     # --------------------------------------------------------
-    # 4. Verify notification_templates
+    # 5. Verify notification_templates table
     # --------------------------------------------------------
 
     with engine.connect() as conn:
-
         exists = conn.execute(
             text(
                 """
@@ -163,11 +211,10 @@ def test_task_5_2_migration(alembic_config, engine):
     )
 
     # --------------------------------------------------------
-    # 5. Verify template_versions
+    # 6. Verify template_versions table
     # --------------------------------------------------------
 
     with engine.connect() as conn:
-
         exists = conn.execute(
             text(
                 """
@@ -186,11 +233,10 @@ def test_task_5_2_migration(alembic_config, engine):
     )
 
     # --------------------------------------------------------
-    # 6. Verify template_versions columns
+    # 7. Verify template_versions columns
     # --------------------------------------------------------
 
     with engine.connect() as conn:
-
         columns = conn.execute(
             text(
                 """
@@ -218,16 +264,15 @@ def test_task_5_2_migration(alembic_config, engine):
     missing_columns = required_columns - set(columns)
 
     assert not missing_columns, (
-        f"Missing template_versions columns: "
+        "Missing template_versions columns: "
         f"{sorted(missing_columns)}"
     )
 
     # --------------------------------------------------------
-    # 7. Verify notification_templates columns
+    # 8. Verify notification_templates columns
     # --------------------------------------------------------
 
     with engine.connect() as conn:
-
         columns = conn.execute(
             text(
                 """
@@ -260,16 +305,15 @@ def test_task_5_2_migration(alembic_config, engine):
     missing_columns = required_columns - set(columns)
 
     assert not missing_columns, (
-        f"Missing notification_templates columns: "
+        "Missing notification_templates columns: "
         f"{sorted(missing_columns)}"
     )
 
     # --------------------------------------------------------
-    # 8. Verify only one Alembic revision
+    # 9. Verify only one Alembic revision
     # --------------------------------------------------------
 
     with engine.connect() as conn:
-
         version_count = conn.execute(
             text(
                 """
@@ -293,71 +337,115 @@ def test_current_migration_downgrade_and_upgrade(
     engine,
 ):
     """
-    Verify that the current migration is already at HEAD.
+    Verify that the database can be upgraded to the current
+    Alembic HEAD and that a second upgrade is idempotent.
 
-    The current repository HEAD is:
-
-        1a02f91166b3
-
-    This test verifies that upgrading to HEAD leaves the
-    database at the expected revision and that a second
-    upgrade remains idempotent.
+    The migration HEAD is discovered dynamically, so this
+    test does not need to be modified when a new migration
+    becomes HEAD.
     """
 
     # --------------------------------------------------------
-    # 1. Verify migration graph
+    # 1. Determine current Alembic HEAD dynamically
     # --------------------------------------------------------
 
-    script = ScriptDirectory.from_config(alembic_config)
+    expected_heads = get_current_alembic_heads(
+        alembic_config
+    )
 
-    heads = script.get_heads()
+    assert expected_heads, (
+        "No Alembic HEAD found in the migration graph"
+    )
 
-    assert heads == [CURRENT_HEAD]
+    # This project expects a single HEAD.
+    assert len(expected_heads) == 1, (
+        f"Expected exactly one Alembic HEAD, "
+        f"got {expected_heads}"
+    )
+
+    current_head = expected_heads[0]
 
     # --------------------------------------------------------
-    # 2. Upgrade to current HEAD
+    # 2. Verify migration graph
+    # --------------------------------------------------------
+
+    script = ScriptDirectory.from_config(
+        alembic_config
+    )
+
+    heads = sorted(script.get_heads())
+
+    assert heads == expected_heads, (
+        f"Expected Alembic heads "
+        f"{expected_heads}, got {heads}"
+    )
+
+    # --------------------------------------------------------
+    # 3. Upgrade database to current HEAD
     # --------------------------------------------------------
 
     command.upgrade(
         alembic_config,
-        CURRENT_HEAD,
+        "head",
     )
 
     # --------------------------------------------------------
-    # 3. Verify current revision
+    # 4. Verify database is at current HEAD
     # --------------------------------------------------------
 
     with engine.connect() as conn:
-
-        revision = conn.execute(
+        revisions = conn.execute(
             text(
                 """
                 SELECT version_num
                 FROM public.alembic_version
                 """
             )
-        ).scalar()
+        ).scalars().all()
 
-    assert revision == CURRENT_HEAD
+    assert len(revisions) == 1, (
+        "Expected exactly one Alembic revision after upgrade"
+    )
+
+    revision = revisions[0]
+
+    assert revision == current_head, (
+        f"Expected Alembic revision "
+        f"{current_head}, got {revision}"
+    )
 
     # --------------------------------------------------------
-    # 4. Upgrade again should remain at HEAD
+    # 5. Upgrade again - must remain idempotent
     # --------------------------------------------------------
 
     command.upgrade(
         alembic_config,
-        CURRENT_HEAD,
+        "head",
     )
 
-    with engine.connect() as conn:
+    # --------------------------------------------------------
+    # 6. Verify revision remains unchanged
+    # --------------------------------------------------------
 
-        revision_after = conn.execute(
+    with engine.connect() as conn:
+        revisions_after = conn.execute(
             text(
                 """
                 SELECT version_num
                 FROM public.alembic_version
                 """
             )
-        ).scalar()
+        ).scalars().all()
 
-    assert revision_after == CURRENT_HEAD
+    assert len(revisions_after) == 1, (
+        "Expected exactly one Alembic revision after "
+        "second upgrade"
+    )
+
+    revision_after = revisions_after[0]
+
+    assert revision_after == current_head, (
+        f"Expected Alembic revision "
+        f"{current_head} after second upgrade, "
+        f"got {revision_after}"
+    )

@@ -28,6 +28,10 @@ from app.auth.dependencies import get_current_user_or_tenant
 from app.routes.jobs import assign_job, JobAssignRequest
 from app.auth.rbac import UserRole
 
+from starlette.requests import Request
+
+
+
 import asyncio
 
 from app.routes.jobs import close_job_endpoint
@@ -63,6 +67,38 @@ def override_get_db():
 
 client = TestClient(app)
 
+
+
+from starlette.requests import Request
+
+
+def make_test_request():
+    """
+    Create a minimal Starlette Request with the app state
+    required by create_job().
+    """
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/jobs",
+        "headers": [],
+        "query_string": b"",
+        "server": ("testserver", 80),
+        "client": ("testclient", 50000),
+        "scheme": "http",
+    }
+
+    request = Request(scope)
+
+    class AppState:
+        kafka_producer = None
+
+    class App:
+        state = AppState()
+
+    request.scope["app"] = App()
+
+    return request
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -3422,7 +3458,8 @@ def test_get_service_types_exception():
 # create_job coverage
 # ---------------------------------------------------------------------------
 
-def test_create_job_required_skill_fallback(monkeypatch):
+@pytest.mark.asyncio
+async def test_create_job_required_skill_fallback(monkeypatch):
     from app.routes.jobs import create_job
 
     monkeypatch.setattr(
@@ -3447,7 +3484,8 @@ def test_create_job_required_skill_fallback(monkeypatch):
             attempt_count=None,
         )
 
-        result = create_job(
+        result = await create_job(
+            request=make_test_request(),
             job=job_data,
             user_tenant=(None, "tenant-1"),
             db=db,
@@ -3461,8 +3499,8 @@ def test_create_job_required_skill_fallback(monkeypatch):
     finally:
         db.close()
 
-
-def test_create_job_platform_super_admin():
+@pytest.mark.asyncio
+async def test_create_job_platform_super_admin():
     from app.routes.jobs import create_job
 
     class FakeUser:
@@ -3487,7 +3525,8 @@ def test_create_job_platform_super_admin():
             attempt_count=0,
         )
 
-        result = create_job(
+        result = await create_job(
+            request=make_test_request(),
             job=job_data,
             user_tenant=(FakeUser(), "__platform__"),
             db=db,
@@ -3498,8 +3537,8 @@ def test_create_job_platform_super_admin():
     finally:
         db.close()
 
-
-def test_create_job_platform_super_admin_without_requested_tenant():
+@pytest.mark.asyncio
+async def test_create_job_platform_super_admin_without_requested_tenant():
     from app.routes.jobs import create_job
 
     class FakeUser:
@@ -3524,7 +3563,8 @@ def test_create_job_platform_super_admin_without_requested_tenant():
             attempt_count=0,
         )
 
-        result = create_job(
+        result = await create_job(
+            request=make_test_request(),
             job=job_data,
             user_tenant=(FakeUser(), "__platform__"),
             db=db,
@@ -3535,8 +3575,8 @@ def test_create_job_platform_super_admin_without_requested_tenant():
     finally:
         db.close()
 
-
-def test_create_job_exception():
+@pytest.mark.asyncio
+async def test_create_job_exception():
     from app.routes.jobs import create_job
 
     class BrokenDB:
@@ -3567,7 +3607,8 @@ def test_create_job_exception():
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        create_job(
+       await create_job(
+           request=make_test_request(),
             job=job_data,
             user_tenant=(None, "tenant-1"),
             db=BrokenDB(),
@@ -5093,8 +5134,9 @@ def test_get_service_types_exception():
 # -----------------------------------------------------------------------------
 # create_job branches
 # -----------------------------------------------------------------------------
+@pytest.mark.asyncio
 
-def test_create_job_super_admin_platform_tenant():
+async def test_create_job_super_admin_platform_tenant():
     from app.routes.jobs import create_job
 
     db = TestingSessionLocal()
@@ -5123,7 +5165,8 @@ def test_create_job_super_admin_platform_tenant():
             attempt_count=0,
         )
 
-        result = create_job(
+        result = await create_job(
+            request=make_test_request(),
             job=job_data,
             user_tenant=(user, "__platform__"),
             db=db,
@@ -5134,8 +5177,8 @@ def test_create_job_super_admin_platform_tenant():
     finally:
         db.close()
 
-
-def test_create_job_escalated():
+@pytest.mark.asyncio
+async def test_create_job_escalated():
     from app.routes.jobs import create_job
     from app.models import SLAEscalation, AuditEvent
 
@@ -5156,7 +5199,8 @@ def test_create_job_escalated():
             attempt_count=0,
         )
 
-        result = create_job(
+        result = await create_job(
+            request=make_test_request(),
             job=job_data,
             user_tenant=(_dispatcher_user(), "tenant-1"),
             db=db,

@@ -25,6 +25,9 @@ from ..models import (
     Job, Technician, InAppNotification,
     TechnicianProfile, 
 )
+
+from app.services.customer_notification_services import (create_customer_job_status_notification)
+
 from ..models.user import User
 from ..models import ServiceRequest
 from ..models.job_closure import JobClosure
@@ -724,6 +727,12 @@ async def start_job(
     old_status = job.status
     job.status = "EN_ROUTE"
 
+    create_customer_job_status_notification(
+    db=db,
+    job=job,
+    new_status="EN_ROUTE",
+)
+
     # Keep the customer's service request status in sync
     service_request = db.query(ServiceRequest).filter(
         ServiceRequest.linked_job_id == job.id,
@@ -778,6 +787,12 @@ async def on_site_job(
 
     old_status = job.status
     job.status = "IN_PROGRESS"
+
+    create_customer_job_status_notification(
+    db=db,
+    job=job,
+    new_status="IN_PROGRESS",
+)
     job.on_site_at = datetime.now(timezone.utc)
     job.on_site_by = current_user.user_id
 

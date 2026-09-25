@@ -13,6 +13,10 @@ from app.auth.dependencies import AuthenticatedUser, require_role,require_permis
 from app.auth.rbac import UserRole,Permission
 from app.services.timer_service import TimerService
 from app.services.socket_manager import sio, emit_notification
+
+from app.services.customer_notification_services import (
+    create_customer_job_status_notification,
+)
 logger = logging.getLogger(__name__)
 
 
@@ -182,6 +186,13 @@ def cancel_job(
 
     old_status = job.status
     job.status = "CANCELLED"
+
+    create_customer_job_status_notification(
+    db=db,
+    job=job,
+    new_status="CANCELLED",
+)
+
 
     audit = AuditEvent(
         tech_id=str(current_user.user_id),
