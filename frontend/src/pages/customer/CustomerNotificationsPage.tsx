@@ -61,7 +61,7 @@ export default function CustomerNotificationsPage() {
               border: `1px solid ${n.isRead ? "#E3ECE7" : "#C6F6D5"}`,
               cursor: "pointer",
               display: "flex",
-              justify: "space-between",
+              justifyContent: "space-between",
               alignItems: "flex-start",
             }}
             onClick={() => !n.isRead && markRead(n.id)}

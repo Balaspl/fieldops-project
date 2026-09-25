@@ -10,11 +10,13 @@ and their own notifications.
 import uuid
 import logging
 import requests
+from io import BytesIO
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from math import radians, sin, cos, asin, sqrt
 from typing import Optional
 
@@ -23,7 +25,7 @@ from ..auth.dependencies import AuthenticatedUser, require_permission
 from ..auth.rbac import Permission
 from ..auth.password import hash_password, verify_password
 from ..models import (
-    Job, Technician, InAppNotification, ServiceRequest, Organization,
+    Job, JobClosure, Technician, InAppNotification, ServiceRequest, Organization,
 )
 from ..models.customer_profile import CustomerProfileModel
 from ..models.technician_profile import TechnicianProfile
@@ -146,7 +148,8 @@ async def get_customer_profile(
     ).first()
 
     user = db.query(User).filter(
-        User.id == current_user.user_id
+        User.id == current_user.user_id,
+        User.tenant_id == current_user.tenant_id,
     ).first()
 
     if not profile:
@@ -240,7 +243,8 @@ async def create_customer_profile(
     db.refresh(profile)
 
     user = db.query(User).filter(
-        User.id == current_user.user_id
+        User.id == current_user.user_id,
+        User.tenant_id == current_user.tenant_id,
     ).first()
 
     return CustomerProfileResponse(
@@ -312,7 +316,8 @@ async def update_customer_profile(
     db.refresh(profile)
 
     user = db.query(User).filter(
-        User.id == current_user.user_id
+        User.id == current_user.user_id,
+        User.tenant_id == current_user.tenant_id,
     ).first()
 
     return CustomerProfileResponse(
@@ -349,7 +354,8 @@ async def change_password(
     """Change customer password."""
 
     user = db.query(User).filter(
-        User.id == current_user.user_id
+        User.id == current_user.user_id,
+        User.tenant_id == current_user.tenant_id,
     ).first()
 
     if not user:
@@ -421,38 +427,41 @@ async def list_service_requests(
 ):
     """List customer's own service requests."""
 
-    query = db.query(ServiceRequest).filter(
-        ServiceRequest.customer_user_id == current_user.user_id,
-        ServiceRequest.tenant_id == current_user.tenant_id,
+    query = (
+        db.query(ServiceRequest, Job.status.label("linked_job_status"))
+        .outerjoin(
+            Job,
+            (ServiceRequest.linked_job_id == Job.id)
+            & or_(
+                Job.customer_id == str(current_user.user_id),
+                Job.customer_id.is_(None),
+            ),
+        )
+        .filter(
+            ServiceRequest.customer_user_id == current_user.user_id,
+            ServiceRequest.tenant_id == current_user.tenant_id,
+        )
     )
 
     if status_filter:
         query = query.filter(
-            func.lower(ServiceRequest.status)
+            func.lower(func.coalesce(Job.status, ServiceRequest.status))
             == status_filter.lower()
         )
     else:
         # CANCELLED requests should not appear in My Requests.
         # Keep them in DB for Service History.
         query = query.filter(
-            func.lower(ServiceRequest.status)
+            func.lower(func.coalesce(Job.status, ServiceRequest.status))
             != "cancelled"
         )
 
-    requests = query.order_by(
-        ServiceRequest.created_at.desc()
-    ).all()
-
-    # Use the linked Job status as the source of truth
-    # once a ServiceRequest has been converted into a Job.
-    for service_request in requests:
-        if service_request.linked_job_id:
-            job = db.query(Job).filter(
-                Job.id == service_request.linked_job_id
-            ).first()
-
-            if job:
-                service_request.status = job.status
+    rows = query.order_by(ServiceRequest.created_at.desc()).all()
+    requests = []
+    for service_request, linked_job_status in rows:
+        if linked_job_status:
+            service_request.status = linked_job_status
+        requests.append(service_request)
 
     return requests
 
@@ -501,7 +510,8 @@ async def create_service_request(
     # ──────────────────────────────────────────────
 
     user_rec = db.query(User).filter(
-        User.id == current_user.user_id
+        User.id == current_user.user_id,
+        User.tenant_id == current_user.tenant_id,
     ).first()
 
     cust_first = (
@@ -763,10 +773,8 @@ async def get_service_request(
 
     sr = db.query(ServiceRequest).filter(
         ServiceRequest.id == sr_id,
-        ServiceRequest.customer_user_id
-        == current_user.user_id,
-        ServiceRequest.tenant_id
-        == current_user.tenant_id,
+        ServiceRequest.customer_user_id == current_user.user_id,
+        ServiceRequest.tenant_id == current_user.tenant_id,
     ).first()
 
     if not sr:
@@ -793,13 +801,16 @@ async def update_service_request(
 ):
     """Edit a pending service request."""
 
-    sr = db.query(ServiceRequest).filter(
-        ServiceRequest.id == sr_id,
-        ServiceRequest.customer_user_id
-        == current_user.user_id,
-        ServiceRequest.tenant_id
-        == current_user.tenant_id,
-    ).first()
+    sr = (
+        db.query(ServiceRequest)
+        .filter(
+            ServiceRequest.id == sr_id,
+            ServiceRequest.customer_user_id == current_user.user_id,
+            ServiceRequest.tenant_id == current_user.tenant_id,
+        )
+        .with_for_update()
+        .first()
+    )
 
     if not sr:
         raise HTTPException(
@@ -807,21 +818,61 @@ async def update_service_request(
             detail="Service request not found",
         )
 
-    if sr.status not in ("UNASSIGNED",):
-        raise HTTPException(status_code=400, detail="Can only edit pending requests")
+    linked_job = None
+    if sr.linked_job_id:
+        linked_job = (
+            db.query(Job)
+            .join(ServiceRequest, ServiceRequest.linked_job_id == Job.id)
+            .filter(
+                ServiceRequest.id == sr.id,
+                ServiceRequest.customer_user_id == current_user.user_id,
+                ServiceRequest.tenant_id == current_user.tenant_id,
+                Job.id == sr.linked_job_id,
+                or_(
+                    Job.customer_id == str(current_user.user_id),
+                    Job.customer_id.is_(None),
+                ),
+            )
+            .with_for_update()
+            .first()
+        )
 
-    update_data = data.model_dump(
-        mode="json",
-        exclude_unset=True,
+    is_editable = (
+        linked_job.status == "CREATED"
+        if linked_job
+        else sr.status == "UNASSIGNED"
     )
+    if not is_editable:
+        raise HTTPException(status_code=400, detail="Can only edit pending requests")
+    if sr.linked_job_id and not linked_job:
+        raise HTTPException(status_code=404, detail="Linked job not found")
 
-    for key, value in update_data.items():
+    update_values = data.model_dump(exclude_unset=True)
+    update_data = data.model_dump(mode="json", exclude_unset=True)
+
+    for key, value in update_values.items():
         if value is not None:
             setattr(
                 sr,
                 key,
                 value,
             )
+
+    if linked_job:
+        if "title" in update_data or "description" in update_data:
+            linked_job.issue_description = f"{sr.title}: {sr.description}"
+        if "service_type" in update_data:
+            linked_job.service_type = sr.service_type or "General"
+            linked_job.required_skill = sr.service_type or "General"
+        if "priority" in update_data:
+            linked_job.priority = sr.priority
+        if "location" in update_data:
+            linked_job.location = sr.location
+            linked_job.site_address = sr.location
+        if "contact_number" in update_data:
+            linked_job.contact_number = sr.contact_number or "N/A"
+        if "preferred_visit_date" in update_data:
+            linked_job.preferred_service_date = sr.preferred_visit_date
 
     audit_log(
         db,
@@ -855,13 +906,16 @@ async def cancel_service_request(
 ):
     """Cancel a pending service request."""
 
-    sr = db.query(ServiceRequest).filter(
-        ServiceRequest.id == sr_id,
-        ServiceRequest.customer_user_id
-        == current_user.user_id,
-        ServiceRequest.tenant_id
-        == current_user.tenant_id,
-    ).first()
+    sr = (
+        db.query(ServiceRequest)
+        .filter(
+            ServiceRequest.id == sr_id,
+            ServiceRequest.customer_user_id == current_user.user_id,
+            ServiceRequest.tenant_id == current_user.tenant_id,
+        )
+        .with_for_update()
+        .first()
+    )
 
     if not sr:
         raise HTTPException(
@@ -869,14 +923,61 @@ async def cancel_service_request(
             detail="Service request not found",
         )
 
-    if sr.status not in ("UNASSIGNED",):
-        raise HTTPException(status_code=400, detail="Can only cancel pending requests")
+    linked_job = None
+    if sr.linked_job_id:
+        linked_job = (
+            db.query(Job)
+            .join(ServiceRequest, ServiceRequest.linked_job_id == Job.id)
+            .filter(
+                ServiceRequest.id == sr.id,
+                ServiceRequest.customer_user_id == current_user.user_id,
+                ServiceRequest.tenant_id == current_user.tenant_id,
+                Job.id == sr.linked_job_id,
+                or_(
+                    Job.customer_id == str(current_user.user_id),
+                    Job.customer_id.is_(None),
+                ),
+            )
+            .with_for_update()
+            .first()
+        )
 
-    sr.status = "CANCELLED"
-
-    sr.cancelled_at = datetime.now(
-        timezone.utc
+    can_cancel = (
+        linked_job.status in {"CREATED", "ASSIGNED"}
+        if linked_job
+        else sr.status == "UNASSIGNED"
     )
+    if not can_cancel:
+        raise HTTPException(status_code=400, detail="Can only cancel pending requests")
+    if sr.linked_job_id and not linked_job:
+        raise HTTPException(status_code=404, detail="Linked job not found")
+
+    cancellation_reason = "Cancelled by customer"
+    from ..services.job_status_machine import (
+        InvalidTransitionError,
+        PermissionDeniedError,
+        ReasonRequiredError,
+    )
+
+    try:
+        if linked_job:
+            linked_job.transition(
+                "CANCELLED",
+                actor_id=current_user.user_id,
+                actor_role="customer",
+                reason=cancellation_reason,
+            )
+        sr.status = "CANCELLED"
+        sr.cancellation_reason = cancellation_reason
+        sr.cancelled_at = datetime.now(timezone.utc)
+    except (InvalidTransitionError, PermissionDeniedError, ReasonRequiredError) as exc:
+        db.rollback()
+        if isinstance(exc, InvalidTransitionError):
+            raise HTTPException(status_code=400, detail=exc.message)
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception:
+        db.rollback()
+        raise
 
     audit_log(
         db,
@@ -927,83 +1028,80 @@ async def track_customer_jobs(
     # Get jobs linked to customer's service requests
     # ──────────────────────────────────────────────
 
-    service_request_job_ids = (
-        db.query(ServiceRequest.linked_job_id)
+    owned_job_query = (
+        db.query(Job)
+        .join(ServiceRequest, ServiceRequest.linked_job_id == Job.id)
         .filter(
-            ServiceRequest.customer_user_id
-            == current_user.user_id,
-            ServiceRequest.tenant_id
-            == current_user.tenant_id,
+            ServiceRequest.customer_user_id == current_user.user_id,
+            ServiceRequest.tenant_id == current_user.tenant_id,
             ServiceRequest.linked_job_id.isnot(None),
+            or_(
+                Job.customer_id == str(current_user.user_id),
+                Job.customer_id.is_(None),
+            ),
         )
-        .all()
     )
 
-    job_ids = [
-        sr[0]
-        for sr in service_request_job_ids
-    ]
-
     # ──────────────────────────────────────────────
-    # Also include jobs directly linked by customer_id
-    # ──────────────────────────────────────────────
-    #
-    # DO NOT filter by current_user.tenant_id.
-    #
-    # Job.tenant_id = selected organization tenant.
-    # Job.customer_id = customer who created the job.
-    # ──────────────────────────────────────────────
-
-    direct_jobs = db.query(Job).filter(
-        Job.customer_id
-        == str(current_user.user_id),
-    ).all()
-
-    # ──────────────────────────────────────────────
-    # Linked jobs
-    # ──────────────────────────────────────────────
-
-    linked_jobs = []
-
-    if job_ids:
-        linked_jobs = db.query(Job).filter(
-            Job.id.in_(job_ids),
-        ).all()
-
-    # ──────────────────────────────────────────────
-    # Remove duplicates
-    # ──────────────────────────────────────────────
-
-    all_jobs = {
+    jobs = list({
         job.id: job
-        for job in direct_jobs
-    }
-
-    for job in linked_jobs:
-        all_jobs[job.id] = job
+        for job in owned_job_query.order_by(Job.created_at.desc()).all()
+    }.values())
 
     # ──────────────────────────────────────────────
     # Build response
     # ──────────────────────────────────────────────
 
+    technician_ids = {
+        job.assigned_technician_id
+        for job in jobs
+        if job.assigned_technician_id is not None
+    }
+    job_tenant_ids = {job.tenant_id for job in jobs if job.tenant_id}
+    technicians = (
+        db.query(Technician)
+        .filter(
+            Technician.technician_id.in_(technician_ids),
+            Technician.tenant_id.in_(job_tenant_ids),
+        )
+        .all()
+        if technician_ids and job_tenant_ids
+        else []
+    )
+    technicians_by_key = {
+        (tech.tenant_id, tech.technician_id): tech
+        for tech in technicians
+    }
+    technician_user_ids = {
+        tech.tech_id for tech in technicians if tech.tech_id
+    }
+    technician_profiles = (
+        db.query(TechnicianProfile)
+        .filter(
+            TechnicianProfile.user_id.in_(technician_user_ids),
+            TechnicianProfile.tenant_id.in_(job_tenant_ids),
+        )
+        .all()
+        if technician_user_ids and job_tenant_ids
+        else []
+    )
+    profiles_by_key = {
+        (profile.tenant_id, profile.user_id): profile
+        for profile in technician_profiles
+    }
+
     results = []
 
-    for job in all_jobs.values():
+    for job in jobs:
 
         tech_name = None
         tech_photo = None
         tech_phone = None
 
         if job.assigned_technician_id:
-
-            # Technician belongs to the organization
-            # that currently owns the Job.
-            tech = db.query(Technician).filter(
-                Technician.technician_id
-                == job.assigned_technician_id,
-                Technician.tenant_id
-                == job.tenant_id,
-            ).first()
+            tech = technicians_by_key.get(
+                (job.tenant_id, job.assigned_technician_id)
+            )
 
             if tech:
 
@@ -1012,13 +1110,9 @@ async def track_customer_jobs(
 
                 # Try to get photo from TechnicianProfile.
                 if tech.tech_id:
-
-                    tp = db.query(
-                        TechnicianProfile
-                    ).filter(
-                        TechnicianProfile.user_id
-                        == tech.tech_id
-                    ).first()
+                    tp = profiles_by_key.get(
+                        (job.tenant_id, tech.tech_id)
+                    )
 
                     if tp:
                         tech_photo = tp.profile_photo
@@ -1062,38 +1156,20 @@ async def get_customer_job_detail(
     # Primary ownership check
     # ──────────────────────────────────────────────
 
-    job = db.query(Job).filter(
-        Job.id == job_id,
-        Job.customer_id
-        == str(current_user.user_id),
-    ).first()
-
-    # ──────────────────────────────────────────────
-    # Backward compatibility
-    # ──────────────────────────────────────────────
-    #
-    # Older jobs may not have customer_id.
-    # In that case check through ServiceRequest.
-    # ──────────────────────────────────────────────
-
-    if not job:
-
-        job = (
-            db.query(Job)
-            .join(
-                ServiceRequest,
-                ServiceRequest.linked_job_id
-                == Job.id,
-            )
-            .filter(
-                Job.id == job_id,
-                ServiceRequest.customer_user_id
-                == current_user.user_id,
-                ServiceRequest.tenant_id
-                == current_user.tenant_id,
-            )
-            .first()
+    job = (
+        db.query(Job)
+        .join(ServiceRequest, ServiceRequest.linked_job_id == Job.id)
+        .filter(
+            Job.id == job_id,
+            or_(
+                Job.customer_id == str(current_user.user_id),
+                Job.customer_id.is_(None),
+            ),
+            ServiceRequest.customer_user_id == current_user.user_id,
+            ServiceRequest.tenant_id == current_user.tenant_id,
         )
+        .first()
+    )
 
     if not job:
         raise HTTPException(
@@ -1131,7 +1207,8 @@ async def get_customer_job_detail(
                     TechnicianProfile
                 ).filter(
                     TechnicianProfile.user_id
-                    == tech.tech_id
+                    == tech.tech_id,
+                    TechnicianProfile.tenant_id == job.tenant_id,
                 ).first()
 
                 if tp:
@@ -1149,6 +1226,81 @@ async def get_customer_job_detail(
         assigned_technician_phone=tech_phone,
         created_at=job.created_at,
         completed_at=job.completed_at,
+    )
+
+
+@router.get("/jobs/{job_id}/report")
+async def download_customer_job_report(
+    job_id: int,
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.REPORTS_DOWNLOAD)
+    ),
+    db: Session = Depends(get_db),
+):
+    """Download the completion report for one of the customer's jobs."""
+
+    report_row = (
+        db.query(JobClosure, Job)
+        .join(Job, Job.id == JobClosure.job_id)
+        .join(ServiceRequest, ServiceRequest.linked_job_id == Job.id)
+        .filter(
+            Job.id == job_id,
+            ServiceRequest.customer_user_id == current_user.user_id,
+            ServiceRequest.tenant_id == current_user.tenant_id,
+            or_(
+                Job.customer_id == str(current_user.user_id),
+                Job.customer_id.is_(None),
+            ),
+            JobClosure.tenant_id == Job.tenant_id,
+        )
+        .order_by(JobClosure.completed_at.desc(), JobClosure.id.desc())
+        .first()
+    )
+
+    if not report_row:
+        raise HTTPException(status_code=404, detail="Job report not found")
+
+    closure, job = report_row
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    pdf.setTitle(f"Service Completion Report - Job {job.id}")
+    pdf.setFont("Helvetica-Bold", 18)
+    pdf.drawString(48, height - 55, "Service Completion Report")
+    pdf.setFont("Helvetica", 11)
+
+    report_lines = [
+        f"Job: {job.id}",
+        f"Service: {job.service_type or 'Service'}",
+        f"Status: {job.status or 'Completed'}",
+        f"Location: {job.location or job.site_address or 'Not provided'}",
+        f"Completed: {closure.completed_at.isoformat() if closure.completed_at else 'Not provided'}",
+        "",
+        "Work summary:",
+        closure.work_summary or "No work summary was recorded.",
+    ]
+    y = height - 90
+    for text_line in report_lines:
+        if y < 55:
+            pdf.showPage()
+            pdf.setFont("Helvetica", 11)
+            y = height - 55
+        pdf.drawString(48, y, text_line[:110])
+        y -= 20
+
+    pdf.save()
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="service_report_job_{job.id}.pdf"'
+            )
+        },
     )
 
 
@@ -1204,8 +1356,8 @@ async def get_notifications(
     ).filter(
         InAppNotification.tenant_id
         == current_user.tenant_id,
-        InAppNotification.tech_id
-        == current_user.user_id,
+        InAppNotification.customer_user_id
+        == str(current_user.user_id),
     ).order_by(
         InAppNotification.created_at.desc()
     ).limit(100).all()
@@ -1213,8 +1365,8 @@ async def get_notifications(
     unread_count = db.query(
         InAppNotification
     ).filter(
-        InAppNotification.tech_id
-        == current_user.user_id,
+        InAppNotification.customer_user_id
+        == str(current_user.user_id),
         InAppNotification.tenant_id
         == current_user.tenant_id,
         InAppNotification.status == "UNREAD",
@@ -1240,7 +1392,6 @@ async def get_notifications(
         "unread_count": unread_count,
     }
 
-
 @router.put(
     "/notifications/{notification_id}/read"
 )
@@ -1259,8 +1410,8 @@ async def mark_notification_read(
         InAppNotification.id == notification_id,
         InAppNotification.tenant_id
         == current_user.tenant_id,
-        InAppNotification.tech_id
-        == current_user.user_id,
+        InAppNotification.customer_user_id
+        == str(current_user.user_id),
     ).first()
 
     if not notification:
@@ -1312,8 +1463,8 @@ async def mark_all_read(
     ).filter(
         InAppNotification.tenant_id
         == current_user.tenant_id,
-        InAppNotification.tech_id
-        == current_user.user_id,
+        InAppNotification.customer_user_id
+        == str(current_user.user_id),
         InAppNotification.status == "UNREAD",
     ).update(
         {

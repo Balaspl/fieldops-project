@@ -262,10 +262,30 @@ class SMSDelivery(Base):
 class InAppNotification(Base):
     __tablename__ = "notifications"
 
-    id = Column(String(36), primary_key=True) # Using UUID string for portability
-    tech_id = Column(String(36), ForeignKey("technicians.tech_id"), nullable=False)
-    tenant_id = Column(String(50),ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True) 
-    job_id = Column(String(36), nullable=True) # Assuming jobs use string UUIDs in some contexts, or int
+    id = Column(String(36), primary_key=True)
+
+    # Technician recipient
+    tech_id = Column(
+        String(36),
+        ForeignKey("technicians.tech_id"),
+        nullable=True,
+    )
+
+    # Customer recipient
+    customer_user_id = Column(
+        String(50),
+        nullable=True,
+        index=True,
+    )
+
+    tenant_id = Column(
+        String(50),
+        ForeignKey("organizations.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+
+    job_id = Column(String(36), nullable=True)
     type = Column(String(50), nullable=False)
     title = Column(String(200), nullable=False)
     body = Column(Text, nullable=True)
@@ -279,13 +299,38 @@ class InAppNotification(Base):
     expires_at = Column(DateTime(timezone=True), nullable=True)
     notification_metadata = Column(JSON, default=dict)
 
-    organization=relationship("Organization",back_populates="InApp_Notification")
+    organization = relationship(
+        "Organization",
+        back_populates="InApp_Notification",
+    )
 
     __table_args__ = (
-        CheckConstraint("status IN ('UNREAD', 'READ', 'DISMISSED')", name="valid_status"),
-        Index("idx_notifications_tech_status", "tech_id", "status"),
-        Index("idx_notifications_created_at", "created_at"),
-        Index("idx_notifications_type", "type"),
+        CheckConstraint(
+            "status IN ('UNREAD', 'READ', 'DISMISSED')",
+            name="valid_status",
+        ),
+        CheckConstraint(
+            "tech_id IS NOT NULL OR customer_user_id IS NOT NULL",
+            name="notification_has_recipient",
+        ),
+        Index(
+            "idx_notifications_tech_status",
+            "tech_id",
+            "status",
+        ),
+        Index(
+            "idx_notifications_customer_status",
+            "customer_user_id",
+            "status",
+        ),
+        Index(
+            "idx_notifications_created_at",
+            "created_at",
+        ),
+        Index(
+            "idx_notifications_type",
+            "type",
+        ),
     )
 
 class NotificationTemplate(Base):

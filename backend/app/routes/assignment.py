@@ -99,7 +99,12 @@ def get_nearest_technician(
     tech_query = db.query(models.Technician).filter(
         models.Technician.technician_skill == job.required_skill,
         models.Technician.technician_status.in_(
-            ["AVAILABLE", "ASSIGNED", "Available", "Assigned"]
+            [
+                "AVAILABLE",
+                "ASSIGNED",
+                "Available",
+                "Assigned"
+            ]
         ),
         models.Technician.current_jobs < models.Technician.max_jobs
     )
@@ -161,6 +166,7 @@ def assign_job(
     - Duplicate assignments are prevented.
     - Technician availability/workload is validated.
     - Assignment notification is created for the technician.
+    - Customer notification is created for the customer.
     - Assignment timer is started after successful DB commit.
     """
 
@@ -223,9 +229,7 @@ def assign_job(
 
             tech_val = assignment.technician_id
 
-            # --------------------------------------------------------
             # 4A. Find by numeric technician_id
-            # --------------------------------------------------------
 
             if (
                 isinstance(tech_val, int)
@@ -246,9 +250,7 @@ def assign_job(
 
                 technician = t_q.first()
 
-            # --------------------------------------------------------
             # 4B. Find by tech_id
-            # --------------------------------------------------------
 
             if not technician:
 
@@ -312,6 +314,7 @@ def assign_job(
             technician = technicians[0]
 
         else:
+
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -338,8 +341,10 @@ def assign_job(
         job.assigned_technician_id = technician.technician_id
         job.status = "ASSIGNED"
 
-        # Update customer ServiceRequest status
-        service_request = db.query(models.ServiceRequest).filter(
+        # Find customer ServiceRequest
+        service_request = db.query(
+            models.ServiceRequest
+        ).filter(
             models.ServiceRequest.linked_job_id == job.id
         ).first()
 
@@ -353,18 +358,6 @@ def assign_job(
         if hasattr(job, "assigned_by") and user:
             job.assigned_by = str(user.user_id)
 
-        print("========== BEFORE WORKLOAD UPDATE ==========")
-        print("Job ID:", job.id)
-        print("Job tenant ID:", job.tenant_id)
-        print("Technician ID:", technician.technician_id)
-        print("Technician tech_id:", technician.tech_id)
-        print("Technician tenant ID:", technician.tenant_id)
-        print(
-            "Job assigned_technician_id:",
-            job.assigned_technician_id
-        )
-        print("Job status:", job.status)
-
         # ============================================================
         # 8. Update Technician Workload
         # ============================================================
@@ -377,36 +370,22 @@ def assign_job(
             1
         )
 
-        print("========== AFTER WORKLOAD UPDATE ==========")
-        print("Job ID:", job.id)
-        print(
-            "Job assigned_technician_id:",
-            job.assigned_technician_id
-        )
-        print("Job status:", job.status)
-
         # ============================================================
         # 9. Create Technician Notification
         # ============================================================
 
         notification = models.InAppNotification(
             id=str(uuid.uuid4()),
-
             tenant_id=technician.tenant_id,
-
             tech_id=technician.tech_id,
-
             job_id=str(job.id),
-
             type="JOB_ASSIGNED",
             title="New Job Assigned",
-
             body=(
                 f"You have been assigned to Job #{job.id}: "
                 f"{job.service_type or 'Service Request'} "
                 f"at {job.location or 'Customer location'}."
             ),
-
             status="UNREAD",
             priority=job.priority or "HIGH",
             created_at=datetime.now(timezone.utc),
@@ -414,20 +393,39 @@ def assign_job(
 
         db.add(notification)
 
-        print("========== NOTIFICATION CREATED ==========")
-        print("Notification ID:", notification.id)
-        print("Notification tech_id:", notification.tech_id)
-        print("Notification tenant_id:", notification.tenant_id)
-        print("Notification job_id:", notification.job_id)
-        print("Notification type:", notification.type)
+        # ============================================================
+        # 9B. Create Customer Notification
+        # ============================================================
+
+        if service_request and service_request.customer_user_id:
+
+            customer_notification = models.InAppNotification(
+                id=str(uuid.uuid4()),
+                tenant_id=service_request.tenant_id,
+                tech_id=None,
+                customer_user_id=str(
+                    service_request.customer_user_id
+                ),
+                job_id=str(job.id),
+                type="JOB_ASSIGNED",
+                title="Technician Assigned",
+                body=(
+                    f"{technician.technician_name or 'A technician'} "
+                    f"has been assigned to your service request "
+                    f"#{job.id}."
+                ),
+                status="UNREAD",
+                priority=job.priority or "HIGH",
+                created_at=datetime.now(timezone.utc),
+            )
+
+            db.add(customer_notification)
 
         # ============================================================
         # 10. Commit Everything
         # ============================================================
 
         db.commit()
-
-        print("========== COMMIT SUCCESS ==========")
 
         # ============================================================
         # 11. Refresh Objects
@@ -436,15 +434,8 @@ def assign_job(
         db.refresh(job)
         db.refresh(technician)
 
-        print("========== AFTER REFRESH ==========")
-        print(
-            "Job assigned_technician_id:",
-            job.assigned_technician_id
-        )
-        print("Job status:", job.status)
-
         # ============================================================
-        # 12. START ASSIGNMENT TIMER
+        # 12. Start Assignment Timer
         # ============================================================
 
         timer_started = TimerService.start_timer(
@@ -452,11 +443,6 @@ def assign_job(
             str(job.id),
             technician.tech_id,
         )
-
-        print("========== ASSIGNMENT TIMER ==========")
-        print("Job ID:", job.id)
-        print("Technician tech_id:", technician.tech_id)
-        print("Timer started:", timer_started)
 
         # ============================================================
         # 13. Return Response
@@ -473,16 +459,8 @@ def assign_job(
             "job_status": job.status
         }
 
-    # ================================================================
-    # HTTP Errors
-    # ================================================================
-
     except HTTPException:
         raise
-
-    # ================================================================
-    # Database Errors
-    # ================================================================
 
     except SQLAlchemyError as e:
         db.rollback()
@@ -495,10 +473,6 @@ def assign_job(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Database connection error occurred"
         )
-
-    # ================================================================
-    # Unexpected Errors
-    # ================================================================
 
     except Exception as e:
         db.rollback()
@@ -533,7 +507,7 @@ def assign_jobs_bulk(
     try:
 
         # ============================================================
-        # 1. Validate request
+        # 1. Validate Request
         # ============================================================
 
         if not assignment.job_ids:
@@ -545,14 +519,18 @@ def assign_jobs_bulk(
         parsed_job_ids = []
 
         for raw_job_id in assignment.job_ids:
+
             job_id_str = str(raw_job_id).strip()
 
             try:
+
                 if job_id_str.upper().startswith("JOB"):
                     job_id = int(job_id_str[3:])
                 else:
                     job_id = int(job_id_str)
+
             except (ValueError, TypeError):
+
                 raise HTTPException(
                     status_code=400,
                     detail=f"Invalid job ID: {raw_job_id}"
@@ -574,7 +552,7 @@ def assign_jobs_bulk(
             )
 
         # ============================================================
-        # 2. Find technician
+        # 2. Find Technician
         # ============================================================
 
         tech_val = assignment.technician_id
@@ -588,6 +566,7 @@ def assign_jobs_bulk(
                 and tech_val.isdigit()
             )
         ):
+
             technician_query = db.query(
                 models.Technician
             ).filter(
@@ -602,6 +581,7 @@ def assign_jobs_bulk(
             technician = technician_query.first()
 
         if not technician:
+
             technician_query = db.query(
                 models.Technician
             ).filter(
@@ -622,10 +602,12 @@ def assign_jobs_bulk(
             )
 
         # ============================================================
-        # 3. Fetch all jobs
+        # 3. Fetch All Jobs
         # ============================================================
 
-        job_query = db.query(models.Job).filter(
+        job_query = db.query(
+            models.Job
+        ).filter(
             models.Job.id.in_(parsed_job_ids)
         ).with_for_update()
 
@@ -642,7 +624,7 @@ def assign_jobs_bulk(
         }
 
         # ============================================================
-        # 4. Make sure every requested job exists
+        # 4. Make Sure Every Requested Job Exists
         # ============================================================
 
         missing_job_ids = [
@@ -669,7 +651,7 @@ def assign_jobs_bulk(
         ]
 
         # ============================================================
-        # 5. Validate EVERY job before mutation
+        # 5. Validate Every Job Before Mutation
         # ============================================================
 
         from ..validation import validate_technician_for_assignment
@@ -691,13 +673,14 @@ def assign_jobs_bulk(
             )
 
         # ============================================================
-        # 6. Validate batch workload
+        # 6. Validate Batch Workload
         # ============================================================
 
         current_jobs = technician.current_jobs or 0
         max_jobs = technician.max_jobs
 
         if max_jobs is not None:
+
             requested_count = len(ordered_jobs)
 
             if current_jobs + requested_count > max_jobs:
@@ -706,12 +689,13 @@ def assign_jobs_bulk(
                     detail=(
                         f"Cannot assign {requested_count} jobs to "
                         f"{technician.technician_name}. "
-                        f"Current workload: {current_jobs}/{max_jobs}."
+                        f"Current workload: "
+                        f"{current_jobs}/{max_jobs}."
                     )
                 )
 
         # ============================================================
-        # 7. Perform mutations
+        # 7. Perform Mutations
         # ============================================================
 
         assigned_at = datetime.now(timezone.utc)
@@ -722,11 +706,19 @@ def assign_jobs_bulk(
 
         for job in ordered_jobs:
 
+            # --------------------------------------------------------
+            # Assign Job
+            # --------------------------------------------------------
+
             job.assigned_technician_id = (
                 technician.technician_id
             )
 
             job.status = "ASSIGNED"
+
+            # --------------------------------------------------------
+            # Find Customer ServiceRequest
+            # --------------------------------------------------------
 
             service_request = db.query(
                 models.ServiceRequest
@@ -737,17 +729,29 @@ def assign_jobs_bulk(
             if service_request:
                 service_request.status = "ASSIGNED"
 
+            # --------------------------------------------------------
+            # Assignment Metadata
+            # --------------------------------------------------------
+
             if hasattr(job, "assigned_at"):
                 job.assigned_at = assigned_at
 
             if hasattr(job, "assigned_by") and user:
                 job.assigned_by = str(user.user_id)
 
+            # --------------------------------------------------------
+            # Update Technician Workload
+            # --------------------------------------------------------
+
             update_workload_count(
                 db,
                 technician.technician_id,
                 1
             )
+
+            # ========================================================
+            # Technician Notification
+            # ========================================================
 
             notification = models.InAppNotification(
                 id=str(uuid.uuid4()),
@@ -768,6 +772,41 @@ def assign_jobs_bulk(
 
             db.add(notification)
 
+            # ========================================================
+            # Customer Notification
+            # ========================================================
+
+            if (
+                service_request
+                and service_request.customer_user_id
+            ):
+
+                customer_notification = models.InAppNotification(
+                    id=str(uuid.uuid4()),
+                    tenant_id=service_request.tenant_id,
+                    tech_id=None,
+                    customer_user_id=str(
+                        service_request.customer_user_id
+                    ),
+                    job_id=str(job.id),
+                    type="JOB_ASSIGNED",
+                    title="Technician Assigned",
+                    body=(
+                        f"{technician.technician_name or 'A technician'} "
+                        f"has been assigned to your service request "
+                        f"#{job.id}."
+                    ),
+                    status="UNREAD",
+                    priority=job.priority or "HIGH",
+                    created_at=assigned_at,
+                )
+
+                db.add(customer_notification)
+
+            # --------------------------------------------------------
+            # Result
+            # --------------------------------------------------------
+
             results.append({
                 "job_id": job.id,
                 "status": "ASSIGNED",
@@ -776,13 +815,13 @@ def assign_jobs_bulk(
             })
 
         # ============================================================
-        # 8. Commit entire batch
+        # 8. Commit Entire Batch
         # ============================================================
 
         db.commit()
 
         # ============================================================
-        # 9. Return response
+        # 9. Return Response
         # ============================================================
 
         return {

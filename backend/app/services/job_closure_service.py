@@ -11,6 +11,8 @@ from ..context import correlation_id_ctx
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from .customer_notification_services import(create_customer_job_status_notification)
+
 from ..models import Job, Technician, AuditEvent
 from ..models.job_closure import JobClosure
 from ..schemas import JobClosureCreate, CompletionChecklist
@@ -225,6 +227,12 @@ def close_job(
             JobStatus.COMPLETED,
             actor_id=actor_id,
             actor_role="technician",
+        )
+
+        create_customer_job_status_notification(
+        db=db,
+        job=job,
+        new_status="COMPLETED",
         )
 
         completed_at = job.completed_at
