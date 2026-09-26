@@ -3457,7 +3457,6 @@ def test_get_service_types_exception():
 # ---------------------------------------------------------------------------
 # create_job coverage
 # ---------------------------------------------------------------------------
-
 @pytest.mark.asyncio
 async def test_create_job_required_skill_fallback(monkeypatch):
     from app.routes.jobs import create_job
@@ -3484,9 +3483,23 @@ async def test_create_job_required_skill_fallback(monkeypatch):
             attempt_count=None,
         )
 
+        request = Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": "/jobs",
+                "headers": [],
+                "query_string": b"",
+                "scheme": "http",
+                "server": ("testserver", 80),
+                "client": ("testclient", 50000),
+                "app": app,
+            }
+        )
+
         result = await create_job(
-            request=make_test_request(),
             job=job_data,
+            request=request,
             user_tenant=(None, "tenant-1"),
             db=db,
         )
@@ -3525,9 +3538,23 @@ async def test_create_job_platform_super_admin():
             attempt_count=0,
         )
 
+        request = Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": "/jobs",
+                "headers": [],
+                "query_string": b"",
+                "scheme": "http",
+                "server": ("testserver", 80),
+                "client": ("testclient", 50000),
+                "app": app,
+            }
+        )
+
         result = await create_job(
-            request=make_test_request(),
             job=job_data,
+            request=request,
             user_tenant=(FakeUser(), "__platform__"),
             db=db,
         )
@@ -3563,9 +3590,23 @@ async def test_create_job_platform_super_admin_without_requested_tenant():
             attempt_count=0,
         )
 
+        request = Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": "/jobs",
+                "headers": [],
+                "query_string": b"",
+                "scheme": "http",
+                "server": ("testserver", 80),
+                "client": ("testclient", 50000),
+                "app": app,
+            }
+        )
+
         result = await create_job(
-            request=make_test_request(),
             job=job_data,
+            request=request,
             user_tenant=(FakeUser(), "__platform__"),
             db=db,
         )
@@ -3606,10 +3647,24 @@ async def test_create_job_exception():
         attempt_count=0,
     )
 
+    request = Request(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "path": "/jobs",
+            "headers": [],
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "client": ("testclient", 50000),
+            "app": app,
+        }
+    )
+
     with pytest.raises(HTTPException) as exc_info:
-       await create_job(
-           request=make_test_request(),
+        await create_job(
             job=job_data,
+            request=request,
             user_tenant=(None, "tenant-1"),
             db=BrokenDB(),
         )
@@ -5135,7 +5190,6 @@ def test_get_service_types_exception():
 # create_job branches
 # -----------------------------------------------------------------------------
 @pytest.mark.asyncio
-
 async def test_create_job_super_admin_platform_tenant():
     from app.routes.jobs import create_job
 
@@ -5165,9 +5219,23 @@ async def test_create_job_super_admin_platform_tenant():
             attempt_count=0,
         )
 
+        request = Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": "/jobs",
+                "headers": [],
+                "query_string": b"",
+                "scheme": "http",
+                "server": ("testserver", 80),
+                "client": ("testclient", 50000),
+                "app": app,
+            }
+        )
+
         result = await create_job(
-            request=make_test_request(),
             job=job_data,
+            request=request,
             user_tenant=(user, "__platform__"),
             db=db,
         )
@@ -5199,9 +5267,23 @@ async def test_create_job_escalated():
             attempt_count=0,
         )
 
+        request = Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": "/jobs",
+                "headers": [],
+                "query_string": b"",
+                "scheme": "http",
+                "server": ("testserver", 80),
+                "client": ("testclient", 50000),
+                "app": app,
+            }
+        )
+
         result = await create_job(
-            request=make_test_request(),
             job=job_data,
+            request=request,
             user_tenant=(_dispatcher_user(), "tenant-1"),
             db=db,
         )

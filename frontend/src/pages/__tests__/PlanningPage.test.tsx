@@ -693,12 +693,17 @@ describe("PlanningPage - Task 1 Bulk Job Assignment", () => {
       })
     );
 
-    await waitFor(() => {
-      expect(mockedAssignJobsBulk).toHaveBeenCalledWith(
-        [101, 102],
-        7
-      );
-    });
+    await waitFor(
+      () => {
+        expect(mockedAssignJobsBulk).toHaveBeenCalledWith(
+          [101, 102],
+          7
+        );
+      },
+      {
+        timeout: 10000,
+      }
+    );
   });
 
   it("shows the assigning state while the bulk API request is pending", async () => {

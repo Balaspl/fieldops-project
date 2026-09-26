@@ -24,14 +24,54 @@ fake_redis = fakeredis.FakeRedis(decode_responses=True)
 import app.redis_client
 app.redis_client.get_redis_client = lambda: fake_redis
 
-from app.database import Base
-from app.models import Job, Technician, JobClosure
+from app.database import Base, get_db
+from app.models import (
+    Job,
+    Technician,
+    JobClosure,
+    JobPaymentStatus,
+    CustomerFeedback,
+)
 from app.schemas import JobClosureCreate
 from app.services.job_closure_service import close_job, get_job_closure
+from app.auth.dependencies import get_current_user, AuthenticatedUser
+from app.auth.rbac import UserRole
+from app.database import get_db
+from app.routes.jobs import get_job_payment_status
 from app.main import app
 
 client = TestClient(app)
 
+def _authenticated_user(
+    *,
+    user_id: str = "dispatcher-100",
+    tenant_id: str = "tenant-1",
+    role: UserRole = UserRole.DISPATCHER,
+) -> AuthenticatedUser:
+    return AuthenticatedUser(
+        user_id=user_id,
+        tenant_id=tenant_id,
+        role=role,
+        jti="test-job-history-jti",
+    )
+
+
+def _override_payment_status_dependencies(db, user: AuthenticatedUser):
+    def override_get_db():
+        yield db
+
+    def override_get_current_user():
+        return user
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = (
+        override_get_current_user
+    )
+
+
+def _clear_payment_status_dependencies():
+    app.dependency_overrides.pop(get_db, None)
+    app.dependency_overrides.pop(get_current_user, None)
 
 @pytest.fixture(autouse=True)
 def setup_db():
@@ -621,3 +661,459 @@ def test_completed_checklist_is_persisted(setup_db):
             },
         ]
     }
+
+@pytest.mark.parametrize(
+    "payment_state",
+    [
+        "PENDING",
+        "SUCCESSFUL",
+        "FAILED",
+        "UNAVAILABLE",
+    ],
+)
+def test_payment_status_returns_backend_authoritative_state(
+    setup_db,
+    payment_state,
+):
+    db = setup_db
+    tech, job = create_sample_tech_and_job(db)
+
+    closure = close_job(
+        db=db,
+        job_id=job.id,
+        closure_data=JobClosureCreate(
+            work_summary="Completed repair.",
+            after_images=["/uploads/after.jpg"],
+            labour_cost=100.0,
+            material_cost=50.0,
+        ),
+        technician_identifier=str(tech.technician_id),
+        tenant_id=tech.tenant_id,
+        user_role="TECHNICIAN",
+    )
+
+    payment = JobPaymentStatus(
+        job_id=job.id,
+        invoice_id=closure.id,
+        tenant_id=job.tenant_id,
+        status=payment_state,
+    )
+    db.add(payment)
+    db.commit()
+    db.refresh(payment)
+
+    user = _authenticated_user()
+
+    _override_payment_status_dependencies(db, user)
+
+    try:
+        response = client.get(
+            f"/api/v1/jobs/{job.id}/payment-status"
+        )
+    finally:
+        _clear_payment_status_dependencies()
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["job_id"] == job.id
+    assert data["invoice_id"] == closure.id
+    assert data["status"] == payment_state
+    assert data["updated_at"] is not None
+
+
+def test_payment_status_returns_unavailable_when_record_does_not_exist(
+    setup_db,
+):
+    db = setup_db
+    _, job = create_sample_tech_and_job(db)
+
+    user = _authenticated_user()
+
+    _override_payment_status_dependencies(db, user)
+
+    try:
+        response = client.get(
+            f"/api/v1/jobs/{job.id}/payment-status"
+        )
+    finally:
+        _clear_payment_status_dependencies()
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data == {
+        "job_id": job.id,
+        "invoice_id": None,
+        "status": "UNAVAILABLE",
+        "updated_at": None,
+    }
+
+
+def test_payment_status_enforces_tenant_isolation(
+    setup_db,
+):
+    db = setup_db
+    tech, job = create_sample_tech_and_job(db)
+
+    payment = JobPaymentStatus(
+        job_id=job.id,
+        invoice_id=None,
+        tenant_id="tenant-1",
+        status="SUCCESSFUL",
+    )
+    db.add(payment)
+    db.commit()
+
+    user = _authenticated_user(
+        tenant_id="tenant-2",
+    )
+
+    _override_payment_status_dependencies(db, user)
+
+    try:
+        response = client.get(
+            f"/api/v1/jobs/{job.id}/payment-status"
+        )
+    finally:
+        _clear_payment_status_dependencies()
+
+    assert response.status_code == 404
+
+    assert response.json()["detail"] == "Job not found"
+
+
+def test_payment_status_enforces_technician_object_access(
+    setup_db,
+):
+    db = setup_db
+
+    assigned_tech, job = create_sample_tech_and_job(
+        db,
+        tech_id_str="tech-100",
+        tech_pk=100,
+    )
+
+    payment = JobPaymentStatus(
+        job_id=job.id,
+        invoice_id=None,
+        tenant_id=job.tenant_id,
+        status="PENDING",
+    )
+    db.add(payment)
+    db.commit()
+
+    other_tech = Technician(
+        technician_id=200,
+        tech_id="tech-200",
+        technician_name="Other Technician",
+        technician_skill="HVAC",
+        technician_location="Zone 2",
+        technician_status="AVAILABLE",
+        current_jobs=0,
+        tenant_id="tenant-1",
+    )
+    db.add(other_tech)
+    db.commit()
+
+    user = _authenticated_user(
+        user_id="tech-200",
+        tenant_id="tenant-1",
+        role=UserRole.TECHNICIAN,
+    )
+
+    _override_payment_status_dependencies(db, user)
+
+    try:
+        response = client.get(
+            f"/api/v1/jobs/{job.id}/payment-status"
+        )
+    finally:
+        _clear_payment_status_dependencies()
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "This job is not assigned to you"
+    )
+
+
+def test_payment_status_does_not_mutate_payment_record(
+    setup_db,
+):
+    db = setup_db
+    tech, job = create_sample_tech_and_job(db)
+
+    payment = JobPaymentStatus(
+        job_id=job.id,
+        invoice_id=None,
+        tenant_id=job.tenant_id,
+        status="PENDING",
+    )
+    db.add(payment)
+    db.commit()
+    db.refresh(payment)
+
+    original_id = payment.id
+    original_status = payment.status
+    original_updated_at = payment.updated_at
+
+    user = _authenticated_user()
+
+    _override_payment_status_dependencies(db, user)
+
+    try:
+        response = client.get(
+            f"/api/v1/jobs/{job.id}/payment-status"
+        )
+    finally:
+        _clear_payment_status_dependencies()
+
+    assert response.status_code == 200
+
+    db.refresh(payment)
+
+    assert payment.id == original_id
+    assert payment.status == original_status
+    assert payment.updated_at == original_updated_at
+
+# ---------------------------------------------------------------------------
+# Task 9: Customer Feedback
+# ---------------------------------------------------------------------------
+
+def test_customer_feedback_returns_backend_authoritative_sanitized_record(
+    setup_db,
+):
+    db = setup_db
+    _, job = create_sample_tech_and_job(db, status="COMPLETED")
+
+    feedback = CustomerFeedback(
+        job_id=job.id,
+        tenant_id=job.tenant_id,
+        customer_id="customer-internal-001",
+        rating=5,
+        comment="Excellent service. The technician resolved the issue quickly.",
+    )
+    db.add(feedback)
+    db.commit()
+    db.refresh(feedback)
+
+    user = _authenticated_user()
+    _override_payment_status_dependencies(db, user)
+
+    try:
+        response = client.get(
+            f"/api/v1/jobs/{job.id}/customer-feedback"
+        )
+    finally:
+        _clear_payment_status_dependencies()
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["job_id"] == job.id
+    assert data["has_feedback"] is True
+    assert data["feedback"]["id"] == feedback.id
+    assert data["feedback"]["rating"] == 5
+    assert (
+        data["feedback"]["comment"]
+        == "Excellent service. The technician resolved the issue quickly."
+    )
+    assert data["feedback"]["created_at"] is not None
+    assert data["feedback"]["updated_at"] is not None
+
+    # Customer-sensitive internal identifiers must never be exposed.
+    assert "customer_id" not in data
+    assert "customer_id" not in data["feedback"]
+
+
+def test_customer_feedback_returns_empty_state_when_no_record_exists(
+    setup_db,
+):
+    db = setup_db
+    _, job = create_sample_tech_and_job(db, status="COMPLETED")
+
+    user = _authenticated_user()
+    _override_payment_status_dependencies(db, user)
+
+    try:
+        response = client.get(
+            f"/api/v1/jobs/{job.id}/customer-feedback"
+        )
+    finally:
+        _clear_payment_status_dependencies()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "job_id": job.id,
+        "has_feedback": False,
+        "feedback": None,
+    }
+
+
+def test_customer_feedback_enforces_tenant_isolation(
+    setup_db,
+):
+    db = setup_db
+    _, job = create_sample_tech_and_job(db, status="COMPLETED")
+
+    feedback = CustomerFeedback(
+        job_id=job.id,
+        tenant_id=job.tenant_id,
+        customer_id="customer-internal-002",
+        rating=4,
+        comment="Good service.",
+    )
+    db.add(feedback)
+    db.commit()
+
+    user = _authenticated_user(
+        tenant_id="tenant-2",
+    )
+    _override_payment_status_dependencies(db, user)
+
+    try:
+        response = client.get(
+            f"/api/v1/jobs/{job.id}/customer-feedback"
+        )
+    finally:
+        _clear_payment_status_dependencies()
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Job not found"
+
+
+def test_customer_feedback_returns_not_found_for_unknown_job(
+    setup_db,
+):
+    db = setup_db
+
+    user = _authenticated_user()
+    _override_payment_status_dependencies(db, user)
+
+    try:
+        response = client.get(
+            "/api/v1/jobs/99999/customer-feedback"
+        )
+    finally:
+        _clear_payment_status_dependencies()
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Job not found"
+
+
+def test_customer_feedback_rejects_unauthorized_permission(
+    setup_db,
+    monkeypatch,
+):
+    db = setup_db
+    _, job = create_sample_tech_and_job(db, status="COMPLETED")
+
+    # The endpoint is protected by the existing JOBS_VIEW_ALL permission
+    # dependency. Force the shared permission check to deny access so the
+    # test verifies the route cannot bypass RBAC.
+    import app.auth.dependencies as auth_dependencies
+
+    monkeypatch.setattr(
+        auth_dependencies,
+        "has_permission",
+        lambda *args, **kwargs: False,
+    )
+
+    user = _authenticated_user()
+    _override_payment_status_dependencies(db, user)
+
+    try:
+        response = client.get(
+            f"/api/v1/jobs/{job.id}/customer-feedback"
+        )
+    finally:
+        _clear_payment_status_dependencies()
+
+    assert response.status_code == 403
+
+
+def test_customer_feedback_does_not_mutate_feedback_record(
+    setup_db,
+):
+    db = setup_db
+    _, job = create_sample_tech_and_job(db, status="COMPLETED")
+
+    feedback = CustomerFeedback(
+        job_id=job.id,
+        tenant_id=job.tenant_id,
+        customer_id="customer-internal-003",
+        rating=3,
+        comment="Service was completed.",
+    )
+    db.add(feedback)
+    db.commit()
+    db.refresh(feedback)
+
+    original_id = feedback.id
+    original_customer_id = feedback.customer_id
+    original_rating = feedback.rating
+    original_comment = feedback.comment
+    original_created_at = feedback.created_at
+    original_updated_at = feedback.updated_at
+
+    user = _authenticated_user()
+    _override_payment_status_dependencies(db, user)
+
+    try:
+        response = client.get(
+            f"/api/v1/jobs/{job.id}/customer-feedback"
+        )
+    finally:
+        _clear_payment_status_dependencies()
+
+    assert response.status_code == 200
+
+    db.refresh(feedback)
+
+    assert feedback.id == original_id
+    assert feedback.customer_id == original_customer_id
+    assert feedback.rating == original_rating
+    assert feedback.comment == original_comment
+    assert feedback.created_at == original_created_at
+    assert feedback.updated_at == original_updated_at
+
+
+def test_customer_feedback_returns_latest_backend_record_without_pii(
+    setup_db,
+):
+    db = setup_db
+    _, job = create_sample_tech_and_job(db, status="COMPLETED")
+
+    feedback = CustomerFeedback(
+        job_id=job.id,
+        tenant_id=job.tenant_id,
+        customer_id="customer-internal-004",
+        rating=1,
+        comment=None,
+    )
+    db.add(feedback)
+    db.commit()
+    db.refresh(feedback)
+
+    user = _authenticated_user()
+    _override_payment_status_dependencies(db, user)
+
+    try:
+        response = client.get(
+            f"/api/v1/jobs/{job.id}/customer-feedback"
+        )
+    finally:
+        _clear_payment_status_dependencies()
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["has_feedback"] is True
+    assert data["feedback"]["rating"] == 1
+    assert data["feedback"]["comment"] is None
+    assert "customer_id" not in data["feedback"]
+
