@@ -83,7 +83,10 @@ export const getPlannedAssignments = async (params?: {
 /**
  * Assign technician to job.
  */
-export const assignJob = async (jobId: string | number, technicianId: string | number): Promise<any> => {
+export const assignJob = async (
+  jobId: string | number,
+  technicianId: string | number
+): Promise<any> => {
   try {
     return await api.post("/assign-job", {
       job_id: jobId,
@@ -93,7 +96,6 @@ export const assignJob = async (jobId: string | number, technicianId: string | n
     handleApiError(error);
   }
 };
-
 
 export const assignJobsBulk = async (
   jobIds: Array<string | number>,
@@ -122,7 +124,6 @@ export const cancelJobsBulk = async (
     handleApiError(error);
   }
 };
-
 
 /**
  * Fetch dashboard stats.
@@ -160,8 +161,10 @@ export const getJobs = async (params?: {
   }
 };
 
-
-export const manualAssign = async (jobId: string | number, technicianId: string | number): Promise<any> => {
+export const manualAssign = async (
+  jobId: string | number,
+  technicianId: string | number
+): Promise<any> => {
   try {
     return await api.post(`/assign-job`, {
       job_id: jobId,
@@ -175,7 +178,12 @@ export const manualAssign = async (jobId: string | number, technicianId: string 
 /**
  * Force assign a technician to a job, bypassing planning constraints.
  */
-export const forceAssignJob = async (jobId: string | number, technicianId: string | number, justification: string, role = "dispatcher"): Promise<any> => {
+export const forceAssignJob = async (
+  jobId: string | number,
+  technicianId: string | number,
+  justification: string,
+  role = "dispatcher"
+): Promise<any> => {
   try {
     return await api.post(`/technicians/assignments/${jobId}/override`, {
       technician_id: String(technicianId),
@@ -265,9 +273,64 @@ export const getJobTimeline = async (
 };
 
 /**
+ * Audit-history sources exposed by the backend audit-history endpoint.
+ */
+export type JobAuditHistorySource =
+  | "audit_event"
+  | "enterprise_audit"
+  | "assignment_override";
+
+/**
+ * Paginated, normalized audit-history response.
+ *
+ * The response shape matches the backend audit-history contract and reuses
+ * the same normalized event fields as the authoritative job timeline.
+ */
+export interface JobAuditHistoryResponse {
+  job_id: number;
+  events: JobTimelineEvent[];
+  page: number;
+  page_size: number;
+  total: number;
+  has_more: boolean;
+}
+
+/**
+ * Fetch permitted, backend-authoritative audit history for a job.
+ *
+ * Tenant scope and RBAC authorization remain enforced by the backend.
+ * Optional filters are forwarded unchanged as API query parameters.
+ */
+export const getJobAuditHistory = async (
+  jobId: string | number,
+  params?: {
+    event_type?: string;
+    source?: JobAuditHistorySource;
+    page?: number;
+    page_size?: number;
+  }
+): Promise<JobAuditHistoryResponse> => {
+  try {
+    const response = await api.get<JobAuditHistoryResponse>(
+      `/api/v1/jobs/${jobId}/audit-history`,
+      {
+        params,
+      }
+    );
+
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+/**
  * Fetch manual override history for a job.
  */
-export const getOverrideHistory = async (jobId: string | number): Promise<any> => {
+export const getOverrideHistory = async (
+  jobId: string | number
+): Promise<any> => {
   try {
     return await api.get(`/jobs/${jobId}/override-history`);
   } catch (error) {
@@ -278,7 +341,11 @@ export const getOverrideHistory = async (jobId: string | number): Promise<any> =
 /**
  * Trigger AI candidate ranking for a job.
  */
-export const getJobPlan = async (jobId: string | number, tenantId: string = "default-tenant", adminOverride: boolean = false): Promise<any> => {
+export const getJobPlan = async (
+  jobId: string | number,
+  tenantId: string = "default-tenant",
+  adminOverride: boolean = false
+): Promise<any> => {
   try {
     const response = await api.post(`/jobs/${jobId}/plan`, null, {
       params: { admin_override: adminOverride },
@@ -293,7 +360,10 @@ export const getJobPlan = async (jobId: string | number, tenantId: string = "def
 /**
  * Fetch override audit trail for a job.
  */
-export const getAuditOverrides = async (jobId: string | number, tenantId: string = "default-tenant"): Promise<any> => {
+export const getAuditOverrides = async (
+  jobId: string | number,
+  tenantId: string = "default-tenant"
+): Promise<any> => {
   try {
     const response = await api.get(`/audit/overrides/${jobId}`, {
       headers: { "X-Tenant-ID": tenantId }
@@ -341,7 +411,10 @@ export interface JobClosureData {
 /**
   Submit job closure details.
  */
-export const closeJob = async (jobId: string | number, data: JobClosureData): Promise<any> => {
+export const closeJob = async (
+  jobId: string | number,
+  data: JobClosureData
+): Promise<any> => {
   try {
     const response = await api.post(`/jobs/${jobId}/close`, data);
     return response.data;
@@ -363,7 +436,9 @@ export const closeJob = async (jobId: string | number, data: JobClosureData): Pr
 /**
   Fetch job closure details for a completed job.
  */
-export const getJobClosure = async (jobId: string | number): Promise<any> => {
+export const getJobClosure = async (
+  jobId: string | number
+): Promise<any> => {
   try {
     const response = await api.get(`/jobs/${jobId}/closure`);
     return response.data;
@@ -372,6 +447,144 @@ export const getJobClosure = async (jobId: string | number): Promise<any> => {
   }
 };
 
+/**
+ * Backend-authoritative invoice/billing data for a completed job.
+ */
+export interface JobInvoiceResponse {
+  id: number;
+  job_id: number;
+  customer_name: string;
+  service_type: string;
+  location: string;
+  work_summary: string;
+  labour_cost: number;
+  material_cost: number;
+  subtotal: number;
+  gst_rate: number;
+  gst_amount: number;
+  total_amount: number;
+  completed_at: string | null;
+  created_at: string | null;
+}
+
+
+/**
+ * Backend-authoritative payment status for a job/invoice.
+ *
+ * The backend owns the payment state. The frontend only displays the
+ * returned state and never performs payment-state transitions.
+ */
+export type JobPaymentStatus =
+  | "PENDING"
+  | "SUCCESSFUL"
+  | "FAILED"
+  | "UNAVAILABLE";
+
+export interface JobPaymentStatusResponse {
+  job_id: number;
+  invoice_id: number | null;
+  status: JobPaymentStatus;
+  updated_at: string | null;
+}
+
+export interface CustomerFeedbackRecord {
+  id: number;
+  rating: number;
+  comment: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface CustomerFeedbackResponse {
+  job_id: number;
+  has_feedback: boolean;
+  feedback: CustomerFeedbackRecord | null;
+}
+
+/**
+ * Fetch the backend-authoritative invoice/billing record for a job.
+ * Tenant scope, RBAC and object-level authorization remain enforced by the backend.
+ */
+export const getJobInvoice = async (
+  jobId: string | number
+): Promise<JobInvoiceResponse> => {
+  try {
+    const response = await api.get<JobInvoiceResponse>(
+      `/api/v1/jobs/${jobId}/invoice`
+    );
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+
+/**
+ * Fetch the backend-authoritative payment status for a job.
+ *
+ * Tenant isolation, RBAC and object-level access are enforced by the
+ * backend payment-status endpoint.
+ */
+export const getJobPaymentStatus = async (
+  jobId: string | number
+): Promise<JobPaymentStatusResponse> => {
+  try {
+    const response = await api.get<JobPaymentStatusResponse>(
+      `/api/v1/jobs/${jobId}/payment-status`
+    );
+
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+
+ /**
+  * Fetch backend-authoritative customer feedback for a job.
+  *
+  * Customer-sensitive access control, tenant isolation and object-level
+  * authorization are enforced by the backend endpoint.
+  *
+  * The frontend only consumes the sanitized response returned by the
+  * backend and never exposes customer_id or other customer PII.
+  */
+export const getJobCustomerFeedback = async (
+  jobId: string | number
+): Promise<CustomerFeedbackResponse> => {
+  try {
+    const response = await api.get<CustomerFeedbackResponse>(
+      `/api/v1/jobs/${jobId}/customer-feedback`
+    );
+
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+/**
+ * Download the backend-generated invoice PDF for a job.
+ */
+export const getJobInvoicePdf = async (
+  jobId: string | number
+): Promise<Blob> => {
+  try {
+    const response = await api.get<Blob>(
+      `/api/v1/jobs/${jobId}/invoice/pdf`,
+      {
+        responseType: "blob",
+      }
+    );
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
 
 /**
  * Fetch SLA state for a job.

@@ -23,15 +23,38 @@ export const SkeletonTimeline: React.FC = () => {
         <div key={n} className="flex gap-4">
           <div className="flex flex-col items-center">
             <div className="w-4 h-4 rounded-full bg-slate-200 dark:bg-slate-700" />
+
             {n < 3 && (
               <div className="w-0.5 flex-1 bg-slate-100 dark:bg-slate-800 my-1 min-h-[40px]" />
             )}
           </div>
+
           <div className="flex-1 bg-slate-50 dark:bg-slate-800/50 border border-slate-100/50 dark:border-slate-800 rounded-xl h-16" />
         </div>
       ))}
     </div>
   );
+};
+
+const getAssignmentOutcome = (
+  event: JobTimelineEvent
+): string | null => {
+  switch (event.event_type) {
+    case 'JOB_ASSIGNED':
+      return 'ASSIGNED';
+
+    case 'JOB_REASSIGNED':
+      return 'REASSIGNED';
+
+    case 'JOB_REASSIGNED_FROM_DECLINED':
+      return 'REASSIGNED AFTER DECLINE';
+
+    case 'ASSIGNMENT_OVERRIDE':
+      return 'MANUAL OVERRIDE';
+
+    default:
+      return null;
+  }
 };
 
 export const JobStatusTimeline: React.FC<JobStatusTimelineProps> = ({
@@ -43,9 +66,10 @@ export const JobStatusTimeline: React.FC<JobStatusTimelineProps> = ({
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [category, setCategory] = useState<JobTimelineCategory | undefined>(
-    undefined
-  );
+
+  const [category, setCategory] = useState<
+    JobTimelineCategory | undefined
+  >(undefined);
 
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
@@ -132,13 +156,14 @@ export const JobStatusTimeline: React.FC<JobStatusTimelineProps> = ({
     );
   }, [jobId, refreshKey, category]);
 
-  // Scroll to the active pulsing timeline item
+  // Scroll to the active pulsing timeline item.
   useEffect(() => {
     if (!loading && events.length > 0) {
       const timer = setTimeout(() => {
-        const activeEl = containerRef.current?.querySelector(
-          '.timeline-item-active'
-        );
+        const activeEl =
+          containerRef.current?.querySelector(
+            '.timeline-item-active'
+          );
 
         if (activeEl) {
           activeEl.scrollIntoView({
@@ -159,6 +184,7 @@ export const JobStatusTimeline: React.FC<JobStatusTimelineProps> = ({
           <History size={13} />
           Job Status History
         </h4>
+
         <SkeletonTimeline />
       </div>
     );
@@ -172,6 +198,7 @@ export const JobStatusTimeline: React.FC<JobStatusTimelineProps> = ({
         </span>
 
         <button
+          type="button"
           onClick={() =>
             fetchTimeline(
               page,
@@ -192,6 +219,7 @@ export const JobStatusTimeline: React.FC<JobStatusTimelineProps> = ({
     return (
       <div className="flex flex-col items-center justify-center p-8 text-center bg-slate-50/50 dark:bg-slate-900/30 border border-slate-100/50 dark:border-slate-850 rounded-xl gap-2 w-full">
         <CalendarClock className="w-8 h-8 text-slate-300 mx-auto mb-1" />
+
         <span className="text-slate-900 dark:text-slate-100 font-bold text-sm">
           No status history
         </span>
@@ -204,7 +232,10 @@ export const JobStatusTimeline: React.FC<JobStatusTimelineProps> = ({
   }
 
   return (
-    <div className="flex flex-col w-full h-full" ref={containerRef}>
+    <div
+      className="flex flex-col w-full h-full"
+      ref={containerRef}
+    >
       <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-1.5 select-none">
         <History size={13} />
         Job Status History
@@ -241,6 +272,25 @@ export const JobStatusTimeline: React.FC<JobStatusTimelineProps> = ({
         ))}
       </div>
 
+      {category === 'ASSIGNMENT' && events.length > 0 && (
+        <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-800 dark:bg-slate-900/60">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+              Assignment History
+            </span>
+
+            <span className="text-[10px] font-bold text-slate-400">
+              {total} {total === 1 ? 'event' : 'events'}
+            </span>
+          </div>
+
+          <p className="mt-1 text-[10px] text-slate-400">
+            Assignment and reassignment events are shown using the
+            backend-authoritative history.
+          </p>
+        </div>
+      )}
+
       {refreshing && (
         <div className="mb-2 flex items-center gap-1.5 text-[10px] text-slate-400">
           <RefreshCw size={11} className="animate-spin" />
@@ -272,14 +322,34 @@ export const JobStatusTimeline: React.FC<JobStatusTimelineProps> = ({
       )}
 
       <div className="flex-1 overflow-y-auto pr-1 max-h-[360px] custom-scrollbar scroll-smooth">
-        {events.map((event, idx) => (
-          <TimelineItem
-            key={event.id}
-            item={event}
-            isCurrent={event.is_current}
-            isLast={idx === events.length - 1}
-          />
-        ))}
+        {events.map((event, idx) => {
+          const assignmentOutcome =
+            category === 'ASSIGNMENT'
+              ? getAssignmentOutcome(event)
+              : null;
+
+          return (
+            <React.Fragment key={event.id}>
+              {assignmentOutcome && (
+                <div className="ml-8 mb-1.5 flex items-center gap-2">
+                  <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">
+                    Outcome
+                  </span>
+
+                  <span className="rounded-md bg-slate-100 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    {assignmentOutcome}
+                  </span>
+                </div>
+              )}
+
+              <TimelineItem
+                item={event}
+                isCurrent={event.is_current}
+                isLast={idx === events.length - 1}
+              />
+            </React.Fragment>
+          );
+        })}
       </div>
 
       {(page > 1 || hasMore) && (
@@ -289,7 +359,9 @@ export const JobStatusTimeline: React.FC<JobStatusTimelineProps> = ({
             disabled={page <= 1 || loading}
             onClick={() => {
               const nextPage = page - 1;
+
               setPage(nextPage);
+
               fetchTimeline(
                 nextPage,
                 category,
@@ -311,7 +383,9 @@ export const JobStatusTimeline: React.FC<JobStatusTimelineProps> = ({
             disabled={!hasMore || loading}
             onClick={() => {
               const nextPage = page + 1;
+
               setPage(nextPage);
+
               fetchTimeline(
                 nextPage,
                 category,

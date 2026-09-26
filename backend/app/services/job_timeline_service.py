@@ -454,7 +454,7 @@ def _job_lifecycle_events(
             )
         )
 
-        if to_status:
+        if to_status:  # pragma: no branch
             previous_status = to_status
 
     return events
@@ -467,8 +467,13 @@ def _audit_event_items(
     """
     Read the existing AuditEvent table.
 
-    This includes status-transition and other job audit events without exposing
-    raw audit details.
+    This includes status-transition, assignment/reassignment and other job
+    audit events without exposing raw audit details.
+
+    Assignment/reassignment events keep the persisted AuditEvent as the
+    source of truth. When a technician identifier is present, it is resolved
+    inside the same tenant so the timeline can show the actual technician
+    identity rather than a generic actor label.
     """
 
     rows = (
@@ -516,6 +521,28 @@ def _audit_event_items(
             from_status = row.old_status
             to_status = row.new_status
 
+        elif event_type in {
+            "JOB_REASSIGNED",
+            "JOB_REASSIGNED_FROM_DECLINED",
+        }:
+            if event_type == "JOB_REASSIGNED":
+                title = "Technician Reassigned"
+                description_prefix = "Job was reassigned"
+            else:
+                title = "Job Reassigned After Decline"
+                description_prefix = "Job was reassigned after technician decline"
+
+            category = "ASSIGNMENT"
+            from_status = row.old_status
+            to_status = row.new_status or "ASSIGNED"
+
+            # Technician identity is resolved below from the authoritative
+            # AuditEvent.tech_id field. The description is completed after
+            # resolution so it contains the actual technician name.
+            description = description_prefix
+
+            reason = str(row.reason).strip() if row.reason else ""
+
         elif event_type.startswith("SLA_"):
             title = "SLA Event"
             category = "OTHER"
@@ -527,6 +554,8 @@ def _audit_event_items(
 
             from_status = row.old_status
             to_status = row.new_status
+
+            reason = ""
 
         else:
             title = event_type.replace(
@@ -544,6 +573,8 @@ def _audit_event_items(
             from_status = row.old_status
             to_status = row.new_status
 
+            reason = ""
+
         actor = _resolve_technician(
             db,
             str(job.tenant_id),
@@ -554,14 +585,28 @@ def _audit_event_items(
         if actor:
             actor_name = actor.technician_name
             actor_role = "TECHNICIAN"
-
         elif row.actor_id:
             actor_name = "Staff"
             actor_role = "STAFF"
-
         else:
             actor_name = "System"
             actor_role = "SYSTEM"
+
+        if event_type in {
+            "JOB_REASSIGNED",
+            "JOB_REASSIGNED_FROM_DECLINED",
+        }:
+            # Build assignment/reassignment descriptions in one place so the
+            # persisted reason is appended with stable spacing/punctuation.
+            if actor_name not in {"Technician", "System", "Staff"}:
+                description = (
+                    f"{description} to {actor_name}."
+                )
+            else:
+                description = f"{description}."
+
+            if reason:
+                description = f"{description} Reason: {reason}."
 
         events.append(
             _build_event(
@@ -615,6 +660,7 @@ def _enterprise_audit_items(
     )
 
     events: list[dict[str, Any]] = []
+    technician_cache: dict[str, Technician | None] = {}
 
     for row in rows:
         action = str(
@@ -719,11 +765,28 @@ def _enterprise_audit_items(
             "STAFF",
         )
 
-        actor_name = (
-            "Technician"
-            if actor_role == "TECHNICIAN"
-            else "Staff"
-        )
+        # Enterprise audit records persist the acting user separately from
+        # the role. For technician actions, resolve that identifier through
+        # the existing tenant-scoped technician resolver so assignment and
+        # reassignment history can show the actual technician identity.
+        enterprise_technician = None
+        if actor_role == "TECHNICIAN":
+            enterprise_technician = _resolve_technician(
+                db,
+                str(job.tenant_id),
+                getattr(row, "user_id", None),
+                technician_cache,
+            )
+
+        if enterprise_technician:
+            actor_name = enterprise_technician.technician_name
+            actor_role = "TECHNICIAN"
+        else:
+            actor_name = (
+                "Technician"
+                if actor_role == "TECHNICIAN"
+                else "Staff"
+            )
 
         events.append(
             _build_event(

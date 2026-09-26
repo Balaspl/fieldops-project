@@ -368,7 +368,8 @@ class ResourceLimiter:
                         process.kill()
 
                     raise ResourceLimitExceeded(
-                        task_id, f"Execution safety timeout after {safety_timeout}s"
+                        task_id,
+                        f"CPU/resource execution safety timeout after {safety_timeout}s",
                     )
 
                 await asyncio.sleep(self.poll_interval)

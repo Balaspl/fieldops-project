@@ -70,13 +70,15 @@ class KafkaProducer:
             "KAFKA_SASL_MECHANISM",
             "PLAIN",
         )
-        sasl_username = os.getenv(
-            "KAFKA_PRODUCER_USERNAME"
-        ) or os.getenv("KAFKA_SASL_USERNAME")
+        sasl_username = os.getenv("KAFKA_SASL_USERNAME")
+        sasl_password = os.getenv("KAFKA_SASL_PASSWORD")
 
-        sasl_password = os.getenv(
-            "KAFKA_PRODUCER_PASSWORD"
-        ) or os.getenv("KAFKA_SASL_PASSWORD")
+        producer_username = os.getenv("KAFKA_PRODUCER_USERNAME")
+        producer_password = os.getenv("KAFKA_PRODUCER_PASSWORD")
+
+        if producer_username and producer_password:
+            sasl_username = producer_username
+            sasl_password = producer_password
 
         producer_kwargs = {
             "bootstrap_servers": self.bootstrap_servers,

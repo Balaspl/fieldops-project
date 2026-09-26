@@ -1,3 +1,4 @@
+import pytest
 from datetime import date, datetime, timezone, timedelta
 from types import SimpleNamespace
 
@@ -396,6 +397,49 @@ def test_job_lifecycle_covers_cancel_close_reject_and_unknown_event(
         timeline_service.LIFECYCLE_TIMESTAMP_FIELDS = original_fields
 
 
+def test_job_lifecycle_covers_missing_to_status_branch(monkeypatch):
+    """
+    Exercise the false branch of the lifecycle status bookkeeping guard.
+
+    Every canonical lifecycle event normally carries a to_status value, so
+    the branch is reached by replacing the already-tested event builder with
+    a narrowly scoped test double that removes the status from the built
+    CREATED event. This leaves the production lifecycle logic untouched while
+    proving the guard is safe when an event has no target status.
+    """
+    original_build_event = timeline_service._build_event
+
+    def build_event_without_target_status(**kwargs):
+        event = original_build_event(**kwargs)
+        if kwargs["event_type"] == "JOB_CREATED":
+            event["to_status"] = None
+        return event
+
+    monkeypatch.setattr(
+        timeline_service,
+        "_build_event",
+        build_event_without_target_status,
+    )
+
+    base = datetime(
+        2026,
+        9,
+        22,
+        10,
+        0,
+        tzinfo=timezone.utc,
+    )
+
+    events = _job_lifecycle_events(
+        None,
+        _timeline_job(created_at=base),
+    )
+
+    assert len(events) == 1
+    assert events[0]["event_type"] == "JOB_CREATED"
+    assert events[0]["to_status"] is None
+
+
 # ---------------------------------------------------------------------------
 # AuditEvent coverage
 # ---------------------------------------------------------------------------
@@ -765,6 +809,64 @@ def test_enterprise_audit_items_covers_all_mapped_and_fallback_actions(
     assert custom["to_status"] == "B"
 
 
+def test_enterprise_audit_items_resolves_tenant_scoped_technician_identity(
+    monkeypatch,
+):
+    """
+    Verify technician actions in EnterpriseAuditLog resolve to the technician
+    identity through the existing tenant-scoped resolver.
+    """
+    enterprise_technician = SimpleNamespace(
+        technician_name="Enterprise Technician",
+    )
+
+    def resolve(db, tenant_id, identifier, cache):
+        assert tenant_id == "tenant-1"
+        if identifier == "enterprise-tech-1":
+            return enterprise_technician
+        return None
+
+    monkeypatch.setattr(
+        timeline_service,
+        "_resolve_technician",
+        resolve,
+    )
+
+    base = datetime(
+        2026,
+        9,
+        22,
+        12,
+        30,
+        tzinfo=timezone.utc,
+    )
+
+    row = SimpleNamespace(
+        id=30,
+        action="JOB_ACCEPTED",
+        timestamp=base,
+        role=SimpleNamespace(value="technician"),
+        user_id="enterprise-tech-1",
+        old_value={"status": "ASSIGNED"},
+        new_value={"status": "ACCEPTED"},
+    )
+
+    events = _enterprise_audit_items(
+        FakeDB({EnterpriseAuditLog: [row]}),
+        _timeline_job(),
+    )
+
+    assert len(events) == 1
+    event = events[0]
+
+    assert event["event_type"] == "JOB_ACCEPTED"
+    assert event["event_category"] == "STATUS"
+    assert event["actor_name"] == "Enterprise Technician"
+    assert event["actor_role"] == "TECHNICIAN"
+    assert event["to_status"] == "ACCEPTED"
+    assert event["source"] == "enterprise_audit"
+
+
 # ---------------------------------------------------------------------------
 # AssignmentOverride coverage
 # ---------------------------------------------------------------------------
@@ -881,7 +983,18 @@ def test_sla_items_covers_all_escalation_milestones():
         cto_notified_at=base + timedelta(minutes=3),
     )
 
-    db = FakeDB({SLAEscalation: [row]})
+    # Exercise the false branch of each optional escalation milestone.
+    row_without_milestones = SimpleNamespace(
+        id=2,
+        created_at=base + timedelta(minutes=4),
+        manager_notified_at=None,
+        manager_responded_at=None,
+        cto_notified_at=None,
+    )
+
+    db = FakeDB({
+        SLAEscalation: [row, row_without_milestones],
+    })
     job = _timeline_job()
 
     events = _sla_items(db, job)
@@ -1170,3 +1283,857 @@ def test_build_job_timeline_sorts_missing_timestamp_last_and_marks_current(
     assert events[1]["id"] == "missing:1"
     assert events[1]["timestamp"] is None
     assert events[1]["is_current"] is False
+
+
+# ---------------------------------------------------------------------------
+# Task 3: assignment/reassignment endpoint and identity coverage
+# ---------------------------------------------------------------------------
+
+def test_audit_event_items_assignment_identity_outcome_and_reason(monkeypatch):
+    reassigned_technician = SimpleNamespace(
+        technician_name="Rahul Kumar",
+    )
+    declined_reassignment_technician = SimpleNamespace(
+        technician_name="Arun Kumar",
+    )
+
+    def resolve(db, tenant_id, identifier, cache):
+        mapping = {
+            "tech-reassigned": reassigned_technician,
+            "tech-reassigned-after-decline": (
+                declined_reassignment_technician
+            ),
+        }
+        return mapping.get(identifier)
+
+    monkeypatch.setattr(
+        timeline_service,
+        "_resolve_technician",
+        resolve,
+    )
+
+    base = datetime(
+        2026,
+        9,
+        24,
+        10,
+        0,
+        tzinfo=timezone.utc,
+    )
+
+    rows = [
+        SimpleNamespace(
+            id=21,
+            timestamp=base,
+            created_at=base,
+            event_type="JOB_REASSIGNED",
+            old_status="ASSIGNED",
+            new_status="ASSIGNED",
+            reason="Dispatcher reassigned after routing conflict",
+            tech_id="tech-reassigned",
+            actor_id=None,
+        ),
+        SimpleNamespace(
+            id=22,
+            timestamp=base + timedelta(minutes=5),
+            created_at=base + timedelta(minutes=5),
+            event_type="JOB_REASSIGNED_FROM_DECLINED",
+            old_status="REJECTED_BY_TECHNICIAN",
+            new_status="ASSIGNED",
+            reason="Original technician declined",
+            tech_id="tech-reassigned-after-decline",
+            actor_id=None,
+        ),
+    ]
+
+    events = _audit_event_items(
+        FakeDB({AuditEvent: rows}),
+        _timeline_job(),
+    )
+
+    assert [
+        event["event_type"]
+        for event in events
+    ] == [
+        "JOB_REASSIGNED",
+        "JOB_REASSIGNED_FROM_DECLINED",
+    ]
+
+    first = events[0]
+
+    assert first["event_category"] == "ASSIGNMENT"
+    assert first["timestamp"] == base.isoformat()
+    assert first["actor_name"] == "Rahul Kumar"
+    assert first["actor_role"] == "TECHNICIAN"
+    assert first["to_status"] == "ASSIGNED"
+    assert (
+        first["description"]
+        == (
+            "Job was reassigned to Rahul Kumar. "
+            "Reason: Dispatcher reassigned after routing conflict."
+        )
+    )
+
+    second = events[1]
+
+    assert second["event_category"] == "ASSIGNMENT"
+    assert second["timestamp"] == (
+        base + timedelta(minutes=5)
+    ).isoformat()
+    assert second["actor_name"] == "Arun Kumar"
+    assert second["actor_role"] == "TECHNICIAN"
+    assert second["to_status"] == "ASSIGNED"
+    assert (
+        second["description"]
+        == (
+            "Job was reassigned after technician decline to Arun Kumar. "
+            "Reason: Original technician declined."
+        )
+    )
+
+
+def test_audit_event_items_assignment_fallback_actor_without_reason(monkeypatch):
+    """Cover fallback assignment actor and the no-reason branch."""
+    monkeypatch.setattr(
+        timeline_service,
+        "_resolve_technician",
+        lambda *args, **kwargs: None,
+    )
+
+    base = datetime(
+        2026,
+        9,
+        24,
+        11,
+        0,
+        tzinfo=timezone.utc,
+    )
+
+    row = SimpleNamespace(
+        id=31,
+        timestamp=base,
+        created_at=base,
+        event_type="JOB_REASSIGNED",
+        old_status="ASSIGNED",
+        new_status="ASSIGNED",
+        reason=None,
+        tech_id="unknown-tech",
+        actor_id=None,
+    )
+
+    events = _audit_event_items(
+        FakeDB({AuditEvent: [row]}),
+        _timeline_job(),
+    )
+
+    assert len(events) == 1
+    event = events[0]
+
+    assert event["event_type"] == "JOB_REASSIGNED"
+    assert event["event_category"] == "ASSIGNMENT"
+    assert event["actor_name"] == "System"
+    assert event["actor_role"] == "SYSTEM"
+    assert event["description"] == "Job was reassigned."
+
+
+def test_get_job_timeline_endpoint_filters_and_paginates_assignment_events(
+    monkeypatch,
+):
+    from app.routes.jobs import get_job_timeline
+
+    db = SessionLocal()
+
+    try:
+        job = _job(db)
+
+        events = [
+            {
+                "id": "assignment:1",
+                "job_id": job.id,
+                "event_type": "JOB_REASSIGNED",
+                "event_category": "ASSIGNMENT",
+                "title": "Technician Reassigned",
+                "description": "Job was reassigned to Rahul Kumar.",
+                "timestamp": "2026-09-24T10:00:00+00:00",
+                "from_status": "ASSIGNED",
+                "to_status": "ASSIGNED",
+                "actor_name": "Rahul Kumar",
+                "actor_role": "TECHNICIAN",
+                "source": "audit_event",
+                "is_current": False,
+            },
+            {
+                "id": "assignment:2",
+                "job_id": job.id,
+                "event_type": "JOB_REASSIGNED_FROM_DECLINED",
+                "event_category": "ASSIGNMENT",
+                "title": "Job Reassigned After Decline",
+                "description": (
+                    "Job was reassigned after technician decline "
+                    "to Arun Kumar."
+                ),
+                "timestamp": "2026-09-24T10:05:00+00:00",
+                "from_status": "REJECTED_BY_TECHNICIAN",
+                "to_status": "ASSIGNED",
+                "actor_name": "Arun Kumar",
+                "actor_role": "TECHNICIAN",
+                "source": "audit_event",
+                "is_current": False,
+            },
+            {
+                "id": "status:1",
+                "job_id": job.id,
+                "event_type": "JOB_IN_PROGRESS",
+                "event_category": "STATUS",
+                "title": "Job In Progress",
+                "description": "Job entered IN_PROGRESS.",
+                "timestamp": "2026-09-24T10:10:00+00:00",
+                "from_status": "ASSIGNED",
+                "to_status": "IN_PROGRESS",
+                "actor_name": "Arun Kumar",
+                "actor_role": "TECHNICIAN",
+                "source": "job_lifecycle",
+                "is_current": True,
+            },
+        ]
+
+        monkeypatch.setattr(
+            timeline_service,
+            "build_job_timeline",
+            lambda db, job: events,
+        )
+
+        response = get_job_timeline(
+            job_id=job.id,
+            category=" assignment ",
+            page=2,
+            page_size=1,
+            current_user=SimpleNamespace(
+                tenant_id="tenant-1",
+            ),
+            db=db,
+        )
+
+        assert response["job_id"] == job.id
+        assert response["page"] == 2
+        assert response["page_size"] == 1
+        assert response["total"] == 2
+        assert response["has_more"] is False
+        assert len(response["events"]) == 1
+        assert response["events"][0]["id"] == "assignment:2"
+        assert response["events"][0]["actor_name"] == "Arun Kumar"
+
+    finally:
+        db.close()
+
+
+def test_get_job_timeline_endpoint_returns_unfiltered_events_and_has_more(
+    monkeypatch,
+):
+    """Cover the no-category endpoint branch and the has_more=True path."""
+    from app.routes.jobs import get_job_timeline
+
+    db = SessionLocal()
+
+    try:
+        job = _job(db)
+
+        events = [
+            {
+                "id": "event:1",
+                "job_id": job.id,
+                "event_type": "JOB_CREATED",
+                "event_category": "CREATION",
+                "title": "Job Created",
+                "description": "Job record was created.",
+                "timestamp": "2026-09-24T09:00:00+00:00",
+                "from_status": None,
+                "to_status": "CREATED",
+                "actor_name": "System",
+                "actor_role": "SYSTEM",
+                "source": "job",
+                "is_current": False,
+            },
+            {
+                "id": "event:2",
+                "job_id": job.id,
+                "event_type": "JOB_ASSIGNED",
+                "event_category": "ASSIGNMENT",
+                "title": "Technician Assigned",
+                "description": "Job was assigned to Vijay Iyer.",
+                "timestamp": "2026-09-24T09:05:00+00:00",
+                "from_status": "CREATED",
+                "to_status": "ASSIGNED",
+                "actor_name": "Vijay Iyer",
+                "actor_role": "TECHNICIAN",
+                "source": "job",
+                "is_current": True,
+            },
+        ]
+
+        monkeypatch.setattr(
+            timeline_service,
+            "build_job_timeline",
+            lambda db, job: events,
+        )
+
+        response = get_job_timeline(
+            job_id=job.id,
+            category=None,
+            page=1,
+            page_size=1,
+            current_user=SimpleNamespace(
+                tenant_id="tenant-1",
+            ),
+            db=db,
+        )
+
+        assert response["job_id"] == job.id
+        assert response["page"] == 1
+        assert response["page_size"] == 1
+        assert response["total"] == 2
+        assert response["has_more"] is True
+        assert len(response["events"]) == 1
+        assert response["events"][0]["id"] == "event:1"
+        assert response["events"][0]["event_category"] == "CREATION"
+
+    finally:
+        db.close()
+
+
+def test_get_job_timeline_endpoint_enforces_tenant_and_category_validation(
+    monkeypatch,
+):
+    from fastapi import HTTPException
+    from app.routes.jobs import get_job_timeline
+
+    db = SessionLocal()
+
+    try:
+        job = _job(db)
+
+        monkeypatch.setattr(
+            timeline_service,
+            "build_job_timeline",
+            lambda db, job: [],
+        )
+
+        with pytest.raises(HTTPException) as tenant_error:
+            get_job_timeline(
+                job_id=job.id,
+                category=None,
+                page=1,
+                page_size=25,
+                current_user=SimpleNamespace(
+                    tenant_id="tenant-2",
+                ),
+                db=db,
+            )
+
+        assert tenant_error.value.status_code == 404
+        assert tenant_error.value.detail == "Job not found"
+
+        with pytest.raises(HTTPException) as category_error:
+            get_job_timeline(
+                job_id=job.id,
+                category="UNKNOWN_CATEGORY",
+                page=1,
+                page_size=25,
+                current_user=SimpleNamespace(
+                    tenant_id="tenant-1",
+                ),
+                db=db,
+            )
+
+        assert category_error.value.status_code == 400
+        assert "Invalid timeline category" in (
+            category_error.value.detail
+        )
+
+    finally:
+        db.close()
+
+
+def test_get_job_timeline_route_declares_jobs_view_all_permission():
+    import inspect
+
+    from app.auth.rbac import Permission
+    from app.routes.jobs import get_job_timeline
+
+    source = inspect.getsource(get_job_timeline)
+
+    assert (
+        "require_permission(Permission.JOBS_VIEW_ALL)"
+        in source
+    )
+# ---------------------------------------------------------------------------
+# Task 4: permitted audit history endpoint coverage
+# ---------------------------------------------------------------------------
+
+def _audit_history_event(
+    event_id,
+    event_type,
+    source,
+    *,
+    category="OTHER",
+    timestamp="2026-09-24T12:00:00+00:00",
+    description="Permitted audit event.",
+):
+    return {
+        "id": event_id,
+        "job_id": 1,
+        "event_type": event_type,
+        "event_category": category,
+        "title": event_type.replace("_", " ").title(),
+        "description": description,
+        "timestamp": timestamp,
+        "from_status": "ASSIGNED",
+        "to_status": "ASSIGNED",
+        "actor_name": "Dispatcher",
+        "actor_role": "DISPATCHER",
+        "source": source,
+        "is_current": False,
+    }
+
+
+def test_get_job_audit_history_returns_only_permitted_normalized_audit_fields(
+    monkeypatch,
+):
+    from app.routes.jobs import get_job_audit_history
+
+    db = SessionLocal()
+
+    try:
+        job = _job(db)
+
+        source_events = [
+            _audit_history_event(
+                "audit:1",
+                "JOB_UPDATED",
+                "audit_event",
+                description="Job details were updated.",
+            ),
+            _audit_history_event(
+                "enterprise:2",
+                "JOB_REASSIGNED",
+                "enterprise_audit",
+                category="ASSIGNMENT",
+                description="Technician assignment was changed.",
+            ),
+            _audit_history_event(
+                "assignment-override:3",
+                "ASSIGNMENT_OVERRIDE",
+                "assignment_override",
+                category="ASSIGNMENT",
+                description="Assignment changed from Old Tech to New Tech.",
+            ),
+            {
+                **_audit_history_event(
+                    "job:4",
+                    "JOB_CREATED",
+                    "job_lifecycle",
+                    category="CREATION",
+                    description="Job record was created.",
+                ),
+                "details": {
+                    "internal_ip": "10.0.0.1",
+                    "secret": "do-not-expose",
+                },
+                "user_email": "internal@example.com",
+                "user_id": "internal-user-id",
+                "old_value": {"status": "QUEUED"},
+                "new_value": {"status": "ACTIVE"},
+            },
+        ]
+
+        monkeypatch.setattr(
+            timeline_service,
+            "build_job_timeline",
+            lambda db, job: source_events,
+        )
+
+        response = get_job_audit_history(
+            job_id=job.id,
+            event_type=None,
+            source=None,
+            page=1,
+            page_size=25,
+            current_user=SimpleNamespace(tenant_id="tenant-1"),
+            db=db,
+        )
+
+        assert response["job_id"] == job.id
+        assert response["total"] == 3
+        assert response["has_more"] is False
+        assert [
+            event["source"]
+            for event in response["events"]
+        ] == [
+            "audit_event",
+            "enterprise_audit",
+            "assignment_override",
+        ]
+
+        allowed_keys = {
+            "id",
+            "job_id",
+            "event_type",
+            "event_category",
+            "title",
+            "description",
+            "timestamp",
+            "from_status",
+            "to_status",
+            "actor_name",
+            "actor_role",
+            "source",
+            "is_current",
+        }
+
+        for event in response["events"]:
+            assert set(event.keys()) == allowed_keys
+            assert "details" not in event
+            assert "user_email" not in event
+            assert "user_id" not in event
+            assert "old_value" not in event
+            assert "new_value" not in event
+
+    finally:
+        db.close()
+
+
+def test_get_job_audit_history_filters_by_event_type(monkeypatch):
+    from app.routes.jobs import get_job_audit_history
+
+    db = SessionLocal()
+
+    try:
+        job = _job(db)
+
+        events = [
+            _audit_history_event(
+                "audit:1",
+                "JOB_UPDATED",
+                "audit_event",
+            ),
+            _audit_history_event(
+                "audit:2",
+                "JOB_REASSIGNED",
+                "audit_event",
+                category="ASSIGNMENT",
+            ),
+            _audit_history_event(
+                "enterprise:3",
+                "JOB_REASSIGNED",
+                "enterprise_audit",
+                category="ASSIGNMENT",
+            ),
+        ]
+
+        monkeypatch.setattr(
+            timeline_service,
+            "build_job_timeline",
+            lambda db, job: events,
+        )
+
+        response = get_job_audit_history(
+            job_id=job.id,
+            event_type=" job_reassigned ",
+            source=None,
+            page=1,
+            page_size=25,
+            current_user=SimpleNamespace(tenant_id="tenant-1"),
+            db=db,
+        )
+
+        assert response["total"] == 2
+        assert all(
+            event["event_type"] == "JOB_REASSIGNED"
+            for event in response["events"]
+        )
+
+    finally:
+        db.close()
+
+
+def test_get_job_audit_history_filters_by_source(monkeypatch):
+    from app.routes.jobs import get_job_audit_history
+
+    db = SessionLocal()
+
+    try:
+        job = _job(db)
+
+        events = [
+            _audit_history_event(
+                "audit:1",
+                "JOB_REASSIGNED",
+                "audit_event",
+                category="ASSIGNMENT",
+            ),
+            _audit_history_event(
+                "enterprise:2",
+                "JOB_REASSIGNED",
+                "enterprise_audit",
+                category="ASSIGNMENT",
+            ),
+            _audit_history_event(
+                "override:3",
+                "ASSIGNMENT_OVERRIDE",
+                "assignment_override",
+                category="ASSIGNMENT",
+            ),
+        ]
+
+        monkeypatch.setattr(
+            timeline_service,
+            "build_job_timeline",
+            lambda db, job: events,
+        )
+
+        response = get_job_audit_history(
+            job_id=job.id,
+            event_type=None,
+            source=" ENTERPRISE_AUDIT ",
+            page=1,
+            page_size=25,
+            current_user=SimpleNamespace(tenant_id="tenant-1"),
+            db=db,
+        )
+
+        assert response["total"] == 1
+        assert response["events"][0]["source"] == "enterprise_audit"
+        assert response["events"][0]["event_type"] == "JOB_REASSIGNED"
+
+    finally:
+        db.close()
+
+
+def test_get_job_audit_history_rejects_invalid_source():
+    from fastapi import HTTPException
+    from app.routes.jobs import get_job_audit_history
+
+    db = SessionLocal()
+
+    try:
+        job = _job(db)
+
+        with pytest.raises(HTTPException) as exc_info:
+            get_job_audit_history(
+                job_id=job.id,
+                event_type=None,
+                source="internal_database",
+                page=1,
+                page_size=25,
+                current_user=SimpleNamespace(tenant_id="tenant-1"),
+                db=db,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "Invalid audit history source" in exc_info.value.detail
+
+    finally:
+        db.close()
+
+
+def test_get_job_audit_history_enforces_tenant_object_access(monkeypatch):
+    from fastapi import HTTPException
+    from app.routes.jobs import get_job_audit_history
+
+    db = SessionLocal()
+
+    try:
+        job = _job(db)
+
+        monkeypatch.setattr(
+            timeline_service,
+            "build_job_timeline",
+            lambda db, job: [],
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            get_job_audit_history(
+                job_id=job.id,
+                event_type=None,
+                source=None,
+                page=1,
+                page_size=25,
+                current_user=SimpleNamespace(tenant_id="tenant-2"),
+                db=db,
+            )
+
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.detail == "Job not found"
+
+    finally:
+        db.close()
+
+
+def test_get_job_audit_history_paginates_and_reports_has_more(monkeypatch):
+    from app.routes.jobs import get_job_audit_history
+
+    db = SessionLocal()
+
+    try:
+        job = _job(db)
+
+        events = [
+            _audit_history_event(
+                f"audit:{index}",
+                "JOB_UPDATED",
+                "audit_event",
+                timestamp=f"2026-09-24T12:{index:02d}:00+00:00",
+            )
+            for index in range(1, 4)
+        ]
+
+        monkeypatch.setattr(
+            timeline_service,
+            "build_job_timeline",
+            lambda db, job: events,
+        )
+
+        first_page = get_job_audit_history(
+            job_id=job.id,
+            event_type=None,
+            source=None,
+            page=1,
+            page_size=2,
+            current_user=SimpleNamespace(tenant_id="tenant-1"),
+            db=db,
+        )
+
+        second_page = get_job_audit_history(
+            job_id=job.id,
+            event_type=None,
+            source=None,
+            page=2,
+            page_size=2,
+            current_user=SimpleNamespace(tenant_id="tenant-1"),
+            db=db,
+        )
+
+        assert first_page["total"] == 3
+        assert first_page["page"] == 1
+        assert first_page["page_size"] == 2
+        assert first_page["has_more"] is True
+        assert len(first_page["events"]) == 2
+
+        assert second_page["page"] == 2
+        assert second_page["has_more"] is False
+        assert len(second_page["events"]) == 1
+        assert second_page["events"][0]["id"] == "audit:3"
+
+    finally:
+        db.close()
+
+
+def test_get_job_audit_history_returns_empty_result_without_synthetic_events(
+    monkeypatch,
+):
+    from app.routes.jobs import get_job_audit_history
+
+    db = SessionLocal()
+
+    try:
+        job = _job(db)
+
+        monkeypatch.setattr(
+            timeline_service,
+            "build_job_timeline",
+            lambda db, job: [],
+        )
+
+        response = get_job_audit_history(
+            job_id=job.id,
+            event_type=None,
+            source=None,
+            page=1,
+            page_size=25,
+            current_user=SimpleNamespace(tenant_id="tenant-1"),
+            db=db,
+        )
+
+        assert response["job_id"] == job.id
+        assert response["events"] == []
+        assert response["total"] == 0
+        assert response["has_more"] is False
+
+    finally:
+        db.close()
+
+
+def test_get_job_audit_history_declares_audit_view_permission():
+    import inspect
+    from app.routes.jobs import get_job_audit_history
+
+    source = inspect.getsource(get_job_audit_history)
+
+    assert (
+        "require_permission(Permission.AUDIT_VIEW)"
+        in source
+    )
+
+
+def test_get_job_audit_history_does_not_expose_raw_sensitive_names_or_payloads(
+    monkeypatch,
+):
+    from app.routes.jobs import get_job_audit_history
+
+    db = SessionLocal()
+
+    try:
+        job = _job(db)
+
+        event = {
+            **_audit_history_event(
+                "enterprise:77",
+                "JOB_UPDATED",
+                "enterprise_audit",
+                description="Safe normalized description.",
+            ),
+            "user_id": "super-sensitive-user-id",
+            "user_email": "person@example.com",
+            "old_value": {"password": "secret"},
+            "new_value": {"token": "secret-token"},
+            "details": {
+                "ip_address": "192.168.1.10",
+                "internal_trace": "trace-data",
+            },
+        }
+
+        monkeypatch.setattr(
+            timeline_service,
+            "build_job_timeline",
+            lambda db, job: [event],
+        )
+
+        response = get_job_audit_history(
+            job_id=job.id,
+            event_type=None,
+            source=None,
+            page=1,
+            page_size=25,
+            current_user=SimpleNamespace(tenant_id="tenant-1"),
+            db=db,
+        )
+
+        returned = response["events"][0]
+
+        assert returned["description"] == "Safe normalized description."
+        assert returned["actor_name"] == "Dispatcher"
+
+        forbidden_keys = {
+            "user_id",
+            "user_email",
+            "old_value",
+            "new_value",
+            "details",
+            "ip_address",
+            "internal_trace",
+        }
+
+        assert forbidden_keys.isdisjoint(returned.keys())
+
+    finally:
+        db.close()

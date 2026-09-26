@@ -417,6 +417,150 @@ describe('Job Status Timeline System', () => {
       });
     });
 
+    it('renders assignment and reassignment history with technician identity and outcomes', async () => {
+      const assignmentTimelineResponse = {
+        ...mockTimelineResponse,
+        total: 3,
+        events: [
+          {
+            id: 'job:10:JOB_ASSIGNED',
+            job_id: 10,
+            event_type: 'JOB_ASSIGNED',
+            event_category: 'ASSIGNMENT' as const,
+            title: 'Technician Assigned',
+            description: 'Job was assigned to Vijay Iyer.',
+            timestamp: '2026-09-23T08:10:00.000Z',
+            from_status: 'CREATED',
+            to_status: 'ASSIGNED',
+            actor_name: 'Vijay Iyer',
+            actor_role: 'TECHNICIAN',
+            source: 'job',
+            is_current: false,
+          },
+          {
+            id: 'enterprise:101',
+            job_id: 10,
+            event_type: 'JOB_REASSIGNED',
+            event_category: 'ASSIGNMENT' as const,
+            title: 'Technician Reassigned',
+            description: 'Technician assignment was changed.',
+            timestamp: '2026-09-23T08:30:00.000Z',
+            from_status: 'ASSIGNED',
+            to_status: 'ASSIGNED',
+            actor_name: 'Arun Kumar',
+            actor_role: 'TECHNICIAN',
+            source: 'enterprise_audit',
+            is_current: false,
+          },
+          {
+            id: 'enterprise:102',
+            job_id: 10,
+            event_type: 'JOB_REASSIGNED_FROM_DECLINED',
+            event_category: 'ASSIGNMENT' as const,
+            title: 'Job Reassigned After Decline',
+            description: 'Technician assignment was changed.',
+            timestamp: '2026-09-23T08:45:00.000Z',
+            from_status: 'REJECTED_BY_TECHNICIAN',
+            to_status: 'ASSIGNED',
+            actor_name: 'Rahul Kumar',
+            actor_role: 'TECHNICIAN',
+            source: 'enterprise_audit',
+            is_current: false,
+          },
+        ],
+      };
+
+      vi.mocked(getJobTimeline)
+        .mockResolvedValueOnce(mockTimelineResponse)
+        .mockResolvedValueOnce(assignmentTimelineResponse);
+
+      render(
+        <JobStatusTimeline
+          jobId={10}
+          currentStatus="ASSIGNED"
+        />
+      );
+
+      await waitFor(() => {
+        expect(
+          screen.getByText('Job Created')
+        ).toBeDefined();
+      });
+
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'ASSIGNMENT',
+        })
+      );
+
+      await waitFor(() => {
+        expect(
+          screen.getByText('Assignment History')
+        ).toBeDefined();
+
+        expect(
+          screen.getByText('Technician Assigned')
+        ).toBeDefined();
+
+        expect(
+          screen.getByText('Technician Reassigned')
+        ).toBeDefined();
+
+        expect(
+          screen.getByText('Job Reassigned After Decline')
+        ).toBeDefined();
+
+        expect(
+          screen.getAllByText('ASSIGNED').length
+        ).toBeGreaterThan(0);
+
+        expect(
+          screen.getByText('REASSIGNED')
+        ).toBeDefined();
+
+        expect(
+          screen.getByText('REASSIGNED AFTER DECLINE')
+        ).toBeDefined();
+      });
+
+      // Assignment events are collapsed by default unless the backend marks
+      // one as current. Expand each event before checking technician identity.
+      fireEvent.click(
+        screen.getByText('Technician Assigned')
+      );
+
+      fireEvent.click(
+        screen.getByText('Technician Reassigned')
+      );
+
+      fireEvent.click(
+        screen.getByText('Job Reassigned After Decline')
+      );
+
+      expect(
+        screen.getByText('Vijay Iyer')
+      ).toBeDefined();
+
+      expect(
+        screen.getByText('Arun Kumar')
+      ).toBeDefined();
+
+      expect(
+        screen.getByText('Rahul Kumar')
+      ).toBeDefined();
+
+      expect(
+        getJobTimeline
+      ).toHaveBeenLastCalledWith(
+        10,
+        {
+          category: 'ASSIGNMENT',
+          page: 1,
+          page_size: 25,
+        }
+      );
+    });
+
     it('refreshes the status history when refreshKey changes', async () => {
       vi.mocked(getJobTimeline).mockResolvedValue(
         mockTimelineResponse

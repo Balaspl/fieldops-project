@@ -9,7 +9,15 @@ import logging
 from app.services.job_closure_service import close_job, get_job_closure
 
 from app.database import get_db
-from app.models import Job, Technician, AuditEvent, DispatcherNotification,InAppNotification
+from app.models import (
+    Job,
+    Technician,
+    AuditEvent,
+    DispatcherNotification,
+    InAppNotification,
+    JobPaymentStatus,
+    CustomerFeedback,
+)
 from app.schemas import (
     JobCreate, JobResponse, PlanResponse, RankedTechnician, DisqualifiedTechnician, ScoringWeights,
     JobClosureCreate, JobClosureResponse
@@ -1900,6 +1908,546 @@ class BulkJobCancellationResponse(BaseModel):
     total_requested: int
     total_cancelled: int
     results: list[dict]
+
+@api_v1_router.get("/jobs/{job_id}/audit-history")
+def get_job_audit_history(
+    job_id: int,
+    event_type: Optional[str] = Query(None),
+    source: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.AUDIT_VIEW)
+    ),
+    db: Session = Depends(get_db),
+):
+    """
+    Return the permitted, backend-authoritative audit history for one job.
+
+    The endpoint reuses the canonical job timeline projection so raw audit
+    fields such as user IDs, email addresses, old/new audit payloads,
+    details and network metadata are never exposed to the frontend.
+
+    Authorization is enforced through AUDIT_VIEW plus tenant/object-level
+    job lookup.
+    """
+
+    job = (
+        db.query(Job)
+        .filter(
+            Job.id == job_id,
+            Job.tenant_id == current_user.tenant_id,
+        )
+        .first()
+    )
+
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found",
+        )
+
+    normalized_event_type = (
+        event_type.strip().upper()
+        if event_type
+        else None
+    )
+
+    normalized_source = (
+        source.strip().lower()
+        if source
+        else None
+    )
+
+    allowed_sources = {
+        "audit_event",
+        "enterprise_audit",
+        "assignment_override",
+    }
+
+    if normalized_source and normalized_source not in allowed_sources:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Invalid audit history source. "
+                "Allowed values: audit_event, enterprise_audit, "
+                "assignment_override"
+            ),
+        )
+
+    from app.services.job_timeline_service import (
+        build_job_timeline,
+    )
+
+    timeline_events = build_job_timeline(
+        db=db,
+        job=job,
+    )
+
+    # Only expose records that originate from an audit/history source.
+    audit_events = [
+        event
+        for event in timeline_events
+        if event.get("source") in allowed_sources
+    ]
+
+    if normalized_event_type:
+        audit_events = [
+            event
+            for event in audit_events
+            if str(event.get("event_type", "")).upper()
+            == normalized_event_type
+        ]
+
+    if normalized_source:
+        audit_events = [
+            event
+            for event in audit_events
+            if str(event.get("source", "")).lower()
+            == normalized_source
+        ]
+
+    # Keep the audit-history contract explicitly whitelisted at the route
+    # boundary. The timeline service normally returns this normalized shape,
+    # but the route must not leak raw audit payloads even if an upstream
+    # event source later contains additional internal fields.
+    allowed_event_fields = (
+        "id",
+        "job_id",
+        "event_type",
+        "event_category",
+        "title",
+        "description",
+        "timestamp",
+        "from_status",
+        "to_status",
+        "actor_name",
+        "actor_role",
+        "source",
+        "is_current",
+    )
+
+    audit_events = [
+        {
+            field: event.get(field)
+            for field in allowed_event_fields
+        }
+        for event in audit_events
+    ]
+
+    total = len(audit_events)
+
+    start = (page - 1) * page_size
+    end = start + page_size
+
+    page_events = audit_events[start:end]
+
+    return {
+        "job_id": job.id,
+        "events": page_events,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "has_more": end < total,
+    }
+
+@api_v1_router.get("/jobs/{job_id}/payment-status")
+def get_job_payment_status(
+    job_id: int,
+    current_user: AuthenticatedUser = Depends(
+        require_any_job_permission(
+            Permission.JOBS_VIEW_ALL,
+            Permission.JOBS_VIEW_OWN,
+        )
+    ),
+    db: Session = Depends(get_db),
+):
+    """
+    Return the backend-authoritative payment status for one job.
+
+    Authorization and tenant/object access follow the existing Job History
+    invoice contract. A missing payment-status record is represented as
+    UNAVAILABLE and does not create or mutate any payment data.
+    """
+
+    job = (
+        db.query(Job)
+        .filter(
+            Job.id == job_id,
+            Job.tenant_id == current_user.tenant_id,
+        )
+        .first()
+    )
+
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found",
+        )
+
+    # Preserve the existing Job History object-level authorization model
+    # for users who only have access to their assigned jobs.
+    if (
+        has_permission(current_user.role, Permission.JOBS_VIEW_OWN)
+        and not has_permission(current_user.role, Permission.JOBS_VIEW_ALL)
+    ):
+        technician = get_technician_for_current_user(
+            db,
+            current_user,
+        )
+
+        if job.assigned_technician_id != technician.technician_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This job is not assigned to you",
+            )
+
+    payment_status = (
+        db.query(JobPaymentStatus)
+        .filter(
+            JobPaymentStatus.job_id == job.id,
+            JobPaymentStatus.tenant_id == current_user.tenant_id,
+        )
+        .order_by(
+            JobPaymentStatus.updated_at.desc(),
+            JobPaymentStatus.id.desc(),
+        )
+        .first()
+    )
+
+    if not payment_status:
+        return {
+            "job_id": job.id,
+            "invoice_id": None,
+            "status": "UNAVAILABLE",
+            "updated_at": None,
+        }
+
+    allowed_statuses = {
+        "PENDING",
+        "SUCCESSFUL",
+        "FAILED",
+        "UNAVAILABLE",
+    }
+
+    normalized_status = str(
+        payment_status.status or "UNAVAILABLE"
+    ).strip().upper()
+
+    if normalized_status not in allowed_statuses:
+        normalized_status = "UNAVAILABLE"
+
+    return {
+        "job_id": job.id,
+        "invoice_id": payment_status.invoice_id,
+        "status": normalized_status,
+        "updated_at": (
+            payment_status.updated_at.isoformat()
+            if payment_status.updated_at
+            else None
+        ),
+    }
+
+
+@api_v1_router.get("/jobs/{job_id}/customer-feedback")
+def get_job_customer_feedback(
+    job_id: int,
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.JOBS_VIEW_ALL)
+    ),
+    db: Session = Depends(get_db),
+):
+    """
+    Return customer feedback for one job.
+
+    Customer feedback is customer-sensitive information. The Job History
+    feedback endpoint therefore requires the existing JOBS_VIEW_ALL
+    permission and always enforces tenant isolation.
+
+    The response intentionally excludes customer_id and other customer PII.
+    When no feedback exists, the endpoint returns a successful empty state
+    instead of creating or mutating a feedback record.
+    """
+
+    job = (
+        db.query(Job)
+        .filter(
+            Job.id == job_id,
+            Job.tenant_id == current_user.tenant_id,
+        )
+        .first()
+    )
+
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found",
+        )
+
+    feedback = (
+        db.query(CustomerFeedback)
+        .filter(
+            CustomerFeedback.job_id == job.id,
+            CustomerFeedback.tenant_id == current_user.tenant_id,
+        )
+        .order_by(
+            CustomerFeedback.updated_at.desc(),
+            CustomerFeedback.id.desc(),
+        )
+        .first()
+    )
+
+    if not feedback:
+        return {
+            "job_id": job.id,
+            "has_feedback": False,
+            "feedback": None,
+        }
+
+    return {
+        "job_id": job.id,
+        "has_feedback": True,
+        "feedback": {
+            "id": feedback.id,
+            "rating": feedback.rating,
+            "comment": feedback.comment,
+            "created_at": (
+                feedback.created_at.isoformat()
+                if feedback.created_at
+                else None
+            ),
+            "updated_at": (
+                feedback.updated_at.isoformat()
+                if feedback.updated_at
+                else None
+            ),
+        },
+    }
+    
+def _get_job_invoice_record(db: Session, job_id: int, current_user: AuthenticatedUser):
+    """
+    Build the existing billing-report-shaped invoice view for one job.
+
+    The job and closure are both tenant-scoped. No client-side billing
+    calculation or persistence is performed; the backend remains the source
+    of truth for the persisted closure amounts.
+    """
+    from app.models import JobClosure
+
+    job = (
+        db.query(Job)
+        .filter(
+            Job.id == job_id,
+            Job.tenant_id == current_user.tenant_id,
+        )
+        .first()
+    )
+
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found",
+        )
+
+    # Preserve the existing Job History object-level authorization model.
+    if (
+        has_permission(current_user.role, Permission.JOBS_VIEW_OWN)
+        and not has_permission(current_user.role, Permission.JOBS_VIEW_ALL)
+    ):
+        technician = get_technician_for_current_user(db, current_user)
+        if job.assigned_technician_id != technician.technician_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This job is not assigned to you",
+            )
+
+    closure = (
+        db.query(JobClosure)
+        .filter(
+            JobClosure.job_id == job.id,
+            JobClosure.tenant_id == current_user.tenant_id,
+        )
+        .order_by(JobClosure.completed_at.desc(), JobClosure.id.desc())
+        .first()
+    )
+
+    if not closure:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Invoice data is not available for this job",
+        )
+
+    subtotal = round(float(closure.subtotal or 0), 2)
+    gst = round(subtotal * 0.05, 2)
+    total = round(subtotal + gst, 2)
+
+    return {
+        "id": closure.id,
+        "job_id": job.id,
+        "customer_name": job.customer_name or "N/A",
+        "service_type": job.service_type or "Service",
+        "location": getattr(job, "location", None) or getattr(job, "site_address", None) or "N/A",
+        "work_summary": closure.work_summary or "N/A",
+        "labour_cost": float(closure.labour_cost or 0),
+        "material_cost": float(closure.material_cost or 0),
+        "subtotal": subtotal,
+        "gst_rate": 5,
+        "gst_amount": gst,
+        "total_amount": total,
+        "completed_at": closure.completed_at.isoformat() if closure.completed_at else None,
+        "created_at": closure.created_at.isoformat() if closure.created_at else None,
+    }
+
+
+@api_v1_router.get("/jobs/{job_id}/invoice")
+def get_job_invoice(
+    job_id: int,
+    current_user: AuthenticatedUser = Depends(
+        require_any_job_permission(
+            Permission.JOBS_VIEW_ALL,
+            Permission.JOBS_VIEW_OWN,
+        )
+    ),
+    db: Session = Depends(get_db),
+):
+    """Return the backend-authoritative billing/invoice data for one job."""
+    return _get_job_invoice_record(
+        db=db,
+        job_id=job_id,
+        current_user=current_user,
+    )
+
+
+@api_v1_router.get("/jobs/{job_id}/invoice/pdf")
+def download_job_invoice_pdf(
+    job_id: int,
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.REPORTS_DOWNLOAD)
+    ),
+    db: Session = Depends(get_db),
+):
+    """Generate the authorized PDF invoice/billing preview for one job."""
+    from io import BytesIO
+    from fastapi.responses import StreamingResponse
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    from app.models import JobClosure
+
+    # REPORTS_DOWNLOAD is intentionally kept as the download authority. The
+    # job/closure lookup below still enforces tenant and object scope.
+    job = (
+        db.query(Job)
+        .filter(
+            Job.id == job_id,
+            Job.tenant_id == current_user.tenant_id,
+        )
+        .first()
+    )
+
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found",
+        )
+
+    closure = (
+        db.query(JobClosure)
+        .filter(
+            JobClosure.job_id == job.id,
+            JobClosure.tenant_id == current_user.tenant_id,
+        )
+        .order_by(JobClosure.completed_at.desc(), JobClosure.id.desc())
+        .first()
+    )
+
+    if not closure:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Invoice data is not available for this job",
+        )
+
+    subtotal = round(float(closure.subtotal or 0), 2)
+    gst = round(subtotal * 0.05, 2)
+    total = round(subtotal + gst, 2)
+
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    pdf.setTitle(f"Invoice - Job #{job.id}")
+
+    pdf.setFont("Helvetica-Bold", 18)
+    pdf.drawString(50, height - 55, "FieldOps - Invoice")
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(50, height - 75, f"Billing Report #{closure.id}  |  Job #{job.id}")
+
+    y = height - 115
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(50, y, "Job Details")
+    y -= 22
+    pdf.setFont("Helvetica", 10)
+
+    details = [
+        ("Customer", job.customer_name or "N/A"),
+        ("Service", job.service_type or "N/A"),
+        ("Location", getattr(job, "location", None) or getattr(job, "site_address", None) or "N/A"),
+        ("Completed", str(closure.completed_at or "N/A")),
+    ]
+
+    for label, value in details:
+        pdf.drawString(50, y, f"{label}: {value}")
+        y -= 18
+
+    y -= 8
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(50, y, "Work Summary")
+    y -= 20
+    pdf.setFont("Helvetica", 10)
+
+    words = (closure.work_summary or "").replace("\n", " ").split()
+    line = ""
+    for word in words:
+        test = f"{line} {word}".strip()
+        if len(test) > 90:
+            pdf.drawString(50, y, line)
+            y -= 15
+            line = word
+        else:
+            line = test
+
+    if line:
+        pdf.drawString(50, y, line)
+        y -= 25
+
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(50, y, "Cost Details")
+    y -= 22
+    pdf.setFont("Helvetica", 10)
+
+    cost_details = [
+        ("Labour", f"{float(closure.labour_cost or 0):.2f}"),
+        ("Material", f"{float(closure.material_cost or 0):.2f}"),
+        ("Subtotal", f"{subtotal:.2f}"),
+        ("GST (5%)", f"{gst:.2f}"),
+        ("Total", f"{total:.2f}"),
+    ]
+
+    for label, value in cost_details:
+        pdf.drawString(50, y, f"{label}: {value}")
+        y -= 18
+
+    pdf.showPage()
+    pdf.save()
+    buffer.seek(0)
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="invoice_job_{job.id}.pdf"'
+            )
+        },
+    )
 
 
 @api_v1_router.get("/jobs/{id}/valid-transitions")
