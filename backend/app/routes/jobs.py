@@ -2600,6 +2600,7 @@ def transition_job_endpoint(
     request: Request,
     current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_STATUS_UPDATE)),
     db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = None,
 ):
     if not str(id).isdigit():
         raise HTTPException(
@@ -2661,6 +2662,8 @@ def transition_job_endpoint(
     )
 
     try:
+        old_status = job.status
+
         job.transition(
             payload.status,
             actor_id=actor_id,
@@ -2670,6 +2673,119 @@ def transition_job_endpoint(
         )
 
         db.commit()
+
+        # Publish only after the authoritative database transition succeeds.
+        # Kafka failure must not roll back the committed lifecycle state.
+        kafka_producer = None
+
+        if request is not None:
+            try:
+                kafka_producer = getattr(
+                    request.app.state,
+                    "kafka_producer",
+                    None,
+                )
+            except (KeyError, AttributeError):
+                kafka_producer = None
+
+        if kafka_producer is not None and background_tasks is not None:
+            try:
+                new_status = str(job.status)
+                status_timestamp = getattr(
+                    job,
+                    f"{new_status.lower()}_at",
+                    None,
+                )
+
+                if status_timestamp is not None:
+                    if status_timestamp.tzinfo is None:
+                        status_timestamp = status_timestamp.replace(
+                            tzinfo=timezone.utc
+                        )
+                    else:
+                        status_timestamp = status_timestamp.astimezone(
+                            timezone.utc
+                        )
+
+                    timestamp = status_timestamp.isoformat().replace(
+                        "+00:00",
+                        "Z",
+                    )
+                else:
+                    timestamp = datetime.now(timezone.utc).isoformat().replace(
+                        "+00:00",
+                        "Z",
+                    )
+
+                tenant_id = str(job.tenant_id)
+                correlation_id = request.headers.get("X-Correlation-ID")
+
+                event_id = (
+                    f"job-status:{tenant_id}:{job.id}:"
+                    f"{old_status}:{new_status}:{timestamp}"
+                )
+
+                event_payload = {
+                    "event_type": "job-status",
+                    "event_id": event_id,
+                    "job_id": str(job.id),
+                    "old_status": old_status,
+                    "new_status": new_status,
+                    "tenant_id": tenant_id,
+                    "schema_version": 1,
+                    "timestamp": timestamp,
+                }
+
+                if correlation_id:
+                    event_payload["correlation_id"] = correlation_id
+
+                event = MessageEnvelope(
+                    sender=AgentAddress(
+                        agent_type="dispatch",
+                        agent_id="job-status-producer",
+                        tenant_id=tenant_id,
+                    ),
+                    message_type=MessageType.EVENT,
+                    payload=event_payload,
+                    topic="fieldops.job.events",
+                )
+
+                async def publish_job_status_event():
+                    try:
+                        published = await kafka_producer.publish(event)
+
+                        if published:
+                            logger.info(
+                                "Published job-status event: "
+                                "job_id=%s event_id=%s",
+                                job.id,
+                                event_id,
+                            )
+                        else:
+                            logger.error(
+                                "Failed to publish job-status event: "
+                                "job_id=%s event_id=%s",
+                                job.id,
+                                event_id,
+                            )
+                    except Exception:
+                        logger.exception(
+                            "Unexpected error while publishing job-status "
+                            "event: job_id=%s event_id=%s",
+                            job.id,
+                            event_id,
+                        )
+
+                background_tasks.add_task(
+                    publish_job_status_event
+                )
+
+            except Exception:
+                logger.exception(
+                    "Unexpected error while preparing job-status event: "
+                    "job_id=%s",
+                    job.id,
+                )
 
         return {
             "status": "success",
