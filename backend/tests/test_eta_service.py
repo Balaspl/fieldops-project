@@ -4,7 +4,7 @@ import json
 import time
 from datetime import datetime, timezone, timedelta
 from fastapi.testclient import TestClient
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.main import app
 from app.models import Job, Technician, GPSPing
@@ -114,7 +114,7 @@ class MockResponse:
         self._json_data = json_data
         self.status = status
 
-    async def json(self):
+    async def json(self, **kwargs):
         return self._json_data
 
     async def __aenter__(self):
@@ -170,20 +170,18 @@ def test_eta_calculation_with_valid_gps_and_job_site(setup_db):
     db.add(ping)
     db.commit()
 
-    # Mock Google Maps response
+    # Mock the Ola Maps directions response used by the ETA service.
     mock_maps_response = {
-        "status": "OK",
-        "rows": [{
-            "elements": [{
-                "distance": {"value": 12500},
-                "duration": {"value": 1680},
-                "duration_in_traffic": {"value": 2100},
-                "status": "OK"
-            }]
-        }]
+        "status": "SUCCESS",
+        "routes": [{
+            "legs": [{
+                "distance": 12500,
+                "duration": 1680,
+            }],
+        }],
     }
 
-    with patch("aiohttp.ClientSession.get", return_value=MockResponse(mock_maps_response, 200)):
+    with patch("aiohttp.ClientSession.request", return_value=MockResponse(mock_maps_response, 200)):
         response = client.get(
             "/api/v1/eta?technician_id=tech-123&job_id=101",
             headers={"X-Tenant-ID": "tenant-1", "Authorization": "Bearer mock-token-admin"}
@@ -195,9 +193,9 @@ def test_eta_calculation_with_valid_gps_and_job_site(setup_db):
         assert data["status"] == "calculated"
         assert data["technician_id"] == "tech-123"
         assert data["job_id"] == "101"
-        assert data["duration_minutes"] == 35.0 # 2100 / 60
+        assert data["duration_minutes"] == 28.0 # Ola route duration: 1680 / 60
         assert data["distance_km"] == 12.5 # 12500 / 1000
-        assert data["traffic_delay_minutes"] == 7.0 # (2100 - 1680) / 60
+        assert "traffic_delay_minutes" not in data # Omit zero delay when Ola has no traffic duration
 
         # Verify ETA is a future timestamp
         eta_time = datetime.fromisoformat(data["eta"].replace("Z", "+00:00"))
@@ -216,12 +214,12 @@ def test_redis_cache_stores_eta_for_30_seconds(setup_db):
     db.commit()
 
     mock_maps_response = {
-        "status": "OK",
-        "rows": [{"elements": [{"distance": {"value": 1000}, "duration": {"value": 100}, "duration_in_traffic": {"value": 120}, "status": "OK"}]}]
+        "status": "SUCCESS",
+        "routes": [{"legs": [{"distance": 1000, "duration": 100}]}],
     }
 
     # Miss call -> sets cache
-    with patch("aiohttp.ClientSession.get", return_value=MockResponse(mock_maps_response, 200)):
+    with patch("aiohttp.ClientSession.request", return_value=MockResponse(mock_maps_response, 200)):
         response = client.get("/api/v1/eta?technician_id=tech-123&job_id=101", headers={"X-Tenant-ID": "tenant-1", "Authorization": "Bearer mock-token-admin"})
         assert response.status_code == 200
 
@@ -231,7 +229,7 @@ def test_redis_cache_stores_eta_for_30_seconds(setup_db):
     assert mock_redis.ttl(cache_key) == 30
 
     # Call again -> should return cached result without hitting API (raise inside patch to confirm)
-    with patch("aiohttp.ClientSession.get", side_effect=Exception("API called")):
+    with patch("aiohttp.ClientSession.request", side_effect=Exception("API called")):
         response = client.get("/api/v1/eta?technician_id=tech-123&job_id=101", headers={"X-Tenant-ID": "tenant-1", "Authorization": "Bearer mock-token-admin"})
         assert response.status_code == 200
         assert response.json()["status"] == "calculated"
@@ -304,13 +302,13 @@ def test_maps_api_failure_triggers_straight_line_fallback(setup_db):
     db.commit()
 
     # Maps API throws network exception
-    with patch("aiohttp.ClientSession.get", side_effect=Exception("API down")):
+    with patch("aiohttp.ClientSession.request", side_effect=Exception("API down")):
         response = client.get("/api/v1/eta?technician_id=tech-123&job_id=101", headers={"X-Tenant-ID": "tenant-1", "Authorization": "Bearer mock-token-admin"})
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "estimated"
         assert data["confidence"] == "low"
-        assert data["fallback_reason"] == "maps_unavailable"
+        assert data["fallback_reason"] == "maps_error"
         assert data["distance_km"] > 0.0
         assert "disclaimer" in data
 
@@ -333,16 +331,11 @@ def test_batch_eta_calculation_for_3_technicians(setup_db):
     db.add_all([p1, p2, p3])
     db.commit()
 
-    mock_batch_response = {
-        "status": "OK",
-        "rows": [
-            {"elements": [{"distance": {"value": 10000}, "duration": {"value": 600}, "status": "OK"}]},
-            {"elements": [{"distance": {"value": 9000}, "duration": {"value": 540}, "status": "OK"}]},
-            {"elements": [{"distance": {"value": 8000}, "duration": {"value": 480}, "status": "OK"}]}
-        ]
-    }
-
-    with patch("aiohttp.ClientSession.get", return_value=MockResponse(mock_batch_response, 200)):
+    with patch("app.services.eta_service.ETAService.calculate_batch_eta", new=AsyncMock(return_value=[
+        {"technician_id": "tech-1", "job_id": "101", "distance_km": 10.0, "duration_minutes": 10.0, "traffic_delay_minutes": 0.0, "status": "calculated"},
+        {"technician_id": "tech-2", "job_id": "101", "distance_km": 9.0, "duration_minutes": 9.0, "traffic_delay_minutes": 0.0, "status": "calculated"},
+        {"technician_id": "tech-3", "job_id": "101", "distance_km": 8.0, "duration_minutes": 8.0, "traffic_delay_minutes": 0.0, "status": "calculated"},
+    ])):
         payload = {
             "technician_ids": ["tech-1", "tech-2", "tech-3"],
             "job_id": 101

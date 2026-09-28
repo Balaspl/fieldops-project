@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   FileText,
   PlusCircle,
@@ -20,6 +20,9 @@ import {
 } from "../../services/customerPortalService";
 
 import api from "../../services/api";
+import { OlaMaps } from "olamaps-web-sdk";
+
+const OLA_STYLE = "https://api.olamaps.io/tiles/vector/v1/styles/default-light-standard/style.json";
 
 const badge = (status: string) => {
   const c: Record<string, string> = {
@@ -84,10 +87,194 @@ export default function CustomerServiceRequestsPage({
   const [siteLatitude, setSiteLatitude] = useState<number | null>(null);
   const [siteLongitude, setSiteLongitude] = useState<number | null>(null);
   const [isGettingLocation, setIsGettingLocation] = useState(false);
+  const [locationSearch, setLocationSearch] = useState("");
+  const [locationResults, setLocationResults] = useState<any[]>([]);
+  const [isSearchingLocations, setIsSearchingLocations] = useState(false);
+  const [locationSearchError, setLocationSearchError] = useState("");
+  const [selectedLocationName, setSelectedLocationName] = useState("");
+  const [locationConfirmed, setLocationConfirmed] = useState(false);
+  const [mapVisible, setMapVisible] = useState(false);
+  const [mapError, setMapError] = useState(false);
+  const [mapTarget, setMapTarget] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [isResolvingMapCenter, setIsResolvingMapCenter] = useState(false);
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const olaMapRef = useRef<any>(null);
+  const programmaticMapMove = useRef(false);
+  const reverseGeocodeSequence = useRef(0);
+  const mapRequestId = useRef(0);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+
+  useEffect(() => {
+    const query = locationSearch.trim();
+    if (query.length < 2) {
+      setLocationResults([]);
+      setIsSearchingLocations(false);
+      setLocationSearchError("");
+      return;
+    }
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      const requestId = ++mapRequestId.current;
+      setIsSearchingLocations(true);
+      setLocationSearchError("");
+      try {
+        const response = await api.get("/organizations/location-search", { params: { q: query } });
+        if (active && requestId === mapRequestId.current) setLocationResults(response.data?.results || []);
+      } catch {
+        if (active && requestId === mapRequestId.current) {
+          setLocationResults([]);
+          setLocationSearchError("Unable to search locations. Try again.");
+        }
+      } finally {
+        if (active && requestId === mapRequestId.current) setIsSearchingLocations(false);
+      }
+    }, 300);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [locationSearch]);
+
+  useEffect(() => {
+    if (!mapVisible || siteLatitude == null || siteLongitude == null || !mapContainerRef.current) return;
+    let cancelled = false;
+    const apiKey = import.meta.env.VITE_OLA_MAPS_API_KEY;
+    if (!apiKey) { setMapError(true); return; }
+    try {
+      const ola = new OlaMaps({ apiKey });
+      void ola.init({ style: OLA_STYLE, container: mapContainerRef.current, center: [siteLongitude, siteLatitude], zoom: 16 })
+        .then((map: any) => {
+          if (cancelled) { map.remove?.(); return; }
+          olaMapRef.current?.remove?.();
+          olaMapRef.current = map;
+          map.dragPan?.enable?.();
+          map.scrollZoom?.enable?.();
+          map.doubleClickZoom?.enable?.();
+          const onMoveEnd = () => {
+            const center = map.getCenter?.();
+            if (!center || !Number.isFinite(center.lat) || !Number.isFinite(center.lng)) return;
+            setSiteLatitude(center.lat);
+            setSiteLongitude(center.lng);
+            if (programmaticMapMove.current) {
+              programmaticMapMove.current = false;
+              return;
+            }
+            void resolveMapCenter(center.lat, center.lng);
+          };
+          map.on("moveend", onMoveEnd);
+          map.__customerLocationMoveEnd = onMoveEnd;
+          setMapError(false);
+        })
+        .catch(() => { if (!cancelled) setMapError(true); });
+    } catch { setMapError(true); }
+    return () => {
+      cancelled = true;
+      if (olaMapRef.current?.__customerLocationMoveEnd) {
+        olaMapRef.current.off?.("moveend", olaMapRef.current.__customerLocationMoveEnd);
+      }
+      olaMapRef.current?.remove?.();
+      olaMapRef.current = null;
+    };
+  }, [mapVisible]);
+
+  useEffect(() => {
+    const map = olaMapRef.current;
+    if (!map || !mapTarget) return;
+    const center = map.getCenter?.();
+    const changed = !center || Math.abs(center.lat - mapTarget.latitude) > 0.000001 || Math.abs(center.lng - mapTarget.longitude) > 0.000001;
+    if (changed) {
+      programmaticMapMove.current = true;
+      map.easeTo({ center: [mapTarget.longitude, mapTarget.latitude], duration: 350 });
+    }
+  }, [mapTarget]);
+
+  const resolveMapCenter = async (
+  latitude: number,
+  longitude: number,
+): Promise<boolean> => {
+  const requestId =
+    ++reverseGeocodeSequence.current;
+
+  setIsResolvingMapCenter(true);
+  setLocationSearchError("Finding address...");
+
+  try {
+    const response = await api.get(
+      "/organizations/reverse-location",
+      {
+        params: {
+          latitude,
+          longitude,
+        },
+      },
+    );
+
+    if (
+      requestId !==
+      reverseGeocodeSequence.current
+    ) {
+      return false;
+    }
+
+    if (
+      response.data?.verified &&
+      response.data?.address
+    ) {
+      const address =
+        response.data.formatted_address ||
+        response.data.address;
+
+      // Save exact coordinates
+      setSiteLatitude(latitude);
+      setSiteLongitude(longitude);
+
+      // Save location name
+      setSelectedLocationName(
+        response.data.name || "",
+      );
+
+      // Save address into form
+      upd("location", address);
+
+      // IMPORTANT:
+      // The location has now been selected
+      // and successfully resolved.
+      setLocationConfirmed(true);
+
+      setLocationSearchError("");
+
+      return true;
+    }
+
+    setLocationConfirmed(false);
+
+    setLocationSearchError(
+      "Unable to determine an address for this location.",
+    );
+
+    return false;
+  } catch (error) {
+    if (
+      requestId ===
+      reverseGeocodeSequence.current
+    ) {
+      setLocationConfirmed(false);
+
+      setLocationSearchError(
+        "Unable to determine an address for this location.",
+      );
+    }
+
+    return false;
+  } finally {
+    if (
+      requestId ===
+      reverseGeocodeSequence.current
+    ) {
+      setIsResolvingMapCenter(false);
+    }
+  }
+};
 
   const load = () => {
     setLoading(true);
@@ -117,6 +304,14 @@ export default function CustomerServiceRequestsPage({
 
     setShowCreate(false);
     setEditId(null);
+    setSiteLatitude(null);
+    setSiteLongitude(null);
+    setLocationSearch("");
+    setLocationResults([]);
+    setSelectedLocationName("");
+    setLocationConfirmed(false);
+    setMapVisible(false);
+    setMapTarget(null);
     setError("");
   };
 
@@ -131,6 +326,14 @@ export default function CustomerServiceRequestsPage({
       contact_number: "",
     });
 
+    setSiteLatitude(null);
+    setSiteLongitude(null);
+    setLocationSearch("");
+    setLocationResults([]);
+    setSelectedLocationName("");
+    setLocationConfirmed(false);
+    setMapVisible(false);
+    setMapTarget(null);
     setError("");
   };
 
@@ -214,6 +417,11 @@ export default function CustomerServiceRequestsPage({
     }
 
     // LOCATION VALIDATION
+    if (!locationConfirmed || siteLatitude == null || siteLongitude == null) {
+      setError("Please select a location and click 'Use This Location' before creating the job.");
+      return;
+    }
+
     if (!location) {
       setError("Location / Address is required");
       return;
@@ -296,6 +504,7 @@ export default function CustomerServiceRequestsPage({
     });
 
     setEditId(sr.id);
+    setLocationConfirmed(Boolean(sr.site_latitude != null && sr.site_longitude != null));
     setShowCreate(true);
     setError("");
   };
@@ -540,71 +749,159 @@ export default function CustomerServiceRequestsPage({
                   Location / Address <span style={requiredStar}>*</span>
                 </label>
 
-                <div
+                <button
+                  type="button"
+                  disabled={isGettingLocation}
                   onClick={() => {
                     if (!navigator.geolocation) {
-                      setError("Geolocation is not supported by this browser.");
+                      setLocationSearchError(
+                        "This browser does not support location access.",
+                      );
                       return;
                     }
 
-                    setError("");
+                    setLocationSearchError("");
                     setIsGettingLocation(true);
+                    setSelectedLocationName("");
+                    setLocationSearch("");
+                    setLocationResults([]);
 
-                    navigator.geolocation.getCurrentPosition(
-                      async (position) => {
-                        let latitude = position.coords.latitude;
-                        let longitude = position.coords.longitude;
+                    let watchId: number | null = null;
+                    let timeoutId: number | null = null;
+                    let finished = false;
+                    let bestAccuracy = Infinity;
+
+                    const finish = () => {
+                      if (finished) {
+                        return;
+                      }
+
+                      finished = true;
+
+                      if (watchId !== null) {
+                        navigator.geolocation.clearWatch(watchId);
+                      }
+
+                      if (timeoutId !== null) {
+                        window.clearTimeout(timeoutId);
+                      }
+
+                      setIsGettingLocation(false);
+                    };
+
+                    watchId = navigator.geolocation.watchPosition(
+                      (position) => {
+                        if (finished) {
+                          return;
+                        }
+
+                        const {
+                          latitude,
+                          longitude,
+                          accuracy,
+                        } = position.coords;
+
+                        console.log(
+                          "[CURRENT LOCATION] GPS fix:",
+                          {
+                            latitude,
+                            longitude,
+                            accuracy,
+                          },
+                        );
+
+                        if (
+                          !Number.isFinite(latitude) ||
+                          !Number.isFinite(longitude) ||
+                          !Number.isFinite(accuracy)
+                        ) {
+                          return;
+                        }
+
+                        if (accuracy < bestAccuracy) {
+                          bestAccuracy = accuracy;
+                        }
+
+                        // Do not accept a poor first GPS fix.
+                        // Wait for a fresh fix at 100m accuracy or better.
+                        if (accuracy > 120) {
+                          setLocationSearchError(
+                            `Getting a more accurate location... current accuracy ${Math.round(
+                              accuracy,
+                            )}m`,
+                          );
+                          return;
+                        }
+
+                        console.log(
+                          "[CURRENT LOCATION] Accurate GPS accepted:",
+                          {
+                            latitude,
+                            longitude,
+                            accuracy,
+                          },
+                        );
 
                         setSiteLatitude(latitude);
                         setSiteLongitude(longitude);
+                        setMapTarget({ latitude, longitude });
+                        setMapVisible(true);
+                        setLocationSearchError("");
 
-                        try {
-                          const response = await api.get(
-                            "/organizations/reverse-location",
-                            {
-                              params: {
-                                latitude,
-                                longitude,
-                              },
-                            },
-                          );
+                        finish();
 
-                          if (
-                            response.data?.verified &&
-                            response.data?.address
-                          ) {
-                            upd("location", response.data.address);
-                            setError("");
-                          } else {
-                            setError(
-                              "Unable to determine address from your current location.",
-                            );
-                          }
-
-                          setIsGettingLocation(false);
-                        } catch (error) {
-                          console.error("Reverse geocoding failed:", error);
-
-                          setError(
-                            "Unable to determine address from your current location.",
-                          );
-                          setIsGettingLocation(false);
-                        }
-                      },
-                      (error) => {
-                        console.error("Geolocation error:", error);
-
-                        setError(
-                          "Unable to get your current location. Please allow location access.",
+                        void resolveMapCenter(
+                          latitude,
+                          longitude,
                         );
-                        setIsGettingLocation(false);
+                      },
+                      (geoError) => {
+                        if (finished) {
+                          return;
+                        }
+
+                        console.error(
+                          "[CURRENT LOCATION] GPS error:",
+                          geoError,
+                        );
+
+                        const messages: Record<number, string> = {
+                          1: "Location permission was denied. Allow access and try again.",
+                          2: "Your location is unavailable. Please try again.",
+                          3: "Location request timed out. Please try again.",
+                        };
+
+                        setLocationSearchError(
+                          messages[geoError.code] ||
+                            "Unable to get your location.",
+                        );
+
+                        finish();
                       },
                       {
                         enableHighAccuracy: true,
-                        timeout: 15000,
                         maximumAge: 0,
+                        timeout: 30000,
                       },
                     );
+
+                    // Safety timeout. If no accurate fix is available,
+                    // do not use a bad location.
+                    timeoutId = window.setTimeout(() => {
+                      if (finished) {
+                        return;
+                      }
+
+                      const accuracyMessage =
+                        bestAccuracy !== Infinity
+                          ? `GPS accuracy is still ${Math.round(
+                              bestAccuracy,
+                            )}m. Please try again in an open area.`
+                          : "Unable to get your current location. Please try again.";
+
+                      setLocationSearchError(accuracyMessage);
+                      finish();
+                    }, 30000);
                   }}
                   style={{
                     display: "flex",
@@ -614,6 +911,9 @@ export default function CustomerServiceRequestsPage({
                     fontWeight: 600,
                     color: "#5C9470",
                     cursor: "pointer",
+                    border: 0,
+                    background: "transparent",
+                    padding: 0,
                   }}
                 >
                   {isGettingLocation ? (
@@ -629,7 +929,7 @@ export default function CustomerServiceRequestsPage({
                           animation: "spin 0.8s linear infinite",
                         }}
                       />
-                      <span>Getting location...</span>
+                      <span>Getting your location...</span>
                     </>
                   ) : (
                     <>
@@ -637,19 +937,55 @@ export default function CustomerServiceRequestsPage({
                       <span>Use current location</span>
                     </>
                   )}
-                </div>
+                </button>
               </div>
 
               <input
                 style={inputStyle}
-                value={form.location}
+                value={locationSearch}
                 onChange={(e) => {
-                  upd("location", e.target.value);
-                  setSiteLatitude(null);
-                  setSiteLongitude(null);
+                  setLocationSearch(e.target.value);
+                  setLocationResults([]);
                 }}
-                placeholder="Enter service location"
+                placeholder="Search building, street or area"
               />
+              {isSearchingLocations && <div style={{ fontSize: 12, color: "#64748B", padding: "8px 2px" }}>Searching...</div>}
+              {locationSearchError && <div style={{ fontSize: 12, color: "#B45309", padding: "8px 2px" }}>{locationSearchError}</div>}
+              {!isSearchingLocations && locationSearch.trim().length >= 2 && !locationSearchError && locationResults.length === 0 && <div style={{ fontSize: 12, color: "#64748B", padding: "8px 2px" }}>No locations found</div>}
+              {locationResults.length > 0 && <div style={{ border: "1px solid #D1D5DB", borderRadius: 8, marginTop: 4, overflow: "hidden" }}>
+                {locationResults.map((result, index) => <button key={result.place_id || `${result.latitude}-${result.longitude}-${index}`} type="button" onClick={() => {
+                  setSiteLatitude(Number(result.latitude)); setSiteLongitude(Number(result.longitude));
+                  setMapTarget({ latitude: Number(result.latitude), longitude: Number(result.longitude) });
+                  setSelectedLocationName(result.name || ""); upd("location", result.formatted_address || result.name || "");
+                  setLocationSearch(""); setLocationResults([]); setMapVisible(true); setLocationSearchError("");
+                }} style={{ display: "block", width: "100%", textAlign: "left", border: 0, borderBottom: "1px solid #E5E7EB", background: "#fff", padding: "10px 12px", cursor: "pointer" }}>
+                  <strong style={{ display: "block", color: "#1F2933", fontSize: 13 }}>{result.name || result.formatted_address}</strong>
+                  <span style={{ color: "#64748B", fontSize: 12 }}>{result.formatted_address}</span>
+                </button>)}
+              </div>}
+              {form.location && <div style={{ marginTop: 10, padding: 10, background: "#F8FAFC", borderRadius: 8, fontSize: 13 }}>
+                {selectedLocationName && <strong style={{ display: "block", marginBottom: 3 }}>{selectedLocationName}</strong>}
+                <span>{form.location}</span>
+              </div>}
+              {mapVisible && <div style={{ marginTop: 12 }}>
+                {mapError ? <div style={{ padding: 10, background: "#FEF3C7", color: "#92400E", borderRadius: 8, fontSize: 12 }}>Map could not be loaded, but your location was selected.</div> : <>
+                  <div style={{ position: "relative", height: 300, borderRadius: 10, overflow: "hidden", background: "#F1F5F9" }}>
+                    <div ref={mapContainerRef} style={{ width: "100%", height: "100%", touchAction: "pan-x pan-y" }} />
+                    <div aria-hidden="true" style={{ position: "absolute", zIndex: 2, left: "50%", top: "50%", transform: "translate(-50%, -100%)", pointerEvents: "none", color: "#DC2626", filter: "drop-shadow(0 2px 2px rgba(0,0,0,.35))" }}>
+                      <MapPin size={34} fill="#DC2626" stroke="white" strokeWidth={1.5} />
+                    </div>
+                  </div>
+                  <button type="button" onClick={() => {
+                    const center = olaMapRef.current?.getCenter?.();
+                    if (!center) return;
+                    setSiteLatitude(center.lat);
+                    setSiteLongitude(center.lng);
+                    void resolveMapCenter(center.lat, center.lng);
+                  }} disabled={isResolvingMapCenter} style={{ marginTop: 10, padding: "9px 14px", border: 0, borderRadius: 8, background: "#5C9470", color: "white", fontSize: 13, fontWeight: 700, cursor: isResolvingMapCenter ? "wait" : "pointer", opacity: isResolvingMapCenter ? 0.7 : 1 }}>
+                    {isResolvingMapCenter ? "Finding address..." : "Use This Location"}
+                  </button>
+                </>}
+              </div>}
             </div>
 
             <div

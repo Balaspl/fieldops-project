@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import { useTrackingStore } from '../store/trackingStore';
 import { useNotificationStore } from '../store/notificationStore';
 
-export const useTrackingWebSocket = (tenantId: string) => {
+export const useTrackingWebSocket = (tenantId: string, jobId?: string, channelTenantId?: string) => {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const reconnectAttemptsRef = useRef<number>(0);
@@ -32,6 +32,7 @@ export const useTrackingWebSocket = (tenantId: string) => {
     const wsUrl = socketUrl.replace(/^http/, 'ws') + '/ws/v1/tracking';
     const token = localStorage.getItem('token') || localStorage.getItem('access_token') || (import.meta as any).env?.VITE_AUTH_TOKEN || 'dev-dispatcher-token';
     const finalTenant = tenantId || localStorage.getItem('tenant_id') || 'tenant-1';
+    const trackingTenant = channelTenantId || finalTenant;
 
     const fullWsUrl = `${wsUrl}?token=${token}&tenant_id=${finalTenant}`;
     
@@ -45,20 +46,30 @@ export const useTrackingWebSocket = (tenantId: string) => {
         setReconnectAttempt(0);
         
         // Subscribe to updates
-        ws.send(
-          JSON.stringify({
-            type: 'subscribe',
-            channel: `tenant:${finalTenant}:all`,
-          })
-        );
+        if (jobId) {
+          // Customer/technician job tracking uses the narrow job channel.
+          // The backend performs the ownership check before allowing it.
+          ws.send(
+            JSON.stringify({
+              type: 'subscribe',
+              channel: `tenant:${trackingTenant}:job:${jobId}`,
+            })
+          );
+        } else {
+          ws.send(
+            JSON.stringify({
+              type: 'subscribe',
+              channel: `tenant:${finalTenant}:all`,
+            })
+          );
 
-        // Subscribe to geofence alerts
-        ws.send(
-          JSON.stringify({
-            type: 'subscribe',
-            channel: `tenant:${finalTenant}:events:geofence`,
-          })
-        );
+          ws.send(
+            JSON.stringify({
+              type: 'subscribe',
+              channel: `tenant:${finalTenant}:events:geofence`,
+            })
+          );
+        }
       };
 
       ws.onmessage = (event) => {
@@ -115,7 +126,7 @@ export const useTrackingWebSocket = (tenantId: string) => {
               longitude: Number(data.longitude),
               status: rawStatus,
               ...(data.technician_name ? { name: String(data.technician_name) } : {}),
-              accuracy: data.accuracy !== undefined ? Number(data.accuracy) : null,
+              accuracy: data.accuracy == null ? null : Number(data.accuracy),
               altitude: data.altitude !== undefined ? Number(data.altitude) : null,
               eta: data.eta || null,
               eta_duration_minutes: data.eta_duration_minutes !== undefined ? Number(data.eta_duration_minutes) : null,
@@ -161,7 +172,7 @@ export const useTrackingWebSocket = (tenantId: string) => {
       console.error('[useTrackingWebSocket] Failed to instantiate WebSocket:', e);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tenantId]);
+  }, [tenantId, jobId, channelTenantId]);
 
   const reconnect = useCallback(() => {
     reconnectAttemptsRef.current = 0;

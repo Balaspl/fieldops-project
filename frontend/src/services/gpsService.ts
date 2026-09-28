@@ -11,8 +11,13 @@ export interface GPSPingPayload {
 }
 
 /** Send the current device position for one authorized active technician job. */
-export const sendGPSPing = (tenantId: string, payload: GPSPingPayload) =>
+export const sendGPSPing = (
+  tenantId: string,
+  payload: GPSPingPayload,
+  options?: { liveTracking?: boolean },
+) =>
   api.post('/api/v1/gps/ping', payload, {
+    params: options?.liveTracking ? { live_tracking: true } : undefined,
     headers: { 'X-Tenant-ID': tenantId },
   });
 
@@ -36,3 +41,30 @@ export const getGPSHistory = async (
   const response = await api.get<GPSHistoryPoint[]>(`/api/v1/gps/history/${technicianId}`, { params });
   return response.data;
 };
+
+
+export interface TechnicianAvailabilityLocationPayload {
+  latitude: number;
+  longitude: number;
+  accuracy?: number | null;
+  altitude?: number | null;
+  timestamp: string;
+}
+
+/**
+ * Send the technician's current location while they are available,
+ * before a job has been assigned.
+ */
+export const sendTechnicianAvailabilityLocation = (
+  tenantId: string,
+  payload: TechnicianAvailabilityLocationPayload,
+) =>
+  api.post(
+    '/api/v1/gps/availability',
+    payload,
+    {
+      headers: {
+        'X-Tenant-ID': tenantId,
+      },
+    },
+  );

@@ -405,7 +405,7 @@ def test_exclusion_checked_in_planning(
         technician_name="Alice",
         technician_status="AVAILABLE",
         technician_skill="Skill",
-        technician_location="0,0",
+        technician_location="13.0800,80.2700",
     )
 
     tech2 = Technician(
@@ -414,7 +414,7 @@ def test_exclusion_checked_in_planning(
         technician_name="Bob",
         technician_status="AVAILABLE",
         technician_skill="Skill",
-        technician_location="0,0",
+        technician_location="13.0800,80.2700",
     )
 
     db.add_all([tech1, tech2])
@@ -422,7 +422,7 @@ def test_exclusion_checked_in_planning(
 
     job = Job(
         customer_name="Customer",
-        location="0,0",
+        location="13.0569,80.2425",
         issue_description="Issue",
         priority="P1",
         service_type="Service",

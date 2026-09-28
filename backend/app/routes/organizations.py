@@ -656,58 +656,40 @@ async def reverse_location(
     longitude: float,
 ):
     try:
-        ola_api_key = os.getenv("OLA_MAPS_API_KEY")
+        from ..redis_client import get_redis_client
+        from ..services.ola_map_client import OlaMapsClient
 
-        if not ola_api_key:
-            return {
-                "verified": False,
-                "message": "Ola Maps API key is not configured.",
-            }
-
-        response = requests.get(
-            "https://api.olamaps.io/places/v1/reverse-geocode",
-            params={
-                "latlng": f"{latitude},{longitude}",
-                "api_key": ola_api_key,
-            },
-            timeout=10,
-        )
-
-        response.raise_for_status()
-
-        data = response.json()
-        results = data.get("results", [])
-
-        if not results:
+        result = await OlaMapsClient(get_redis_client()).reverse_geocode(latitude, longitude)
+        if not result:
             return {
                 "verified": False,
                 "message": "Unable to find an address for this location.",
             }
-
-        result = results[0]
-
-        address = result.get("formatted_address")
-
-        if not address:
-            return {
-                "verified": False,
-                "message": "Unable to determine address from this location.",
-            }
-
         return {
             "verified": True,
-            "address": address,
-            "latitude": latitude,
-            "longitude": longitude,
+            "name": result.get("name", ""),
+            "address": result["formatted_address"],
+            "formatted_address": result["formatted_address"],
+            "latitude": result["latitude"],
+            "longitude": result["longitude"],
         }
-
     except Exception as e:
         logger.error("Ola Maps reverse geocoding failed: %s", e)
+        return {"verified": False, "message": "Unable to determine address from this location."}
 
-        return {
-            "verified": False,
-            "message": "Unable to determine address from this location.",
-        }
+
+@org_router.get("/location-search")
+async def search_locations(q: str = Query(..., min_length=2, max_length=200)):
+    """Search for customer-selected addresses using the server-side Ola client."""
+    try:
+        from ..redis_client import get_redis_client
+        from ..services.ola_map_client import OlaMapsClient
+
+        results = await OlaMapsClient(get_redis_client()).search_places(q)
+        return {"results": results}
+    except Exception as e:
+        logger.error("Ola Maps location search failed: %s", e)
+        return {"results": [], "message": "Unable to search locations."}
 @org_router.get("/current")
 async def get_current_organization(
     current_user: AuthenticatedUser = Depends(get_current_user),

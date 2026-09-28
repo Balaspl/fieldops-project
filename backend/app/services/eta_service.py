@@ -6,11 +6,11 @@ from typing import List
 from fastapi import HTTPException, status
 
 from .. import models
-from ..services.google_maps_client import GoogleMapsClient, MapsAPIException
+from ..services.ola_map_client import OlaMapsClient, MapsAPIException
 from .fallback_eta_service import FallbackETAService
 
 class ETAService:
-    def __init__(self, db, redis_client, maps_client: GoogleMapsClient):
+    def __init__(self, db, redis_client, maps_client: OlaMapsClient):
         self.db = db
         self.redis = redis_client
         self.maps = maps_client

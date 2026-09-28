@@ -6,7 +6,16 @@ import uuid
 import json
 import time
 import logging
+import os
 import msgpack
+
+import json
+import os
+
+from datetime import datetime
+from typing import Optional
+
+from pydantic import BaseModel
 
 from ..database import get_db
 from ..redis_client import get_redis_client
@@ -15,6 +24,13 @@ from .. import models, schemas
 from .dispatch import verify_jwt_token
 from ..auth.dependencies import AuthenticatedUser, get_current_user
 from ..auth.rbac import Permission
+
+class TechnicianAvailabilityLocationRequest(BaseModel):
+    latitude: float
+    longitude: float
+    accuracy: Optional[float] = None
+    altitude: Optional[float] = None
+    timestamp: datetime
 
 router = APIRouter(
     prefix="/api/v1/gps",
@@ -37,7 +53,7 @@ def _enforce_gps_actor(current_user: AuthenticatedUser, tenant_id: str, technici
     ):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Technician GPS access denied")
 
-def check_sliding_window_rate_limit(redis_client, technician_id: str, tenant_id: str) -> bool:
+def check_sliding_window_rate_limit(redis_client, technician_id: str, tenant_id: str, window: int = 30) -> bool:
     """
     Checks if a technician has exceeded the rate limit.
     Enforces max 1 ping per 30 seconds per technician using a sliding window in Redis.
@@ -46,7 +62,6 @@ def check_sliding_window_rate_limit(redis_client, technician_id: str, tenant_id:
     if redis_failures_count >= 3:
         return True
     now = time.time()
-    window = 30
     limit = 1
     key = f"rate_limit:gps:{tenant_id}:{technician_id}"
     
@@ -84,7 +99,7 @@ def log_rejected_ping(db: Session, technician_id: str, job_id: str, tenant_id: s
     except Exception as e:
         logger.error(f"Failed to log rejected ping: {e}")
 
-def check_and_set_interval(redis_client, db: Session, tenant_id: str, technician_id: str, job_id: str, correlation_id: str) -> tuple[bool, int, str]:
+def check_and_set_interval(redis_client, db: Session, tenant_id: str, technician_id: str, job_id: str, correlation_id: str, interval_seconds: int = 30) -> tuple[bool, int, str]:
     global redis_failures_count
     interval_key = f"gps:interval:{tenant_id}:{technician_id}:{job_id}"
     
@@ -95,10 +110,10 @@ def check_and_set_interval(redis_client, db: Session, tenant_id: str, technician
             if redis_client.exists(interval_key):
                 ttl = redis_client.ttl(interval_key)
                 if ttl <= 0:
-                    ttl = 30
+                    ttl = interval_seconds
                 redis_failures_count = 0
                 return False, ttl, "redis"
-            redis_client.setex(interval_key, 30, "1")
+            redis_client.setex(interval_key, interval_seconds, "1")
             redis_failures_count = 0
             return True, 0, "redis"
         except Exception as e:
@@ -118,8 +133,8 @@ def check_and_set_interval(redis_client, db: Session, tenant_id: str, technician
             if last_time.tzinfo is None:
                 last_time = last_time.replace(tzinfo=timezone.utc)
             delta = (now - last_time).total_seconds()
-            if delta < 30:
-                retry_after = int(30 - delta)
+            if delta < interval_seconds:
+                retry_after = int(interval_seconds - delta)
                 if retry_after <= 0:
                     retry_after = 1
                 return False, retry_after, "fallback"
@@ -199,6 +214,7 @@ async def gps_ping(
     authorization: str = Depends(verify_jwt_token),
     redis_client = Depends(get_redis_client),
     bypass_interval: bool = False,
+    live_tracking: bool = False,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     if current_user.tenant_id != x_tenant_id:
@@ -334,6 +350,14 @@ async def gps_ping(
 
         job_status_upper = job.status.upper().strip()
 
+        # Reject low-confidence live GPS fixes. The device remains the source of
+        # truth for GPS accuracy; Ola Maps is used later for road/routing data.
+        max_accuracy = float(os.getenv("GPS_MAX_ACCURACY_METERS", "100"))
+        if payload.accuracy is not None and payload.accuracy > max_accuracy:
+            reason = f"GPS accuracy {payload.accuracy:.1f}m exceeds {max_accuracy:.0f}m"
+            log_rejected_ping(db, payload.technician_id, payload.job_id, x_tenant_id, reason)
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=reason)
+
         # Enforce 30-second interval gating
         if not bypass_interval and not is_legacy_active:
             # Check and handle job status transition to reset interval key
@@ -349,12 +373,19 @@ async def gps_ping(
                 except Exception:
                     pass
 
+            interval_seconds = 5 if live_tracking and job_status_upper == "EN_ROUTE" else 30
             allowed, retry_after, mode = check_and_set_interval(
-                redis_client, db, x_tenant_id, payload.technician_id, payload.job_id, correlation_id
+                redis_client,
+                db,
+                x_tenant_id,
+                payload.technician_id,
+                payload.job_id,
+                correlation_id,
+                interval_seconds=interval_seconds,
             )
             if not allowed:
                 if mode == "redis":
-                    reason = "GPS ping interval minimum 30 seconds"
+                    reason = f"GPS ping interval minimum {interval_seconds} seconds"
                     log_rejected_ping(db, payload.technician_id, payload.job_id, x_tenant_id, reason)
                     return JSONResponse(
                         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -362,7 +393,7 @@ async def gps_ping(
                         content={"detail": reason, "retry_after": retry_after, "status": 429}
                     )
                 else:
-                    reason = "GPS ping interval minimum 30 seconds (fallback mode)"
+                    reason = f"GPS ping interval minimum {interval_seconds} seconds (fallback mode)"
                     log_rejected_ping(db, payload.technician_id, payload.job_id, x_tenant_id, reason)
                     return JSONResponse(
                         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -371,7 +402,8 @@ async def gps_ping(
                     )
 
         # Enforce rate limiting: max 1 ping per 30 seconds per technician
-        rate_limit_allowed = check_sliding_window_rate_limit(redis_client, payload.technician_id, x_tenant_id)
+        rate_limit_window = 5 if live_tracking and job_status_upper == "EN_ROUTE" else 30
+        rate_limit_allowed = check_sliding_window_rate_limit(redis_client, payload.technician_id, x_tenant_id, window=rate_limit_window)
         if not rate_limit_allowed:
             logger.warning(f"Rate limit exceeded for technician: {payload.technician_id}", extra=log_extra)
             log_rejected_ping(db, payload.technician_id, payload.job_id, x_tenant_id, "Too Many Requests (rate limit)")
@@ -853,3 +885,123 @@ async def gps_batch(
         db.close()
 
 
+@router.post("/availability", status_code=status.HTTP_200_OK)
+async def update_technician_availability_location(
+    payload: TechnicianAvailabilityLocationRequest,
+    x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
+    redis_client=Depends(get_redis_client),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """
+    Store the technician's latest location before job assignment.
+
+    This location is used by the Planning Agent to determine
+    which technician is closest to a new job.
+
+    This endpoint is NOT job tracking.
+    """
+
+    # ---------------------------------------------------------
+    # 1. Verify tenant
+    # ---------------------------------------------------------
+    if str(current_user.tenant_id) != str(x_tenant_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant access denied",
+        )
+
+    # ---------------------------------------------------------
+    # 2. Verify technician role
+    # ---------------------------------------------------------
+    if str(current_user.role).lower() != "technician":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only technicians can update availability location",
+        )
+
+    # ---------------------------------------------------------
+    # 3. Validate latitude
+    # ---------------------------------------------------------
+    if not -90 <= payload.latitude <= 90:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid latitude",
+        )
+
+    # ---------------------------------------------------------
+    # 4. Validate longitude
+    # ---------------------------------------------------------
+    if not -180 <= payload.longitude <= 180:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid longitude",
+        )
+
+    # ---------------------------------------------------------
+    # 5. Validate GPS accuracy
+    # ---------------------------------------------------------
+    max_accuracy = float(
+        os.getenv("GPS_MAX_ACCURACY_METERS", "100")
+    )
+
+    if (
+        payload.accuracy is not None
+        and payload.accuracy > max_accuracy
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"GPS accuracy {payload.accuracy:.1f}m "
+                f"exceeds allowed {max_accuracy:.0f}m"
+            ),
+        )
+
+    # ---------------------------------------------------------
+    # 6. Get technician ID from authenticated user
+    # ---------------------------------------------------------
+    technician_id = str(current_user.user_id)
+    tenant_id = str(current_user.tenant_id)
+
+    # ---------------------------------------------------------
+    # 7. Redis key
+    # ---------------------------------------------------------
+    redis_key = (
+        f"gps:availability:"
+        f"{tenant_id}:"
+        f"{technician_id}"
+    )
+
+    # ---------------------------------------------------------
+    # 8. Location data
+    # ---------------------------------------------------------
+    location_data = {
+        "technician_id": technician_id,
+        "tenant_id": tenant_id,
+        "latitude": payload.latitude,
+        "longitude": payload.longitude,
+        "accuracy": payload.accuracy,
+        "altitude": payload.altitude,
+        "timestamp": payload.timestamp.isoformat(),
+    }
+
+    # ---------------------------------------------------------
+    # 9. Store latest location for 2 minutes
+    # ---------------------------------------------------------
+    redis_client.setex(
+        redis_key,
+        120,
+        json.dumps(location_data),
+    )
+
+    # ---------------------------------------------------------
+    # 10. Return success
+    # ---------------------------------------------------------
+    return {
+        "status": "stored",
+        "technician_id": technician_id,
+        "latitude": payload.latitude,
+        "longitude": payload.longitude,
+        "accuracy": payload.accuracy,
+        "timestamp": payload.timestamp,
+        "expires_in_seconds": 120,
+    }

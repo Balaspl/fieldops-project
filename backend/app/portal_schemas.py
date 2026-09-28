@@ -6,7 +6,7 @@ Pydantic models for request/response validation on portal-specific endpoints.
 
 from datetime import date, datetime
 from typing import Optional, List
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, Field, field_validator, ConfigDict, model_validator
 
 
 # ──────────────────────────────────────────────────
@@ -141,8 +141,16 @@ class ServiceRequestCreate(BaseModel):
     images: Optional[List[str]] = Field(default_factory=list)
     location: Optional[str] = None
     contact_number: Optional[str] = None
-    site_latitude: Optional[float] = None
-    site_longitude: Optional[float] = None
+    site_latitude: Optional[float] = Field(None, ge=-90, le=90)
+    site_longitude: Optional[float] = Field(None, ge=-180, le=180)
+
+    @model_validator(mode="after")
+    def validate_site_coordinates(self):
+        if (self.site_latitude is None) != (self.site_longitude is None):
+            raise ValueError("Latitude and longitude must be provided together")
+        if self.site_latitude == 0 and self.site_longitude == 0:
+            raise ValueError("The 0,0 coordinate is not a valid service location")
+        return self
 
     @field_validator("priority")
     @classmethod
@@ -270,12 +278,35 @@ class ServiceRequestResponse(BaseModel):
     contact_number: Optional[str] = None
     status: str
     linked_job_id: Optional[int] = None
+    created_job: Optional["CreatedServiceRequestJobResponse"] = None
     cancellation_reason: Optional[str] = None
     cancelled_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class CreatedServiceRequestJobResponse(BaseModel):
+    id: int
+    service_request_id: int
+    tenant_id: str
+    customer_tenant_id: str
+    customer_id: str
+    assigned_technician_id: Optional[int] = None
+    status: str
+    location: str
+    site_latitude: Optional[float] = None
+    site_longitude: Optional[float] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ServiceRequestCreatedResponse(ServiceRequestResponse):
+    created_job: CreatedServiceRequestJobResponse
+
+
+ServiceRequestResponse.model_rebuild()
 
 
 # ──────────────────────────────────────────────────
@@ -392,9 +423,19 @@ class CustomerJobTrackingResponse(BaseModel):
     priority: Optional[str] = None
     service_type: Optional[str] = None
     location: Optional[str] = None
+    site_address: Optional[str] = None
+    site_latitude: Optional[float] = None
+    site_longitude: Optional[float] = None
+    assigned_technician_id: Optional[int] = None
     assigned_technician_name: Optional[str] = None
     assigned_technician_photo: Optional[str] = None
     assigned_technician_phone: Optional[str] = None
+    technician_latitude: Optional[float] = None
+    technician_longitude: Optional[float] = None
+    technician_accuracy: Optional[float] = None
+    technician_last_ping: Optional[datetime] = None
+    live_tracking: bool = False
+    tracking_tenant_id: Optional[str] = None
     estimated_arrival: Optional[datetime] = None
     created_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None

@@ -1,9 +1,9 @@
 from typing import List, Dict, Any
-from .google_maps_client import GoogleMapsClient
+from .ola_map_client import OlaMapsClient
 
 class DistanceScoringService:
     async def calculate_distance_score(self, job_loc: dict, tech_locs: List[dict], redis_client) -> List[dict]:
-        gmaps_client = GoogleMapsClient(redis_client)
+        gmaps_client = OlaMapsClient(redis_client)
         results = []
         
         for t in tech_locs:

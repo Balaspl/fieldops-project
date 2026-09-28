@@ -2,35 +2,34 @@ import {
   useState,
   useEffect,
   useRef,
+  type ReactNode,
 } from "react";
 import {
   CheckCircle,
   XCircle,
   Play,
-  Pause,
-  RotateCcw,
   AlertTriangle,
   MapPin,
   Phone,
   Clock,
   X,
   Check,
-  IndianRupee,
   User,
+  LoaderCircle,
   Navigation,
 } from "lucide-react";
+
 import {
   getTechnicianJobs,
   acceptTechnicianJob,
   rejectTechnicianJob,
   startTechnicianJob,
   onSiteTechnicianJob,
-  pauseTechnicianJob,
-  resumeTechnicianJob,
 } from "../../services/technicianPortalService";
+
 import { JobClosureModal } from "../../components/jobs/JobClosureModal";
 import CustomerSignatureModal from "../../components/jobs/CustomerSignatureModal";
-
+import JobLiveTrackingMap from "../../components/customer-tracking/JobLiveTrackingMap";
 
 const s = {
   page: {
@@ -193,36 +192,28 @@ const statusStyle: Record<string, { bg: string; fg: string }> = {
   PAUSED: { bg: "#E5E7EB", fg: "#374151" },
   EN_ROUTE: { bg: "#EDE9FE", fg: "#5B21B6" },
   COMPLETED: { bg: "#D1FAE5", fg: "#059669" },
+  CLOSED: { bg: "#D1FAE5", fg: "#059669" },
 };
 
 const normalizeStatus = (status: unknown): string =>
-  String(status ?? "")
-    .trim()
-    .toUpperCase();
+  String(status ?? "").trim().toUpperCase();
 
 const getStatusLabel = (status: unknown): string => {
-  const normalizedStatus = normalizeStatus(status);
-
-  switch (normalizedStatus) {
+  switch (normalizeStatus(status)) {
     case "ASSIGNED":
     case "ACTIVE":
       return "AWAITING ACCEPTANCE";
-
     case "ACCEPTED":
       return "ACCEPTED";
-
     case "EN_ROUTE":
       return "EN ROUTE";
-
     case "ON_SITE":
     case "IN_PROGRESS":
     case "PAUSED":
       return "IN PROGRESS";
-
     case "COMPLETED":
     case "CLOSED":
       return "COMPLETED";
-
     default:
       return String(status || "UNKNOWN");
   }
@@ -232,10 +223,7 @@ const formatSchedule = (job: any): string => {
   const date = job?.preferred_service_date;
   const time = job?.preferred_service_time;
 
-  if (date && time) {
-    return `${date} ${time}`;
-  }
-
+  if (date && time) return `${date} ${time}`;
   return date || time || "N/A";
 };
 
@@ -246,28 +234,13 @@ const getBackendActionErrorMessage = (
   const response = (error as any)?.response;
   const detail = response?.data?.detail;
 
-  if (
-    typeof detail === "string" &&
-    detail.trim()
-  ) {
-    return detail;
-  }
+  if (typeof detail === "string" && detail.trim()) return detail;
 
-  if (
-    detail &&
-    typeof detail === "object"
-  ) {
-    if (
-      typeof detail.message === "string" &&
-      detail.message.trim()
-    ) {
+  if (detail && typeof detail === "object") {
+    if (typeof detail.message === "string" && detail.message.trim()) {
       return detail.message;
     }
-
-    if (
-      typeof detail.error === "string" &&
-      detail.error.trim()
-    ) {
+    if (typeof detail.error === "string" && detail.error.trim()) {
       return detail.error;
     }
   }
@@ -279,72 +252,69 @@ const getBackendActionErrorMessage = (
     return response.data.message;
   }
 
+  if (error instanceof Error && error.message) return error.message;
+
   return fallback;
 };
+
+const hasValidCoordinates = (job: any): boolean => {
+  const lat = Number(job?.site_latitude);
+  const lng = Number(job?.site_longitude);
+
+  return (
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lng >= -180 &&
+    lng <= 180
+  );
+};
+
 export default function TechnicianJobsPage() {
   const [jobs, setJobs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [jobsError, setJobsError] = useState<string | null>(null);
-  
   const [lastJobsSync, setLastJobsSync] = useState<Date | null>(null);
 
   const [rejectModal, setRejectModal] = useState<number | null>(null);
   const [rejectReason, setRejectReason] = useState("");
+
   const [completeModal, setCompleteModal] = useState<number | null>(null);
   const [customerSignatureModal, setCustomerSignatureModal] =
     useState<number | null>(null);
-  const [completeNotes, setCompleteNotes] = useState("");
+
   const [actionLoading, setActionLoading] = useState<number | null>(null);
   const startInFlightRef = useRef<Set<number>>(new Set());
   const onSiteInFlightRef = useRef<Set<number>>(new Set());
-  // Pop-up modal for newly assigned job
+
+  const [liveJob, setLiveJob] = useState<any | null>(null);
+
   const [assignedPopupJob, setAssignedPopupJob] = useState<any | null>(null);
   const [timerSeconds, setTimerSeconds] = useState(7194);
 
- const loadJobs = async () => {
+  const loadJobs = async () => {
     setLoading(true);
 
     try {
       const response = await getTechnicianJobs();
-
-      const list = Array.isArray(response?.data)
-        ? response.data
-        : [];
+      const list = Array.isArray(response?.data) ? response.data : [];
 
       setJobs(list);
       setJobsError(null);
-      
       setLastJobsSync(new Date());
 
-      const pendingAssigned = list.find(
-        (job: any) => {
-          const status = (
-            job.status || ""
-          ).toUpperCase();
+      const pendingAssigned = list.find((job: any) => {
+        const status = normalizeStatus(job?.status);
+        return status === "ASSIGNED" || status === "ACTIVE";
+      });
 
-          return (
-            status === "ASSIGNED" ||
-            status === "ACTIVE"
-          );
-        },
-      );
-
-      if (pendingAssigned) {
-        setAssignedPopupJob(
-          pendingAssigned,
-        );
-      }
+     if (pendingAssigned) {
+  setAssignedPopupJob(pendingAssigned);
+}
     } catch (error) {
-      console.error(
-        "Failed to load technician jobs:",
-        error,
-      );
-
-      setJobsError(
-        "Unable to load your assigned jobs. Please try again.",
-      );
-
-      
+      console.error("Failed to load technician jobs:", error);
+      setJobsError("Unable to load your assigned jobs. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -354,70 +324,50 @@ export default function TechnicianJobsPage() {
     void loadJobs();
   }, []);
 
-  // Timer countdown effect for the assigned-job popup.
   useEffect(() => {
-    if (!assignedPopupJob) {
-      return;
-    }
+    if (!assignedPopupJob) return;
 
-    const interval = setInterval(() => {
-      setTimerSeconds((prev) => (
-        prev > 0 ? prev - 1 : 0
-      ));
+    const interval = window.setInterval(() => {
+      setTimerSeconds((prev) => (prev > 0 ? prev - 1 : 0));
     }, 1000);
 
-    return () => clearInterval(interval);
+    return () => window.clearInterval(interval);
   }, [assignedPopupJob]);
-
- 
 
   const formatTimer = (secs: number) => {
     const mins = Math.floor(secs / 60);
     const remainderSecs = secs % 60;
-
-    return `${mins}:${
-      remainderSecs < 10 ? "0" : ""
-    }${remainderSecs}`;
+    return `${mins}:${remainderSecs < 10 ? "0" : ""}${remainderSecs}`;
   };
 
-  const doAction = async (
-    id: number,
-    action: () => Promise<any>,
-  ) => {
+  const doAction = async (id: number, action: () => Promise<any>) => {
+    if (actionLoading === id) return;
+
     setActionLoading(id);
 
     try {
       await action();
       await loadJobs();
     } catch (error) {
-      console.error(
-        "Assigned job action failed:",
-        error,
+      console.error("Assigned job action failed:", error);
+      alert(
+        getBackendActionErrorMessage(
+          error,
+          "Action failed. Please try again.",
+        ),
       );
-
-      alert("Action failed. Please try again.");
     } finally {
-      setActionLoading(null);
+      setActionLoading((current) => (current === id ? null : current));
     }
   };
 
-  const handleStart = async (
-    jobId: number,
-  ) => {
-    const currentJob = jobs.find(
-      (job) => job.id === jobId,
-    );
+  const handleStart = async (jobId: number) => {
+    const currentJob = jobs.find((job) => job.id === jobId);
 
-    // En-route is only initiated from the backend-authorized ACCEPTED state.
-    // Do not submit the transition from stale or otherwise ineligible UI state.
-    if (
-      normalizeStatus(currentJob?.status) !==
-      "ACCEPTED"
-    ) {
+    if (normalizeStatus(currentJob?.status) !== "ACCEPTED") {
       return;
     }
 
-    // Prevent duplicate submissions for the same job.
     if (
       startInFlightRef.current.has(jobId) ||
       actionLoading === jobId
@@ -429,8 +379,15 @@ export default function TechnicianJobsPage() {
     setActionLoading(jobId);
 
     try {
-      // Existing authoritative transition: ACCEPTED -> EN_ROUTE.
       await startTechnicianJob(jobId);
+      await loadJobs();
+
+      // Open the live map immediately after the authoritative
+      // ACCEPTED -> EN_ROUTE transition succeeds.
+      const updatedJob =
+        jobs.find((job) => job.id === jobId) || currentJob;
+
+      setLiveJob(updatedJob);
     } catch (error) {
       alert(
         getBackendActionErrorMessage(
@@ -439,40 +396,29 @@ export default function TechnicianJobsPage() {
         ),
       );
     } finally {
-      // Always reconcile against the authoritative server state.
-      try {
-        await loadJobs();
-      } finally {
-        startInFlightRef.current.delete(
-          jobId,
-        );
-
-        setActionLoading((current) =>
-          current === jobId
-            ? null
-            : current,
-        );
-      }
+      startInFlightRef.current.delete(jobId);
+      setActionLoading((current) => (current === jobId ? null : current));
     }
   };
 
-  const handleOnSite = async (
-    jobId: number,
-  ) => {
-    const currentJob = jobs.find(
-      (job) => job.id === jobId,
-    );
-
-    // On-site is only valid from the backend-authorized EN_ROUTE state.
-    // Do not submit the transition from stale or otherwise ineligible UI state.
-    if (
-      normalizeStatus(currentJob?.status) !==
-      "EN_ROUTE"
-    ) {
+  const handleOpenLiveMap = (job: any) => {
+    if (!hasValidCoordinates(job)) {
+      alert(
+        "Customer location coordinates are not available for this job.",
+      );
       return;
     }
 
-    // Prevent duplicate submissions for the same job.
+    setLiveJob(job);
+  };
+
+  const handleOnSite = async (jobId: number) => {
+    const currentJob = jobs.find((job) => job.id === jobId);
+
+    if (normalizeStatus(currentJob?.status) !== "EN_ROUTE") {
+      return;
+    }
+
     if (
       onSiteInFlightRef.current.has(jobId) ||
       actionLoading === jobId
@@ -484,9 +430,8 @@ export default function TechnicianJobsPage() {
     setActionLoading(jobId);
 
     try {
-      // Existing authoritative transition. No client-side GPS payload is invented;
-      // any backend location/GPS prerequisite remains backend-enforced.
       await onSiteTechnicianJob(jobId);
+      await loadJobs();
     } catch (error) {
       alert(
         getBackendActionErrorMessage(
@@ -495,83 +440,42 @@ export default function TechnicianJobsPage() {
         ),
       );
     } finally {
-      // Always reconcile against the authoritative server state.
-      try {
-        await loadJobs();
-      } finally {
-        onSiteInFlightRef.current.delete(
-          jobId,
-        );
-
-        setActionLoading((current) =>
-          current === jobId
-            ? null
-            : current,
-        );
-      }
+      onSiteInFlightRef.current.delete(jobId);
+      setActionLoading((current) => (current === jobId ? null : current));
     }
   };
 
-  const handleOpenCompletion = (
-    jobId: number,
-  ) => {
-    const currentJob = jobs.find(
-      (job) => job.id === jobId,
-    );
+  const handleOpenCompletion = (jobId: number) => {
+    const currentJob = jobs.find((job) => job.id === jobId);
+    const currentStatus = normalizeStatus(currentJob?.status);
 
-    const currentStatus =
-      normalizeStatus(currentJob?.status);
-
-    // Completion is only exposed for the existing technician
-    // work phase. Final validation remains authoritative in
-    // the existing JobClosureModal/backend completion workflow.
-    if (
-      !["IN_PROGRESS", "PAUSED"].includes(
-        currentStatus,
-      )
-    ) {
-      return;
-    }
+    if (!["IN_PROGRESS", "PAUSED"].includes(currentStatus)) return;
 
     setCompleteModal(jobId);
   };
 
-  const handleCompletionSuccess =
-    async () => {
-      const completedJobId = completeModal;
+  const handleCompletionSuccess = async () => {
+    const completedJobId = completeModal;
 
-      if (!completedJobId) {
-        return;
-      }
+    if (!completedJobId) return;
 
-      setCompleteModal(null);
+    setCompleteModal(null);
 
-      try {
-        // Reconcile the UI from the authoritative
-        // backend state before notifying dependent views.
-        await loadJobs();
-      } finally {
-        // The closure operation has succeeded authoritatively.
-        // Open the customer-confirmation screen for that same job.
-        setCustomerSignatureModal(
-          completedJobId,
-        );
+    try {
+      await loadJobs();
+    } finally {
+      setCustomerSignatureModal(completedJobId);
 
-        window.dispatchEvent(
-          new CustomEvent(
-            "technician-dashboard-refresh",
-          ),
-        );
-      }
-    };
+      window.dispatchEvent(
+        new CustomEvent("technician-dashboard-refresh"),
+      );
+    }
+  };
 
   const handlePopupAccept = async () => {
-    if (!assignedPopupJob) {
-      return;
-    }
+    if (!assignedPopupJob) return;
 
     const jobId = assignedPopupJob.id;
-
     setActionLoading(jobId);
 
     try {
@@ -579,13 +483,12 @@ export default function TechnicianJobsPage() {
       setAssignedPopupJob(null);
       await loadJobs();
     } catch (error) {
-      console.error(
-        "Failed to accept assigned job:",
-        error,
-      );
-
+      console.error("Failed to accept assigned job:", error);
       alert(
-        "Failed to accept job. Please try again.",
+        getBackendActionErrorMessage(
+          error,
+          "Failed to accept job. Please try again.",
+        ),
       );
     } finally {
       setActionLoading(null);
@@ -593,49 +496,34 @@ export default function TechnicianJobsPage() {
   };
 
   const handlePopupRejectClick = () => {
-    if (!assignedPopupJob) {
-      return;
-    }
+    if (!assignedPopupJob) return;
 
     const jobId = assignedPopupJob.id;
-
     setAssignedPopupJob(null);
     setRejectModal(jobId);
   };
 
   const handleReject = async () => {
-    if (
-      !rejectModal ||
-      rejectReason.length < 10
-    ) {
-      return;
-    }
+    if (!rejectModal || rejectReason.trim().length < 10) return;
 
-    setActionLoading(rejectModal);
+    const jobId = rejectModal;
+    setActionLoading(jobId);
 
     try {
-      await rejectTechnicianJob(
-        rejectModal,
-        rejectReason,
-      );
+      await rejectTechnicianJob(jobId, rejectReason.trim());
 
-      setJobs((prev) =>
-        prev.filter(
-          (job) => job.id !== rejectModal,
-        ),
-      );
-
+      setJobs((prev) => prev.filter((job) => job.id !== jobId));
       setRejectModal(null);
       setRejectReason("");
-
       await loadJobs();
     } catch (error) {
-      console.error(
-        "Failed to reject assigned job:",
-        error,
+      console.error("Failed to reject assigned job:", error);
+      alert(
+        getBackendActionErrorMessage(
+          error,
+          "Reject failed. Please try again.",
+        ),
       );
-
-      alert("Reject failed. Please try again.");
     } finally {
       setActionLoading(null);
     }
@@ -643,39 +531,37 @@ export default function TechnicianJobsPage() {
 
   const getActions = (job: any) => {
     const st = normalizeStatus(job?.status);
-    const btns = [];
-    const isLoading =
-      actionLoading === job?.id;
+    const btns: ReactNode[] = [];
+    const isLoading = actionLoading === job?.id;
 
-    if (
-      ["ASSIGNED", "ACTIVE"].includes(st)
-    ) {
+    if (st === "ASSIGNED" || st === "ACTIVE") {
       btns.push(
         <button
           key="accept"
           type="button"
           disabled={isLoading}
           style={{
-            ...s.btn(
-              "#D1FAE5",
-              "#065F46",
-            ),
+            ...s.btn("#D1FAE5", "#065F46"),
             opacity: isLoading ? 0.6 : 1,
           }}
           onClick={() =>
-            doAction(
-              job.id,
-              () =>
-                acceptTechnicianJob(
-                  job.id,
-                ),
-            )
+            doAction(job.id, () => acceptTechnicianJob(job.id))
           }
         >
-          <CheckCircle size={14} />
-          {isLoading
-            ? "Accepting..."
-            : "Accept"}
+          {isLoading ? (
+            <>
+              <LoaderCircle
+                size={14}
+                style={{ animation: "spin 1s linear infinite" }}
+              />
+              Accepting...
+            </>
+          ) : (
+            <>
+              <CheckCircle size={14} />
+              Accept
+            </>
+          )}
         </button>,
       );
 
@@ -685,15 +571,10 @@ export default function TechnicianJobsPage() {
           type="button"
           disabled={isLoading}
           style={{
-            ...s.btn(
-              "#FEE2E2",
-              "#991B1B",
-            ),
+            ...s.btn("#FEE2E2", "#991B1B"),
             opacity: isLoading ? 0.6 : 1,
           }}
-          onClick={() =>
-            setRejectModal(job.id)
-          }
+          onClick={() => setRejectModal(job.id)}
         >
           <XCircle size={14} />
           Reject
@@ -704,36 +585,63 @@ export default function TechnicianJobsPage() {
     if (st === "ACCEPTED") {
       const isStarting =
         actionLoading === job.id &&
-        startInFlightRef.current.has(
-          job.id,
-        );
+        startInFlightRef.current.has(job.id);
 
       btns.push(
         <button
           key="start"
           type="button"
-          aria-label="Start"
+          aria-label={`Start job ${job.id}`}
           disabled={isStarting}
           style={{
-            ...s.btn(
-              "#DBEAFE",
-              "#1E40AF",
-            ),
-            opacity: isStarting
-              ? 0.6
-              : 1,
-            cursor: isStarting
-              ? "not-allowed"
-              : "pointer",
+            ...s.btn("#DBEAFE", "#1E40AF"),
+            opacity: isStarting ? 0.6 : 1,
+            cursor: isStarting ? "not-allowed" : "pointer",
           }}
-          onClick={() =>
-            handleStart(job.id)
+          onClick={() => handleStart(job.id)}
+        >
+          {isStarting ? (
+            <>
+              <LoaderCircle
+                size={14}
+                style={{ animation: "spin 1s linear infinite" }}
+              />
+              Starting...
+            </>
+          ) : (
+            <>
+              <Play size={14} />
+              Start
+            </>
+          )}
+        </button>,
+      );
+    }
+
+    // The Live Map button is available once tracking can exist.
+    if (
+      ["EN_ROUTE", "ON_SITE", "IN_PROGRESS", "PAUSED"].includes(st)
+    ) {
+      btns.push(
+        <button
+          key="live-map"
+          type="button"
+          aria-label={`Open live map for job ${job.id}`}
+          disabled={!hasValidCoordinates(job)}
+          style={{
+            ...s.btn("#ECFDF5", "#047857"),
+            opacity: hasValidCoordinates(job) ? 1 : 0.5,
+            cursor: hasValidCoordinates(job) ? "pointer" : "not-allowed",
+          }}
+          onClick={() => handleOpenLiveMap(job)}
+          title={
+            hasValidCoordinates(job)
+              ? "Open live tracking map"
+              : "Customer coordinates are unavailable"
           }
         >
-          <Play size={14} />
-          {isStarting
-            ? "Starting..."
-            : "Start"}
+          <Navigation size={14} />
+          Live Map
         </button>,
       );
     }
@@ -741,87 +649,66 @@ export default function TechnicianJobsPage() {
     if (st === "EN_ROUTE") {
       const isOnSiteLoading =
         actionLoading === job.id &&
-        onSiteInFlightRef.current.has(
-          job.id,
-        );
+        onSiteInFlightRef.current.has(job.id);
 
       btns.push(
         <button
           key="on-site"
           type="button"
-          aria-label="On Site"
           disabled={isOnSiteLoading}
           style={{
-            ...s.btn(
-              "#E0F2FE",
-              "#0369A1",
-            ),
-            opacity: isOnSiteLoading
-              ? 0.6
-              : 1,
-            cursor: isOnSiteLoading
-              ? "not-allowed"
-              : "pointer",
+            ...s.btn("#E0F2FE", "#0369A1"),
+            opacity: isOnSiteLoading ? 0.6 : 1,
+            cursor: isOnSiteLoading ? "not-allowed" : "pointer",
           }}
-          onClick={() =>
-            handleOnSite(job.id)
-          }
+          onClick={() => handleOnSite(job.id)}
         >
-          <MapPin size={14} />
-          {isOnSiteLoading
-            ? "Updating..."
-            : "On Site"}
+          {isOnSiteLoading ? (
+            <>
+              <LoaderCircle
+                size={14}
+                style={{ animation: "spin 1s linear infinite" }}
+              />
+              Updating...
+            </>
+          ) : (
+            <>
+              <MapPin size={14} />
+              On Site
+            </>
+          )}
         </button>,
       );
     }
 
-    if (
-      ["IN_PROGRESS", "PAUSED"].includes(st)
-    ) {
+    if (["IN_PROGRESS", "PAUSED"].includes(st)) {
       btns.push(
         <button
           key="complete"
           type="button"
-          aria-label="Complete"
           disabled={isLoading}
           style={{
-            background:
-              "rgba(220, 252, 231, 0.35)",
+            background: "rgba(220, 252, 231, 0.35)",
             color: "#059669",
-            border:
-              "1.5px solid #059669",
+            border: "1.5px solid #059669",
             borderRadius: "8px",
             padding: "10px 20px",
             minWidth: "120px",
             height: "40px",
             fontSize: "12px",
             fontWeight: 700,
-            cursor: isLoading
-              ? "not-allowed"
-              : "pointer",
+            cursor: isLoading ? "not-allowed" : "pointer",
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
             gap: "6px",
-            textTransform:
-              "uppercase",
-            letterSpacing:
-              "0.5px",
-            transition:
-              "all 0.2s ease",
-            opacity: isLoading
-              ? 0.6
-              : 1,
+            textTransform: "uppercase" as const,
+            letterSpacing: "0.5px",
+            opacity: isLoading ? 0.6 : 1,
           }}
-          onClick={() =>
-            handleOpenCompletion(
-              job.id,
-            )
-          }
+          onClick={() => handleOpenCompletion(job.id)}
         >
-          {isLoading
-            ? "Completing..."
-            : "Complete"}
+          {isLoading ? "Completing..." : "Complete"}
         </button>,
       );
     }
@@ -832,21 +719,25 @@ export default function TechnicianJobsPage() {
   if (loading) {
     return (
       <div style={s.page}>
-        <div style={s.empty}>
-          Loading assigned jobs...
-        </div>
+        <div style={s.empty}>Loading assigned jobs...</div>
       </div>
     );
   }
 
   return (
     <div style={s.page}>
+      <style>
+        {`
+          @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+          }
+        `}
+      </style>
+
       <div style={s.header}>
         <div>
-          <h2 style={s.title}>
-            Assigned Jobs
-          </h2>
-
+          <h2 style={s.title}>Assigned Jobs</h2>
           <div
             style={{
               fontSize: "12px",
@@ -854,17 +745,11 @@ export default function TechnicianJobsPage() {
               marginTop: "4px",
             }}
           >
-            Jobs assigned to the authenticated
-            technician
+            Jobs assigned to the authenticated technician
           </div>
         </div>
 
-        <span
-          style={{
-            fontSize: "13px",
-            color: "#6B7280",
-          }}
-        >
+        <span style={{ fontSize: "13px", color: "#6B7280" }}>
           {jobs.length} job(s)
         </span>
       </div>
@@ -878,8 +763,7 @@ export default function TechnicianJobsPage() {
             textAlign: "right",
           }}
         >
-          Last synced{" "}
-          {lastJobsSync.toLocaleTimeString()}
+          Last synced {lastJobsSync.toLocaleTimeString()}
         </div>
       )}
 
@@ -891,103 +775,61 @@ export default function TechnicianJobsPage() {
             padding: "12px 14px",
             borderRadius: "10px",
             background: "#FEF2F2",
-            border:
-              "1px solid #FECACA",
+            border: "1px solid #FECACA",
             color: "#991B1B",
             fontSize: "13px",
             lineHeight: 1.5,
           }}
         >
-          Unable to load your assigned jobs.
-          Please try again.
+          {jobsError}
         </div>
       )}
 
-
-
       {jobs.length === 0 ? (
-        <div
-          style={s.empty}
-          role="status"
-        >
+        <div style={s.empty} role="status">
           {jobsError
             ? "Assigned jobs are currently unavailable."
             : "No active jobs assigned to you"}
         </div>
       ) : (
         jobs.map((job) => {
-          const normalizedStatus =
-            normalizeStatus(
-              job?.status,
-            );
-
+          const normalizedStatus = normalizeStatus(job?.status);
           const statusMeta =
-            statusStyle[
-              normalizedStatus
-            ] || {
+            statusStyle[normalizedStatus] || {
+              bg: "#E5E7EB",
+              fg: "#374151",
+            };
+
+          const priority =
+            priorityStyle[normalizeStatus(job?.priority)] || {
               bg: "#E5E7EB",
               fg: "#374151",
             };
 
           return (
-            <div
-              key={job.id}
-              style={s.card}
-            >
+            <div key={job.id} style={s.card}>
               <div style={s.cardHeader}>
                 <div>
-                  <span
-                    style={s.jobId}
-                  >
-                    JOB #{job.id}
-                  </span>
-
-                  <div
-                    style={s.jobTitle}
-                  >
-                    {job.service_type ||
-                      "Service Request"}
+                  <span style={s.jobId}>JOB #{job.id}</span>
+                  <div style={s.jobTitle}>
+                    {job.service_type || "Service Request"}
                   </div>
                 </div>
 
-                <div
-                  style={{
-                    display: "flex",
-                    gap: "6px",
-                    flexWrap: "wrap",
-                    justifyContent:
-                      "flex-end",
-                  }}
-                >
-                  <span
-                    style={s.badge(
-                      priorityStyle[
-                        job.priority
-                      ]?.bg ||
-                        "#E5E7EB",
-                      priorityStyle[
-                        job.priority
-                      ]?.fg ||
-                        "#374151",
-                    )}
-                  >
-                    {job.priority ||
-                      "MEDIUM"}
-                  </span>
-                </div>
+                <span style={s.badge(priority.bg, priority.fg)}>
+                  {job.priority || "MEDIUM"}
+                </span>
               </div>
 
               <div style={s.meta}>
                 <span style={s.metaItem}>
                   <MapPin size={14} />
-                  {job.location ||
-                    "N/A"}
+                  {job.location || "N/A"}
                 </span>
 
                 <span style={s.metaItem}>
                   <Phone size={14} />
-                  {job.contact_number ||
-                    "N/A"}
+                  {job.contact_number || "N/A"}
                 </span>
 
                 <span style={s.metaItem}>
@@ -1012,20 +854,12 @@ export default function TechnicianJobsPage() {
               <div
                 style={{
                   ...s.actions,
-                  justifyContent:
-                    "space-between",
+                  justifyContent: "space-between",
                   alignItems: "center",
                 }}
               >
-                <span
-                  style={s.badge(
-                    statusMeta.bg,
-                    statusMeta.fg,
-                  )}
-                >
-                  {getStatusLabel(
-                    job.status,
-                  )}
+                <span style={s.badge(statusMeta.bg, statusMeta.fg)}>
+                  {getStatusLabel(job.status)}
                 </span>
 
                 <div
@@ -1043,23 +877,18 @@ export default function TechnicianJobsPage() {
         })
       )}
 
-      {/* JOB ASSIGNED POPUP MODAL */}
       {assignedPopupJob && (
         <div style={s.modal}>
           <div
             style={s.overlay}
-            onClick={() =>
-              setAssignedPopupJob(null)
-            }
+            onClick={() => setAssignedPopupJob(null)}
           />
 
           <div style={s.modalCard}>
-            {/* Header row */}
             <div
               style={{
                 display: "flex",
-                justifyContent:
-                  "space-between",
+                justifyContent: "space-between",
                 alignItems: "center",
                 marginBottom: "4px",
               }}
@@ -1071,137 +900,64 @@ export default function TechnicianJobsPage() {
                   color: "#6B7280",
                 }}
               >
-                Job ID: #
-                {assignedPopupJob.id}
+                Job ID: #{assignedPopupJob.id}
               </span>
 
-              <div
+              <button
+                type="button"
+                aria-label="Close assigned job popup"
+                onClick={() => setAssignedPopupJob(null)}
                 style={{
+                  background: "#F3F4F6",
+                  border: "none",
+                  borderRadius: "50%",
+                  width: "30px",
+                  height: "30px",
                   display: "flex",
-                  alignItems:
-                    "center",
-                  gap: "10px",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                  color: "#6B7280",
                 }}
               >
-                <span
-                  style={s.badge(
-                    priorityStyle[
-                      assignedPopupJob
-                        .priority
-                    ]?.bg ||
-                      "#FEF3C7",
-                    priorityStyle[
-                      assignedPopupJob
-                        .priority
-                    ]?.fg ||
-                      "#92400E",
-                  )}
-                >
-                  {assignedPopupJob.priority ||
-                    "MEDIUM"}
-                </span>
-
-                <button
-                  type="button"
-                  aria-label="Close assigned job popup"
-                  onClick={() =>
-                    setAssignedPopupJob(
-                      null,
-                    )
-                  }
-                  style={{
-                    background:
-                      "#F3F4F6",
-                    border: "none",
-                    borderRadius:
-                      "50%",
-                    width: "30px",
-                    height: "30px",
-                    display: "flex",
-                    alignItems:
-                      "center",
-                    justifyContent:
-                      "center",
-                    cursor:
-                      "pointer",
-                    color:
-                      "#6B7280",
-                  }}
-                >
-                  <X size={18} />
-                </button>
-              </div>
+                <X size={18} />
+              </button>
             </div>
 
-            <h3
-              style={s.modalTitle}
-            >
-              Job Assigned
-            </h3>
+            <h3 style={s.modalTitle}>Job Assigned</h3>
 
-            {/* Countdown Banner */}
             <div
               style={{
                 background: "#ECFDF5",
-                border:
-                  "1px solid #A7F3D0",
-                borderRadius:
-                  "12px",
-                padding:
-                  "12px 16px",
+                border: "1px solid #A7F3D0",
+                borderRadius: "12px",
+                padding: "12px 16px",
                 display: "flex",
-                alignItems:
-                  "center",
+                alignItems: "center",
                 gap: "10px",
                 marginTop: "12px",
                 marginBottom: "20px",
               }}
             >
-              <Clock
-                size={20}
-                color="#059669"
-              />
-
-              <div
-                style={{
-                  display:
-                    "flex",
-                  alignItems:
-                    "baseline",
-                  gap: "8px",
-                }}
-              >
+              <Clock size={20} color="#059669" />
+              <div style={{ display: "flex", alignItems: "baseline", gap: "8px" }}>
                 <span
                   style={{
-                    fontSize:
-                      "18px",
-                    fontWeight:
-                      800,
-                    color:
-                      "#065F46",
-                    fontFamily:
-                      "monospace",
-                    letterSpacing:
-                      "0.05em",
+                    fontSize: "18px",
+                    fontWeight: 800,
+                    color: "#065F46",
+                    fontFamily: "monospace",
+                    letterSpacing: "0.05em",
                   }}
                 >
-                  {formatTimer(
-                    timerSeconds,
-                  )}
+                  {formatTimer(timerSeconds)}
                 </span>
-
                 <span
                   style={{
-                    fontSize:
-                      "12px",
-                    fontWeight:
-                      700,
-                    color:
-                      "#047857",
-                    letterSpacing:
-                      "0.06em",
-                    textTransform:
-                      "uppercase",
+                    fontSize: "12px",
+                    fontWeight: 700,
+                    color: "#047857",
+                    letterSpacing: "0.06em",
                   }}
                 >
                   REMAINING
@@ -1209,356 +965,169 @@ export default function TechnicianJobsPage() {
               </div>
             </div>
 
-            {/* 2x2 Grid Info */}
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns:
-                  "1fr 1fr",
+                gridTemplateColumns: "1fr 1fr",
                 gap: "16px",
-                marginBottom:
-                  "18px",
+                marginBottom: "18px",
               }}
             >
               <div>
+                <div style={s.label}>CUSTOMER</div>
                 <div
                   style={{
-                    fontSize:
-                      "11px",
-                    fontWeight:
-                      700,
-                    color:
-                      "#9CA3AF",
-                    textTransform:
-                      "uppercase",
-                    letterSpacing:
-                      "0.05em",
-                    marginBottom:
-                      "4px",
-                  }}
-                >
-                  CUSTOMER
-                </div>
-
-                <div
-                  style={{
-                    display:
-                      "flex",
-                    alignItems:
-                      "center",
+                    display: "flex",
+                    alignItems: "center",
                     gap: "6px",
-                    fontSize:
-                      "14px",
-                    fontWeight:
-                      600,
-                    color:
-                      "#1F2933",
+                    fontSize: "14px",
+                    fontWeight: 600,
+                    color: "#1F2933",
                   }}
                 >
-                  <User
-                    size={15}
-                    color="#6B7280"
-                  />
-
-                  {assignedPopupJob.customer_name ||
-                    "N/A"}
+                  <User size={15} color="#6B7280" />
+                  {assignedPopupJob.customer_name || "N/A"}
                 </div>
               </div>
 
               <div>
+                <div style={s.label}>CONTACT</div>
                 <div
                   style={{
-                    fontSize:
-                      "11px",
-                    fontWeight:
-                      700,
-                    color:
-                      "#9CA3AF",
-                    textTransform:
-                      "uppercase",
-                    letterSpacing:
-                      "0.05em",
-                    marginBottom:
-                      "4px",
-                  }}
-                >
-                  CONTACT
-                </div>
-
-                <div
-                  style={{
-                    display:
-                      "flex",
-                    alignItems:
-                      "center",
+                    display: "flex",
+                    alignItems: "center",
                     gap: "6px",
-                    fontSize:
-                      "14px",
-                    fontWeight:
-                      600,
-                    color:
-                      "#2563EB",
+                    fontSize: "14px",
+                    fontWeight: 600,
+                    color: "#2563EB",
                   }}
                 >
-                  <Phone
-                    size={15}
-                    color="#2563EB"
-                  />
-
-                  {assignedPopupJob.contact_number ||
-                    "N/A"}
+                  <Phone size={15} color="#2563EB" />
+                  {assignedPopupJob.contact_number || "N/A"}
                 </div>
               </div>
 
               <div>
+                <div style={s.label}>SCHEDULE</div>
                 <div
                   style={{
-                    fontSize:
-                      "11px",
-                    fontWeight:
-                      700,
-                    color:
-                      "#9CA3AF",
-                    textTransform:
-                      "uppercase",
-                    letterSpacing:
-                      "0.05em",
-                    marginBottom:
-                      "4px",
-                  }}
-                >
-                  SCHEDULE
-                </div>
-
-                <div
-                  style={{
-                    display:
-                      "flex",
-                    alignItems:
-                      "center",
+                    display: "flex",
+                    alignItems: "center",
                     gap: "6px",
-                    fontSize:
-                      "14px",
-                    fontWeight:
-                      600,
-                    color:
-                      "#4B5563",
+                    fontSize: "14px",
+                    fontWeight: 600,
+                    color: "#4B5563",
                   }}
                 >
-                  <Clock
-                    size={15}
-                    color="#4B5563"
-                  />
-
-                  {formatSchedule(
-                    assignedPopupJob,
-                  )}
+                  <Clock size={15} color="#4B5563" />
+                  {formatSchedule(assignedPopupJob)}
                 </div>
               </div>
 
               <div>
+                <div style={s.label}>LOCATION</div>
                 <div
                   style={{
-                    fontSize:
-                      "11px",
-                    fontWeight:
-                      700,
-                    color:
-                      "#9CA3AF",
-                    textTransform:
-                      "uppercase",
-                    letterSpacing:
-                      "0.05em",
-                    marginBottom:
-                      "4px",
-                  }}
-                >
-                  LOCATION
-                </div>
-
-                <div
-                  style={{
-                    display:
-                      "flex",
-                    alignItems:
-                      "center",
+                    display: "flex",
+                    alignItems: "center",
                     gap: "6px",
-                    fontSize:
-                      "14px",
-                    fontWeight:
-                      600,
-                    color:
-                      "#4B5563",
+                    fontSize: "14px",
+                    fontWeight: 600,
+                    color: "#4B5563",
                   }}
                 >
-                  <MapPin
-                    size={15}
-                    color="#4B5563"
-                  />
-
-                  {assignedPopupJob.location ||
-                    "N/A"}
+                  <MapPin size={15} color="#4B5563" />
+                  {assignedPopupJob.location || "N/A"}
                 </div>
               </div>
             </div>
 
-            {/* Service + Issue Description */}
             <div
               style={{
-                background:
-                  "#F9FAFB",
-                borderRadius:
-                  "10px",
-                padding:
-                  "12px 14px",
-                marginBottom:
-                  "20px",
-                border:
-                  "1px solid #F3F4F6",
+                background: "#F9FAFB",
+                borderRadius: "10px",
+                padding: "12px 14px",
+                marginBottom: "20px",
+                border: "1px solid #F3F4F6",
               }}
             >
               <div
                 style={{
-                  fontSize:
-                    "14px",
-                  fontWeight:
-                    700,
-                  color:
-                    "#1F2933",
-                  marginBottom:
-                    "6px",
+                  fontSize: "14px",
+                  fontWeight: 700,
+                  color: "#1F2933",
+                  marginBottom: "6px",
                 }}
               >
-                {assignedPopupJob.service_type ||
-                  "Service Request"}
+                {assignedPopupJob.service_type || "Service Request"}
               </div>
 
               {assignedPopupJob.issue_description && (
                 <div
                   style={{
-                    fontSize:
-                      "13px",
-                    color:
-                      "#4B5563",
-                    lineHeight:
-                      1.5,
-                    marginBottom:
-                      "8px",
+                    fontSize: "13px",
+                    color: "#4B5563",
+                    lineHeight: 1.5,
                   }}
                 >
-                  {
-                    assignedPopupJob.issue_description
-                  }
+                  {assignedPopupJob.issue_description}
                 </div>
               )}
             </div>
 
-            {/* Action Buttons */}
-            <div
-              style={{
-                display:
-                  "flex",
-                gap: "12px",
-                marginTop: "12px",
-              }}
-            >
+            <div style={{ display: "flex", gap: "12px", marginTop: "12px" }}>
               <button
                 type="button"
-                onClick={
-                  handlePopupAccept
-                }
-                disabled={
-                  actionLoading ===
-                  assignedPopupJob.id
-                }
+                onClick={handlePopupAccept}
+                disabled={actionLoading === assignedPopupJob.id}
                 style={{
                   flex: 1,
-                  height:
-                    "46px",
-                  background:
-                    "#059669",
-                  color:
-                    "#ffffff",
-                  border:
-                    "none",
-                  borderRadius:
-                    "12px",
-                  fontSize:
-                    "15px",
-                  fontWeight:
-                    700,
+                  height: "46px",
+                  background: "#059669",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: "12px",
+                  fontSize: "15px",
+                  fontWeight: 700,
                   cursor:
-                    actionLoading ===
-                    assignedPopupJob.id
+                    actionLoading === assignedPopupJob.id
                       ? "not-allowed"
                       : "pointer",
-                  display:
-                    "flex",
-                  alignItems:
-                    "center",
-                  justifyContent:
-                    "center",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
                   gap: "8px",
-                  boxShadow:
-                    "0 4px 12px rgba(5, 150, 105, 0.25)",
-                  opacity:
-                    actionLoading ===
-                    assignedPopupJob.id
-                      ? 0.6
-                      : 1,
+                  opacity: actionLoading === assignedPopupJob.id ? 0.6 : 1,
                 }}
               >
                 <Check size={18} />
-                {actionLoading ===
-                assignedPopupJob.id
+                {actionLoading === assignedPopupJob.id
                   ? "Accepting..."
                   : "Accept Job"}
               </button>
 
               <button
                 type="button"
-                onClick={
-                  handlePopupRejectClick
-                }
-                disabled={
-                  actionLoading ===
-                  assignedPopupJob.id
-                }
+                onClick={handlePopupRejectClick}
+                disabled={actionLoading === assignedPopupJob.id}
                 style={{
                   flex: 1,
-                  height:
-                    "46px",
-                  background:
-                    "#EF4444",
-                  color:
-                    "#ffffff",
-                  border:
-                    "none",
-                  borderRadius:
-                    "12px",
-                  fontSize:
-                    "15px",
-                  fontWeight:
-                    700,
+                  height: "46px",
+                  background: "#EF4444",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: "12px",
+                  fontSize: "15px",
+                  fontWeight: 700,
                   cursor:
-                    actionLoading ===
-                    assignedPopupJob.id
+                    actionLoading === assignedPopupJob.id
                       ? "not-allowed"
                       : "pointer",
-                  display:
-                    "flex",
-                  alignItems:
-                    "center",
-                  justifyContent:
-                    "center",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
                   gap: "8px",
-                  boxShadow:
-                    "0 4px 12px rgba(239, 68, 68, 0.25)",
-                  opacity:
-                    actionLoading ===
-                    assignedPopupJob.id
-                      ? 0.6
-                      : 1,
+                  opacity: actionLoading === assignedPopupJob.id ? 0.6 : 1,
                 }}
               >
                 <X size={18} />
@@ -1569,103 +1138,62 @@ export default function TechnicianJobsPage() {
         </div>
       )}
 
-      {/* Reject Reason Modal */}
       {rejectModal && (
         <div style={s.modal}>
           <div
             style={s.overlay}
-            onClick={() =>
-              setRejectModal(null)
-            }
+            onClick={() => setRejectModal(null)}
           />
 
           <div style={s.modalCard}>
             <button
               type="button"
               aria-label="Close rejection dialog"
-              onClick={() =>
-                setRejectModal(null)
-              }
+              onClick={() => setRejectModal(null)}
               style={{
-                position:
-                  "absolute",
+                position: "absolute",
                 top: "12px",
                 right: "12px",
-                background:
-                  "none",
-                border:
-                  "none",
-                cursor:
-                  "pointer",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
               }}
             >
-              <X
-                size={20}
-                color="#6B7280"
-              />
+              <X size={20} color="#6B7280" />
             </button>
 
-            <div
-              style={s.modalTitle}
-            >
+            <div style={s.modalTitle}>
               <AlertTriangle
                 size={20}
                 color="#E53E3E"
-                style={{
-                  marginRight:
-                    "8px",
-                  verticalAlign:
-                    "middle",
-                }}
+                style={{ marginRight: "8px", verticalAlign: "middle" }}
               />
-              Reject Job #
-              {rejectModal}
+              Reject Job #{rejectModal}
             </div>
 
-            <label
-              style={s.label}
-            >
-              Rejection Reason
-              (min 10 characters) *
+            <label style={s.label}>
+              Rejection Reason (min 10 characters) *
             </label>
 
             <textarea
-              style={
-                s.textarea as any
-              }
-              value={
-                rejectReason
-              }
-              onChange={(e) =>
-                setRejectReason(
-                  e.target.value,
-                )
-              }
+              style={s.textarea}
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
               placeholder="Explain why you're rejecting this job..."
             />
 
             <div
               style={{
-                display:
-                  "flex",
+                display: "flex",
                 gap: "10px",
-                marginTop:
-                  "16px",
-                justifyContent:
-                  "flex-end",
+                marginTop: "16px",
+                justifyContent: "flex-end",
               }}
             >
               <button
                 type="button"
-                style={s.btn(
-                  "#E5E7EB",
-                  "#374151",
-                )}
-                onClick={() =>
-                  setRejectModal(
-                    null,
-                  )
-                }
+                style={s.btn("#E5E7EB", "#374151")}
+                onClick={() => setRejectModal(null)}
               >
                 Cancel
               </button>
@@ -1673,28 +1201,16 @@ export default function TechnicianJobsPage() {
               <button
                 type="button"
                 style={{
-                  ...s.btn(
-                    "#FEE2E2",
-                    "#991B1B",
-                  ),
-                  opacity:
-                    rejectReason.length <
-                    10
-                      ? 0.5
-                      : 1,
+                  ...s.btn("#FEE2E2", "#991B1B"),
+                  opacity: rejectReason.trim().length < 10 ? 0.5 : 1,
                 }}
-                onClick={
-                  handleReject
-                }
+                onClick={handleReject}
                 disabled={
-                  rejectReason.length <
-                  10 ||
-                  actionLoading ===
-                    rejectModal
+                  rejectReason.trim().length < 10 ||
+                  actionLoading === rejectModal
                 }
               >
-                {actionLoading ===
-                rejectModal
+                {actionLoading === rejectModal
                   ? "Rejecting..."
                   : "Confirm Reject"}
               </button>
@@ -1703,43 +1219,108 @@ export default function TechnicianJobsPage() {
         </div>
       )}
 
-      {/* Job Closure Form Modal */}
       {completeModal && (
         <JobClosureModal
           jobId={completeModal}
-          isOpen={
-            !!completeModal
-          }
-          onClose={() =>
-            setCompleteModal(null)
-          }
-          onSuccess={
-            handleCompletionSuccess
-          }
+          isOpen={!!completeModal}
+          onClose={() => setCompleteModal(null)}
+          onSuccess={handleCompletionSuccess}
         />
       )}
 
-      {/* Customer Signature Modal */}
       {customerSignatureModal && (
         <CustomerSignatureModal
           jobId={customerSignatureModal}
-          onClose={() =>
-            setCustomerSignatureModal(null)
-          }
+          onClose={() => setCustomerSignatureModal(null)}
           onSuccess={() => {
             setCustomerSignatureModal(null);
             void loadJobs();
 
             window.dispatchEvent(
-              new CustomEvent(
-                "technician-dashboard-refresh",
-              ),
+              new CustomEvent("technician-dashboard-refresh"),
             );
           }}
         />
       )}
+
+      {liveJob && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10000,
+            background: "rgba(15,23,42,0.65)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+          }}
+        >
+          <div
+            style={{
+              width: "min(1000px, 96vw)",
+              background: "#fff",
+              borderRadius: 16,
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                padding: "14px 18px",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
+              <strong>
+                Live Route to Customer — Job #{liveJob.id}
+              </strong>
+
+              <button
+                type="button"
+                aria-label="Close live map"
+                onClick={() => setLiveJob(null)}
+                style={{
+                  border: 0,
+                  background: "transparent",
+                  cursor: "pointer",
+                  fontSize: 22,
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div style={{ height: "min(72vh, 620px)" }}>
+              {hasValidCoordinates(liveJob) ? (
+                <JobLiveTrackingMap
+                  jobId={liveJob.id}
+                  customerLatitude={Number(liveJob.site_latitude)}
+                  customerLongitude={Number(liveJob.site_longitude)}
+                  technicianId={liveJob.assigned_technician_id}
+                  mode="technician"
+                  tenantId={localStorage.getItem("tenant_id") || ""}
+                  buildingAddress={liveJob.location}
+                />
+              ) : (
+                <div
+                  style={{
+                    height: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "#6B7280",
+                    padding: 24,
+                    textAlign: "center",
+                  }}
+                >
+                  Customer location coordinates are unavailable.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
-
-

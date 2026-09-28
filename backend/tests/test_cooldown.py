@@ -213,12 +213,12 @@ def test_technician_available_after_120s(setup_db):
     db = setup_db
     tech = Technician(
         tech_id="tech-123", technician_name="John Doe", technician_skill="Plumbing",
-        technician_location="0,0", technician_status="AVAILABLE", current_jobs=0,tenant_id="tenant-1"
+        technician_location="13.0,80.0", technician_status="AVAILABLE", current_jobs=0,tenant_id="tenant-1"
     )
     db.add(tech)
     
     job = Job(
-        customer_name="Alice", location="1,1", issue_description="Leak",
+        customer_name="Alice", location="13.01,80.01", issue_description="Leak",
         priority="HIGH", service_type="Plumbing", contact_number="1234567890",
         preferred_service_date=datetime.now().date(), status="QUEUED",tenant_id="tenant-1"
     )

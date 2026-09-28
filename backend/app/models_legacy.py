@@ -93,6 +93,9 @@ class Job(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(String(50),ForeignKey("organizations.id", ondelete="RESTRICT"), index=True, nullable=True) # Added for tenant isolation
+    # Tenant of the customer who originated the request. This can differ from
+    # tenant_id when the request is routed to another service organization.
+    customer_tenant_id = Column(String(50), ForeignKey("organizations.id", ondelete="RESTRICT"), index=True, nullable=True)
     customer_name = Column(String(100), nullable=False)
     location = Column(String(500), nullable=False)
     issue_description = Column(Text, nullable=False)
@@ -148,7 +151,7 @@ class Job(Base):
     share_token_expires_at = Column(DateTime(timezone=True), nullable=True)
 
     technician = relationship("Technician", back_populates="jobs")
-    organization=relationship("Organization",back_populates="jobs")
+    organization=relationship("Organization",back_populates="jobs", foreign_keys=[tenant_id])
 
     @property
     def technician_id(self) -> Optional[str]:

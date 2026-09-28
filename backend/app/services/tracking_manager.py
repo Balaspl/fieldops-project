@@ -29,13 +29,17 @@ import json
 import uuid
 
 # ── JWT Configuration ─────────────────────────────────────────────────────────
-WS_JWT_SECRET = os.getenv("WS_JWT_SECRET", "dev-secret-key")
+WS_JWT_SECRET = os.getenv("JWT_SECRET")
 WS_JWT_ALGORITHM = "HS256"
+
+if not WS_JWT_SECRET:
+    raise RuntimeError("JWT_SECRET must be explicitly configured")
 ALLOWED_ROLES = {
     "head",
     "super_admin",
     "dispatcher",
     "technician",
+    "customer",
 }
 
 # ── Limits & Intervals ────────────────────────────────────────────────────────
@@ -131,6 +135,60 @@ class TenantValidator:
             return False
         
         channel_tenant_id = parts[1]
+
+        # Customers may subscribe to a job channel only when the linked
+        # ServiceRequest belongs to the authenticated customer. This is
+        # intentionally allowed even when the Job is owned by the service
+        # organization's tenant.
+        if jwt_role == "customer":
+            if channel_tenant_id == jwt_tenant_id:
+                # A customer-tenant "all" or technician stream must never
+                # expose organizational GPS data.
+                if len(parts) != 4 or parts[2] != "job":
+                    await websocket.send_json({
+                        "type": "error",
+                        "code": "RESOURCE_ACCESS_DENIED",
+                        "message": "Customers may only access their own job tracking streams",
+                    })
+                    return False
+            if len(parts) != 4 or parts[2] != "job" or not parts[3].isdigit():
+                await websocket.send_json({
+                    "type": "error",
+                    "code": "RESOURCE_ACCESS_DENIED",
+                    "message": "Customers may only access job tracking streams",
+                })
+                return False
+
+            from ..models import Job, ServiceRequest
+            owned = self.db.query(Job.id).join(
+                ServiceRequest, ServiceRequest.linked_job_id == Job.id
+            ).filter(
+                Job.id == int(parts[3]),
+                ServiceRequest.customer_user_id == str(user_id),
+                ServiceRequest.tenant_id == jwt_tenant_id,
+            ).first()
+
+            # The job's actual tenant is authoritative for the channel.
+            # The customer is allowed to cross that tenant boundary only
+            # through this explicit ownership relationship.
+            if owned:
+                if channel_tenant_id != self.db.query(Job.tenant_id).filter(
+                    Job.id == int(parts[3])
+                ).scalar():
+                    await websocket.send_json({
+                        "type": "error",
+                        "code": "INVALID_JOB_CHANNEL",
+                        "message": "Job channel does not match the job owner",
+                    })
+                    return False
+                return True
+
+            await websocket.send_json({
+                "type": "error",
+                "code": "RESOURCE_ACCESS_DENIED",
+                "message": "Customer is not authorized for this job",
+            })
+            return False
 
         # A technician can only receive their own GPS stream and jobs that
         # are currently assigned to their tenant-scoped technician record.
