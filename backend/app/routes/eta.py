@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..redis_client import get_redis_client
-from ..services.google_maps_client import GoogleMapsClient, MapsAPIException
+from ..services.ola_map_client import OlaMapsClient, MapsAPIException
 from ..services.eta_service import ETAService
 from ..routes.dispatch import verify_jwt_token
 from .. import models
@@ -34,23 +34,71 @@ async def get_route(
     origin_lng: float,
     dest_lat: float,
     dest_lng: float,
-    redis_client = Depends(get_redis_client)
+    redis_client=Depends(get_redis_client)
 ):
     """
-    Returns driving route distance (meters) and duration (seconds) with traffic consideration.
+    Returns driving route distance (meters), duration (seconds),
+    and road geometry from Ola Maps.
     """
-    client = GoogleMapsClient(redis_client)
+    client = OlaMapsClient(redis_client)
+
     try:
-        result = await client.get_route_duration(origin_lat, origin_lng, dest_lat, dest_lng)
+        result = await client.get_route_duration(
+            origin_lat,
+            origin_lng,
+            dest_lat,
+            dest_lng,
+        )
+
+        logger.info(
+            "Ola route success: origin=(%s,%s) destination=(%s,%s) provider=%s",
+            origin_lat,
+            origin_lng,
+            dest_lat,
+            dest_lng,
+            result.get("provider"),
+        )
+
         return result
+
     except MapsAPIException as e:
+        logger.exception(
+            "Ola Maps routing failed: status=%s message=%s",
+            e.status_code,
+            e.message,
+        )
+
         if e.status_code == "INVALID_REQUEST":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=e.message)
-        # Graceful fallback for quota exceeded or other maps failures
-        return client._fallback_route(origin_lat, origin_lng, dest_lat, dest_lng)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "provider": "ola_maps",
+                    "status": e.status_code,
+                    "message": e.message,
+                },
+            )
+
+        # Do NOT silently return a straight-line route.
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "provider": "ola_maps",
+                "status": e.status_code,
+                "message": e.message,
+            },
+        )
+
     except Exception as exc:
-        logger.error(f"Unexpected error in single route lookup: {exc}")
-        return client._fallback_route(origin_lat, origin_lng, dest_lat, dest_lng)
+        logger.exception("Unexpected Ola Maps routing error")
+
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "provider": "ola_maps",
+                "status": "unexpected_error",
+                "message": str(exc),
+            },
+        )
 
 
 @router.post("/api/v1/gps/route/batch", response_model=List[dict])
@@ -74,7 +122,7 @@ async def get_batch_route(
             detail="Maximum 10 origin-destination pairs supported"
         )
 
-    client = GoogleMapsClient(redis_client)
+    client = OlaMapsClient(redis_client)
     origins_list = [(c.lat, c.lng) for c in payload.origins]
     destinations_list = [(c.lat, c.lng) for c in payload.destinations]
 
@@ -184,7 +232,7 @@ async def get_technician_eta(
         )
 
     # 3. Perform ETA calculation
-    maps_client = GoogleMapsClient(redis_client)
+    maps_client = OlaMapsClient(redis_client)
     eta_service = ETAService(db, redis_client, maps_client)
     result = await eta_service.calculate_eta(technician_id, job_id)
     return result
@@ -241,7 +289,7 @@ async def get_batch_technician_eta(
             )
 
     # 3. Perform batch calculation
-    maps_client = GoogleMapsClient(redis_client)
+    maps_client = OlaMapsClient(redis_client)
     eta_service = ETAService(db, redis_client, maps_client)
     results = await eta_service.calculate_batch_eta(payload.technician_ids, payload.job_id)
     return results

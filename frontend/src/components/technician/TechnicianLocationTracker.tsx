@@ -1,112 +1,423 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+
 import { MapPin } from "lucide-react";
-import { getTechnicianJobs } from "../../services/technicianPortalService";
-import { sendGPSPing } from "../../services/gpsService";
+
+import {
+  getTechnicianJobs,
+} from "../../services/technicianPortalService";
+
+import {
+  sendGPSPing,
+} from "../../services/gpsService";
+
 import type { AuthUser } from "../../store/authStore";
 
-type Props = { user: AuthUser | null };
+type Props = {
+  user: AuthUser | null;
+};
 
-const TRACKED_STATUSES = new Set(["EN_ROUTE", "ON_SITE", "IN_PROGRESS", "ACTIVE"]);
+const TRACKED_STATUSES = new Set([
+  "EN_ROUTE",
+  "ON_SITE",
+  "IN_PROGRESS",
+  "ACTIVE",
+]);
 
-/** Collect real browser location and send it for the signed-in technician's active jobs. */
-export default function TechnicianLocationTracker({ user }: Props) {
-  const [status, setStatus] = useState("Location tracking starts with an active job");
-  const [position, setPosition] = useState<GeolocationPosition | null>(null);
-  const [jobs, setJobs] = useState<any[]>([]);
-  const lastSentAt = useRef(0);
-  const sending = useRef(false);
+export default function TechnicianLocationTracker({
+  user,
+}: Props) {
+  // =========================================================
+  // STATE
+  // =========================================================
+
+  const [status, setStatus] =
+    useState(
+      "Location tracking starts with an active job",
+    );
+
+  const [position, setPosition] =
+    useState<GeolocationPosition | null>(
+      null,
+    );
+
+  const [jobs, setJobs] =
+    useState<any[]>([]);
+
+  // =========================================================
+  // SEND CONTROL
+  // =========================================================
+
+  const lastSentAt =
+    useRef(0);
+
+  const sending =
+    useRef(false);
+
+  // =========================================================
+  // LOAD JOBS + START REAL GPS
+  // =========================================================
 
   useEffect(() => {
-    if (!user || user.role !== "technician") return;
-    let stopped = false;
-    const refreshJobs = async () => {
-      try {
-        const response = await getTechnicianJobs();
-        if (!stopped) setJobs(response.data || []);
-      } catch (error) {
-        console.warn("Could not load assigned jobs for GPS tracking:", error);
-      }
-    };
-    void refreshJobs();
-    const jobsTimer = window.setInterval(refreshJobs, 15000);
+    if (
+      !user ||
+      user.role !== "technician"
+    ) {
+      return;
+    }
 
-    if (!navigator.geolocation) {
-      setStatus("Location is unavailable in this browser");
+    let stopped = false;
+
+    // =======================================================
+    // LOAD TECHNICIAN JOBS
+    // =======================================================
+
+    const refreshJobs =
+      async () => {
+        try {
+          const response =
+            await getTechnicianJobs();
+
+          if (!stopped) {
+            const technicianJobs =
+              response.data || [];
+
+            setJobs(
+              technicianJobs,
+            );
+          }
+        } catch (error) {
+          if (!stopped) {
+            setStatus(
+              "Unable to load technician jobs",
+            );
+          }
+        }
+      };
+
+    void refreshJobs();
+
+    /*
+     * Refresh jobs every 15 seconds.
+     */
+    const jobsTimer =
+      window.setInterval(
+        refreshJobs,
+        15000,
+      );
+
+    // =======================================================
+    // CHECK BROWSER GPS
+    // =======================================================
+
+    if (
+      !navigator.geolocation
+    ) {
+      setStatus(
+        "Location is unavailable in this browser",
+      );
+
       return () => {
         stopped = true;
-        window.clearInterval(jobsTimer);
+
+        window.clearInterval(
+          jobsTimer,
+        );
       };
     }
 
-    const watchId = navigator.geolocation.watchPosition(
-      (currentPosition) => {
-        if (!stopped) {
-          setPosition(currentPosition);
-          setStatus("Location fix received");
-        }
-      },
-      (error) => {
-        if (!stopped) {
-          setStatus(
-            error.code === error.PERMISSION_DENIED
-              ? "Allow browser location access to share GPS"
-              : "Waiting for a GPS fix",
+    // =======================================================
+    // START BROWSER GPS
+    // =======================================================
+
+    const watchId =
+      navigator.geolocation.watchPosition(
+        (
+          currentPosition,
+        ) => {
+          if (stopped) {
+            return;
+          }
+
+          /*
+           * THIS IS THE REAL TECHNICIAN
+           * CURRENT LOCATION.
+           */
+          setPosition(
+            currentPosition,
           );
-        }
-      },
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 },
-    );
+
+          const accuracy =
+            currentPosition
+              .coords
+              .accuracy;
+
+          if (
+            accuracy != null &&
+            accuracy <= 50
+          ) {
+            setStatus(
+              `Good GPS accuracy: ${accuracy.toFixed(1)}m`,
+            );
+          } else if (
+            accuracy != null &&
+            accuracy <= 100
+          ) {
+            setStatus(
+              `GPS accuracy: ${accuracy.toFixed(1)}m`,
+            );
+          } else if (
+            accuracy != null
+          ) {
+            setStatus(
+              `GPS accuracy: ${accuracy.toFixed(1)}m`,
+            );
+          } else {
+            setStatus(
+              "Location fix received",
+            );
+          }
+        },
+
+        (error) => {
+          if (stopped) {
+            return;
+          }
+
+          setStatus(
+            error.code ===
+              error.PERMISSION_DENIED
+              ? "Allow browser location access to share GPS"
+              : error.code ===
+                  error.TIMEOUT
+                ? "GPS timeout; waiting for a new fix"
+                : "Waiting for a GPS fix",
+          );
+        },
+
+        {
+          enableHighAccuracy:
+            true,
+
+          maximumAge:
+            5000,
+
+          timeout:
+            15000,
+        },
+      );
+
+    // =======================================================
+    // CLEANUP
+    // =======================================================
 
     return () => {
       stopped = true;
-      window.clearInterval(jobsTimer);
-      navigator.geolocation.clearWatch(watchId);
+
+      window.clearInterval(
+        jobsTimer,
+      );
+
+      navigator.geolocation.clearWatch(
+        watchId,
+      );
     };
   }, [user]);
 
+  // =========================================================
+  // REAL GPS → BACKEND
+  // =========================================================
+
   useEffect(() => {
-    if (!user || !position || sending.current) return;
-    const activeJob = jobs.find((job) =>
-      TRACKED_STATUSES.has(String(job.status || "").toUpperCase()),
-    );
-    if (!activeJob) {
-      setStatus("Location fix received; waiting for an active job");
+    if (
+      !user ||
+      user.role !== "technician" ||
+      !position ||
+      sending.current
+    ) {
       return;
     }
-    if (Date.now() - lastSentAt.current < 32000) return;
 
-    sending.current = true;
-    lastSentAt.current = Date.now();
-    const { latitude, longitude, accuracy, altitude } = position.coords;
+    // =======================================================
+    // FIND ACTIVE JOB
+    // =======================================================
+
+    const activeJob =
+      jobs.find((job) =>
+        TRACKED_STATUSES.has(
+          String(
+            job.status || "",
+          ).toUpperCase(),
+        ),
+      );
+
+    // =======================================================
+    // NO ACTIVE JOB
+    // =======================================================
+
+    if (!activeJob) {
+      setStatus(
+        "Location fix received; waiting for an active job",
+      );
+
+      return;
+    }
+
+    // =======================================================
+    // JOB STATUS
+    // =======================================================
+
+    const jobStatus =
+      String(
+        activeJob.status || "",
+      ).toUpperCase();
+
+    const isLiveTracking =
+      jobStatus ===
+      "EN_ROUTE";
+
+    // =======================================================
+    // SENDING FREQUENCY
+    // =======================================================
+
+    const minimumClientInterval =
+      isLiveTracking
+        ? 5000
+        : 30000;
+
+    if (
+      Date.now() -
+        lastSentAt.current <
+      minimumClientInterval
+    ) {
+      return;
+    }
+
+    // =======================================================
+    // PREVENT CONCURRENT REQUESTS
+    // =======================================================
+
+    sending.current =
+      true;
+
+    const {
+      latitude,
+      longitude,
+      accuracy,
+      altitude,
+    } =
+      position.coords;
+
+    // =======================================================
+    // SEND
+    // =======================================================
+
     void (async () => {
       try {
-        await sendGPSPing(user.tenant_id, {
-          technician_id: user.id,
-          job_id: String(activeJob.id),
-          latitude,
-          longitude,
-          timestamp: new Date(position.timestamp).toISOString(),
-          accuracy,
-          altitude,
-        });
-        setStatus("Sharing live location");
+        await sendGPSPing(
+          user.tenant_id,
+          {
+            technician_id:
+              user.id,
+
+            job_id:
+              String(
+                activeJob.id,
+              ),
+
+            latitude,
+
+            longitude,
+
+            timestamp:
+              new Date(
+                position.timestamp,
+              ).toISOString(),
+
+            accuracy,
+
+            altitude,
+          },
+          {
+            liveTracking:
+              isLiveTracking,
+          },
+        );
+
+        lastSentAt.current =
+          Date.now();
+
+        setStatus(
+          isLiveTracking
+            ? "Sharing live location"
+            : "Location recorded",
+        );
       } catch (error) {
-        setStatus("Could not send location; will retry");
-        console.warn("Technician GPS update failed:", error);
+        setStatus(
+          "Could not send location; will retry",
+        );
       } finally {
-        sending.current = false;
+        sending.current =
+          false;
       }
     })();
-  }, [jobs, position, user]);
+  }, [
+    jobs,
+    position,
+    user,
+  ]);
 
-  if (!user || user.role !== "technician") return null;
+  // =========================================================
+  // NON-TECHNICIAN
+  // =========================================================
+
+  if (
+    !user ||
+    user.role !== "technician"
+  ) {
+    return null;
+  }
+
+  // =========================================================
+  // STATUS UI
+  // =========================================================
+
   return (
     <div
       role="status"
       aria-live="polite"
-      style={{ position: "fixed", right: 16, bottom: 16, zIndex: 10000, display: "flex", alignItems: "center", gap: 6, padding: "8px 12px", borderRadius: 20, background: "#fff", boxShadow: "0 2px 10px #0002", color: "#374151", fontSize: 12 }}
+      style={{
+        position: "fixed",
+        right: 16,
+        bottom: 16,
+        zIndex: 10000,
+
+        display: "flex",
+        alignItems: "center",
+
+        gap: 6,
+
+        padding:
+          "8px 12px",
+
+        borderRadius: 20,
+
+        background: "#fff",
+
+        boxShadow:
+          "0 2px 10px #0002",
+
+        color: "#374151",
+
+        fontSize: 12,
+      }}
     >
-      <MapPin size={14} /> {status}
+      <MapPin size={14} />
+
+      {status}
     </div>
   );
 }

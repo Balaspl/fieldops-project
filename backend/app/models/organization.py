@@ -74,7 +74,7 @@ class Organization(Base):
 
     #relationship
     users = relationship("User",back_populates="organization")
-    jobs = relationship("Job",back_populates="organization")
+    jobs = relationship("Job",back_populates="organization", foreign_keys="Job.tenant_id")
     technicans=relationship("Technician",back_populates="organization")
     technician_profile=relationship("TechnicianProfile",back_populates="organization")
     customer_profiles_extended=relationship("CustomerProfileModel",back_populates="organization")
@@ -88,7 +88,7 @@ class Organization(Base):
     dispatcher_notifications = relationship("DispatcherNotification", back_populates="organization")
     job_assignments = relationship("JobAssignment", back_populates="organization")
     dispatcher_alerts = relationship("DispatcherAlert", back_populates="organization")
-    jobs = relationship("Job", back_populates="organization")
+    jobs = relationship("Job", back_populates="organization", foreign_keys="Job.tenant_id")
     communication_channel_configurations = relationship("CommunicationChannelConfiguration", back_populates="organization")
     communication_configuration_audits = relationship("CommunicationConfigurationAudit", back_populates="organization")
     tenant_gps_configurations = relationship("TenantGPSConfiguration", back_populates="organization")

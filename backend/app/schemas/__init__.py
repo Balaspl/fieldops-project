@@ -63,6 +63,7 @@ class JobResponse(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     tenant_id: Optional[str] = None
+    customer_tenant_id: Optional[str] = None
     sla_deadline: Optional[datetime] = None
     attempt_count: Optional[int] = 0
 
