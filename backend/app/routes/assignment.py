@@ -2,7 +2,14 @@ from typing import List, Optional
 from datetime import datetime, timezone
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    status,
+    Request,
+    BackgroundTasks,
+)
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -11,6 +18,11 @@ from .. import models, schemas, utils
 from ..auth.dependencies import get_current_user_or_tenant, AuthenticatedUser
 from ..redis_client import get_redis_client
 from ..services.timer_service import TimerService
+from ..services.ai.FieldOpsAI.schemas.agent_messages import (
+    AgentAddress,
+    MessageEnvelope,
+    MessageType,
+)
 
 
 router = APIRouter(
@@ -156,6 +168,8 @@ def assign_job(
     ),
     db: Session = Depends(get_db),
     redis_client=Depends(get_redis_client),
+    request: Request = None,
+    background_tasks: BackgroundTasks = None,
 ):
     """
     Assign a technician to a job.
@@ -426,6 +440,76 @@ def assign_job(
         # ============================================================
 
         db.commit()
+
+        # ============================================================
+        # 10B. Publish Kafka Job Assigned Event
+        # ============================================================
+
+        kafka_producer = (
+            getattr(request.app.state, "kafka_producer", None)
+            if request is not None
+            else None
+        )
+
+        if kafka_producer is not None and background_tasks is not None:
+            try:
+                event_id = f"job-assigned:{job.tenant_id}:{job.id}"
+
+                event = MessageEnvelope(
+                    sender=AgentAddress(
+                        agent_type="dispatch",
+                        agent_id="job-assigned-producer",
+                        tenant_id=str(job.tenant_id),
+                    ),
+                    message_type=MessageType.EVENT,
+                    payload={
+                        "event_type": "job-assigned",
+                        "event_id": event_id,
+                        "job_id": str(job.id),
+                        "tenant_id": str(job.tenant_id),
+                        "technician_id": str(
+                            technician.technician_id
+                        ),
+                        "schema_version": 1,
+                        "timestamp": datetime.now(
+                            timezone.utc
+                        ).isoformat(),
+                    },
+                    topic="fieldops.job.events",
+                )
+
+                async def publish_job_assigned_event():
+                    try:
+                        published = await kafka_producer.publish(event)
+
+                        if published:
+                            print(
+                                f"Published job-assigned event: "
+                                f"job_id={job.id} "
+                                f"event_id={event_id}"
+                            )
+                        else:
+                            print(
+                                f"Failed to publish job-assigned event: "
+                                f"job_id={job.id} "
+                                f"event_id={event_id}"
+                            )
+
+                    except Exception:
+                        print(
+                            f"Unexpected error while publishing "
+                            f"job-assigned event: job_id={job.id}"
+                        )
+
+                background_tasks.add_task(
+                    publish_job_assigned_event
+                )
+
+            except Exception:
+                print(
+                    f"Unexpected error while preparing "
+                    f"job-assigned event: job_id={job.id}"
+                )
 
         # ============================================================
         # 11. Refresh Objects

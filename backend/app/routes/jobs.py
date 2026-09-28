@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, Query,status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, Query,status, BackgroundTasks
 from typing import Optional
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -212,9 +212,10 @@ def get_service_types(
 
 
 @router.post("", response_model=JobResponse, status_code=201)
-async def create_job(
-    request: Request,
+def create_job(
     job: JobCreate,
+    background_tasks: BackgroundTasks = None,
+    request: Request = None,
     user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(get_current_user_or_tenant),
     current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_CREATE)),
     db: Session = Depends(get_db)
@@ -251,9 +252,17 @@ async def create_job(
 
         if job.status.upper() == "ESCALATED":
             from app.models import SLAEscalation, AuditEvent
+
             now_utc = datetime.now(timezone.utc)
-            escalation = SLAEscalation(tenant_id=new_job.tenant_id or "default", job_id=new_job.id, manager_notified_at=now_utc, status="ESCALATED")
+
+            escalation = SLAEscalation(
+                tenant_id=new_job.tenant_id or "default",
+                job_id=new_job.id,
+                manager_notified_at=now_utc,
+                status="ESCALATED"
+            )
             db.add(escalation)
+
             audit = AuditEvent(
                 tech_id="system",
                 tenant_id=new_job.tenant_id,
@@ -263,10 +272,16 @@ async def create_job(
                 reason="Manager manually created job as ESCALATED"
             )
             db.add(audit)
-            db.commit()
-            
 
-        kafka_producer = getattr(request.app.state, "kafka_producer", None)
+            db.commit()
+
+        # Kafka is available only when called through the HTTP route.
+        # Direct unit-test calls may not provide a Request object.
+        kafka_producer = (
+            getattr(request.app.state, "kafka_producer", None)
+            if request is not None
+            else None
+        )
 
         if kafka_producer is not None:
             try:
@@ -290,20 +305,31 @@ async def create_job(
                     topic="fieldops.job.events",
                 )
 
-                published = await kafka_producer.publish(event)
+                async def publish_job_created_event():
+                    try:
+                        published = await kafka_producer.publish(event)
 
-                if published:
-                    logger.info(
-                        "Published job-created event: job_id=%s event_id=%s",
-                        new_job.id,
-                        event_id,
-                    )
-                else:
-                    logger.error(
-                        "Failed to publish job-created event: job_id=%s event_id=%s",
-                        new_job.id,
-                        event_id,
-                    )
+                        if published:
+                            logger.info(
+                                "Published job-created event: job_id=%s event_id=%s",
+                                new_job.id,
+                                event_id,
+                            )
+                        else:
+                            logger.error(
+                                "Failed to publish job-created event: job_id=%s event_id=%s",
+                                new_job.id,
+                                event_id,
+                            )
+                    except Exception:
+                        logger.exception(
+                            "Unexpected error while publishing job-created event: "
+                            "job_id=%s event_id=%s",
+                            new_job.id,
+                            event_id,
+                        )
+
+                background_tasks.add_task(publish_job_created_event)
 
             except Exception:
                 logger.exception(
@@ -315,8 +341,10 @@ async def create_job(
 
     except Exception as error:
         db.rollback()
-        raise HTTPException(status_code=500,detail=f"Failed to create job: {str(error)}")
-
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create job: {str(error)}"
+        )
 
 @router.get("", response_model=list[JobResponse])
 def get_jobs(
@@ -1273,6 +1301,8 @@ async def assign_job(
     ),
     db: Session = Depends(get_db),
     redis_client=Depends(get_redis_client),
+    request: Request = None,
+    background_tasks: BackgroundTasks = None,
 ):
     from app.models import (
         OverrideAuditEvent,
@@ -1471,6 +1501,78 @@ async def assign_job(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Unable to assign job",
             )
+
+        # Kafka job-assigned event is published only after
+        # the authoritative database operation succeeds.
+        kafka_producer = (
+            getattr(request.app.state, "kafka_producer", None)
+            if request is not None
+            else None
+        )
+
+        if kafka_producer is not None and background_tasks is not None:
+            try:
+                event_id = (
+                    f"job-assigned:{effective_tenant_id}:{job.id}"
+                )
+
+                event = MessageEnvelope(
+                    sender=AgentAddress(
+                        agent_type="dispatch",
+                        agent_id="job-assigned-producer",
+                        tenant_id=str(effective_tenant_id),
+                    ),
+                    message_type=MessageType.EVENT,
+                    payload={
+                        "event_type": "job-assigned",
+                        "event_id": event_id,
+                        "job_id": str(job.id),
+                        "tenant_id": str(effective_tenant_id),
+                        "technician_id": str(tech.technician_id),
+                        "schema_version": 1,
+                        "timestamp": datetime.now(
+                            timezone.utc
+                        ).isoformat(),
+                    },
+                    topic="fieldops.job.events",
+                )
+
+                async def publish_job_assigned_event():
+                    try:
+                        published = await kafka_producer.publish(event)
+
+                        if published:
+                            logger.info(
+                                "Published job-assigned event: "
+                                "job_id=%s event_id=%s",
+                                job.id,
+                                event_id,
+                            )
+                        else:
+                            logger.error(
+                                "Failed to publish job-assigned event: "
+                                "job_id=%s event_id=%s",
+                                job.id,
+                                event_id,
+                            )
+                    except Exception:
+                        logger.exception(
+                            "Unexpected error while publishing "
+                            "job-assigned event: job_id=%s event_id=%s",
+                            job.id,
+                            event_id,
+                        )
+
+                background_tasks.add_task(
+                    publish_job_assigned_event
+                )
+
+            except Exception:
+                logger.exception(
+                    "Unexpected error while preparing job-assigned "
+                    "event: job_id=%s",
+                    job.id,
+                )
 
         # Step 7: Broadcast override history.
         override_data = {

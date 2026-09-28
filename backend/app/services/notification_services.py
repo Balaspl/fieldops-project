@@ -1410,45 +1410,6 @@ class NotificationRouter:
             return False
 
         # ------------------------------------------------
-        # Generate approved communication
-        # ------------------------------------------------
-
-        communication = (
-            await self._generate_safe_communication(
-                event=event,
-                recipient_type=recipient_type,
-                channel="sms",
-                notification_type=notification_type,
-            )
-        )
-
-        if communication is None:
-            return False
-
-        output = communication.decision.output
-        message_body = output.text
-
-        if not isinstance(message_body, str):
-            logger.error(
-                "SMS communication body is invalid. "
-                "job_id=%s",
-                event.job_id,
-            )
-            return False
-
-        # ------------------------------------------------
-        # SMS transport limit
-        # ------------------------------------------------
-
-        if len(message_body) > 160:
-            logger.error(
-                "Final SMS content exceeds the transport "
-                "limit. Delivery was skipped. job_id=%s",
-                event.job_id,
-            )
-            return False
-
-        # ------------------------------------------------
         # Technician SMS
         # ------------------------------------------------
 
@@ -1457,6 +1418,43 @@ class NotificationRouter:
                 logger.warning(
                     "Technician SMS skipped because technician "
                     "ID is missing. job_id=%s",
+                    event.job_id,
+                )
+                return False
+
+            # Generate approved communication only after the
+            # technician recipient has been validated.
+            communication = (
+                await self._generate_safe_communication(
+                    event=event,
+                    recipient_type=recipient_type,
+                    channel="sms",
+                    notification_type=notification_type,
+                )
+            )
+
+            if communication is None:
+                return False
+
+            output = communication.decision.output
+            message_body = output.text
+
+            if not isinstance(message_body, str):
+                logger.error(
+                    "SMS communication body is invalid. "
+                    "job_id=%s",
+                    event.job_id,
+                )
+                return False
+
+            # ------------------------------------------------
+            # SMS transport limit
+            # ------------------------------------------------
+
+            if len(message_body) > 160:
+                logger.error(
+                    "Final SMS content exceeds the transport "
+                    "limit. Delivery was skipped. job_id=%s",
                     event.job_id,
                 )
                 return False
@@ -1511,6 +1509,17 @@ class NotificationRouter:
             return False
 
         # ------------------------------------------------
+        # Generate safe communication
+        # ------------------------------------------------
+
+        communication = await self._generate_safe_communication(
+            event=event,
+            recipient_type=recipient_type,
+            channel="sms",
+            notification_type=notification_type,
+        )
+
+        # ------------------------------------------------
         # Customer delivery policy
         # ------------------------------------------------
 
@@ -1534,6 +1543,39 @@ class NotificationRouter:
                 ),
                 decision,
             )
+
+        if communication is None:
+            # Preserve the existing safe-generation failure behavior
+            # for normal notifications. Emergency delivery may use
+            # the existing minimal fallback message when policy allows.
+            if category != CommunicationMessageCategory.EMERGENCY:
+                return False
+
+            message_body = "FieldOps notification update."
+        else:
+            output = communication.decision.output
+            message_body = output.text
+
+
+        if not isinstance(message_body, str):
+            logger.error(
+                "SMS communication body is invalid. "
+                "job_id=%s",
+                event.job_id,
+            )
+            return False
+
+        # ------------------------------------------------
+        # SMS transport limit
+        # ------------------------------------------------
+
+        if len(message_body) > 160:
+            logger.error(
+                "Final SMS content exceeds the transport "
+                "limit. Delivery was skipped. job_id=%s",
+                event.job_id,
+            )
+            return False
 
         # ------------------------------------------------
         # Twilio
@@ -1584,6 +1626,7 @@ class NotificationRouter:
                 event.job_id,
             )
             return False
+
 
     async def _send_email(
         self,
