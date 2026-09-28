@@ -3809,6 +3809,334 @@ def test_accept_job_success(monkeypatch):
     finally:
         db.close()
 
+def test_accept_job_publishes_job_started_event(monkeypatch):
+    from app.routes.jobs import accept_job
+    from fastapi import BackgroundTasks
+    from starlette.requests import Request
+    from types import SimpleNamespace
+    import asyncio
+
+    published_events = []
+
+    class FakeKafkaProducer:
+        async def publish(self, event):
+            published_events.append(event)
+            return True
+
+    class FakeApp:
+        state = SimpleNamespace(
+            kafka_producer=FakeKafkaProducer()
+        )
+
+    db = TestingSessionLocal()
+
+    try:
+        job = db.query(Job).filter(Job.id == 102).first()
+        tech = db.query(Technician).filter(
+            Technician.technician_id == 1
+        ).first()
+
+        assert job is not None
+        assert tech is not None
+
+        job.status = "ASSIGNED"
+        job.assigned_technician_id = tech.technician_id
+        tech.current_jobs = 0
+        db.commit = lambda: None
+
+        redis_client = FakeAcceptRedis(
+            lock_result=True,
+            timer_exists=True,
+        )
+
+        request = Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": "/api/v1/jobs/102/accept",
+                "headers": [
+                    (
+                        b"x-correlation-id",
+                        b"test-correlation-123",
+                    ),
+                ],
+                "app": FakeApp(),
+            }
+        )
+
+        background_tasks = BackgroundTasks()
+
+        result = accept_job(
+            job_id=102,
+            current_user=_technician_user(),
+            db=db,
+            redis_client=redis_client,
+            request=request,
+            background_tasks=background_tasks,
+        )
+
+        assert result["status"] == "EN_ROUTE"
+
+        assert len(background_tasks.tasks) == 1
+
+        task = background_tasks.tasks[0]
+        asyncio.run(task.func(*task.args, **task.kwargs))
+
+        assert len(published_events) == 1
+
+        event = published_events[0]
+
+        assert event.topic == "fieldops.events"
+        assert event.payload["event_type"] == "job-started"
+        assert event.payload["job_id"] == "102"
+        assert event.payload["tenant_id"] == "tenant-1"
+        assert event.payload["schema_version"] == 1
+        assert (
+            event.payload["correlation_id"]
+            == "test-correlation-123"
+        )
+        assert (
+            event.payload["event_id"]
+            == "job-started:tenant-1:102:ASSIGNED:EN_ROUTE"
+        )
+
+    finally:
+        db.close()
+def test_accept_job_kafka_failure_does_not_rollback(monkeypatch):
+    from app.routes.jobs import accept_job
+    from fastapi import BackgroundTasks
+    from starlette.requests import Request
+    from types import SimpleNamespace
+
+    class FailingKafkaProducer:
+        async def publish(self, event):
+            raise RuntimeError("Kafka unavailable")
+
+    class FakeApp:
+        state = SimpleNamespace(
+            kafka_producer=FailingKafkaProducer()
+        )
+
+    db = TestingSessionLocal()
+
+    try:
+        job = db.query(Job).filter(Job.id == 102).first()
+        tech = db.query(Technician).filter(
+            Technician.technician_id == 1
+        ).first()
+
+        assert job is not None
+        assert tech is not None
+
+        job.status = "ASSIGNED"
+        job.assigned_technician_id = tech.technician_id
+        tech.current_jobs = 0
+
+        db.commit = lambda: None
+
+        redis_client = FakeAcceptRedis(
+            lock_result=True,
+            timer_exists=True,
+        )
+
+        request = Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": "/api/v1/jobs/102/accept",
+                "headers": [],
+                "app": FakeApp(),
+            }
+        )
+
+        background_tasks = BackgroundTasks()
+
+        result = accept_job(
+            job_id=102,
+            current_user=_technician_user(),
+            db=db,
+            redis_client=redis_client,
+            request=request,
+            background_tasks=background_tasks,
+        )
+
+        assert result["status"] == "EN_ROUTE"
+        assert job.status == "EN_ROUTE"
+
+        assert len(background_tasks.tasks) == 1
+
+        task = background_tasks.tasks[0]
+
+        # Kafka failure must be contained inside the background publisher.
+        import asyncio
+
+        asyncio.run(
+            task.func(
+                *task.args,
+                **task.kwargs,
+            )
+        )
+
+        # The authoritative job transition remains successful.
+        assert job.status == "EN_ROUTE"
+
+    finally:
+        db.close()
+
+def test_accept_job_already_en_route_does_not_publish_job_started():
+    from app.routes.jobs import accept_job
+    from fastapi import BackgroundTasks
+    from starlette.requests import Request
+    from types import SimpleNamespace
+
+    published_events = []
+
+    class FakeKafkaProducer:
+        async def publish(self, event):
+            published_events.append(event)
+            return True
+
+    class FakeApp:
+        state = SimpleNamespace(
+            kafka_producer=FakeKafkaProducer()
+        )
+
+    db = TestingSessionLocal()
+
+    try:
+        job = db.query(Job).filter(Job.id == 102).first()
+        tech = db.query(Technician).filter(
+            Technician.technician_id == 1
+        ).first()
+
+        assert job is not None
+        assert tech is not None
+
+        job.status = "EN_ROUTE"
+        job.assigned_technician_id = tech.technician_id
+        tech.current_jobs = 1
+
+        db.commit = lambda: None
+
+        redis_client = FakeAcceptRedis(
+            lock_result=True,
+            timer_exists=True,
+        )
+
+        request = Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": "/api/v1/jobs/102/accept",
+                "headers": [],
+                "app": FakeApp(),
+            }
+        )
+
+        background_tasks = BackgroundTasks()
+
+        with pytest.raises(HTTPException) as exc_info:
+            accept_job(
+                job_id=102,
+                current_user=_technician_user(),
+                db=db,
+                redis_client=redis_client,
+                request=request,
+                background_tasks=background_tasks,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == (
+            "Job is not in ASSIGNED status"
+        )
+
+        assert len(background_tasks.tasks) == 0
+        assert published_events == []
+
+    finally:
+        db.close()        
+        
+def test_accept_job_kafka_publish_false_does_not_rollback():
+    from app.routes.jobs import accept_job
+    from fastapi import BackgroundTasks
+    from starlette.requests import Request
+    from types import SimpleNamespace
+
+    class FalseKafkaProducer:
+        async def publish(self, event):
+            assert event.payload["event_type"] == "job-started"
+            assert event.topic == "fieldops.events"
+            return False
+
+    class FakeApp:
+        state = SimpleNamespace(
+            kafka_producer=FalseKafkaProducer()
+        )
+
+    db = TestingSessionLocal()
+
+    try:
+        job = db.query(Job).filter(Job.id == 102).first()
+        tech = db.query(Technician).filter(
+            Technician.technician_id == 1
+        ).first()
+
+        assert job is not None
+        assert tech is not None
+
+        job.status = "ASSIGNED"
+        job.assigned_technician_id = tech.technician_id
+        tech.current_jobs = 0
+
+        db.commit = lambda: None
+
+        redis_client = FakeAcceptRedis(
+            lock_result=True,
+            timer_exists=True,
+        )
+
+        background_tasks = BackgroundTasks()
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/jobs/102/accept",
+            "headers": [
+                (b"x-correlation-id", b"test-correlation-123"),
+            ],
+            "app": FakeApp(),
+        }
+
+        request = Request(scope)
+
+        current_user = AuthenticatedUser(
+            user_id="tech-1",
+            tenant_id="tenant-1",
+            role=UserRole.DISPATCHER,
+            jti="test-jti",
+            session_id="test-session",
+        )
+
+        result = accept_job(
+            job_id=102,
+            current_user=current_user,
+            request=request,
+            background_tasks=background_tasks,
+            db=db,
+            redis_client=redis_client,
+        )
+
+        assert result["status"] == "EN_ROUTE"
+        assert job.status == "EN_ROUTE"
+
+        for task in background_tasks.tasks:
+            asyncio.run(
+                task.func(*task.args, **task.kwargs)
+            )
+
+    finally:
+        db.close()
+
 
 def test_accept_job_validation_branches():
     from app.routes.jobs import accept_job
