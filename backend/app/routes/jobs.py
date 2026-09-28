@@ -885,6 +885,8 @@ def accept_job(
     ),
     db: Session = Depends(get_db),
     redis_client=Depends(get_redis_client),
+    request: Request = None,
+    background_tasks: BackgroundTasks = None,
 ):
     # 1. Check whether JOB exists first
     job = db.query(Job).filter(
@@ -987,6 +989,94 @@ def accept_job(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Unable to accept job",
             )
+        # 10. Publish job-started event after
+        # the authoritative start transition succeeds.
+        kafka_producer = (
+            getattr(request.app.state, "kafka_producer", None)
+            if request is not None
+            else None
+        )
+
+        if kafka_producer is not None and background_tasks is not None:
+            try:
+                effective_tenant_id = str(job.tenant_id)
+                correlation_id = (
+                    request.headers.get("X-Correlation-ID")
+                    if request is not None
+                    else None
+                )
+
+                event_id = (
+                    f"job-started:"
+                    f"{effective_tenant_id}:"
+                    f"{job.id}:"
+                    f"{previous_status}:"
+                    f"EN_ROUTE"
+                )
+
+                event = MessageEnvelope(
+                    sender=AgentAddress(
+                        agent_type="dispatch",
+                        agent_id="job-started-producer",
+                        tenant_id=effective_tenant_id,
+                    ),
+                    message_type=MessageType.EVENT,
+                    payload={
+                        "event_type": "job-started",
+                        "event_id": event_id,
+                        "job_id": str(job.id),
+                        "tenant_id": effective_tenant_id,
+                        "schema_version": 1,
+                        "timestamp": datetime.now(
+                            timezone.utc
+                        ).isoformat(),
+                        **(
+                            {"correlation_id": correlation_id}
+                            if correlation_id
+                            else {}
+                        ),
+                    },
+                    topic="fieldops.events",
+                )
+
+                async def publish_job_started_event():
+                    try:
+                        published = await kafka_producer.publish(
+                            event
+                        )
+
+                        if published:
+                            logger.info(
+                                "Published job-started event: "
+                                "job_id=%s event_id=%s",
+                                job.id,
+                                event_id,
+                            )
+                        else:
+                            logger.error(
+                                "Failed to publish job-started event: "
+                                "job_id=%s event_id=%s",
+                                job.id,
+                                event_id,
+                            )
+                    except Exception:
+                        logger.exception(
+                            "Unexpected error while publishing "
+                            "job-started event: job_id=%s event_id=%s",
+                            job.id,
+                            event_id,
+                        )
+
+                background_tasks.add_task(
+                    publish_job_started_event
+                )
+
+            except Exception:
+                logger.exception(
+                    "Failed to prepare job-started event: "
+                    "job_id=%s",
+                    job.id,
+                )
 
         # 10. Remove acceptance timer after successful commit
         redis_client.delete(
