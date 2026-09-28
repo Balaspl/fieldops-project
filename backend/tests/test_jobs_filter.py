@@ -571,7 +571,7 @@ def test_plan_job_not_found():
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            
+
 
             asyncio.run(
                 plan_job_assignment(
@@ -621,7 +621,7 @@ def test_plan_job_invalid_status():
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            
+
 
             asyncio.run(
                 plan_job_assignment(
@@ -680,7 +680,7 @@ def test_plan_job_redis_rate_limit_none():
         db.query(Technician).delete()
         db.commit()
 
-        
+
 
         result = asyncio.run(
             plan_job_assignment(
@@ -723,7 +723,7 @@ def test_plan_job_rate_limit_exceeded():
 
             def get(self, key):
                 return None
-            
+
             def exists(self, *args, **kwargs):
                 return False
 
@@ -736,7 +736,7 @@ def test_plan_job_rate_limit_exceeded():
             }
         )
 
-        
+
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(
@@ -812,7 +812,7 @@ def test_plan_job_cache_hit():
             }
         )
 
-        
+
 
         result = asyncio.run(
             plan_job_assignment(
@@ -869,7 +869,7 @@ def test_plan_job_no_available_technicians(monkeypatch):
             }
         )
 
-        
+
 
         result = asyncio.run(
             plan_job_assignment(
@@ -898,7 +898,7 @@ def test_update_job_required_skill_fallback(monkeypatch):
         if not req_skill or not req_skill.strip():
             req_skill = map_service_type_to_skill(job.service_type)
     """
-   
+
 
     monkeypatch.setattr(
         "app.routes.jobs.map_service_type_to_skill",
@@ -1060,7 +1060,7 @@ def test_plan_job_admin_override_success(monkeypatch):
             }
         )
 
-        
+
 
         result = asyncio.run(
             plan_job_assignment(
@@ -1181,7 +1181,7 @@ def test_plan_job_invalid_technician_location(monkeypatch):
             }
         )
 
-        
+
 
         result = asyncio.run(
             plan_job_assignment(
@@ -1298,7 +1298,7 @@ def test_plan_job_technician_location_without_coordinates(monkeypatch):
             }
         )
 
-        
+
 
         result = asyncio.run(
             plan_job_assignment(
@@ -1377,7 +1377,7 @@ def test_plan_job_certification_disqualified(monkeypatch):
             }
         )
 
-        
+
 
         result = asyncio.run(
             plan_job_assignment(
@@ -1464,7 +1464,7 @@ def test_plan_job_cooldown_disqualified(monkeypatch):
             }
         )
 
-        
+
 
         result = asyncio.run(
             plan_job_assignment(
@@ -1551,7 +1551,7 @@ def test_plan_job_certification_warnings(monkeypatch):
             }
         )
 
-        
+
 
         result = asyncio.run(
             plan_job_assignment(
@@ -1637,7 +1637,7 @@ def test_plan_job_exclusion_disqualified(monkeypatch):
             }
         )
 
-        
+
 
         result = asyncio.run(
             plan_job_assignment(
@@ -1735,7 +1735,7 @@ def test_plan_job_missing_prerequisite(monkeypatch):
             }
         )
 
-        
+
 
         result = asyncio.run(
             plan_job_assignment(
@@ -1843,7 +1843,7 @@ def test_plan_job_max_capacity_disqualified(monkeypatch):
             }
         )
 
-        
+
 
         result = asyncio.run(
             plan_job_assignment(
@@ -2297,7 +2297,7 @@ def test_get_job_status_history_no_events():
         db.close()
 
 def test_get_job_status_history_with_event(monkeypatch):
-    
+
 
     db = TestingSessionLocal()
 
@@ -2371,7 +2371,7 @@ def test_get_job_status_history_with_event(monkeypatch):
 
     finally:
         db.close()
-                        
+
 
 def test_get_job_status_history_with_technician_actor():
     from app.routes.jobs import get_job_status_history
@@ -2967,7 +2967,7 @@ def test_get_jobs_response_total_count():
     assert response.headers["X-Total-Count"] == "1"
     assert response.headers["Access-Control-Expose-Headers"] == "X-Total-Count"
 
-    
+
 # ---------------------------------------------------------------------------
 # Pending jobs
 # ---------------------------------------------------------------------------
@@ -3698,7 +3698,7 @@ class FakeAcceptRedis:
     def exists(self, key):
         return self.timer_exists
 
-    
+
 
     def delete(self, key):
         self.deleted_keys.append(key)
@@ -6382,7 +6382,7 @@ def test_plan_job_normal_certification_success(monkeypatch):
             }
         )
 
-        
+
 
         result = asyncio.run(
             plan_job_assignment(
@@ -6485,7 +6485,7 @@ def test_assign_job_numeric_technician_fallback(monkeypatch):
             lambda *args, **kwargs: None,
         )
 
-        
+
 
         result = asyncio.run(
             assign_job(
@@ -7025,7 +7025,7 @@ def test_plan_job_job_location_parse_value_error(monkeypatch):
             }
         )
 
-        
+
 
         result = asyncio.run(
             plan_job_assignment(
@@ -7181,7 +7181,7 @@ def test_assign_job_numeric_lookup_direct(monkeypatch):
             def get(self, *args, **kwargs):
                 return None
 
-        
+
 
         result = asyncio.run(
             assign_job(
@@ -7297,6 +7297,151 @@ def test_transition_job_success(monkeypatch):
 
         assert result["status"] == "success"
         assert result["new_status"] == "IN_PROGRESS"
+
+    finally:
+        db.close()
+
+def test_transition_job_publishes_kafka_status_event(monkeypatch):
+    from app.routes.jobs import transition_job_endpoint, TransitionRequest
+    from fastapi import BackgroundTasks
+
+    published_events = []
+
+    class FakeKafkaProducer:
+        async def publish(self, event):
+            published_events.append(event)
+            return True
+
+    def fake_transition(self, *args, **kwargs):
+        self.status = "IN_PROGRESS"
+
+    monkeypatch.setattr(
+        Job,
+        "transition",
+        fake_transition,
+    )
+    monkeypatch.setattr(
+        app.state,
+        "kafka_producer",
+        FakeKafkaProducer(),
+        raising=False,
+    )
+
+    db = TestingSessionLocal()
+
+    try:
+        payload = TransitionRequest(
+            status="IN_PROGRESS",
+            reason="Kafka status event coverage",
+        )
+
+        request = Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": "/api/v1/jobs/101/transition",
+                "headers": [
+                    (b"x-correlation-id", b"test-correlation-123"),
+                ],
+                "app": app,
+            }
+        )
+
+        background_tasks = BackgroundTasks()
+
+        result = transition_job_endpoint(
+            id="101",
+            payload=payload,
+            request=request,
+            current_user=_dispatcher_user(),
+            db=db,
+            background_tasks=background_tasks,
+        )
+
+        asyncio.run(background_tasks())
+
+        assert result["status"] == "success"
+        assert result["new_status"] == "IN_PROGRESS"
+
+        assert len(published_events) == 1
+
+        event = published_events[0]
+
+        assert event.topic == "fieldops.job.events"
+        assert event.payload["event_type"] == "job-status"
+        assert event.payload["job_id"] == "101"
+        assert event.payload["old_status"] == "active"
+        assert event.payload["new_status"] == "IN_PROGRESS"
+        assert event.payload["tenant_id"] == "tenant-1"
+        assert event.payload["schema_version"] == 1
+        assert event.payload["correlation_id"] == "test-correlation-123"
+
+    finally:
+        db.close()
+
+
+def test_transition_job_kafka_failure_does_not_rollback(monkeypatch):
+    from app.routes.jobs import transition_job_endpoint, TransitionRequest
+    from fastapi import BackgroundTasks
+
+    class FailingKafkaProducer:
+        async def publish(self, event):
+            raise RuntimeError("Kafka unavailable")
+
+    def fake_transition(self, *args, **kwargs):
+        self.status = "IN_PROGRESS"
+
+    monkeypatch.setattr(
+        Job,
+        "transition",
+        fake_transition,
+    )
+    monkeypatch.setattr(
+        app.state,
+        "kafka_producer",
+        FailingKafkaProducer(),
+        raising=False,
+    )
+
+    db = TestingSessionLocal()
+
+    try:
+        payload = TransitionRequest(
+            status="IN_PROGRESS",
+            reason="Kafka failure coverage",
+        )
+
+        request = Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": "/api/v1/jobs/101/transition",
+                "headers": [],
+                "app": app,
+            }
+        )
+
+        background_tasks = BackgroundTasks()
+
+        result = transition_job_endpoint(
+            id="101",
+            payload=payload,
+            request=request,
+            current_user=_dispatcher_user(),
+            db=db,
+            background_tasks=background_tasks,
+        )
+
+        asyncio.run(background_tasks())
+
+        assert result["status"] == "success"
+        assert result["new_status"] == "IN_PROGRESS"
+
+        db.expire_all()
+        job = db.query(Job).filter(Job.id == 101).first()
+
+        assert job is not None
+        assert job.status == "IN_PROGRESS"
 
     finally:
         db.close()
@@ -7897,7 +8042,7 @@ def test_technician_job_list_and_direct_id_reads_are_assignment_and_tenant_scope
 # ---------------------------------------------------------------------------
 
 def _bulk_cancel_test_user(role="dispatcher", tenant_id="tenant-1"):
-    
+
 
     return SimpleNamespace(
         user_id="test-user",
@@ -8303,7 +8448,7 @@ class _BulkCancelFakeJob:
 
 
 def test_bulk_cancel_empty_job_ids():
-    
+
     from app.routes.jobs import bulk_cancel_jobs
 
     user = _bulk_cancel_fake_user()
