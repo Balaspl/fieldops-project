@@ -110,7 +110,7 @@ services:
       KAFKA_BILLING_EVENTS_RETENTION_MS: "${KAFKA_BILLING_EVENTS_RETENTION_MS:-7776000000}"
       KAFKA_PAYMENT_EVENTS_RETENTION_MS: "${KAFKA_PAYMENT_EVENTS_RETENTION_MS:-7776000000}"
       KAFKA_AUDIT_EVENTS_RETENTION_MS: "${KAFKA_AUDIT_EVENTS_RETENTION_MS:-15552000000}"
-
+      KAFKA_DISPATCH_CONSUMER_GROUP: "${KAFKA_DISPATCH_CONSUMER_GROUP:-fieldops-dispatch}"
     entrypoint: ["/bin/sh", "-c"]
 
     command:
@@ -196,6 +196,42 @@ services:
               --config "retention.ms=$$retention_ms"
           fi
         done
+
+        # Configure Kafka ACLs for the job-assigned producer and dispatch consumer.
+        # kafka-init uses the internal PLAINTEXT listener and ANONYMOUS is a super user.
+        /opt/kafka/bin/kafka-acls.sh \
+          --bootstrap-server kafka:9092 \
+          --add \
+          --allow-principal "User:$$KAFKA_PRODUCER_USERNAME" \
+          --operation WRITE \
+          --operation DESCRIBE \
+          --topic "fieldops.job.events"
+
+        /opt/kafka/bin/kafka-acls.sh \
+          --bootstrap-server kafka:9092 \
+          --add \
+          --allow-principal "User:$$KAFKA_DISPATCH_USERNAME" \
+          --operation READ \
+          --operation DESCRIBE \
+          --topic "fieldops.job.events"
+
+        /opt/kafka/bin/kafka-acls.sh \
+          --bootstrap-server kafka:9092 \
+          --add \
+          --allow-principal "User:$$KAFKA_DISPATCH_USERNAME" \
+          --operation READ \
+          --operation DESCRIBE \
+          --group "$$KAFKA_DISPATCH_CONSUMER_GROUP"
+
+        # Allow the dynamic consumer groups used by the job-assigned Kafka E2E tests.
+        /opt/kafka/bin/kafka-acls.sh \
+          --bootstrap-server kafka:9092 \
+          --add \
+          --allow-principal "User:$$KAFKA_DISPATCH_USERNAME" \
+          --operation READ \
+          --operation DESCRIBE \
+          --group "fieldops-job-assigned-e2e-" \
+          --resource-pattern-type prefixed
 
 volumes:
   kafka_data:

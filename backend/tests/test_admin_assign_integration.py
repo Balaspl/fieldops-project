@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 from datetime import datetime, timezone
 from contextlib import contextmanager
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 import uuid
 
 from app.auth.jwt_handler import create_access_token
@@ -1257,6 +1257,76 @@ def test_assign_job_by_numeric_technician_id(setup_db):
     assert data["job_id"] == job.id
     assert data["job_status"] == "ASSIGNED"
     assert data["assigned_technician"]["id"] == tech.technician_id
+    
+def test_assign_job_publishes_job_assigned_kafka_event(setup_db):
+    db = setup_db
+
+    tech = Technician(
+        tech_id="kafka-assignment-tech",
+        tenant_id="tenant-1",
+        technician_name="Kafka Assignment Technician",
+        technician_skill="Plumbing",
+        technician_location="0,0",
+        technician_status="AVAILABLE",
+        current_jobs=0,
+        max_jobs=10,
+    )
+
+    job = Job(
+        tenant_id="tenant-1",
+        customer_name="Kafka Assignment Customer",
+        location="1,1",
+        issue_description="Plumbing issue",
+        priority="HIGH",
+        service_type="Plumbing",
+        required_skill="Plumbing",
+        contact_number="1234567890",
+        preferred_service_date=datetime.now(timezone.utc).date(),
+        status="QUEUED",
+    )
+
+    db.add_all([tech, job])
+    db.commit()
+    db.refresh(tech)
+    db.refresh(job)
+
+    kafka_producer = SimpleNamespace(
+        publish=AsyncMock(return_value=True)
+    )
+    app.state.kafka_producer = kafka_producer
+
+    try:
+        response = client.post(
+            "/assign-job",
+            headers={
+                "Authorization": f"Bearer {get_test_token()}",
+                "X-Tenant-ID": "tenant-1",
+            },
+            json={
+                "job_id": job.id,
+                "technician_id": tech.technician_id,
+            },
+        )
+
+        assert response.status_code == 200
+
+        kafka_producer.publish.assert_awaited_once()
+
+        event = kafka_producer.publish.await_args.args[0]
+
+        assert event.topic == "fieldops.job.events"
+        assert event.payload["event_type"] == "job-assigned"
+        assert event.payload["event_id"] == (
+            f"job-assigned:tenant-1:{job.id}"
+        )
+        assert event.payload["job_id"] == str(job.id)
+        assert event.payload["tenant_id"] == "tenant-1"
+        assert event.payload["technician_id"] == str(
+            tech.technician_id
+        )
+        assert event.payload["schema_version"] == 1
+    finally:
+        app.state.kafka_producer = None
 
 
 def test_assign_job_by_job_prefix(setup_db):

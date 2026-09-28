@@ -3497,7 +3497,7 @@ async def test_create_job_required_skill_fallback(monkeypatch):
             }
         )
 
-        result = await create_job(
+        result = create_job(
             job=job_data,
             request=request,
             user_tenant=(None, "tenant-1"),
@@ -3552,7 +3552,7 @@ async def test_create_job_platform_super_admin():
             }
         )
 
-        result = await create_job(
+        result = create_job(
             job=job_data,
             request=request,
             user_tenant=(FakeUser(), "__platform__"),
@@ -3604,7 +3604,7 @@ async def test_create_job_platform_super_admin_without_requested_tenant():
             }
         )
 
-        result = await create_job(
+        result = create_job(
             job=job_data,
             request=request,
             user_tenant=(FakeUser(), "__platform__"),
@@ -3662,7 +3662,7 @@ async def test_create_job_exception():
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        await create_job(
+        create_job(
             job=job_data,
             request=request,
             user_tenant=(None, "tenant-1"),
@@ -5233,7 +5233,7 @@ async def test_create_job_super_admin_platform_tenant():
             }
         )
 
-        result = await create_job(
+        result = create_job(
             job=job_data,
             request=request,
             user_tenant=(user, "__platform__"),
@@ -5281,7 +5281,7 @@ async def test_create_job_escalated():
             }
         )
 
-        result = await create_job(
+        result = create_job(
             job=job_data,
             request=request,
             user_tenant=(_dispatcher_user(), "tenant-1"),
@@ -8555,3 +8555,4 @@ def test_bulk_cancel_mutation_generic_exception():
     assert exc_info.value.status_code == 500
     assert exc_info.value.detail == "Bulk cancellation failed"
     assert db.rollback_count == 1
+
