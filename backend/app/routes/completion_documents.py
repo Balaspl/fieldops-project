@@ -1,5 +1,14 @@
+"""
+Completion document routes.
+
+Handles secure upload, scan-state tracking, download protection,
+and deletion of completion documents.
+
+Raw binary data is never stored in PostgreSQL.
+"""
+
+import logging
 from datetime import datetime, timezone
-from pathlib import Path
 
 from fastapi import (
     APIRouter,
@@ -16,14 +25,14 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import (
     AuthenticatedUser,
-    get_current_user,
-    require_permission
+    require_permission,
 )
-from app.auth.rbac import UserRole,Permission
+from app.auth.rbac import Permission
 from app.context import correlation_id_ctx
 from app.database import get_db
 from app.models import AuditEvent, CompletionDocument, Job
 from app.models.job_closure import JobClosure
+from app.repositories import CompletionDocumentRepository
 from app.routes.jobs import get_technician_for_current_user
 from app.services.completion_document_storage import (
     CompletionDocumentStorage,
@@ -31,6 +40,10 @@ from app.services.completion_document_storage import (
 from app.services.completion_document_validation import (
     CompletionDocumentValidator,
 )
+from app.services.file_scan_service import FileScanService
+
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(
@@ -45,15 +58,25 @@ class CompletionDocumentResponse(BaseModel):
     job_closure_id: int
     tenant_id: str
     category: str
+    document_type: str
     original_filename: str
     content_type: str
     file_size: int
     checksum_sha256: str
     storage_key: str
     status: str
+    scan_status: str
+    scanned_at: datetime | None
     uploaded_by: str
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(
+        from_attributes=True,
+    )
+
+
+# =====================================================================
+# UPLOAD
+# =====================================================================
 
 
 @router.post(
@@ -65,17 +88,23 @@ def upload_completion_photo(
     job_id: int,
     category: str = Form(...),
     file: UploadFile = File(...),
-    current_user: AuthenticatedUser = Depends(require_permission(Permission.COMPLETION_DOCUMENTS_MANAGE)),
+    current_user: AuthenticatedUser = Depends(
+        require_permission(
+            Permission.COMPLETION_DOCUMENTS_MANAGE
+        )
+    ),
     db: Session = Depends(get_db),
 ):
     # ---------------------------------------------------------------
-    # Technician role check
+    # Repository
     # ---------------------------------------------------------------
- 
+
+    document_repository = CompletionDocumentRepository(db)
 
     # ---------------------------------------------------------------
     # Resolve authenticated technician
     # ---------------------------------------------------------------
+
     technician = get_technician_for_current_user(
         db,
         current_user,
@@ -90,6 +119,7 @@ def upload_completion_photo(
     # ---------------------------------------------------------------
     # Tenant-scoped job lookup
     # ---------------------------------------------------------------
+
     job = (
         db.query(Job)
         .filter(
@@ -108,6 +138,7 @@ def upload_completion_photo(
     # ---------------------------------------------------------------
     # Technician ownership
     # ---------------------------------------------------------------
+
     if job.assigned_technician_id != technician.technician_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -117,6 +148,7 @@ def upload_completion_photo(
     # ---------------------------------------------------------------
     # Completion record must already exist
     # ---------------------------------------------------------------
+
     closure = (
         db.query(JobClosure)
         .filter(
@@ -138,9 +170,12 @@ def upload_completion_photo(
     # ---------------------------------------------------------------
     # Validate uploaded image
     # ---------------------------------------------------------------
+
     try:
         normalized_category = (
-            CompletionDocumentValidator.validate_category(category)
+            CompletionDocumentValidator.validate_category(
+                category
+            )
         )
 
         (
@@ -152,6 +187,8 @@ def upload_completion_photo(
             file=file.file,
             content_type=file.content_type or "",
             filename=file.filename or "",
+            document_type="PHOTO",
+            category=normalized_category,
         )
 
     except Exception as exc:
@@ -163,6 +200,7 @@ def upload_completion_photo(
     # ---------------------------------------------------------------
     # Generate unique storage key
     # ---------------------------------------------------------------
+
     storage = CompletionDocumentStorage()
 
     storage_key = storage.generate_storage_key(
@@ -176,6 +214,7 @@ def upload_completion_photo(
     # ---------------------------------------------------------------
     # Store binary outside the database
     # ---------------------------------------------------------------
+
     try:
         storage.save(
             file=file.file,
@@ -196,12 +235,15 @@ def upload_completion_photo(
     # ---------------------------------------------------------------
     # Create completion document metadata
     #
-    # New uploads remain PENDING until they are approved/scanned.
+    # New uploads start with PENDING scan state.
     # ---------------------------------------------------------------
+
     document = CompletionDocument(
         job_closure_id=closure.id,
         job_id=job.id,
         tenant_id=str(current_user.tenant_id),
+        uploaded_by=str(current_user.user_id),
+        document_type="PHOTO",
         category=normalized_category,
         original_filename=safe_filename,
         content_type=content_type,
@@ -210,20 +252,72 @@ def upload_completion_photo(
         storage_key=storage_key,
         storage_url=None,
         status="PENDING",
-        uploaded_by=str(current_user.user_id),
+        scan_status="PENDING",
+        scanned_at=None,
     )
 
     try:
         # -----------------------------------------------------------
-        # Add document and flush to generate document.id
+        # Persist document and generate document.id
         # -----------------------------------------------------------
-        db.add(document)
-        db.flush()
+
+        document_repository.create(document)
 
         # -----------------------------------------------------------
-        # Create audit event
+        # Scan stored completion document
         # -----------------------------------------------------------
-        audit_event = AuditEvent(
+
+        scan_failed = False
+
+        try:
+            scan_result = FileScanService(storage).scan(
+                document
+            )
+
+            document.scan_status = (
+                scan_result.scan_status
+            )
+
+            document.scanned_at = (
+                scan_result.scanned_at
+            )
+
+            # A rejected scan also makes the overall document
+            # rejected.
+            if scan_result.scan_status == "REJECTED":
+                document.status = "REJECTED"
+
+        except Exception:
+            # Fail closed:
+            #
+            # - keep scan_status=PENDING
+            # - keep status=PENDING
+            # - keep scanned_at=NULL
+            # - prevent download through the scan gate
+            #
+            # Scanner internals are logged server-side only.
+            scan_failed = True
+
+            document.scan_status = "PENDING"
+            document.scanned_at = None
+            document.status = "PENDING"
+
+            logger.exception(
+                "Completion document scan failed",
+                extra={
+                    "completion_document_id": document.id,
+                    "job_id": job.id,
+                    "tenant_id": str(
+                        current_user.tenant_id
+                    ),
+                },
+            )
+
+        # -----------------------------------------------------------
+        # Upload audit event
+        # -----------------------------------------------------------
+
+        upload_audit_event = AuditEvent(
             tech_id=str(technician.tech_id),
             tenant_id=str(current_user.tenant_id),
             event_type="COMPLETION_DOCUMENT_UPLOADED",
@@ -236,6 +330,7 @@ def upload_completion_photo(
             details={
                 "completion_document_id": document.id,
                 "job_closure_id": closure.id,
+                "document_type": "PHOTO",
                 "category": normalized_category,
                 "original_filename": safe_filename,
                 "content_type": content_type,
@@ -245,18 +340,81 @@ def upload_completion_photo(
             },
         )
 
-        db.add(audit_event)
+        db.add(upload_audit_event)
 
         # -----------------------------------------------------------
-        # Document + audit committed atomically
+        # Scan audit event
         # -----------------------------------------------------------
+
+        if scan_failed:
+            scan_audit_event = AuditEvent(
+                tech_id=str(technician.tech_id),
+                tenant_id=str(
+                    current_user.tenant_id
+                ),
+                event_type=(
+                    "COMPLETION_DOCUMENT_SCAN_FAILED"
+                ),
+                old_status="PENDING",
+                new_status="PENDING",
+                job_id=str(job.id),
+                actor_id=str(current_user.user_id),
+                timestamp=datetime.now(timezone.utc),
+                correlation_id=(
+                    correlation_id_ctx.get() or None
+                ),
+                details={
+                    "completion_document_id": document.id,
+                    "job_closure_id": closure.id,
+                    "scan_status": "PENDING",
+                },
+            )
+
+        else:
+            scan_audit_event = AuditEvent(
+                tech_id=str(technician.tech_id),
+                tenant_id=str(
+                    current_user.tenant_id
+                ),
+                event_type=(
+                    "COMPLETION_DOCUMENT_SCANNED"
+                ),
+                old_status="PENDING",
+                new_status=document.scan_status,
+                job_id=str(job.id),
+                actor_id=str(current_user.user_id),
+                timestamp=(
+                    document.scanned_at
+                    or datetime.now(timezone.utc)
+                ),
+                correlation_id=(
+                    correlation_id_ctx.get() or None
+                ),
+                details={
+                    "completion_document_id": document.id,
+                    "job_closure_id": closure.id,
+                    "scan_status": document.scan_status,
+                    "scanned_at": (
+                        document.scanned_at.isoformat()
+                        if document.scanned_at
+                        else None
+                    ),
+                },
+            )
+
+        db.add(scan_audit_event)
+
+        # -----------------------------------------------------------
+        # Document + audit events committed atomically
+        # -----------------------------------------------------------
+
         db.commit()
         db.refresh(document)
 
     except Exception as exc:
         db.rollback()
 
-        # Remove stored binary if database persistence failed.
+        # Remove stored binary if database persistence fails.
         try:
             storage.delete(storage_key)
         except Exception:
@@ -270,18 +428,34 @@ def upload_completion_photo(
     return document
 
 
+# =====================================================================
+# DOWNLOAD
+# =====================================================================
+
+
 @router.get(
     "/{job_id}/completion-documents/{document_id}/download",
 )
 def download_completion_photo(
     job_id: int,
     document_id: int,
-    current_user: AuthenticatedUser = Depends(require_permission(Permission.COMPLETION_DOCUMENTS_MANAGE)),
+    current_user: AuthenticatedUser = Depends(
+        require_permission(
+            Permission.COMPLETION_DOCUMENTS_MANAGE
+        )
+    ),
     db: Session = Depends(get_db),
 ):
     # ---------------------------------------------------------------
-    # Technician role check
+    # Repository
     # ---------------------------------------------------------------
+
+    document_repository = CompletionDocumentRepository(db)
+
+    # ---------------------------------------------------------------
+    # Resolve authenticated technician
+    # ---------------------------------------------------------------
+
     technician = get_technician_for_current_user(
         db,
         current_user,
@@ -296,14 +470,11 @@ def download_completion_photo(
     # ---------------------------------------------------------------
     # Tenant-scoped document lookup
     # ---------------------------------------------------------------
-    document = (
-        db.query(CompletionDocument)
-        .filter(
-            CompletionDocument.id == document_id,
-            CompletionDocument.job_id == job_id,
-            CompletionDocument.tenant_id == current_user.tenant_id,
-        )
-        .first()
+
+    document = document_repository.get_by_id_for_job(
+        document_id=document_id,
+        job_id=job_id,
+        tenant_id=str(current_user.tenant_id),
     )
 
     if not document:
@@ -315,6 +486,7 @@ def download_completion_photo(
     # ---------------------------------------------------------------
     # Tenant-scoped job lookup
     # ---------------------------------------------------------------
+
     job = (
         db.query(Job)
         .filter(
@@ -333,6 +505,7 @@ def download_completion_photo(
     # ---------------------------------------------------------------
     # Technician ownership
     # ---------------------------------------------------------------
+
     if job.assigned_technician_id != technician.technician_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -340,13 +513,28 @@ def download_completion_photo(
         )
 
     # ---------------------------------------------------------------
-    # Only approved/available documents can be downloaded
+    # Security scan gate
+    #
+    # Only CLEAN documents can be downloaded.
+    #
+    # This blocks:
+    #   PENDING
+    #   REJECTED
     # ---------------------------------------------------------------
-    if document.status != "AVAILABLE":
+
+    if (
+        document.scan_status != "CLEAN"
+        or document.status == "REJECTED"
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Completion document is not available for download",
         )
+    
+
+    # ---------------------------------------------------------------
+    # Physical storage
+    # ---------------------------------------------------------------
 
     storage = CompletionDocumentStorage()
 
@@ -365,6 +553,11 @@ def download_completion_photo(
     )
 
 
+# =====================================================================
+# DELETE
+# =====================================================================
+
+
 @router.delete(
     "/{job_id}/completion-documents/{document_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -372,11 +565,21 @@ def download_completion_photo(
 def delete_completion_photo(
     job_id: int,
     document_id: int,
-    current_user: AuthenticatedUser = Depends(require_permission(Permission.COMPLETION_DOCUMENTS_MANAGE)),
+    current_user: AuthenticatedUser = Depends(
+        require_permission(
+            Permission.COMPLETION_DOCUMENTS_MANAGE
+        )
+    ),
     db: Session = Depends(get_db),
 ):
     # ---------------------------------------------------------------
-    # Technician role check
+    # Repository
+    # ---------------------------------------------------------------
+
+    document_repository = CompletionDocumentRepository(db)
+
+    # ---------------------------------------------------------------
+    # Resolve authenticated technician
     # ---------------------------------------------------------------
 
     technician = get_technician_for_current_user(
@@ -393,14 +596,11 @@ def delete_completion_photo(
     # ---------------------------------------------------------------
     # Tenant-scoped document lookup
     # ---------------------------------------------------------------
-    document = (
-        db.query(CompletionDocument)
-        .filter(
-            CompletionDocument.id == document_id,
-            CompletionDocument.job_id == job_id,
-            CompletionDocument.tenant_id == current_user.tenant_id,
-        )
-        .first()
+
+    document = document_repository.get_by_id_for_job(
+        document_id=document_id,
+        job_id=job_id,
+        tenant_id=str(current_user.tenant_id),
     )
 
     if not document:
@@ -412,6 +612,7 @@ def delete_completion_photo(
     # ---------------------------------------------------------------
     # Tenant-scoped job lookup
     # ---------------------------------------------------------------
+
     job = (
         db.query(Job)
         .filter(
@@ -430,6 +631,7 @@ def delete_completion_photo(
     # ---------------------------------------------------------------
     # Technician ownership
     # ---------------------------------------------------------------
+
     if job.assigned_technician_id != technician.technician_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -437,17 +639,20 @@ def delete_completion_photo(
         )
 
     storage = CompletionDocumentStorage()
+
     storage_key = document.storage_key
 
     try:
         # -----------------------------------------------------------
         # Delete physical storage object first
         # -----------------------------------------------------------
+
         storage.delete(storage_key)
 
         # -----------------------------------------------------------
         # Create deletion audit event
         # -----------------------------------------------------------
+
         audit_event = AuditEvent(
             tech_id=str(technician.tech_id),
             tenant_id=str(current_user.tenant_id),
@@ -461,6 +666,7 @@ def delete_completion_photo(
             details={
                 "completion_document_id": document.id,
                 "job_closure_id": document.job_closure_id,
+                "document_type": document.document_type,
                 "category": document.category,
                 "original_filename": document.original_filename,
                 "content_type": document.content_type,
@@ -473,9 +679,15 @@ def delete_completion_photo(
         db.add(audit_event)
 
         # -----------------------------------------------------------
-        # Remove database reference
+        # Remove database reference through repository
         # -----------------------------------------------------------
-        db.delete(document)
+
+        document_repository.delete(document)
+
+        # -----------------------------------------------------------
+        # Commit document deletion + audit atomically
+        # -----------------------------------------------------------
+
         db.commit()
 
     except Exception as exc:

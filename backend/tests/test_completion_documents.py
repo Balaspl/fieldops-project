@@ -106,6 +106,14 @@ client = TestClient(app)
 # ---------------------------------------------------------------------------
 # Test data helpers
 # ---------------------------------------------------------------------------
+def _valid_jpeg_bytes():
+    """Return a minimal valid JPEG fixture for upload tests."""
+    return (
+        b"\xff\xd8\xff\xe0"
+        b"\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+        b"\xff\xd9"
+    )
+
 
 def _create_tech_and_job(
     db,
@@ -221,7 +229,7 @@ def test_assigned_technician_can_upload_completion_photo(
             files={
                 "file": (
                     "after.jpg",
-                    b"test-image-data",
+                    _valid_jpeg_bytes(),
                     "image/jpeg",
                 )
             },
@@ -237,7 +245,7 @@ def test_assigned_technician_can_upload_completion_photo(
         assert data["category"] == "AFTER"
         assert data["original_filename"] == "after.jpg"
         assert data["content_type"] == "image/jpeg"
-        assert data["file_size"] == len(b"test-image-data")
+        assert data["file_size"] == len(_valid_jpeg_bytes())
         assert data["status"] == "AVAILABLE"
 
         document = (
@@ -284,7 +292,7 @@ def test_assigned_technician_can_upload_completion_photo(
             files={
                 "file": (
                     "after.jpg",
-                    b"test-image-data",
+                    _valid_jpeg_bytes(),
                     "image/jpeg",
                 )
             },
@@ -300,7 +308,7 @@ def test_assigned_technician_can_upload_completion_photo(
         assert data["category"] == "AFTER"
         assert data["original_filename"] == "after.jpg"
         assert data["content_type"] == "image/jpeg"
-        assert data["file_size"] == len(b"test-image-data")
+        assert data["file_size"] == len(_valid_jpeg_bytes())
 
         # Newly uploaded completion photos must remain PENDING
         # until an approval/scanning process marks them AVAILABLE.
@@ -352,7 +360,7 @@ def test_cross_tenant_job_is_not_accessible():
             files={
                 "file": (
                     "after.jpg",
-                    b"test-image-data",
+                    _valid_jpeg_bytes(),
                     "image/jpeg",
                 )
             },
@@ -383,7 +391,7 @@ def test_non_technician_cannot_upload_completion_photo():
             files={
                 "file": (
                     "after.jpg",
-                    b"test-image-data",
+                    _valid_jpeg_bytes(),
                     "image/jpeg",
                 )
             },
@@ -434,7 +442,7 @@ def test_storage_failure_does_not_create_database_reference(
             files={
                 "file": (
                     "after.jpg",
-                    b"test-image-data",
+                    _valid_jpeg_bytes(),
                     "image/jpeg",
                 )
             },
@@ -485,7 +493,7 @@ def test_duplicate_filenames_generate_unique_storage_keys(
             files={
                 "file": (
                     "after.jpg",
-                    b"first-image-data",
+                    _valid_jpeg_bytes(),
                     "image/jpeg",
                 )
             },
@@ -499,7 +507,7 @@ def test_duplicate_filenames_generate_unique_storage_keys(
             files={
                 "file": (
                     "after.jpg",
-                    b"second-image-data",
+                    _valid_jpeg_bytes(),
                     "image/jpeg",
                 )
             },
@@ -631,7 +639,7 @@ def test_successful_upload_creates_audit_event(tmp_path, monkeypatch):
             files={
                 "file": (
                     "after.jpg",
-                    b"test-image-data",
+                    _valid_jpeg_bytes(),
                     "image/jpeg",
                 )
             },
@@ -669,7 +677,7 @@ def test_successful_upload_creates_audit_event(tmp_path, monkeypatch):
         assert audit_event.details["category"] == "AFTER"
         assert audit_event.details["original_filename"] == "after.jpg"
         assert audit_event.details["content_type"] == "image/jpeg"
-        assert audit_event.details["file_size"] == len(b"test-image-data")
+        assert audit_event.details["file_size"] == len(_valid_jpeg_bytes())
         assert (
             audit_event.details["checksum_sha256"]
             == document_data["checksum_sha256"]
@@ -712,7 +720,7 @@ def test_assigned_technician_can_download_available_photo(
             files={
                 "file": (
                     "after.jpg",
-                    b"download-test-image",
+                    _valid_jpeg_bytes(),
                     "image/jpeg",
                 )
             },
@@ -749,7 +757,7 @@ def test_assigned_technician_can_download_available_photo(
         )
 
         assert download_response.status_code == 200
-        assert download_response.content == b"download-test-image"
+        assert download_response.content == _valid_jpeg_bytes()
         assert download_response.headers["content-type"].startswith(
             "image/jpeg"
         )
@@ -787,7 +795,7 @@ def test_wrong_technician_cannot_download_photo(
             files={
                 "file": (
                     "after.jpg",
-                    b"private-image",
+                    _valid_jpeg_bytes(),
                     "image/jpeg",
                 )
             },
@@ -867,7 +875,7 @@ def test_cross_tenant_document_cannot_be_downloaded(
             files={
                 "file": (
                     "after.jpg",
-                    b"tenant-two-image",
+                    _valid_jpeg_bytes(),
                     "image/jpeg",
                 )
             },
@@ -935,7 +943,7 @@ def test_pending_document_cannot_be_downloaded(
             files={
                 "file": (
                     "pending.jpg",
-                    b"pending-image",
+                    _valid_jpeg_bytes(),
                     "image/jpeg",
                 )
             },
@@ -952,6 +960,8 @@ def test_pending_document_cannot_be_downloaded(
         assert document is not None
 
         document.status = "PENDING"
+        document.scan_status = "PENDING"
+        document.scanned_at = None
         db.commit()
 
         _set_user(
@@ -1004,7 +1014,7 @@ def test_rejected_document_cannot_be_downloaded(
             files={
                 "file": (
                     "rejected.jpg",
-                    b"rejected-image",
+                    _valid_jpeg_bytes(),
                     "image/jpeg",
                 )
             },
@@ -1073,7 +1083,7 @@ def test_missing_storage_file_returns_404(
             files={
                 "file": (
                     "missing.jpg",
-                    b"missing-file-image",
+                    _valid_jpeg_bytes(),
                     "image/jpeg",
                 )
             },
@@ -1158,7 +1168,7 @@ def test_assigned_technician_can_delete_completion_photo(
             files={
                 "file": (
                     "delete.jpg",
-                    b"image-to-delete",
+                    _valid_jpeg_bytes(),
                     "image/jpeg",
                 )
             },
@@ -1233,7 +1243,7 @@ def test_wrong_technician_cannot_delete_completion_photo(
             files={
                 "file": (
                     "protected.jpg",
-                    b"protected-image",
+                    _valid_jpeg_bytes(),
                     "image/jpeg",
                 )
             },
@@ -1308,7 +1318,7 @@ def test_cross_tenant_technician_cannot_delete_completion_photo(
             files={
                 "file": (
                     "tenant-two.jpg",
-                    b"tenant-two-image",
+                    _valid_jpeg_bytes(),
                     "image/jpeg",
                 )
             },
@@ -1373,7 +1383,7 @@ def test_upload_audit_event_has_timestamp_and_correlation_id(
             files={
                 "file": (
                     "audit.jpg",
-                    b"audit-image",
+                    _valid_jpeg_bytes(),
                     "image/jpeg",
                 )
             },
