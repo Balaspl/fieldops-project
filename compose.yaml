@@ -96,6 +96,9 @@ services:
     environment:
       KAFKA_TOPICS: "${KAFKA_TOPICS:-fieldops.job.events,fieldops.gps.events,fieldops.sla.events,fieldops.notification.events,fieldops.billing.events,fieldops.payment.events,fieldops.audit.events}"
       KAFKA_REPLICATION_FACTOR: "${KAFKA_REPLICATION_FACTOR:-1}"
+      KAFKA_PRODUCER_USERNAME: "${KAFKA_PRODUCER_USERNAME:?KAFKA_PRODUCER_USERNAME must be set}"
+      KAFKA_AUDIT_USERNAME: "${KAFKA_AUDIT_USERNAME:?KAFKA_AUDIT_USERNAME must be set}"
+      KAFKA_AUDIT_CONSUMER_GROUP: "${KAFKA_AUDIT_CONSUMER_GROUP:-fieldops-audit}"
       KAFKA_JOB_EVENTS_PARTITIONS: "${KAFKA_JOB_EVENTS_PARTITIONS:-6}"
       KAFKA_GPS_EVENTS_PARTITIONS: "${KAFKA_GPS_EVENTS_PARTITIONS:-12}"
       KAFKA_SLA_EVENTS_PARTITIONS: "${KAFKA_SLA_EVENTS_PARTITIONS:-6}"
