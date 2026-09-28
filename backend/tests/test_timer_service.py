@@ -12,11 +12,13 @@ class MockRedis:
         self.data[key] = value
         return True
         
-    def delete(self, key):
-        if key in self.data:
-            del self.data[key]
-            return 1
-        return 0
+    def delete(self, *keys):
+        deleted_count = 0
+        for key in keys:
+            if key in self.data:
+                del self.data[key]
+                deleted_count += 1
+        return deleted_count
         
     def exists(self, key):
         return key in self.data

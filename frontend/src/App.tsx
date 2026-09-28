@@ -48,6 +48,8 @@ import { getTechnicianNotifications } from "./services/technicianPortalService";
 import { ToastProvider, useToast } from "./hooks/useToast";
 import LoadingSpinner from "./components/ui/LoadingSpinner";
 import TechnicianLocationTracker from "./components/technician/TechnicianLocationTracker";
+import TechnicianAvailabilityLocation from "./components/technician/TechnicianAvailabilityLocation";
+
 
 // Lazy load page components
 const LoginPage = lazy(() => import("./pages/LoginPage"));
@@ -103,7 +105,7 @@ const CustomerServiceRequestsPage = lazy(
   () => import("./pages/customer/CustomerServiceRequestsPage"),
 );
 const CustomerJobTrackingPage = lazy(
-  () => import("./pages/customer/CustomerJobTrackingPage"),
+  () => import("./pages/customer/CustomerTrackingPage"),
 );
 const CustomerNotificationsPage = lazy(
   () => import("./pages/customer/CustomerNotificationsPage"),
@@ -2786,7 +2788,16 @@ function AppInner() {
                 : "hidden",
           }}
         >
-          {isTechnician && <TechnicianLocationTracker user={user} />}
+          {isTechnician && (
+  <>
+              <TechnicianAvailabilityLocation
+                technicianId={String(user?.id)}
+                tenantId={String(user?.tenant_id)}
+              />
+
+              <TechnicianLocationTracker user={user} />
+            </>
+          )}
           {selectedNotification && (
             <NotificationDetail
               notification={

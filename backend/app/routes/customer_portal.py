@@ -9,6 +9,7 @@ and their own notifications.
 
 import uuid
 import logging
+import os
 import requests
 from io import BytesIO
 from datetime import datetime, timezone
@@ -25,7 +26,7 @@ from ..auth.dependencies import AuthenticatedUser, require_permission
 from ..auth.rbac import Permission
 from ..auth.password import hash_password, verify_password
 from ..models import (
-    Job, JobClosure, Technician, InAppNotification, ServiceRequest, Organization,
+    Job, JobClosure, Technician, InAppNotification, ServiceRequest, Organization, GPSPing,
 )
 from ..models.customer_profile import CustomerProfileModel
 from ..models.technician_profile import TechnicianProfile
@@ -37,11 +38,13 @@ from ..portal_schemas import (
     ServiceRequestCreate,
     ServiceRequestUpdate,
     ServiceRequestResponse,
+    ServiceRequestCreatedResponse,
     CustomerDashboardResponse,
     CustomerJobTrackingResponse,
     ChangePasswordRequest,
 )
 from ..services.enterprise_audit import audit_log, AuditAction
+from ..services.ola_map_client import is_valid_coordinate
 
 logger = logging.getLogger(__name__)
 
@@ -81,52 +84,58 @@ def haversine_km(
 
 
 def geocode_customer_location(address: str):
+    """Convert a customer-entered address into coordinates using Ola Maps.
+
+    The customer can still submit exact GPS coordinates; this helper is for
+    legacy/address-only flows and keeps Photon only as a last-resort fallback.
     """
-    Convert a customer-entered address into latitude/longitude.
+    ola_api_key = os.getenv("OLA_MAPS_API_KEY", "").strip()
+    if ola_api_key:
+        try:
+            response = requests.get(
+                "https://api.olamaps.io/places/v1/geocode",
+                params={"address": address, "api_key": ola_api_key},
+                timeout=8,
+            )
+            response.raise_for_status()
+            results = response.json().get("geocodingResults", [])
+            if results:
+                location = results[0].get("geometry", {}).get("location", {})
+                if location.get("lat") is not None and location.get("lng") is not None:
+                    return {
+                        "longitude": float(location["lng"]),
+                        "latitude": float(location["lat"]),
+                    }
+        except (requests.RequestException, ValueError, KeyError, TypeError):
+            logger.exception("Ola Maps geocoding failed for customer location: %s", address)
 
-    Returns:
-        {
-            "longitude": float,
-            "latitude": float
-        }
-
-    Returns None when geocoding fails or no location is found.
-    """
-
+    # Legacy fallback for environments that have not configured Ola yet.
     try:
         response = requests.get(
             "https://photon.komoot.io/api/",
-            params={
-                "q": address,
-                "limit": 1,
-            },
-            headers={
-                "User-Agent": "FieldOps/1.0",
-            },
+            params={"q": address, "limit": 1},
+            headers={"User-Agent": "FieldOps/1.0"},
             timeout=10,
         )
-
         response.raise_for_status()
-
-        data = response.json()
-        features = data.get("features", [])
-
+        features = response.json().get("features", [])
         if not features:
             return None
-
         coordinates = features[0]["geometry"]["coordinates"]
-
-        return {
-            "longitude": coordinates[0],
-            "latitude": coordinates[1],
-        }
-
+        return {"longitude": coordinates[0], "latitude": coordinates[1]}
     except (requests.RequestException, ValueError, KeyError, TypeError):
-        logger.exception(
-            "Failed to geocode customer location: %s",
-            address,
-        )
+        logger.exception("Fallback geocoding failed for customer location: %s", address)
         return None
+
+
+def _latest_technician_ping(db: Session, job_id: int):
+    """Return the most recent GPS fix for a job, if one exists."""
+    return (
+        db.query(GPSPing)
+        .filter(GPSPing.job_id == str(job_id))
+        .order_by(GPSPing.timestamp.desc(), GPSPing.created_at.desc())
+        .first()
+    )
 
 
 # ──────────────────────────────────────────────────
@@ -468,7 +477,7 @@ async def list_service_requests(
 
 @router.post(
     "/service-requests",
-    response_model=ServiceRequestResponse,
+    response_model=ServiceRequestCreatedResponse,
     status_code=201,
 )
 async def create_service_request(
@@ -567,7 +576,7 @@ async def create_service_request(
     customer_address = data.location.strip()
 
 # Use exact GPS coordinates from customer current location.
-    if data.site_latitude is not None and data.site_longitude is not None:
+    if is_valid_coordinate(data.site_latitude, data.site_longitude):
         customer_latitude = data.site_latitude
         customer_longitude = data.site_longitude
     else:
@@ -669,6 +678,7 @@ async def create_service_request(
 
     new_job = Job(
         tenant_id=selected_tenant_id,
+        customer_tenant_id=current_user.tenant_id,
         customer_name=cust_name,
         location=customer_address,
         site_latitude=customer_latitude,
@@ -694,68 +704,78 @@ async def create_service_request(
         customer_email=cust_email,
     )
 
-    db.add(new_job)
-
-    # Get Job ID before creating ServiceRequest.
-    db.flush()
+    try:
+        db.add(new_job)
+        db.flush()
 
     # ──────────────────────────────────────────────
     # Create Service Request
     # ──────────────────────────────────────────────
 
-    sr = ServiceRequest(
-        request_number=_generate_request_number(),
-        customer_user_id=current_user.user_id,
-        tenant_id=current_user.tenant_id,
-        title=data.title,
-        description=data.description,
-        service_type=data.service_type,
-        priority=data.priority,
-        preferred_visit_date=data.preferred_visit_date,
-        images=data.images,
-        location=data.location,
-        contact_number=data.contact_number,
-        status="UNASSIGNED",
-        linked_job_id=new_job.id,
-    )
-
-    db.add(sr)
+        sr = ServiceRequest(
+            request_number=_generate_request_number(),
+            customer_user_id=current_user.user_id,
+            tenant_id=current_user.tenant_id,
+            title=data.title,
+            description=data.description,
+            service_type=data.service_type,
+            priority=data.priority,
+            preferred_visit_date=data.preferred_visit_date,
+            images=data.images,
+            location=customer_address,
+            contact_number=data.contact_number,
+            status="UNASSIGNED",
+            linked_job_id=new_job.id,
+        )
+        db.add(sr)
+        db.flush()
 
     # ──────────────────────────────────────────────
     # Audit
     # ──────────────────────────────────────────────
 
-    audit_log(
-        db,
-        action=AuditAction.SERVICE_REQUEST_CREATED,
-        tenant_id=current_user.tenant_id,
-        user_id=current_user.user_id,
-        role=current_user.role.value,
-        entity_type="service_request",
-        entity_id=sr.request_number,
-        new_value={
-            "title": data.title,
-            "priority": data.priority,
-            "job_id": new_job.id,
-            "selected_organization_id": (
-                selected_tenant_id
-            ),
-            "required_skill": req_skill,
-            "customer_latitude": (
-                customer_latitude
-            ),
-            "customer_longitude": (
-                customer_longitude
-            ),
-        },
-        request=request,
-    )
+        audit_log(
+            db,
+            action=AuditAction.SERVICE_REQUEST_CREATED,
+            tenant_id=current_user.tenant_id,
+            user_id=current_user.user_id,
+            role=current_user.role.value,
+            entity_type="service_request",
+            entity_id=sr.request_number,
+            new_value={
+                "title": data.title,
+                "priority": data.priority,
+                "job_id": new_job.id,
+                "selected_organization_id": selected_tenant_id,
+                "required_skill": req_skill,
+                "customer_latitude": customer_latitude,
+                "customer_longitude": customer_longitude,
+            },
+            request=request,
+        )
 
-    db.commit()
+        # The Job, linked ServiceRequest, and audit record share one transaction.
+        db.commit()
+        db.refresh(sr)
+        db.refresh(new_job)
+    except Exception:
+        db.rollback()
+        raise
 
-    db.refresh(sr)
-
-    return sr
+    service_request = ServiceRequestResponse.model_validate(sr).model_dump()
+    service_request["created_job"] = {
+        "id": new_job.id,
+        "service_request_id": sr.id,
+        "tenant_id": new_job.tenant_id,
+        "customer_tenant_id": new_job.customer_tenant_id,
+        "customer_id": new_job.customer_id,
+        "assigned_technician_id": new_job.assigned_technician_id,
+        "status": new_job.status,
+        "location": new_job.location,
+        "site_latitude": new_job.site_latitude,
+        "site_longitude": new_job.site_longitude,
+    }
+    return service_request
 
 
 @router.get(
@@ -1117,6 +1137,7 @@ async def track_customer_jobs(
                     if tp:
                         tech_photo = tp.profile_photo
 
+        latest_ping = _latest_technician_ping(db, job.id)
         results.append(
             CustomerJobTrackingResponse(
                 id=job.id,
@@ -1125,9 +1146,19 @@ async def track_customer_jobs(
                 priority=job.priority,
                 service_type=job.service_type,
                 location=job.location,
+                site_address=job.site_address or job.location,
+                site_latitude=job.site_latitude,
+                site_longitude=job.site_longitude,
+                assigned_technician_id=job.assigned_technician_id,
                 assigned_technician_name=tech_name,
                 assigned_technician_photo=tech_photo,
                 assigned_technician_phone=tech_phone,
+                technician_latitude=float(latest_ping.latitude) if latest_ping else None,
+                technician_longitude=float(latest_ping.longitude) if latest_ping else None,
+                technician_accuracy=float(latest_ping.accuracy) if latest_ping and latest_ping.accuracy is not None else None,
+                technician_last_ping=latest_ping.timestamp if latest_ping else None,
+                live_tracking=(str(job.status).upper() == "EN_ROUTE" and latest_ping is not None),
+                tracking_tenant_id=str(job.tenant_id) if job.tenant_id else None,
                 created_at=job.created_at,
                 completed_at=job.completed_at,
             )
@@ -1214,6 +1245,7 @@ async def get_customer_job_detail(
                 if tp:
                     tech_photo = tp.profile_photo
 
+    latest_ping = _latest_technician_ping(db, job.id)
     return CustomerJobTrackingResponse(
         id=job.id,
         customer_name=job.customer_name,
@@ -1221,9 +1253,19 @@ async def get_customer_job_detail(
         priority=job.priority,
         service_type=job.service_type,
         location=job.location,
+        site_address=job.site_address or job.location,
+        site_latitude=job.site_latitude,
+        site_longitude=job.site_longitude,
+        assigned_technician_id=job.assigned_technician_id,
         assigned_technician_name=tech_name,
         assigned_technician_photo=tech_photo,
         assigned_technician_phone=tech_phone,
+        technician_latitude=float(latest_ping.latitude) if latest_ping else None,
+        technician_longitude=float(latest_ping.longitude) if latest_ping else None,
+        technician_accuracy=float(latest_ping.accuracy) if latest_ping and latest_ping.accuracy is not None else None,
+        technician_last_ping=latest_ping.timestamp if latest_ping else None,
+        live_tracking=(str(job.status).upper() == "EN_ROUTE" and latest_ping is not None),
+        tracking_tenant_id=str(job.tenant_id) if job.tenant_id else None,
         created_at=job.created_at,
         completed_at=job.completed_at,
     )

@@ -14,6 +14,7 @@ from app.auth.dependencies import AuthenticatedUser, require_permission
 from app.auth.rbac import Permission, UserRole
 from app.database import Base
 from app.models import Job, JobClosure, Organization, ServiceRequest
+from app.models_legacy import GPSPing
 from app.portal_schemas import ServiceRequestUpdate
 from app.routes import customer_portal
 from app.routes.customer_portal import (
@@ -39,6 +40,7 @@ def customer_db():
             Job.__table__,
             ServiceRequest.__table__,
             JobClosure.__table__,
+            GPSPing.__table__,
         ],
     )
     session = sessionmaker(bind=engine)()

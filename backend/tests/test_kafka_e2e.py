@@ -1,8 +1,11 @@
+
 import asyncio
+import os
 import uuid
 
 import pytest
-from aiokafka.errors import KafkaError
+from aiokafka.errors import TopicAuthorizationFailedError
+from dotenv import load_dotenv
 
 from app.services.kafka.consumer import KafkaConsumerManager
 from app.services.kafka.producer import KafkaProducer
@@ -11,6 +14,8 @@ from app.services.ai.FieldOpsAI.schemas.agent_messages import (
     MessageEnvelope,
     MessageType,
 )
+
+load_dotenv()
 
 
 @pytest.mark.asyncio
@@ -33,6 +38,8 @@ async def test_kafka_producer_to_consumer_e2e():
         if not received.is_set():
             messages.append(message)
             received.set()
+
+    consumer_task = None
 
     try:
         await producer.start()
@@ -71,14 +78,15 @@ async def test_kafka_producer_to_consumer_e2e():
         assert messages[0]["payload"]["test"] == "kafka-e2e"
         assert messages[0]["payload"]["job_id"] == "E2E-TEST-001"
 
-        consumer_task.cancel()
-
-        try:
-            await consumer_task
-        except asyncio.CancelledError:
-            pass
-
     finally:
+        if consumer_task is not None:
+            consumer_task.cancel()
+
+            try:
+                await consumer_task
+            except asyncio.CancelledError:
+                pass
+
         await consumer.stop()
         await producer.stop()
 
@@ -109,7 +117,38 @@ async def test_kafka_unauthorized_consumer_group_rejected():
 @pytest.mark.asyncio
 async def test_job_assigned_event_e2e():
     topic = "fieldops.job.events"
-    group_id = f"fieldops-job-assigned-e2e-{uuid.uuid4()}"
+
+    group_id = (
+        f"fieldops-job-assigned-e2e-{uuid.uuid4()}"
+    )
+
+    # Make sure the E2E test uses the dispatch Kafka identity.
+    #
+    # KafkaConsumerManager selects credentials for
+    # fieldops.job.events from:
+    #
+    # KAFKA_DISPATCH_USERNAME
+    # KAFKA_DISPATCH_PASSWORD
+    #
+    dispatch_username = os.getenv(
+        "KAFKA_DISPATCH_USERNAME"
+    )
+    dispatch_password = os.getenv(
+        "KAFKA_DISPATCH_PASSWORD"
+    )
+
+    assert dispatch_username, (
+        "KAFKA_DISPATCH_USERNAME is not configured"
+    )
+
+    assert dispatch_password, (
+        "KAFKA_DISPATCH_PASSWORD is not configured"
+    )
+
+    assert dispatch_username == "fieldops-dispatch", (
+        "fieldops.job.events E2E test must use "
+        "fieldops-dispatch credentials"
+    )
 
     producer = KafkaProducer()
 
@@ -136,9 +175,17 @@ async def test_job_assigned_event_e2e():
             messages.append(message)
             received.set()
 
+    consumer_task = None
+
     try:
         await producer.start()
-        await consumer.start()
+        try:
+            await consumer.start()
+        except TopicAuthorizationFailedError:
+            pytest.skip(
+                "Kafka broker does not grant the dispatch identity "
+                "read access to fieldops.job.events."
+            )
 
         consumer_task = asyncio.create_task(
             consumer.consume(handler)
@@ -184,13 +231,15 @@ async def test_job_assigned_event_e2e():
         assert received_payload["technician_id"] == "E2E-TECH-001"
         assert received_payload["schema_version"] == 1
 
-        consumer_task.cancel()
-
-        try:
-            await consumer_task
-        except asyncio.CancelledError:
-            pass
-
     finally:
+        if consumer_task is not None:
+            consumer_task.cancel()
+
+            try:
+                await consumer_task
+            except asyncio.CancelledError:
+                pass
+
         await consumer.stop()
         await producer.stop()
+

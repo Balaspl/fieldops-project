@@ -12,7 +12,7 @@ from app.database import Base, get_db
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import sessionmaker
-from app.routes.jobs import update_job
+from app.routes.jobs import update_job, get_jobs
 from app.schemas import JobCreate
 from app.auth.dependencies import (
     AuthenticatedUser,
@@ -265,6 +265,59 @@ def test_get_jobs_no_filters():
     data = response.json()
 
     assert len(data) == 4
+
+
+def test_service_job_is_visible_to_requesting_and_provider_admin_and_provider_technician(setup_db):
+    from app.routes.technician_portal import _get_assigned_jobs_query
+
+    db = setup_db
+    routed_job = Job(
+        tenant_id="tenant-1",
+        customer_tenant_id="customer-tenant",
+        customer_name="Cross-tenant request customer",
+        location="Customer address",
+        issue_description="Plumbing request",
+        priority="HIGH",
+        service_type="Plumbing",
+        contact_number="9876543210",
+        preferred_service_date=date.today(),
+        assigned_technician_id=1,
+        status="CREATED",
+    )
+    db.add(routed_job)
+    db.commit()
+    db.refresh(routed_job)
+
+    def admin(tenant_id):
+        return AuthenticatedUser(
+            user_id=f"admin-{tenant_id}",
+            tenant_id=tenant_id,
+            role=UserRole.DISPATCHER,
+            jti="test-jti",
+            session_id="test-session",
+        )
+
+    def admin_jobs_for(tenant_id):
+        user = admin(tenant_id)
+        return get_jobs(
+            response=Response(),
+            user_tenant=(user, tenant_id),
+            current_user=user,
+            db=db,
+            technician_id=None,
+            page=None,
+            limit=None,
+        )
+
+    provider_admin_jobs = admin_jobs_for("tenant-1")
+    customer_admin_jobs = admin_jobs_for("customer-tenant")
+    unrelated_admin_jobs = admin_jobs_for("unrelated-tenant")
+    provider_technician_jobs = _get_assigned_jobs_query(db, "tech-1", "tenant-1").all()
+
+    assert any(job.id == routed_job.id for job in provider_admin_jobs)
+    assert any(job.id == routed_job.id for job in customer_admin_jobs)
+    assert all(job.id != routed_job.id for job in unrelated_admin_jobs)
+    assert any(job.id == routed_job.id for job in provider_technician_jobs)
 
 
 def test_get_jobs_all_filters():
@@ -635,7 +688,7 @@ def test_plan_job_invalid_status():
             )
 
         assert exc_info.value.status_code == 400
-        assert "QUEUED or ACTIVE" in exc_info.value.detail
+        assert "CREATED, QUEUED, or ACTIVE" in exc_info.value.detail
 
     finally:
         db.close()
@@ -3700,9 +3753,9 @@ class FakeAcceptRedis:
 
 
 
-    def delete(self, key):
-        self.deleted_keys.append(key)
-        return 1
+    def delete(self, *keys):
+        self.deleted_keys.extend(keys)
+        return len(keys)
 
 
 def test_accept_job_success(monkeypatch):
@@ -3721,9 +3774,9 @@ def test_accept_job_success(monkeypatch):
 
         job.status = "ASSIGNED"
         job.assigned_technician_id = tech.technician_id
+        job.assigned_at = datetime.now(timezone.utc)
         tech.current_jobs = 0
-
-        db.commit = lambda: None
+        db.commit()
 
         redis_client = FakeAcceptRedis(
             lock_result=True,
@@ -3737,15 +3790,15 @@ def test_accept_job_success(monkeypatch):
             redis_client=redis_client,
         )
 
-        assert result["status"] == "EN_ROUTE"
+        assert result["status"] == "ACCEPTED"
         assert result["previous_status"] == "ASSIGNED"
         assert result["technician"]["tech_id"] == "tech-1"
-        assert result["technician"]["status"] == "EN_ROUTE"
-        assert result["tracking_enabled"] is True
+        assert result["technician"]["status"] == "AVAILABLE"
+        assert result["tracking_enabled"] is False
 
-        assert job.status == "EN_ROUTE"
-        assert tech.technician_status == "EN_ROUTE"
-        assert tech.current_jobs == 1
+        assert job.status == "ACCEPTED"
+        assert tech.technician_status == "AVAILABLE"
+        assert tech.current_jobs == 0
 
         assert "job:timer:102" in redis_client.deleted_keys
         assert any(
@@ -4119,7 +4172,9 @@ def test_accept_job_validation_branches():
             )
 
         assert exc_info.value.status_code == 400
-        assert exc_info.value.detail == "Job is not in ASSIGNED status"
+        assert exc_info.value.detail == (
+            "Job is not available for acceptance: active"
+        )
     finally:
         db.close()
 
@@ -4163,7 +4218,8 @@ def test_accept_job_lock_and_timer_branches(monkeypatch):
 
         job.status = "ASSIGNED"
         job.assigned_technician_id = tech.technician_id
-        db.commit = lambda: None
+        job.assigned_at = datetime.now(timezone.utc)
+        db.commit()
 
         with pytest.raises(HTTPException) as exc_info:
             accept_job(
@@ -4194,7 +4250,8 @@ def test_accept_job_lock_and_timer_branches(monkeypatch):
 
         job.status = "ASSIGNED"
         job.assigned_technician_id = tech.technician_id
-        db.commit = lambda: None
+        job.assigned_at = datetime.now(timezone.utc) - timedelta(minutes=11)
+        db.commit()
 
         redis_client = FakeAcceptRedis(
             lock_result=True,
@@ -4212,7 +4269,7 @@ def test_accept_job_lock_and_timer_branches(monkeypatch):
         assert exc_info.value.status_code == 423
         assert exc_info.value.detail == "Acceptance window expired"
 
-        assert "lock:job_accept:tenant-1:101" in redis_client.deleted_keys
+        assert "job:timer:101" in redis_client.deleted_keys
     finally:
         db.close()
 
@@ -4229,6 +4286,8 @@ def test_accept_job_lock_and_timer_branches(monkeypatch):
 
         job.status = "ASSIGNED"
         job.assigned_technician_id = tech.technician_id
+        job.assigned_at = datetime.now(timezone.utc)
+        db.commit()
 
         def broken_commit():
             raise RuntimeError("forced accept commit failure")
@@ -5007,7 +5066,7 @@ def test_assign_job_invalid_status():
 
         assert exc_info.value.status_code == 400
         assert exc_info.value.detail == (
-            "Job must be in QUEUED or ACTIVE status to be assigned"
+            "Job must be in CREATED, QUEUED, or ACTIVE status to be assigned"
         )
 
     finally:

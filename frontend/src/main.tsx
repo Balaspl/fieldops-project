@@ -158,8 +158,7 @@ if (typeof document !== 'undefined') {
   document.head.appendChild(styleEl);
 }
 
-import CustomerTrackingPage from './pages/CustomerTrackingPage';
-
+import CustomerTrackingPage from './pages/customer/CustomerTrackingPage';
 const container = document.getElementById('root');
 if (container) {
   const path = window.location.pathname;
