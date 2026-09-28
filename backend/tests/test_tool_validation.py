@@ -1,5 +1,3 @@
-import logging
-
 import fakeredis
 import pytest
 import logging

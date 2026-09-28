@@ -24,7 +24,11 @@ const TECHNICIAN_STATUSES = [
   "Suspended",
 ];
 
-const normalizeTechnicianStatus = (status?: string) => {
+const AVAILABILITY_STALE_AFTER_MS = 15000;
+
+const normalizeTechnicianStatus = (
+  status?: string | null,
+): string | null => {
   const value = (status || "").toLowerCase().trim();
 
   const map: Record<string, string> = {
@@ -41,7 +45,7 @@ const normalizeTechnicianStatus = (status?: string) => {
     suspended: "Suspended",
   };
 
-  return map[value] || "Available";
+  return map[value] ?? null;
 };
 
 const s = {
@@ -52,21 +56,37 @@ const s = {
     background: "#EEF4F1",
     fontFamily: "'Inter', sans-serif",
   },
-header: {
-  background: "#fff",
-  borderRadius: "14px",
-  padding: "24px",
-  marginBottom: "24px",
-  boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
-  border: "1px solid #E3ECE7",
-},  title: { fontSize: "24px", fontWeight: 700, color: "#1F2933", margin: 0 },
-  subtitle: { fontSize: "14px", color: "#6B7280", marginTop: "4px" },
+
+  header: {
+    background: "#fff",
+    borderRadius: "14px",
+    padding: "24px",
+    marginBottom: "24px",
+    boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+    border: "1px solid #E3ECE7",
+  },
+
+  title: {
+    fontSize: "24px",
+    fontWeight: 700,
+    color: "#1F2933",
+    margin: 0,
+  },
+
+  subtitle: {
+    fontSize: "14px",
+    color: "#6B7280",
+    marginTop: "4px",
+  },
+
   grid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+    gridTemplateColumns:
+      "repeat(auto-fit, minmax(200px, 1fr))",
     gap: "16px",
     marginBottom: "28px",
   },
+
   card: {
     background: "#fff",
     borderRadius: "14px",
@@ -77,6 +97,7 @@ header: {
     flexDirection: "column" as const,
     gap: "8px",
   },
+
   cardIcon: {
     width: "40px",
     height: "40px",
@@ -85,8 +106,19 @@ header: {
     alignItems: "center",
     justifyContent: "center",
   },
-  cardLabel: { fontSize: "12px", color: "#6B7280", fontWeight: 500 },
-  cardValue: { fontSize: "28px", fontWeight: 700, color: "#1F2933" },
+
+  cardLabel: {
+    fontSize: "12px",
+    color: "#6B7280",
+    fontWeight: 500,
+  },
+
+  cardValue: {
+    fontSize: "28px",
+    fontWeight: 700,
+    color: "#1F2933",
+  },
+
   section: {
     background: "#fff",
     borderRadius: "14px",
@@ -94,6 +126,7 @@ header: {
     boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
     border: "1px solid #E3ECE7",
   },
+
   sectionTitle: {
     fontSize: "16px",
     fontWeight: 700,
@@ -103,6 +136,7 @@ header: {
     alignItems: "center",
     gap: "8px",
   },
+
   jobRow: {
     display: "flex",
     justifyContent: "space-between",
@@ -110,20 +144,24 @@ header: {
     padding: "12px 0",
     borderBottom: "1px solid #f0f0f0",
   },
+
   jobInfo: {
     display: "flex",
     flexDirection: "column" as const,
     gap: "2px",
   },
+
   jobTitle: {
     fontSize: "14px",
     fontWeight: 600,
     color: "#1F2933",
   },
+
   jobMeta: {
     fontSize: "12px",
     color: "#6B7280",
   },
+
   badge: (color: string) => ({
     fontSize: "11px",
     fontWeight: 600,
@@ -133,6 +171,7 @@ header: {
     color,
     display: "inline-block",
   }),
+
   empty: {
     textAlign: "center" as const,
     color: "#9CA3AF",
@@ -149,10 +188,20 @@ export default function TechnicianPortalDashboard({
   const [stats, setStats] = useState<any>(null);
   const [recentJobs, setRecentJobs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [technicianStatus, setTechnicianStatus] = useState("Not Available");
+
+  const [technicianStatus, setTechnicianStatus] =
+    useState("Not Available");
+
   const [savingStatus, setSavingStatus] = useState(false);
   const [profileCompleted, setProfileCompleted] = useState(false);
-  const [showProfileMessage, setShowProfileMessage] = useState(false);
+  const [showProfileMessage, setShowProfileMessage] =
+    useState(false);
+
+  const [attendanceError, setAttendanceError] =
+    useState<string | null>(null);
+
+  const [lastAttendanceSync, setLastAttendanceSync] =
+    useState<Date | null>(null);
 
   const loadDashboard = async () => {
     try {
@@ -162,7 +211,9 @@ export default function TechnicianPortalDashboard({
       ]);
 
       setStats(dashRes.data);
-      setRecentJobs((jobsRes.data || []).slice(0, 5));
+      setRecentJobs(
+        (jobsRes.data || []).slice(0, 5),
+      );
     } catch {
       // Keep existing dashboard behaviour on API failure.
     } finally {
@@ -180,19 +231,49 @@ export default function TechnicianPortalDashboard({
 
         setStats(dashRes.data);
 
-        const isProfileCompleted = Boolean(dashRes.data?.profile_completed);
+        const isProfileCompleted = Boolean(
+          dashRes.data?.profile_completed,
+        );
 
         setProfileCompleted(isProfileCompleted);
 
-        setTechnicianStatus(
-          isProfileCompleted
-            ? normalizeTechnicianStatus(dashRes.data?.technician_status)
-            : "Not Available",
+        if (isProfileCompleted) {
+          const authoritativeStatus =
+            normalizeTechnicianStatus(
+              dashRes.data?.technician_status,
+            );
+
+          if (authoritativeStatus) {
+            setTechnicianStatus(
+              authoritativeStatus,
+            );
+            setAttendanceError(null);
+            setLastAttendanceSync(new Date());
+          } else {
+            setTechnicianStatus("Not Available");
+            setAttendanceError(
+              "Attendance and availability status is currently unavailable.",
+            );
+            setLastAttendanceSync(null);
+          }
+        } else {
+          setTechnicianStatus("Not Available");
+          setAttendanceError(null);
+          setLastAttendanceSync(null);
+        }
+
+        setRecentJobs(
+          (jobsRes.data || []).slice(0, 5),
+        );
+      } catch (error) {
+        console.error(
+          "Failed to load dashboard:",
+          error,
         );
 
-        setRecentJobs((jobsRes.data || []).slice(0, 5));
-      } catch (error) {
-        console.error("Failed to load dashboard:", error);
+        setAttendanceError(
+          "Unable to load your attendance and availability status.",
+        );
       } finally {
         setLoading(false);
       }
@@ -200,29 +281,62 @@ export default function TechnicianPortalDashboard({
 
     loadDashboard();
 
-    const timer = setInterval(loadDashboard, 5000);
+    const timer = setInterval(
+      loadDashboard,
+      5000,
+    );
 
     return () => clearInterval(timer);
   }, []);
-  const handleStatusChange = async (newStatus: string) => {
-    const previousStatus = technicianStatus;
 
-    setTechnicianStatus(newStatus);
-
+  const handleStatusChange = async (
+    newStatus: string,
+  ) => {
     try {
       setSavingStatus(true);
+      setAttendanceError(null);
 
-      const response = await updateTechnicianStatus(newStatus);
+      const response =
+        await updateTechnicianStatus(
+          newStatus,
+        );
 
-      setTechnicianStatus(
+      const authoritativeStatus =
         normalizeTechnicianStatus(
-          response.data?.technician_status || newStatus,
-        ),
-      );
-    } catch (error) {
-      console.error("Failed to update technician status:", error);
+          response.data?.technician_status,
+        );
 
-      setTechnicianStatus(previousStatus);
+      if (!authoritativeStatus) {
+        throw new Error(
+          "Backend returned an invalid technician status.",
+        );
+      }
+
+      // Update only after backend confirmation.
+      setTechnicianStatus(
+        authoritativeStatus,
+      );
+
+      setStats((previous: any) =>
+        previous
+          ? {
+              ...previous,
+              technician_status:
+                authoritativeStatus,
+            }
+          : previous,
+      );
+
+      setLastAttendanceSync(new Date());
+    } catch (error) {
+      console.error(
+        "Failed to update technician attendance status:",
+        error,
+      );
+
+      setAttendanceError(
+        "Unable to update attendance and availability. Please try again.",
+      );
     } finally {
       setSavingStatus(false);
     }
@@ -236,6 +350,7 @@ export default function TechnicianPortalDashboard({
       bg: "#E8F5E9",
       color: "#2E7D32",
     },
+
     {
       label: "Pending Acceptance",
       value: stats?.pending_acceptance ?? 0,
@@ -243,6 +358,7 @@ export default function TechnicianPortalDashboard({
       bg: "#FFF8E1",
       color: "#F57F17",
     },
+
     {
       label: "Rejected Jobs",
       value: stats?.rejected_jobs ?? 0,
@@ -250,6 +366,7 @@ export default function TechnicianPortalDashboard({
       bg: "#FDECEC",
       color: "#D32F2F",
     },
+
     {
       label: "Total Completed",
       value: stats?.total_completed ?? 0,
@@ -267,7 +384,8 @@ export default function TechnicianPortalDashboard({
   };
 
   const getStatusLabel = (status: string) => {
-    const normalizedStatus = (status || "").toUpperCase();
+    const normalizedStatus =
+      (status || "").toUpperCase();
 
     switch (normalizedStatus) {
       case "ASSIGNED":
@@ -294,7 +412,8 @@ export default function TechnicianPortalDashboard({
   };
 
   const getStatusColor = (status: string) => {
-    const normalizedStatus = (status || "").toUpperCase();
+    const normalizedStatus =
+      (status || "").toUpperCase();
 
     switch (normalizedStatus) {
       case "ASSIGNED":
@@ -320,10 +439,19 @@ export default function TechnicianPortalDashboard({
     }
   };
 
+  const availabilityStale =
+    profileCompleted &&
+    (!lastAttendanceSync ||
+      Date.now() -
+        lastAttendanceSync.getTime() >
+        AVAILABILITY_STALE_AFTER_MS);
+
   if (loading)
     return (
       <div style={s.page}>
-        <div style={s.empty}>Loading dashboard...</div>
+        <div style={s.empty}>
+          Loading dashboard...
+        </div>
       </div>
     );
 
@@ -338,8 +466,13 @@ export default function TechnicianPortalDashboard({
         }}
       >
         <div>
-          <h1 style={s.title}>Technician Dashboard</h1>
-          <p style={s.subtitle}>Your work overview at a glance</p>
+          <h1 style={s.title}>
+            Technician Dashboard
+          </h1>
+
+          <p style={s.subtitle}>
+            Your work overview at a glance
+          </p>
         </div>
 
         <div
@@ -356,19 +489,30 @@ export default function TechnicianPortalDashboard({
               color: "#6B7280",
             }}
           >
-            Status
+            Attendance / Availability
           </span>
 
           <select
-            value={profileCompleted ? technicianStatus : "Not Available"}
-            disabled={savingStatus || !profileCompleted}
+            aria-label="Technician attendance and availability"
+            data-testid="technician-attendance-status"
+            value={
+              profileCompleted
+                ? technicianStatus
+                : "Not Available"
+            }
+            disabled={
+              savingStatus ||
+              !profileCompleted
+            }
             onChange={(e) => {
               if (!profileCompleted) {
                 setShowProfileMessage(true);
                 return;
               }
 
-              handleStatusChange(e.target.value);
+              handleStatusChange(
+                e.target.value,
+              );
             }}
             style={{
               minWidth: "185px",
@@ -380,79 +524,209 @@ export default function TechnicianPortalDashboard({
               color: "#1F2933",
               fontSize: "14px",
               fontWeight: 600,
-              cursor: savingStatus ? "wait" : "pointer",
-              opacity: savingStatus ? 0.7 : 1,
+              cursor: savingStatus
+                ? "wait"
+                : "pointer",
+              opacity: savingStatus
+                ? 0.7
+                : 1,
             }}
           >
-            <option value="" disabled>
-              Select Status
+            <option
+              value="Not Available"
+              disabled
+            >
+              Not Available
             </option>
-            {TECHNICIAN_STATUSES.map((status) => (
-              <option key={status} value={status}>
-                {status}
-              </option>
-            ))}
+
+            {TECHNICIAN_STATUSES.map(
+              (status) => (
+                <option
+                  key={status}
+                  value={status}
+                >
+                  {status}
+                </option>
+              ),
+            )}
           </select>
 
-          {showProfileMessage && !profileCompleted && (
-            <div
-              style={{
-                marginTop: "8px",
-                fontSize: "13px",
-                color: "#B45309",
-              }}
-            >
-              Please complete your profile to change technician status.
-              <button
-                type="button"
-                onClick={() => onNavigate("/technician/profile")}
+          <div
+            style={{
+              display: "flex",
+              flexDirection:
+                "column",
+              gap: "2px",
+              minWidth: "235px",
+            }}
+          >
+            {attendanceError ? (
+              <span
+                role="alert"
                 style={{
-                  marginLeft: "8px",
-                  border: "none",
-                  background: "none",
-                  textDecoration: "underline",
-                  cursor: "pointer",
-                  fontWeight: 600,
+                  fontSize: "12px",
+                  color: "#B91C1C",
                 }}
               >
-                Complete Profile
-              </button>
-            </div>
-          )}
+                {attendanceError}
+              </span>
+            ) : availabilityStale ? (
+              <>
+                <span
+                  data-testid="technician-availability-state"
+                  aria-live="polite"
+                  style={{
+                    fontSize: "12px",
+                    color: "#B45309",
+                    fontWeight: 600,
+                  }}
+                >
+                  Availability data is stale
+                </span>
+
+                {lastAttendanceSync && (
+                  <span
+                    style={{
+                      fontSize: "11px",
+                      color: "#6B7280",
+                    }}
+                  >
+                    Last synced{" "}
+                    {lastAttendanceSync.toLocaleTimeString()}
+                  </span>
+                )}
+              </>
+            ) : lastAttendanceSync ? (
+              <>
+                <span
+                  data-testid="technician-availability-state"
+                  aria-live="polite"
+                  style={{
+                    fontSize: "12px",
+                    color: "#4B5563",
+                    fontWeight: 600,
+                  }}
+                >
+                  Current availability:{" "}
+                  {technicianStatus}
+                </span>
+
+                <span
+                  style={{
+                    fontSize: "11px",
+                    color: "#6B7280",
+                  }}
+                >
+                  Last synced{" "}
+                  {lastAttendanceSync.toLocaleTimeString()}
+                </span>
+              </>
+            ) : profileCompleted ? (
+              <span
+                data-testid="technician-availability-state"
+                aria-live="polite"
+                style={{
+                  fontSize: "11px",
+                  color: "#6B7280",
+                }}
+              >
+                Waiting for availability status...
+              </span>
+            ) : null}
+          </div>
+
+          {showProfileMessage &&
+            !profileCompleted && (
+              <div
+                style={{
+                  marginTop: "8px",
+                  fontSize: "13px",
+                  color: "#B45309",
+                }}
+              >
+                Please complete your profile
+                to change technician status.
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    onNavigate(
+                      "/technician/profile",
+                    )
+                  }
+                  style={{
+                    marginLeft: "8px",
+                    border: "none",
+                    background: "none",
+                    textDecoration:
+                      "underline",
+                    cursor: "pointer",
+                    fontWeight: 600,
+                  }}
+                >
+                  Complete Profile
+                </button>
+              </div>
+            )}
         </div>
       </div>
 
       <div style={s.grid}>
         {cards.map((c, i) => (
-          <div key={i} style={s.card}>
-            <div style={{ ...s.cardIcon, background: c.bg, color: c.color }}>
+          <div
+            key={i}
+            style={s.card}
+          >
+            <div
+              style={{
+                ...s.cardIcon,
+                background: c.bg,
+                color: c.color,
+              }}
+            >
               {c.icon}
             </div>
 
-            <span style={s.cardLabel}>{c.label}</span>
+            <span style={s.cardLabel}>
+              {c.label}
+            </span>
 
-            <span style={s.cardValue}>{c.value}</span>
+            <span style={s.cardValue}>
+              {c.value}
+            </span>
           </div>
         ))}
       </div>
 
       <div style={s.section}>
         <div style={s.sectionTitle}>
-          <Briefcase size={18} color="#7AAE8A" /> Recent Assigned Jobs
+          <Briefcase
+            size={18}
+            color="#7AAE8A"
+          />{" "}
+          Recent Assigned Jobs
         </div>
 
         {recentJobs.length === 0 ? (
-          <div style={s.empty}>No active jobs at the moment</div>
+          <div style={s.empty}>
+            No active jobs at the moment
+          </div>
         ) : (
           recentJobs.map((job: any) => (
-            <div key={job.id} style={s.jobRow}>
+            <div
+              key={job.id}
+              style={s.jobRow}
+            >
               <div style={s.jobInfo}>
                 <span style={s.jobTitle}>
-                  #{job.id} — {job.service_type || "Service"}
+                  #{job.id} —{" "}
+                  {job.service_type ||
+                    "Service"}
                 </span>
 
                 <span style={s.jobMeta}>
-                  {job.customer_name} • {job.location}
+                  {job.customer_name} •{" "}
+                  {job.location}
                 </span>
               </div>
 
@@ -463,12 +737,26 @@ export default function TechnicianPortalDashboard({
                   gap: "10px",
                 }}
               >
-                <span style={s.badge(priorityColor[job.priority] || "#6B7280")}>
+                <span
+                  style={s.badge(
+                    priorityColor[
+                      job.priority
+                    ] || "#6B7280",
+                  )}
+                >
                   {job.priority}
                 </span>
 
-                <span style={s.badge(getStatusColor(job.status))}>
-                  {getStatusLabel(job.status)}
+                <span
+                  style={s.badge(
+                    getStatusColor(
+                      job.status,
+                    ),
+                  )}
+                >
+                  {getStatusLabel(
+                    job.status,
+                  )}
                 </span>
               </div>
             </div>
@@ -477,7 +765,9 @@ export default function TechnicianPortalDashboard({
 
         {recentJobs.length > 0 && (
           <button
-            onClick={() => onNavigate("tech_jobs")}
+            onClick={() =>
+              onNavigate("tech_jobs")
+            }
             style={{
               marginTop: "12px",
               background: "none",
@@ -491,7 +781,8 @@ export default function TechnicianPortalDashboard({
               gap: "4px",
             }}
           >
-            View All Jobs <ArrowRight size={14} />
+            View All Jobs{" "}
+            <ArrowRight size={14} />
           </button>
         )}
       </div>

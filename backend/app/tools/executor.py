@@ -997,17 +997,6 @@ class ToolExecutor:
             )
 
         # ----------------------------------------------------
-        # Defensive error
-        # ----------------------------------------------------
-
-        if error is None:
-            error = PermanentError(
-                "Tool execution failed",
-                tool_id=tool_id,
-                parameters=parameters,
-            )
-
-        # ----------------------------------------------------
         # IMPORTANT:
         #
         # Fallback is only used for permanent failures.

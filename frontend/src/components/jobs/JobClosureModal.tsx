@@ -19,7 +19,8 @@ interface JobClosureModalProps {
 const compressImage = (
   file: File,
   maxWidth = 800,
-  quality = 0.7
+  quality = 0.7,
+  onProgress?: (progress: number) => void,
 ): Promise<string> => {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -55,6 +56,12 @@ const compressImage = (
     };
 
     reader.onerror = () => resolve("");
+    reader.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) {
+        onProgress?.(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+    reader.onloadend = () => onProgress?.(100);
     reader.readAsDataURL(file);
   });
 };
@@ -66,8 +73,14 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
   onSuccess,
 }) => {
   const [workSummary, setWorkSummary] = useState("");
+  const [partsUsedText, setPartsUsedText] = useState("");
+  const [durationMinutes, setDurationMinutes] = useState("");
   const [beforeImages, setBeforeImages] = useState<string[]>([]);
   const [afterImages, setAfterImages] = useState<string[]>([]);
+  const [uploadingType, setUploadingType] = useState<"before" | "after" | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadResult, setUploadResult] = useState<string | null>(null);
 
   const [serviceCharge, setServiceCharge] = useState<string>("");
   const [materialCost, setMaterialCost] = useState<string>("");
@@ -101,23 +114,73 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
 
     if (!files || files.length === 0) return;
 
-    for (const file of Array.from(files)) {
-      try {
-        const compressedBase64 = await compressImage(file);
+    setUploadError(null);
+    setUploadResult(null);
+    setUploadingType(type);
+    setUploadProgress(0);
 
-        if (compressedBase64) {
-          if (type === "before") {
-            setBeforeImages((prev) => [...prev, compressedBase64]);
-          } else {
-            setAfterImages((prev) => [...prev, compressedBase64]);
-          }
+    const selectedFiles = Array.from(files);
+    const preparedImages: string[] = [];
+    let rejectedCount = 0;
+
+    try {
+      for (let index = 0; index < selectedFiles.length; index += 1) {
+        const file = selectedFiles[index];
+        const fileStart = (index / selectedFiles.length) * 100;
+        const fileEnd = ((index + 1) / selectedFiles.length) * 100;
+
+        if (!file.type.startsWith("image/")) {
+          rejectedCount += 1;
+          setUploadError(`\"${file.name}\" is not a supported image file.`);
+          continue;
         }
-      } catch (err) {
-        console.error("Failed to compress image:", err);
-      }
-    }
 
-    e.target.value = "";
+        const compressedBase64 = await compressImage(
+          file,
+          800,
+          0.7,
+          (fileProgress) => {
+            setUploadProgress(
+              Math.round(
+                fileStart +
+                  ((fileEnd - fileStart) * fileProgress) / 100,
+              ),
+            );
+          },
+        );
+
+        if (!compressedBase64) {
+          rejectedCount += 1;
+          setUploadError(`Unable to prepare \"${file.name}\" for upload.`);
+          continue;
+        }
+
+        preparedImages.push(compressedBase64);
+        setUploadProgress(Math.round(fileEnd));
+      }
+
+      if (preparedImages.length > 0) {
+        if (type === "before") {
+          setBeforeImages((prev) => [...prev, ...preparedImages]);
+        } else {
+          setAfterImages((prev) => [...prev, ...preparedImages]);
+        }
+
+        setUploadResult(
+          `${preparedImages.length} photo${preparedImages.length === 1 ? "" : "s"} ready for completion upload${
+            rejectedCount > 0
+              ? `; ${rejectedCount} file${rejectedCount === 1 ? "" : "s"} rejected`
+              : ""
+          }.`,
+        );
+      } else {
+        setUploadResult("No photos were added.");
+      }
+    } finally {
+      setUploadProgress(100);
+      setUploadingType(null);
+      e.target.value = "";
+    }
   };
 
   const handleRemoveBeforeImage = (index: number) => {
@@ -128,6 +191,10 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
     setAfterImages((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const uploadStatus = uploadingType
+    ? `${uploadingType === "after" ? "After" : "Before"} photos preparing ${uploadProgress}%`
+    : null;
+
   // -----------------------------
   // SUBMIT
   // -----------------------------
@@ -136,11 +203,39 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
     e.preventDefault();
     setError(null);
 
-    if (!workSummary.trim()) {
+    const canonicalWorkSummary = workSummary.trim();
+
+    if (!canonicalWorkSummary) {
       setError("Work summary is required.");
       return;
     }
 
+    if (canonicalWorkSummary.length > 5000) {
+      setError("Work summary cannot exceed 5000 characters.");
+      return;
+    }
+
+    if (/<\s*\/?[A-Za-z][^>]*>/.test(canonicalWorkSummary)) {
+      setError("Work summary must be plain text and cannot contain markup tags.");
+      return;
+    }
+
+    const partsUsed = partsUsedText
+      .split(/\r?\n/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    const normalizedDuration = durationMinutes.trim();
+    let parsedDuration: number | undefined;
+
+    if (normalizedDuration !== "") {
+      parsedDuration = Number(normalizedDuration);
+
+      if (!Number.isInteger(parsedDuration) || parsedDuration < 0) {
+        setError("Duration must be a whole number of minutes greater than or equal to 0.");
+        return;
+      }
+    }
 
     if (serviceCharge.trim() === "" || materialCost.trim() === "") {
       setError("Service Charge and Material Cost are required.");
@@ -164,8 +259,21 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
     setIsSubmitting(true);
 
     try {
+      const structuredDetails = [
+        `Work Summary: ${canonicalWorkSummary}`,
+        partsUsed.length > 0
+          ? `Parts Used:\n${partsUsed.map((part) => `- ${part}`).join("\n")}`
+          : "Parts Used: None reported",
+        parsedDuration !== undefined
+          ? `Duration (minutes): ${parsedDuration}`
+          : "Duration (minutes): Not reported",
+      ].join("\n\n");
+
       const payload: JobClosureData = {
-        work_summary: workSummary.trim(),
+        // The existing completion schema has one authoritative work-summary field.
+        // Structured report inputs are normalized into that field instead of
+        // creating a second completion payload model.
+        work_summary: structuredDetails,
         before_images: filteredBeforeImages,
         after_images: filteredAfterImages,
 
@@ -246,6 +354,64 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
             </div>
           )}
 
+          {(uploadStatus || uploadResult || uploadError) && (
+            <div style={{ marginBottom: 14 }}>
+              {(uploadStatus || uploadResult) && (
+                <div
+                  role="status"
+                  style={{
+                    padding: "10px 12px",
+                    borderRadius: 10,
+                    background: "#EFF6FF",
+                    border: "1px solid #BFDBFE",
+                    color: "#1E40AF",
+                    fontSize: 12,
+                    marginBottom: uploadError ? 8 : 0,
+                  }}
+                >
+                  <div>{uploadStatus || uploadResult}</div>
+                  {uploadingType && (
+                    <div
+                      aria-label="Photo upload progress"
+                      style={{
+                        height: 6,
+                        marginTop: 8,
+                        borderRadius: 999,
+                        overflow: "hidden",
+                        background: "#DBEAFE",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${uploadProgress}%`,
+                          height: "100%",
+                          background: "#2563EB",
+                          transition: "width 0.1s ease",
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {uploadError && (
+                <div
+                  role="alert"
+                  style={{
+                    padding: "10px 12px",
+                    borderRadius: 10,
+                    background: "#FEF2F2",
+                    border: "1px solid #FECACA",
+                    color: "#991B1B",
+                    fontSize: 12,
+                  }}
+                >
+                  {uploadError}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Work Summary */}
           <div style={styles.formGroup}>
             <label style={styles.label}>
@@ -254,8 +420,10 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
             </label>
 
             <textarea
+              data-testid="work-report-summary"
               style={styles.textarea}
               rows={3}
+              maxLength={5000}
               value={workSummary}
               onChange={(e) =>
                 setWorkSummary(e.target.value)
@@ -263,6 +431,62 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
               placeholder="Describe work completed, tests run, and final status..."
               required
             />
+          </div>
+
+          {/* Structured Work Report */}
+          <div
+            style={{
+              fontSize: "15px",
+              fontWeight: 700,
+              color: "#166534",
+              marginTop: "4px",
+              marginBottom: "-4px",
+            }}
+          >
+            Work Report
+          </div>
+          <div style={styles.reportGrid}>
+            {/* Parts Used */}
+            <div style={styles.formGroup}>
+              <label style={styles.label}>
+                Parts Used (Optional)
+              </label>
+
+              <textarea
+                data-testid="work-report-parts"
+                style={styles.textarea}
+                rows={4}
+                value={partsUsedText}
+                onChange={(e) => setPartsUsedText(e.target.value)}
+                placeholder="Enter one part per line..."
+              />
+
+              <div style={styles.helperText}>
+                Each non-empty line is sent as one structured part.
+              </div>
+            </div>
+
+            {/* Duration */}
+            <div style={styles.formGroup}>
+              <label style={styles.label}>
+                Duration (minutes)
+              </label>
+
+              <input
+                data-testid="work-report-duration"
+                type="number"
+                min="0"
+                step="1"
+                style={styles.input}
+                value={durationMinutes}
+                onChange={(e) => setDurationMinutes(e.target.value)}
+                placeholder="Optional"
+              />
+
+              <div style={styles.helperText}>
+                Optional whole-number duration for the completed work.
+              </div>
+            </div>
           </div>
 
           {/* Images Section */}
@@ -525,8 +749,9 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
 
             <button
               type="submit"
+              data-testid="submit-job-closure"
               style={styles.submitBtn}
-              disabled={isSubmitting}
+              disabled={isSubmitting || uploadingType !== null}
             >
               {isSubmitting
                 ? "Submitting..."
@@ -553,6 +778,19 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     zIndex: 1100,
     padding: "16px",
+  },
+
+  reportGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+    gap: "16px",
+  },
+
+  helperText: {
+    marginTop: "6px",
+    fontSize: "11px",
+    lineHeight: 1.4,
+    color: "#64748b",
   },
 
   modal: {

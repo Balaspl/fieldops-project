@@ -596,3 +596,61 @@ export const getJobSla = async (jobId: string | number): Promise<any> => {
     handleApiError(error);
   }
 };
+
+
+
+/**
+ * Backend-authoritative customer signature record.
+ */
+export interface CustomerSignatureResponse {
+  id: number;
+  job_id: number;
+  job_closure_id: number;
+  signature_data: string;
+  signed_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Capture and persist the customer's signature for a completed job.
+ *
+ * Authorization, tenant isolation, job ownership and duplicate-signature
+ * enforcement are performed by the backend.
+ */
+export const captureCustomerSignature = async (
+  jobId: string | number,
+  signatureData: string,
+): Promise<CustomerSignatureResponse> => {
+  try {
+    const response = await api.post<CustomerSignatureResponse>(
+      `/jobs/${jobId}/customer-signature`,
+      {
+        signature_data: signatureData,
+      },
+    );
+
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+/**
+ * Fetch the backend-authoritative customer signature for a job.
+ */
+export const getCustomerSignature = async (
+  jobId: string | number,
+): Promise<CustomerSignatureResponse> => {
+  try {
+    const response = await api.get<CustomerSignatureResponse>(
+      `/jobs/${jobId}/customer-signature`,
+    );
+
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
