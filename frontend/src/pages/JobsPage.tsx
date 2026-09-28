@@ -1210,8 +1210,10 @@ function JobCreationForm() {
         "Failed to export audit history. Please try again."
       );
     } finally {
-      auditHistoryExportInProgressRef.current = false;
-      setAuditHistoryExportLoading(false);
+      window.setTimeout(() => {
+        auditHistoryExportInProgressRef.current = false;
+        setAuditHistoryExportLoading(false);
+      }, 0);
     }
   }, [
     auditHistory,

@@ -971,5 +971,63 @@ class JobClosureResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+CUSTOMER_SIGNATURE_MAX_LENGTH = 2_000_000
+
+_CUSTOMER_SIGNATURE_DATA_RE = re.compile(
+    r"^data:image/(?:png|jpeg);base64,[A-Za-z0-9+/=]+$"
+)
 
 
+class CustomerSignatureCreate(BaseModel):
+    """
+    Signature captured from the customer on the technician portal.
+
+    The backend receives a serialized canvas data URL and validates its
+    structure before the service persists it as the auditable signature
+    record. Job, tenant, actor and signed timestamp are resolved server-side.
+    """
+
+    signature_data: str
+
+    @field_validator("signature_data")
+    @classmethod
+    def validate_signature_data(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("Signature data must be text")
+
+        canonical = value.strip()
+
+        if not canonical:
+            raise ValueError("Customer signature is required")
+
+        if len(canonical) > CUSTOMER_SIGNATURE_MAX_LENGTH:
+            raise ValueError(
+                f"Customer signature data cannot exceed "
+                f"{CUSTOMER_SIGNATURE_MAX_LENGTH} characters"
+            )
+
+        if not _CUSTOMER_SIGNATURE_DATA_RE.fullmatch(canonical):
+            raise ValueError(
+                "Customer signature must be a PNG or JPEG base64 data URL"
+            )
+
+        return canonical
+
+
+class CustomerSignatureResponse(BaseModel):
+    """
+    Backend-authoritative customer signature record returned to the portal.
+
+    Tenant identifiers and other internal authorization details are not
+    exposed by this response model.
+    """
+
+    id: int
+    job_id: int
+    job_closure_id: int
+    signature_data: str
+    signed_at: datetime
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

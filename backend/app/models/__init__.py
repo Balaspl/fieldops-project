@@ -85,3 +85,4 @@ from .mfa_recovery_code import MFARecoveryCode  # noqa: F401
 from .password_reset_token import PasswordResetToken
 from .trust_device import TrustedDevice
 from .completion_document import CompletionDocument
+from .customer_signature import CustomerSignature  # noqa: F401

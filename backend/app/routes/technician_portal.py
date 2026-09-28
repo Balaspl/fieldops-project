@@ -932,9 +932,49 @@ async def complete_job(
     if data.completion_notes:
         job.work_report = data.completion_notes
 
-    # Decrement tech's current jobs
-    if tech.current_jobs and tech.current_jobs > 0:
-        tech.current_jobs -= 1
+    # The fallback completion route receives labour/material costs in the
+    # request payload, but TechnicianJobCompleteRequest keeps its existing
+    # contract. Read those optional values from the original request body so
+    # the billing report can persist the same costs without changing the schema.
+    try:
+        request_payload = await request.json()
+    except Exception:
+        request_payload = {}
+
+    labour_cost = round(float(request_payload.get("labour_cost") or 0), 2)
+    material_cost = round(float(request_payload.get("material_cost") or 0), 2)
+    subtotal = round(labour_cost + material_cost, 2)
+
+    # The Billing Report is backed by JobClosure records. The compatibility
+    # completion route must therefore create the closure record as part of the
+    # same transaction.
+    existing_closure = (
+        db.query(JobClosure)
+        .filter(
+            JobClosure.job_id == job.id,
+            JobClosure.tenant_id == job.tenant_id,
+        )
+        .first()
+    )
+
+    if not existing_closure:
+        closure_record = JobClosure(
+            job_id=job.id,
+            tenant_id=job.tenant_id,
+            work_summary=data.completion_notes or "Job completed",
+            before_images=[],
+            after_images=list(data.photos or []),
+            labour_cost=labour_cost,
+            material_cost=material_cost,
+            subtotal=subtotal,
+            completed_at=job.completed_at,
+        )
+        db.add(closure_record)
+
+        # Decrement tech's current jobs only when this completion created the
+        # authoritative closure record.
+        if tech.current_jobs and tech.current_jobs > 0:
+            tech.current_jobs -= 1
 
     audit_log(
         db, action=AuditAction.JOB_COMPLETED,

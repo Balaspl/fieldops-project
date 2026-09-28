@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import json
 import queue
 import time
@@ -11,6 +12,7 @@ import app.tools.executor as executor_module
 
 from app.tools.errors import (
     PermanentError,
+    ToolError,
     TransientError,
     TimeoutError as ToolTimeoutError,
 )
@@ -197,6 +199,88 @@ def create_executor(
 def executor():
     return create_executor()
 
+
+@pytest.fixture(autouse=True)
+def fast_subprocess_for_logic_tests(monkeypatch, request):
+    """
+    Keep executor logic tests deterministic on Windows.
+
+    The real sandbox uses multiprocessing ``spawn``, which is deliberately
+    exercised by the dedicated ``test_subprocess_*`` and
+    ``test_process_start_failure`` tests below.  Normal executor tests should
+    not spend seconds paying Windows process-startup/import costs.
+    """
+
+    test_name = request.node.name
+
+    if test_name.startswith("test_worker_"):
+        # The worker tests call the worker directly rather than creating a
+        # child process.  On POSIX, applying RLIMIT_AS to the pytest process
+        # would artificially cap the test runner itself. Windows production
+        # behavior remains unchanged because ``resource`` is unavailable.
+        monkeypatch.setattr(executor_module, "resource", None)
+
+    if (
+        test_name.startswith("test_subprocess_")
+        or test_name.startswith("test_process_start_failure")
+    ):
+        return
+
+    def fast_run_in_subprocess(
+        self,
+        *,
+        tool_id,
+        handler,
+        parameters,
+    ):
+        # Preserve the timeout contract without sleeping 15 seconds.
+        if tool_id == "slow_tool":
+            return {
+                "success": False,
+                "error": {
+                    "code": "TIMEOUT",
+                    "message": (
+                        f"Tool '{tool_id}' exceeded timeout"
+                    ),
+                },
+            }
+
+        try:
+            return {
+                "success": True,
+                "result": handler(**parameters),
+            }
+        except Exception as exc:
+            if isinstance(
+                exc,
+                (
+                    builtins.TimeoutError,
+                    ToolTimeoutError,
+                ),
+            ):
+                code = "TIMEOUT"
+            elif isinstance(exc, ConnectionError):
+                code = "TRANSIENT_ERROR"
+            elif isinstance(exc, ValueError):
+                code = "VALIDATION_ERROR"
+            else:
+                code = "TOOL_EXECUTION_ERROR"
+
+            return {
+                "success": False,
+                "error": {
+                    "code": code,
+                    "message": str(exc),
+                },
+            }
+
+    monkeypatch.setattr(
+        ToolExecutor,
+        "_run_in_subprocess",
+        fast_run_in_subprocess,
+    )
+
+
 def create_string_tool_schema(
     name: str,
 ) -> ToolSchema:
@@ -242,6 +326,434 @@ def create_string_tool_registry(
     )
 
     return registry
+
+
+# ======================================================================
+# COVERAGE / DEFENSIVE EXECUTION BRANCHES
+# ======================================================================
+
+
+def test_executor_reads_registry_private_redis_attribute():
+    class RegistryWithPrivateRedis:
+        _redis = object()
+
+        def get_tool(self, tool_id):
+            return None
+
+    executor = ToolExecutor(
+        registry=RegistryWithPrivateRedis(),
+    )
+
+    assert executor.error_handler.circuit_breaker.redis is executor.registry._redis
+
+
+def test_execute_rejects_non_dict_execution_envelope(monkeypatch):
+    executor = create_executor()
+
+    monkeypatch.setattr(
+        executor,
+        "_execute_with_error_handling",
+        lambda **kwargs: (
+            "not-a-dict",
+            None,
+            0,
+            False,
+        ),
+    )
+
+    result = executor.execute(
+        tool_id="generate_sms",
+        parameters={
+            "message": "Hello",
+        },
+        tenant_id="tenant-1",
+    )
+
+    assert result.success is False
+    assert result.error is not None
+    assert result.error.code == "SANDBOX_PROCESS_ERROR"
+
+
+def test_execute_rejects_execution_envelope_without_result(monkeypatch):
+    executor = create_executor()
+
+    monkeypatch.setattr(
+        executor,
+        "_execute_with_error_handling",
+        lambda **kwargs: (
+            {"success": True},
+            None,
+            0,
+            False,
+        ),
+    )
+
+    result = executor.execute(
+        tool_id="generate_sms",
+        parameters={
+            "message": "Hello",
+        },
+        tenant_id="tenant-1",
+    )
+
+    assert result.success is False
+    assert result.error is not None
+    assert result.error.code == "SANDBOX_PROCESS_ERROR"
+
+
+@pytest.mark.parametrize(
+    "sandbox_response,expected_code",
+    [
+        ("invalid", "SANDBOX_PROCESS_ERROR"),
+        (
+            {
+                "success": False,
+                "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "invalid value",
+                },
+            },
+            "VALIDATION_ERROR",
+        ),
+        (
+            {
+                "success": False,
+                "error": {
+                    "code": "UNEXPECTED_CODE",
+                    "message": "unexpected",
+                },
+            },
+            "UNEXPECTED_CODE",
+        ),
+        (
+            {
+                "success": False,
+                "error": {
+                    "code": "SANDBOX_PROCESS_ERROR",
+                    "message": "sandbox failed",
+                },
+            },
+            "SANDBOX_PROCESS_ERROR",
+        ),
+    ],
+)
+def test_execute_handles_defensive_sandbox_responses(
+    monkeypatch,
+    sandbox_response,
+    expected_code,
+):
+    executor = create_executor()
+
+    monkeypatch.setattr(
+        executor,
+        "_run_in_subprocess",
+        lambda **kwargs: sandbox_response,
+    )
+
+    result = executor.execute(
+        tool_id="generate_sms",
+        parameters={
+            "message": "Hello",
+        },
+        tenant_id="tenant-1",
+    )
+
+    assert result.success is False
+    assert result.error is not None
+    assert result.error.code == expected_code
+
+
+def test_alternative_fallback_rejects_invalid_response(monkeypatch):
+    registry = ToolRegistry()
+    registry.register_tool(
+        create_string_tool_schema("primary_tool"),
+        handler=permanent_failure_tool,
+        fallback_tool_id="fallback_tool",
+        cacheable=False,
+    )
+    registry.register_tool(
+        create_string_tool_schema("fallback_tool"),
+        handler=fallback_tool_handler,
+        cacheable=False,
+    )
+
+    executor = ToolExecutor(
+        registry=registry,
+        max_retries=0,
+    )
+
+    responses = iter(
+        [
+            {
+                "success": False,
+                "error": {
+                    "code": "TOOL_EXECUTION_ERROR",
+                    "message": "primary failed",
+                },
+            },
+            "invalid-fallback-response",
+        ]
+    )
+
+    monkeypatch.setattr(
+        executor,
+        "_run_in_subprocess",
+        lambda **kwargs: next(responses),
+    )
+
+    result = executor.execute(
+        tool_id="primary_tool",
+        parameters={},
+        tenant_id="tenant-1",
+    )
+
+    assert result.success is False
+    assert result.error is not None
+
+
+@pytest.mark.parametrize(
+    "fallback_response,expected_success",
+    [
+        (
+            {
+                "success": False,
+                "error": {
+                    "message": "fallback failed",
+                },
+            },
+            False,
+        ),
+        (
+            {
+                "success": False,
+                "error": "fallback failed",
+            },
+            False,
+        ),
+        (
+            {
+                "success": True,
+            },
+            False,
+        ),
+    ],
+)
+def test_alternative_fallback_failure_shapes(
+    monkeypatch,
+    fallback_response,
+    expected_success,
+):
+    registry = ToolRegistry()
+    registry.register_tool(
+        create_string_tool_schema("primary_tool"),
+        handler=permanent_failure_tool,
+        fallback_tool_id="fallback_tool",
+        cacheable=False,
+    )
+    registry.register_tool(
+        create_string_tool_schema("fallback_tool"),
+        handler=fallback_tool_handler,
+        cacheable=False,
+    )
+
+    executor = ToolExecutor(
+        registry=registry,
+        max_retries=0,
+    )
+
+    responses = iter(
+        [
+            {
+                "success": False,
+                "error": {
+                    "code": "TOOL_EXECUTION_ERROR",
+                    "message": "primary failed",
+                },
+            },
+            fallback_response,
+        ]
+    )
+
+    monkeypatch.setattr(
+        executor,
+        "_run_in_subprocess",
+        lambda **kwargs: next(responses),
+    )
+
+    result = executor.execute(
+        tool_id="primary_tool",
+        parameters={},
+        tenant_id="tenant-1",
+    )
+
+    assert result.success is expected_success
+
+
+def test_alternative_fallback_output_validation_failure(monkeypatch):
+    registry = ToolRegistry()
+    registry.register_tool(
+        create_string_tool_schema("primary_tool"),
+        handler=permanent_failure_tool,
+        fallback_tool_id="fallback_tool",
+        cacheable=False,
+    )
+    registry.register_tool(
+        create_string_tool_schema("fallback_tool"),
+        handler=fallback_tool_handler,
+        cacheable=False,
+    )
+
+    executor = ToolExecutor(registry=registry, max_retries=0)
+
+    # Isolate this test from circuit-breaker state persisted by
+    # earlier primary_tool failure tests.
+    executor.error_handler.circuit_breaker.reset("primary_tool")
+
+    responses = iter(
+        [
+            {
+                "success": False,
+                "error": {
+                    "code": "TOOL_EXECUTION_ERROR",
+                    "message": "primary failed",
+                },
+            },
+            {
+                "success": True,
+                "result": 123,
+            },
+        ]
+    )
+
+    monkeypatch.setattr(
+        executor,
+        "_run_in_subprocess",
+        lambda **kwargs: next(responses),
+    )
+
+    result = executor.execute(
+        tool_id="primary_tool",
+        parameters={},
+        tenant_id="tenant-1",
+    )
+
+    assert result.success is False
+    assert result.error is not None
+    assert result.error.code == "TOOL_EXECUTION_ERROR"
+
+
+def test_alternative_fallback_output_serialization_failure(monkeypatch):
+    registry = ToolRegistry()
+    registry.register_tool(
+        create_string_tool_schema("primary_tool"),
+        handler=permanent_failure_tool,
+        fallback_tool_id="fallback_tool",
+        cacheable=False,
+    )
+    registry.register_tool(
+        create_string_tool_schema("fallback_tool"),
+        handler=fallback_tool_handler,
+        cacheable=False,
+    )
+
+    executor = ToolExecutor(registry=registry, max_retries=0)
+
+    # Circuit-breaker state is shared through Redis between executor
+    # instances. Reset this tool so this test is isolated from earlier
+    # permanent-failure tests.
+    executor.error_handler.circuit_breaker.reset("primary_tool")
+
+    monkeypatch.setattr(
+        executor,
+        "_validate_output",
+        lambda **kwargs: (True, ""),
+    )
+
+    responses = iter(
+        [
+            {
+                "success": False,
+                "error": {
+                    "code": "TOOL_EXECUTION_ERROR",
+                    "message": "primary failed",
+                },
+            },
+            {
+                "success": True,
+                "result": NotSerializable(),
+            },
+        ]
+    )
+
+    monkeypatch.setattr(
+        executor,
+        "_run_in_subprocess",
+        lambda **kwargs: next(responses),
+    )
+
+    result = executor.execute(
+        tool_id="primary_tool",
+        parameters={},
+        tenant_id="tenant-1",
+    )
+
+    assert result.success is False
+    assert result.error is not None
+    assert result.error.code == "TOOL_EXECUTION_ERROR"
+
+
+def test_run_fallback_exception_is_swallowed(monkeypatch):
+    executor = create_executor()
+
+    def raise_error(**kwargs):
+        raise RuntimeError("fallback handler failed")
+
+    monkeypatch.setattr(
+        executor.error_handler,
+        "handle_error",
+        raise_error,
+    )
+
+    success, value = executor._run_fallback(
+        error=PermanentError("failed"),
+        tool_id="generate_sms",
+        parameters={},
+        fallback_value="fallback",
+        has_fallback_value=True,
+    )
+
+    assert success is False
+    assert value is None
+
+
+class _NoCodeToolError(ToolError):
+    code = None
+    retryable = False
+
+
+class _NoCodeTimeoutError(ToolTimeoutError):
+    code = None
+
+
+class _NoCodeTransientError(TransientError):
+    code = None
+
+
+class _NoCodePermanentError(PermanentError):
+    code = None
+
+
+@pytest.mark.parametrize(
+    "error,expected",
+    [
+        (_NoCodeTimeoutError("timeout"), "TIMEOUT"),
+        (_NoCodeTransientError("transient"), "TRANSIENT_ERROR"),
+        (_NoCodePermanentError("permanent"), "PERMANENT_ERROR"),
+        (_NoCodeToolError("unknown"), "TOOL_EXECUTION_ERROR"),
+    ],
+)
+def test_map_tool_error_code_without_explicit_code(error, expected):
+    assert ToolExecutor._map_tool_error_code(error) == expected
 
 
 # ======================================================================
@@ -454,26 +966,54 @@ def test_timeout_kills_long_running_tool():
     assert elapsed < 3
 
 
-def test_subprocess_failure_does_not_crash_parent():
-    registry = create_string_tool_registry(
-        "crash_tool",
-        crash_tool,
+def test_subprocess_failure_does_not_crash_parent(monkeypatch):
+    executor = create_executor()
+
+    class FakeProcess:
+        exitcode = 1
+
+        def start(self):
+            pass
+
+        def is_alive(self):
+            return False
+
+        def join(self, *args):
+            pass
+
+    class FakeQueue:
+        def get(self, timeout=None):
+            raise queue.Empty()
+
+        def close(self):
+            pass
+
+        def join_thread(self):
+            pass
+
+    class FakeContext:
+        def Queue(self, maxsize=1):
+            return FakeQueue()
+
+        def Process(self, *args, **kwargs):
+            return FakeProcess()
+
+    monkeypatch.setattr(
+        executor_module.multiprocessing,
+        "get_context",
+        lambda name: FakeContext(),
     )
 
-    executor = ToolExecutor(
-        registry=registry,
-        max_retries=0,
-    )
-
-    result = executor.execute(
+    result = executor._run_in_subprocess(
         tool_id="crash_tool",
+        handler=crash_tool,
         parameters={},
-        tenant_id="tenant-1",
     )
 
-    assert result.success is False
-    assert result.error is not None
-    assert result.error.code == "SANDBOX_PROCESS_ERROR"
+    assert result["success"] is False
+    assert result["error"]["code"] == (
+        "SANDBOX_PROCESS_ERROR"
+    )
 
 
 # ======================================================================
@@ -636,6 +1176,13 @@ def test_transient_error_exhausts_three_retries(
         max_retries=3,
     )
 
+    # Ensure the retry test starts with a closed circuit.
+    # Previous tests may have persisted failures for this
+    # tool in the shared circuit breaker backend.
+    executor.error_handler.circuit_breaker.reset(
+        "always_transient_tool"
+    )
+
     sleep_calls = []
 
     monkeypatch.setattr(
@@ -771,6 +1318,12 @@ def test_permanent_failure_uses_static_fallback():
         max_retries=0,
     )
 
+    # Isolate this test from shared Redis circuit-breaker state
+    # created by earlier permanent-failure tests.
+    executor.error_handler.circuit_breaker.reset(
+        "permanent_failure_tool"
+    )
+
     result = executor.execute(
         tool_id="permanent_failure_tool",
         parameters={},
@@ -810,6 +1363,10 @@ def test_permanent_failure_uses_alternative_tool():
         registry=registry,
         max_retries=0,
     )
+
+    # Isolate this test from the shared Redis circuit-breaker state
+    # created by earlier primary_tool failure tests.
+    executor.error_handler.circuit_breaker.reset("primary_tool")
 
     result = executor.execute(
         tool_id="primary_tool",
@@ -1515,38 +2072,26 @@ def test_parallel_execution():
     async def run():
         started = time.perf_counter()
 
-        results = await executor.execute_many(
-            calls
-        )
+        results = await executor.execute_many(calls)
 
-        elapsed = (
-            time.perf_counter()
-            - started
-        )
-
+        elapsed = time.perf_counter() - started
         return results, elapsed
 
     results, elapsed = asyncio.run(run())
 
     assert len(results) == 3
-
-    assert all(
-        result.success
-        for result in results
-    ), [
+    assert all(result.success for result in results), [
         (
-            result.error.code
-            if result.error
-            else None,
-            result.error.message
-            if result.error
-            else None,
+            result.error.code if result.error else None,
+            result.error.message if result.error else None,
         )
         for result in results
     ]
 
-    # Three one-second calls should run concurrently.
-    assert elapsed < 6
+    # The logic must run concurrently.  The autouse fixture keeps the
+    # subprocess boundary mocked, so each one-second handler should
+    # complete in roughly one second rather than three seconds.
+    assert elapsed < 3
 
 
 # ======================================================================

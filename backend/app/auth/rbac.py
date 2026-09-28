@@ -96,6 +96,12 @@ class Permission(str, Enum):
     COMPLETION_DOCUMENTS_MANAGE = "completion_documents:manage"
 
     # --------------------------------------------------
+    # Customer Signature
+    # --------------------------------------------------
+
+    CUSTOMER_SIGNATURES_MANAGE = "customer_signatures:manage"
+
+    # --------------------------------------------------
     # Technicians
     # --------------------------------------------------
 
@@ -361,25 +367,18 @@ ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
     # ==================================================
 
     UserRole.TECHNICIAN: {
-        # Own jobs
         Permission.JOBS_VIEW_OWN,
         Permission.JOBS_ACCEPT_REJECT,
         Permission.JOBS_STATUS_UPDATE,
         Permission.JOBS_REASSIGN_OWN,
-        Permission.COMPLETION_DOCUMENTS_MANAGE,
-        Permission.REPORTS_VIEW,
-
-        # Own profile
         Permission.TECHNICIANS_VIEW_OWN,
-
-        # Dashboard
         Permission.DASHBOARD_TECH_VIEW,
-
-        # Notifications
         Permission.NOTIFICATIONS_VIEW_OWN,
-
-        # Own GPS
         Permission.GPS_TRACK_OWN,
+        Permission.COMPLETION_DOCUMENTS_MANAGE,
+        Permission.CUSTOMER_SIGNATURES_MANAGE,
+        Permission.REPORTS_VIEW,
+        Permission.REPORTS_DOWNLOAD,
     },
 
     # ==================================================

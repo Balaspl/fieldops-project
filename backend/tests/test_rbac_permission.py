@@ -7,6 +7,8 @@ from app.auth.rbac import (
     can_manage_role,
     get_permissions,
     has_permission,
+    is_super_admin,
+    role_hierarchy_level,
 )
 
 
@@ -96,7 +98,9 @@ EXPECTED_PERMISSIONS = {
         Permission.NOTIFICATIONS_VIEW_OWN,
         Permission.GPS_TRACK_OWN,
         Permission.COMPLETION_DOCUMENTS_MANAGE,
+        Permission.CUSTOMER_SIGNATURES_MANAGE,
         Permission.REPORTS_VIEW,
+        Permission.REPORTS_DOWNLOAD,
     },
 
     UserRole.CUSTOMER: {
@@ -132,8 +136,53 @@ def test_get_permissions_returns_expected_permissions(role):
     assert permissions == EXPECTED_PERMISSIONS[role]
 
 
+def test_get_permissions_invalid_role_returns_empty_set():
+    assert get_permissions("unknown") == set()
+    assert get_permissions(None) == set()
+
+
 # ============================================================
-# 3. Explicit permission checks
+# 3. Super-admin helper
+# ============================================================
+
+@pytest.mark.parametrize(
+    "role,expected",
+    [
+        (UserRole.SUPER_ADMIN.value, True),
+        (UserRole.HEAD.value, False),
+        (UserRole.DISPATCHER.value, False),
+        (UserRole.TECHNICIAN.value, False),
+        (UserRole.CUSTOMER.value, False),
+        ("unknown", False),
+        (None, False),
+    ],
+)
+def test_is_super_admin(role, expected):
+    assert is_super_admin(role) is expected
+
+
+# ============================================================
+# 4. Role hierarchy
+# ============================================================
+
+@pytest.mark.parametrize(
+    "role,expected_level",
+    [
+        (UserRole.CUSTOMER, 1),
+        (UserRole.TECHNICIAN, 2),
+        (UserRole.DISPATCHER, 3),
+        (UserRole.SUPER_ADMIN, 4),
+        (UserRole.HEAD, 5),
+        ("unknown", 0),
+        (None, 0),
+    ],
+)
+def test_role_hierarchy_level(role, expected_level):
+    assert role_hierarchy_level(role) == expected_level
+
+
+# ============================================================
+# 5. Explicit permission checks
 # ============================================================
 
 @pytest.mark.parametrize(
@@ -156,6 +205,7 @@ def test_get_permissions_returns_expected_permissions(role):
         (UserRole.TECHNICIAN, Permission.JOBS_ACCEPT_REJECT),
         (UserRole.TECHNICIAN, Permission.GPS_TRACK_OWN),
         (UserRole.TECHNICIAN, Permission.COMPLETION_DOCUMENTS_MANAGE),
+        (UserRole.TECHNICIAN, Permission.CUSTOMER_SIGNATURES_MANAGE),
         (UserRole.TECHNICIAN, Permission.REPORTS_VIEW),
 
         (UserRole.CUSTOMER, Permission.JOBS_VIEW_OWN),
@@ -168,7 +218,7 @@ def test_allowed_role_permission_pairs(role, permission):
 
 
 # ============================================================
-# 4. Permissions that must be denied
+# 6. Permissions that must be denied
 # ============================================================
 
 @pytest.mark.parametrize(
@@ -216,7 +266,7 @@ def test_denied_role_permission_pairs(role, permission):
 
 
 # ============================================================
-# 5. Unknown role must deny
+# 7. Unknown role must deny
 # ============================================================
 
 @pytest.mark.parametrize(
@@ -238,7 +288,7 @@ def test_unknown_role_denied(unknown_role):
 
 
 # ============================================================
-# 6. Unknown permission must deny
+# 8. Unknown permission must deny
 # ============================================================
 
 @pytest.mark.parametrize(
@@ -259,7 +309,7 @@ def test_unknown_permission_denied(unknown_permission):
 
 
 # ============================================================
-# 7. Missing permission must deny
+# 9. Missing permission must deny
 # ============================================================
 
 def test_missing_permission_denied():
@@ -284,7 +334,7 @@ def test_technician_cannot_manage_dispatch():
 
 
 # ============================================================
-# 8. Permission sets must not be accidentally shared/mutable
+# 10. Permission sets must not be accidentally shared/mutable
 # ============================================================
 
 def test_get_permissions_returns_copy():
@@ -298,7 +348,7 @@ def test_get_permissions_returns_copy():
 
 
 # ============================================================
-# 9. Role hierarchy / escalation tests
+# 11. Role hierarchy / escalation tests
 # ============================================================
 
 @pytest.mark.parametrize(
@@ -336,7 +386,7 @@ def test_role_escalation_denied(actor, target):
 
 
 # ============================================================
-# 10. Role management must not allow HEAD/SUPER_ADMIN creation
+# 12. Role management must not allow HEAD/SUPER_ADMIN creation
 # ============================================================
 
 @pytest.mark.parametrize(
@@ -355,7 +405,7 @@ def test_cannot_create_head_or_super_admin(actor):
 
 
 # ============================================================
-# 11. Complete matrix sanity check
+# 13. Complete matrix sanity check
 # ============================================================
 
 def test_every_role_has_defined_permission_set():
@@ -369,7 +419,7 @@ def test_no_unknown_roles_in_permission_matrix():
 
 
 # ============================================================
-# 12. Every permission is represented in the matrix
+# 14. Every permission is represented in the matrix
 # ============================================================
 
 def test_all_permissions_are_known():

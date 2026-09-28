@@ -1549,3 +1549,20 @@ def test_tool_error_handler_reset_alert_redis_exception_falls_back():
     handler.reset_alert("tool-1")
 
     assert "tool-1" not in handler._alerted_tools
+
+def test_error_rate_tracker_redis_zero_total_returns_zero_after_cleanup():
+    class ZeroTotalRedis(FakeRedis):
+        def zcard(self, key):
+            return 0
+
+    redis = ZeroTotalRedis()
+    tracker = ErrorRateTracker(
+        window_seconds=300,
+        redis_client=redis,
+    )
+
+    # Exercise the Redis record path where the total count is zero.
+    assert tracker.record(
+        "tool-zero-total",
+        success=True,
+    ) == 0.0

@@ -3318,3 +3318,81 @@ def get_job_closure_endpoint(
     )
 
 
+
+from app.services.customer_signature_service import (
+    capture_customer_signature,
+    get_customer_signature,
+)
+
+
+
+@router.post(
+    "/{job_id}/customer-signature",
+    response_model=schemas.CustomerSignatureResponse,
+)
+def capture_customer_signature_endpoint(
+    job_id: int,
+    payload: schemas.CustomerSignatureCreate,
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.CUSTOMER_SIGNATURES_MANAGE)
+    ),
+    db: Session = Depends(get_db),
+):
+    """
+    Capture one customer signature for a completed job assigned to the
+    authenticated technician.
+    """
+
+    if current_user.role != UserRole.TECHNICIAN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only technicians can capture customer signatures",
+        )
+
+    technician = get_technician_for_current_user(
+        db,
+        current_user,
+    )
+
+    return capture_customer_signature(
+        db=db,
+        job_id=job_id,
+        signature_data=payload,
+        technician_identifier=str(technician.tech_id),
+        tenant_id=str(current_user.tenant_id),
+        user_role=current_user.role.value,
+    )
+
+
+@router.get(
+    "/{job_id}/customer-signature",
+    response_model=schemas.CustomerSignatureResponse,
+)
+def get_customer_signature_endpoint(
+    job_id: int,
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.CUSTOMER_SIGNATURES_MANAGE)
+    ),
+    db: Session = Depends(get_db),
+):
+    """
+    Return the backend-authoritative customer signature for the assigned job.
+    """
+
+    if current_user.role != UserRole.TECHNICIAN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only technicians can view customer signatures",
+        )
+
+    technician = get_technician_for_current_user(
+        db,
+        current_user,
+    )
+
+    return get_customer_signature(
+        db=db,
+        job_id=job_id,
+        tenant_id=str(current_user.tenant_id),
+        technician_identifier=str(technician.tech_id),
+    )
