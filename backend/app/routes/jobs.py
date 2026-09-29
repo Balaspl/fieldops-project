@@ -3770,28 +3770,76 @@ def capture_customer_signature_endpoint(
 def get_customer_signature_endpoint(
     job_id: int,
     current_user: AuthenticatedUser = Depends(
-        require_permission(Permission.CUSTOMER_SIGNATURES_MANAGE)
+        require_any_job_permission(
+            Permission.CUSTOMER_SIGNATURES_MANAGE,
+            Permission.JOBS_VIEW_ALL,
+        )
     ),
     db: Session = Depends(get_db),
 ):
     """
-    Return the backend-authoritative customer signature for the assigned job.
+    Return the backend-authoritative customer signature for the job.
+
+    Technicians can view the signature only for jobs assigned to them.
+    Dispatcher and Super Admin can view the signature for jobs within
+    their authenticated tenant.
     """
 
-    if current_user.role != UserRole.TECHNICIAN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only technicians can view customer signatures",
+    # Preserve the existing technician object-level authorization.
+    if current_user.role == UserRole.TECHNICIAN:
+        technician = get_technician_for_current_user(
+            db,
+            current_user,
         )
 
-    technician = get_technician_for_current_user(
-        db,
-        current_user,
-    )
+        return get_customer_signature(
+            db=db,
+            job_id=job_id,
+            tenant_id=str(current_user.tenant_id),
+            technician_identifier=str(technician.tech_id),
+        )
 
-    return get_customer_signature(
-        db=db,
-        job_id=job_id,
-        tenant_id=str(current_user.tenant_id),
-        technician_identifier=str(technician.tech_id),
+    # Dispatcher / Super Admin already have JOBS_VIEW_ALL.
+    # Keep tenant isolation enforced by the backend.
+    if has_permission(
+        current_user.role,
+        Permission.JOBS_VIEW_ALL,
+    ):
+        from app.models import CustomerSignature
+
+        job = (
+            db.query(Job)
+            .filter(
+                Job.id == job_id,
+                Job.tenant_id == current_user.tenant_id,
+            )
+            .first()
+        )
+
+        if not job:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Job not found",
+            )
+
+        signature = (
+            db.query(CustomerSignature)
+            .filter(
+                CustomerSignature.job_id == job.id,
+                CustomerSignature.tenant_id == current_user.tenant_id,
+            )
+            .first()
+        )
+
+        if signature is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Customer signature not found",
+            )
+
+        return signature
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You are not authorized to view customer signatures",
     )

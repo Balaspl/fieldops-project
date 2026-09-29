@@ -99,8 +99,8 @@ EXPECTED_PERMISSIONS = {
         Permission.GPS_TRACK_OWN,
         Permission.COMPLETION_DOCUMENTS_MANAGE,
         Permission.CUSTOMER_SIGNATURES_MANAGE,
+        Permission.JOB_EXPENSES_MANAGE,
         Permission.REPORTS_VIEW,
-        Permission.REPORTS_DOWNLOAD,
     },
 
     UserRole.CUSTOMER: {

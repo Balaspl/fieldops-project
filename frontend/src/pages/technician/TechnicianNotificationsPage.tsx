@@ -9,6 +9,7 @@ import {
   AlertTriangle,
   Clock,
   X,
+  RefreshCw,
 } from "lucide-react";
 import {
   getTechnicianNotifications,
@@ -22,6 +23,8 @@ export default function TechnicianNotificationsPage() {
   const [notifications, setNotifications] = useState<any[]>([]);
   const [unread, setUnread] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   // Reject Modal State
   const [rejectModalJobId, setRejectModalJobId] = useState<number | null>(null);
@@ -29,36 +32,123 @@ export default function TechnicianNotificationsPage() {
   const [actionLoading, setActionLoading] = useState<string | number | null>(null);
   const [successBanner, setSuccessBanner] = useState("");
 
-  const loadNotifications = () => {
+  const getNotificationErrorMessage = (error: any) => {
+    const status = error?.response?.status;
+
+    if (status === 403) {
+      return "You are not authorized to view technician notifications.";
+    }
+
+    if (status === 404) {
+      return "Technician notification history is currently unavailable.";
+    }
+
+    return "Unable to load notifications. Please try again.";
+  };
+
+  const loadNotifications = async () => {
     setLoading(true);
-    getTechnicianNotifications()
-      .then((r) => {
-        setNotifications(r.data.notifications || []);
-        setUnread(r.data.unread_count || 0);
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    setError(null);
+
+    try {
+      const response = await getTechnicianNotifications();
+      const nextNotifications = Array.isArray(response?.data?.notifications)
+        ? response.data.notifications
+        : [];
+      const nextUnread = Number(response?.data?.unread_count ?? 0);
+
+      setNotifications(nextNotifications);
+      setUnread(Number.isFinite(nextUnread) ? Math.max(0, nextUnread) : 0);
+      setLastUpdated(new Date());
+    } catch (loadError) {
+      console.error("Failed to load technician notifications:", loadError);
+      setError(getNotificationErrorMessage(loadError));
+      // Preserve already-rendered notifications so a refresh failure is explicit
+      // without replacing known-good data with an empty state.
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
-    loadNotifications();
-    // Refresh notifications every 10 seconds for real-time updates
-    const interval = setInterval(loadNotifications, 10000);
-    return () => clearInterval(interval);
+    void loadNotifications();
+
+    // Reconcile the notification center after existing technician/job workflows
+    // dispatch the shared dashboard refresh event.
+    const handleDashboardRefresh = () => {
+      void loadNotifications();
+    };
+
+    window.addEventListener(
+      "technician-dashboard-refresh",
+      handleDashboardRefresh,
+    );
+
+    return () => {
+      window.removeEventListener(
+        "technician-dashboard-refresh",
+        handleDashboardRefresh,
+      );
+    };
   }, []);
 
   const markRead = async (id: string) => {
-    await markTechnicianNotificationRead(id);
-    setNotifications((ns) =>
-      ns.map((n) => (n.id === id ? { ...n, isRead: true } : n))
+    const notification = notifications.find(
+      (item) => String(item.id) === String(id),
     );
-    setUnread((u) => Math.max(0, u - 1));
+
+    if (!notification || notification.isRead) {
+      return;
+    }
+
+    setActionLoading(id);
+
+    try {
+      await markTechnicianNotificationRead(id);
+      setNotifications((ns) =>
+        ns.map((n) =>
+          String(n.id) === String(id)
+            ? { ...n, isRead: true }
+            : n,
+        ),
+      );
+      setUnread((u) => Math.max(0, u - 1));
+      setError(null);
+    } catch (markError) {
+      console.error("Failed to mark notification as read:", markError);
+      setError(
+        getNotificationErrorMessage(markError),
+      );
+    } finally {
+      setActionLoading(null);
+    }
   };
 
   const markAllRead = async () => {
-    await markAllTechnicianNotificationsRead();
-    setNotifications((ns) => ns.map((n) => ({ ...n, isRead: true })));
-    setUnread(0);
+    if (unread <= 0) {
+      return;
+    }
+
+    setActionLoading("all");
+
+    try {
+      await markAllTechnicianNotificationsRead();
+      setNotifications((ns) =>
+        ns.map((n) => ({ ...n, isRead: true })),
+      );
+      setUnread(0);
+      setError(null);
+    } catch (markAllError) {
+      console.error(
+        "Failed to mark all notifications as read:",
+        markAllError,
+      );
+      setError(
+        getNotificationErrorMessage(markAllError),
+      );
+    } finally {
+      setActionLoading(null);
+    }
   };
 
   const handleAccept = async (jobId: number, notifId: string) => {
@@ -66,23 +156,15 @@ export default function TechnicianNotificationsPage() {
     try {
       await acceptTechnicianJob(jobId);
       await markRead(notifId);
-      setSuccessBanner(`Job #${jobId} accepted! Status moved to EN ROUTE.`);
+      setSuccessBanner(`Job #${jobId} accepted successfully.`);
       setTimeout(() => setSuccessBanner(""), 4000);
-      // Immediately erase notification from list
-      setNotifications((prev) =>
-      prev.map((n) =>
-        n.id === notifId
-          ? {
-          ...n,
-          isRead: true,
-          jobStatus: "EN_ROUTE",
-        }
-      : n
-      )
-    );;
-      setUnread((u) => Math.max(0, u - 1));
+      await loadNotifications();
     } catch (e: any) {
-      alert(e.response?.data?.detail || "Failed to accept job");
+      console.error("Failed to accept job from notification center:", e);
+      setError(
+        e?.response?.data?.detail ||
+          "Failed to accept job. Please try again.",
+      );
     } finally {
       setActionLoading(null);
     }
@@ -95,23 +177,15 @@ export default function TechnicianNotificationsPage() {
       await rejectTechnicianJob(rejectModalJobId, rejectReason);
       setSuccessBanner(`Job #${rejectModalJobId} declined.`);
       setTimeout(() => setSuccessBanner(""), 4000);
-      // Immediately erase notification from local state
-      setNotifications((prev) =>
-  prev.map((n) =>
-    parseInt(n.jobId, 10) === rejectModalJobId
-      ? {
-          ...n,
-          isRead: true,
-          jobStatus: "REJECTED_BY_TECHNICIAN",
-        }
-      : n
-  )
-);
       setRejectModalJobId(null);
       setRejectReason("");
-      loadNotifications();
+      await loadNotifications();
     } catch (e: any) {
-      alert(e.response?.data?.detail || "Failed to reject job");
+      console.error("Failed to decline job from notification center:", e);
+      setError(
+        e?.response?.data?.detail ||
+          "Failed to decline job. Please try again.",
+      );
     } finally {
       setActionLoading(null);
     }
@@ -185,27 +259,55 @@ export default function TechnicianNotificationsPage() {
           </p>
         </div>
 
-        {unread > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <button
-            onClick={markAllRead}
+            type="button"
+            onClick={() => void loadNotifications()}
+            disabled={loading}
+            aria-label="Refresh notifications"
             style={{
               background: "#FFFFFF",
               border: "1px solid #D1D5DB",
               borderRadius: "8px",
-              padding: "8px 16px",
+              padding: "8px 12px",
               fontSize: "12px",
               fontWeight: 600,
               color: "#374151",
-              cursor: "pointer",
+              cursor: loading ? "not-allowed" : "pointer",
               display: "flex",
               alignItems: "center",
               gap: "6px",
-              transition: "all 0.2s",
+              opacity: loading ? 0.6 : 1,
             }}
           >
-            <CheckCheck size={14} /> Mark All Read
+            <RefreshCw size={14} /> Refresh
           </button>
-        )}
+
+          {unread > 0 && (
+            <button
+              type="button"
+              onClick={() => void markAllRead()}
+              disabled={actionLoading === "all"}
+              style={{
+                background: "#FFFFFF",
+                border: "1px solid #D1D5DB",
+                borderRadius: "8px",
+                padding: "8px 16px",
+                fontSize: "12px",
+                fontWeight: 600,
+                color: "#374151",
+                cursor: actionLoading === "all" ? "not-allowed" : "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                opacity: actionLoading === "all" ? 0.6 : 1,
+              }}
+            >
+              <CheckCheck size={14} />
+              {actionLoading === "all" ? "Marking..." : "Mark All Read"}
+            </button>
+          )}
+        </div>
       </div>
 
       {successBanner && (
@@ -228,8 +330,60 @@ export default function TechnicianNotificationsPage() {
         </div>
       )}
 
+      {error && (
+        <div
+          role="alert"
+          style={{
+            background: "#FEF2F2",
+            border: "1px solid #FECACA",
+            borderRadius: "8px",
+            padding: "12px 16px",
+            color: "#991B1B",
+            fontSize: "13px",
+            fontWeight: 600,
+            marginBottom: "16px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "12px",
+          }}
+        >
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={() => void loadNotifications()}
+            style={{
+              border: "1px solid #FCA5A5",
+              background: "#FFFFFF",
+              color: "#991B1B",
+              borderRadius: "6px",
+              padding: "5px 9px",
+              fontSize: "11px",
+              fontWeight: 700,
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {lastUpdated && !loading && !error && (
+        <div
+          style={{
+            marginBottom: "12px",
+            fontSize: "11px",
+            color: "#6B7280",
+            textAlign: "right",
+          }}
+        >
+          Last updated: {lastUpdated.toLocaleString()}
+        </div>
+      )}
+
       {/* Notifications List - Orderwise (1, 2, 3...) */}
-      {loading ? (
+      {loading && notifications.length === 0 ? (
         <div
           style={{
             textAlign: "center",
@@ -443,6 +597,8 @@ export default function TechnicianNotificationsPage() {
                       borderRadius: "4px",
                     }}
                     title="Mark as read"
+                    aria-label={`Mark notification ${n.id} as read`}
+                    disabled={actionLoading === n.id}
                   >
                     <Check size={18} />
                   </button>

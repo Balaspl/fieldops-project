@@ -3,6 +3,7 @@ from typing import Literal, Optional, Union
 import re
 from pydantic import BaseModel, field_validator, ConfigDict, Field
 from .services.ai.FieldOpsAI.schemas.prompt_variable import PromptVariableDeclaration
+from decimal import Decimal
 
 
 class JobCreate(BaseModel):
@@ -1027,6 +1028,64 @@ class CustomerSignatureResponse(BaseModel):
     job_closure_id: int
     signature_data: str
     signed_at: datetime
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+
+
+
+JOB_EXPENSE_DESCRIPTION_MAX_LENGTH = 2_000
+
+
+class JobExpenseCreate(BaseModel):
+    """
+    Technician-submitted job expense.
+
+    Monetary validation is performed by Pydantic on the backend before the
+    request reaches the persistence/service layer. The authenticated
+    technician, tenant and job ownership are resolved server-side.
+    """
+
+    amount: Decimal = Field(
+        ...,
+        gt=Decimal("0"),
+        max_digits=12,
+        decimal_places=2,
+    )
+    description: str = Field(
+        ...,
+        min_length=1,
+        max_length=JOB_EXPENSE_DESCRIPTION_MAX_LENGTH,
+    )
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, value: str) -> str:
+        canonical = value.strip()
+
+        if not canonical:
+            raise ValueError("Expense description is required")
+
+        return canonical
+
+
+class JobExpenseResponse(BaseModel):
+    """
+    Backend-authoritative persisted job expense record.
+
+    Tenant ID and other internal authorization details are intentionally not
+    exposed in the response.
+    """
+
+    id: int
+    job_id: int
+    technician_id: int
+    amount: Decimal
+    description: str
+    submitted_at: datetime
     created_at: datetime
     updated_at: datetime
 

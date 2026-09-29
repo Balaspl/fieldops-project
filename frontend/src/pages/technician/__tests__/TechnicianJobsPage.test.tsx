@@ -23,6 +23,7 @@ import {
   startTechnicianJob,
   onSiteTechnicianJob,
   completeTechnicianJob,
+  submitTechnicianJobExpense,
 } from "../../../services/technicianPortalService";
 
 vi.mock(
@@ -36,6 +37,7 @@ vi.mock(
     pauseTechnicianJob: vi.fn(),
     resumeTechnicianJob: vi.fn(),
     completeTechnicianJob: vi.fn(),
+    submitTechnicianJobExpense: vi.fn(),
   }),
 );
 
@@ -107,6 +109,50 @@ vi.mock(
   }),
 );
 
+vi.mock(
+  "../../../components/jobs/JobExpenseModal",
+  () => ({
+    default: ({
+      jobId,
+      onClose,
+      onSuccess,
+    }: {
+      jobId: number;
+      isOpen: boolean;
+      onClose: () => void;
+      onSuccess?: (expense: unknown) => void | Promise<void>;
+    }) => (
+      <div data-testid="job-expense-modal">
+        <span>
+          Expense Job #{jobId}
+        </span>
+
+        <button
+          type="button"
+          onClick={onClose}
+        >
+          Close Expense
+        </button>
+
+        <button
+          type="button"
+          onClick={() =>
+            onSuccess?.({
+              id: 41,
+              job_id: jobId,
+              amount: "125.50",
+              description: "Parking fee",
+            })
+          }
+        >
+          Submit Mock Expense
+        </button>
+      </div>
+    ),
+  }),
+);
+
+
 const mockedGetTechnicianJobs =
   vi.mocked(getTechnicianJobs);
 
@@ -124,6 +170,9 @@ const mockedOnSiteTechnicianJob =
 
 const mockedCompleteTechnicianJob =
   vi.mocked(completeTechnicianJob);
+
+const mockedSubmitTechnicianJobExpense =
+  vi.mocked(submitTechnicianJobExpense);
 
 type JobsResponse = Awaited<
   ReturnType<typeof getTechnicianJobs>
@@ -194,6 +243,8 @@ describe(
     afterEach(() => {
       vi.clearAllMocks();
     });
+
+
 
     it(
       "shows the loading state before the assigned-jobs API resolves",
@@ -546,7 +597,7 @@ describe(
           await screen.findByRole(
             "button",
             {
-              name: "Start",
+              name: /^Start job \d+$/,
             },
           );
 
@@ -592,7 +643,7 @@ describe(
         expect(
           screen.getAllByRole(
             "button",
-            { name: "Start" },
+            { name: /^Start job \d+$/ },
           ).length,
         ).toBe(1);
 
@@ -637,7 +688,7 @@ describe(
         const startButton =
           await screen.findByRole(
             "button",
-            { name: "Start" },
+            { name: /^Start job \d+$/ },
           );
 
         fireEvent.click(startButton);
@@ -664,7 +715,7 @@ describe(
         expect(
           screen.queryByRole(
             "button",
-            { name: "Start" },
+            { name: /^Start job \d+$/ },
           ),
         ).toBeNull();
       },
@@ -701,7 +752,7 @@ describe(
         const startButton =
           await screen.findByRole(
             "button",
-            { name: "Start" },
+            { name: /^Start job \d+$/ },
           );
 
         fireEvent.click(startButton);
@@ -716,7 +767,7 @@ describe(
           (
             screen.getByRole(
               "button",
-              { name: "Start" },
+              { name: /^Start job \d+$/ },
             ) as HTMLButtonElement
           ).disabled,
         ).toBe(true);
@@ -1372,6 +1423,143 @@ describe(
             callsBeforeSignature,
           );
         });
+      },
+    );
+
+    it(
+      "opens the expense submission workflow for an assigned job",
+      async () => {
+        render(<TechnicianJobsPage />);
+
+        const expenseButton =
+          await screen.findByRole(
+            "button",
+            {
+              name: "Add expense for job 101",
+            },
+          );
+
+        expect(expenseButton).toBeTruthy();
+
+        fireEvent.click(expenseButton);
+
+        expect(
+          screen.getByTestId(
+            "job-expense-modal",
+          ),
+        ).toBeTruthy();
+
+        expect(
+          screen.getByText(
+            "Expense Job #101",
+          ),
+        ).toBeTruthy();
+      },
+    );
+
+    it(
+      "refreshes the authoritative job state after expense submission",
+      async () => {
+        mockedGetTechnicianJobs
+          .mockResolvedValueOnce(
+            createJobsResponse([
+              {
+                ...representativeJob,
+                id: 901,
+                status: "IN_PROGRESS",
+              },
+            ]),
+          )
+          .mockResolvedValueOnce(
+            createJobsResponse([
+              {
+                ...representativeJob,
+                id: 901,
+                status: "IN_PROGRESS",
+              },
+            ]),
+          );
+
+        render(<TechnicianJobsPage />);
+
+        const expenseButton =
+          await screen.findByRole(
+            "button",
+            {
+              name: "Add expense for job 901",
+            },
+          );
+
+        fireEvent.click(expenseButton);
+
+        expect(
+          screen.getByTestId(
+            "job-expense-modal",
+          ),
+        ).toBeTruthy();
+
+        fireEvent.click(
+          screen.getByRole(
+            "button",
+            {
+              name: "Submit Mock Expense",
+            },
+          ),
+        );
+
+        await waitFor(() => {
+          expect(
+            mockedGetTechnicianJobs,
+          ).toHaveBeenCalledTimes(2);
+        });
+
+        expect(
+          screen.queryByTestId(
+            "job-expense-modal",
+          ),
+        ).toBeNull();
+      },
+    );
+
+    it(
+      "closes the expense workflow without submitting directly from the page",
+      async () => {
+        render(<TechnicianJobsPage />);
+
+        const expenseButton =
+          await screen.findByRole(
+            "button",
+            {
+              name: "Add expense for job 101",
+            },
+          );
+
+        fireEvent.click(expenseButton);
+
+        expect(
+          screen.getByTestId(
+            "job-expense-modal",
+          ),
+        ).toBeTruthy();
+
+        fireEvent.click(
+          screen.getByRole(
+            "button",
+            {
+              name: "Close Expense",
+            },
+          ),
+        );
+
+        expect(
+          screen.queryByTestId(
+            "job-expense-modal",
+          ),
+        ).toBeNull();
+
+        expect(
+          mockedSubmitTechnicianJobExpense,
+        ).not.toHaveBeenCalled();
       },
     );
   },

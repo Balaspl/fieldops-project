@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 from datetime import datetime, timezone, timedelta
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from fakeredis import FakeRedis
 from contextlib import contextmanager
 
@@ -262,11 +262,18 @@ def test_technician_available_after_120s(setup_db):
         cooldown = CooldownService.check_cooldown(fake_redis, str(job.id), tech.tech_id)
         assert cooldown is None
         
-        # Let's call planning
-        response = client.post(
-            f"/jobs/{job.id}/plan",
-            headers={"Authorization": "Bearer dispatcher", "X-Tenant-ID": "tenant-1"}
-        )
+        # Planning should exercise cooldown filtering, not the external
+        # Ola Maps service. Once the cooldown has expired, the technician
+        # reaches the scoring stage, so isolate that external dependency.
+        with patch(
+            "app.routes.jobs.DistanceScoringService.calculate_distance_score",
+            new_callable=AsyncMock,
+            return_value=[{"id": tech.technician_id, "score": 99.0, "distance_km": 1.0}],
+        ):
+            response = client.post(
+                f"/jobs/{job.id}/plan",
+                headers={"Authorization": "Bearer dispatcher", "X-Tenant-ID": "tenant-1"}
+            )
         assert response.status_code == 200, response.text
         data = response.json()
         

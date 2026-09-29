@@ -14,11 +14,12 @@ import {
   Clock,
   X,
   Check,
+  IndianRupee,
   User,
   LoaderCircle,
   Navigation,
 } from "lucide-react";
-
+import JobExpenseModal from "../../components/jobs/JobExpenseModal";
 import {
   getTechnicianJobs,
   acceptTechnicianJob,
@@ -283,7 +284,9 @@ export default function TechnicianJobsPage() {
   const [completeModal, setCompleteModal] = useState<number | null>(null);
   const [customerSignatureModal, setCustomerSignatureModal] =
     useState<number | null>(null);
-
+  const [expenseModalJob, setExpenseModalJob] =
+    useState<number | null>(null);
+  const [completeNotes, setCompleteNotes] = useState("");
   const [actionLoading, setActionLoading] = useState<number | null>(null);
   const startInFlightRef = useRef<Set<number>>(new Set());
   const onSiteInFlightRef = useRef<Set<number>>(new Set());
@@ -434,11 +437,15 @@ export default function TechnicianJobsPage() {
       await loadJobs();
     } catch (error) {
       alert(
-        getBackendActionErrorMessage(
-          error,
-          "Unable to mark this job as on site. Please try again.",
-        ),
+        error instanceof Error
+          ? "Unable to mark this job as on site. Please try again."
+          : getBackendActionErrorMessage(
+              error,
+              "Unable to mark this job as on site. Please try again.",
+            ),
       );
+
+      await loadJobs();
     } finally {
       onSiteInFlightRef.current.delete(jobId);
       setActionLoading((current) => (current === jobId ? null : current));
@@ -655,6 +662,7 @@ export default function TechnicianJobsPage() {
         <button
           key="on-site"
           type="button"
+          aria-label="On Site"
           disabled={isOnSiteLoading}
           style={{
             ...s.btn("#E0F2FE", "#0369A1"),
@@ -712,6 +720,28 @@ export default function TechnicianJobsPage() {
         </button>,
       );
     }
+
+    // Expense submission is independent of job status transitions.
+    // Backend remains authoritative for technician, tenant, object,
+    // and monetary validation.
+    btns.push(
+      <button
+        key="expense"
+        type="button"
+        aria-label={`Add expense for job ${job.id}`}
+        disabled={isLoading}
+        style={{
+          ...s.btn("#ECFDF5", "#047857"),
+          border: "1px solid #A7F3D0",
+          opacity: isLoading ? 0.6 : 1,
+          cursor: isLoading ? "not-allowed" : "pointer",
+        }}
+        onClick={() => setExpenseModalJob(job.id)}
+      >
+        <IndianRupee size={14} />
+        Add Expense
+      </button>,
+    );
 
     return btns;
   };
@@ -1219,6 +1249,28 @@ export default function TechnicianJobsPage() {
         </div>
       )}
 
+      {/* Job Expense Submission Modal */}
+      {expenseModalJob !== null && (
+        <JobExpenseModal
+          jobId={expenseModalJob}
+          isOpen={true}
+          onClose={() => setExpenseModalJob(null)}
+          onSuccess={async () => {
+            setExpenseModalJob(null);
+
+            // Reconcile from the authoritative backend state.
+            await loadJobs();
+
+            window.dispatchEvent(
+              new CustomEvent(
+                "technician-dashboard-refresh",
+              ),
+            );
+          }}
+        />
+      )}
+
+      {/* Job Closure Form Modal */}
       {completeModal && (
         <JobClosureModal
           jobId={completeModal}

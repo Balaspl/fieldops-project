@@ -67,6 +67,11 @@ vi.mock('@react-google-maps/api', () => ({
   OverlayView: { OVERLAY_MOUSE_TARGET: 'OVERLAY_MOUSE_TARGET' },
 }));
 
+
+vi.mock("../../../services/etaService", () => ({
+  getTechnicianETA: vi.fn().mockResolvedValue({}),
+}));
+
 // Mock WebSocket hook — use path relative to PAGE (since the page does the import)
 const mockReconnect = vi.fn();
 vi.mock('../../../hooks/useTrackingWebSocket', () => ({
@@ -254,7 +259,7 @@ describe('TrackingDashboard', () => {
   let originalWindowLocalStorage: any;
 
   beforeEach(() => {
-    originalLocalStorage = global.localStorage;
+    originalLocalStorage = globalThis.localStorage;
     if (typeof window !== 'undefined') {
       originalWindowLocalStorage = window.localStorage;
     }
@@ -273,7 +278,7 @@ describe('TrackingDashboard', () => {
         delete localStorageStore[key];
       }),
     };
-    Object.defineProperty(global, 'localStorage', { value: localStorageMock, writable: true, configurable: true });
+    Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock, writable: true, configurable: true });
     if (typeof window !== 'undefined') {
       Object.defineProperty(window, 'localStorage', { value: localStorageMock, writable: true, configurable: true });
     }
@@ -295,7 +300,7 @@ describe('TrackingDashboard', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     if (originalLocalStorage) {
-      Object.defineProperty(global, 'localStorage', { value: originalLocalStorage, writable: true, configurable: true });
+      Object.defineProperty(globalThis, 'localStorage', { value: originalLocalStorage, writable: true, configurable: true });
     }
     if (originalWindowLocalStorage && typeof window !== 'undefined') {
       Object.defineProperty(window, 'localStorage', { value: originalWindowLocalStorage, writable: true, configurable: true });

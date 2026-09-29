@@ -29,7 +29,9 @@ import {
   getJobInvoicePdf,
   getJobPaymentStatus,
   getJobCustomerFeedback,
+  getCustomerSignature,
   type CustomerFeedbackResponse,
+  type CustomerSignatureResponse,
   type JobAuditHistoryResponse,
   type JobAuditHistorySource,
   type JobInvoiceResponse,
@@ -520,6 +522,20 @@ function JobCreationForm() {
     useState("");
 
   const customerFeedbackRequestIdRef =
+    useRef(0);
+
+  const [customerSignatureDetails, setCustomerSignatureDetails] =
+    useState<CustomerSignatureResponse | null>(
+      null
+    );
+
+  const [customerSignatureLoading, setCustomerSignatureLoading] =
+    useState(false);
+
+  const [customerSignatureError, setCustomerSignatureError] =
+    useState("");
+
+  const customerSignatureRequestIdRef =
     useRef(0);
 
   const [selectedImage, setSelectedImage] =
@@ -1044,6 +1060,93 @@ function JobCreationForm() {
           customerFeedbackRequestIdRef.current
         ) {
           setCustomerFeedbackLoading(
+            false
+          );
+        }
+      });
+  }, [
+    viewJob,
+    isTechnician,
+  ]);
+
+  useEffect(() => {
+    const requestId =
+      ++customerSignatureRequestIdRef.current;
+
+    if (
+      !viewJob ||
+      isTechnician ||
+      viewJob.status?.toUpperCase() !==
+        "COMPLETED"
+    ) {
+      setCustomerSignatureDetails(
+        null
+      );
+      setCustomerSignatureError("");
+      setCustomerSignatureLoading(
+        false
+      );
+      return;
+    }
+
+    setCustomerSignatureDetails(
+      null
+    );
+    setCustomerSignatureError("");
+    setCustomerSignatureLoading(
+      true
+    );
+
+    getCustomerSignature(viewJob.id)
+      .then((response) => {
+        if (
+          requestId !==
+          customerSignatureRequestIdRef.current
+        ) {
+          return;
+        }
+
+        setCustomerSignatureDetails(
+          response
+        );
+      })
+      .catch((error: any) => {
+        if (
+          requestId !==
+          customerSignatureRequestIdRef.current
+        ) {
+          return;
+        }
+
+        setCustomerSignatureDetails(
+          null
+        );
+
+        const status =
+          error?.response?.status;
+
+        if (status === 403) {
+          setCustomerSignatureError(
+            "You are not authorized to view the customer signature for this job."
+          );
+        } else if (
+          status === 404
+        ) {
+          setCustomerSignatureError(
+            "Customer signature is not available for this job."
+          );
+        } else {
+          setCustomerSignatureError(
+            "Customer signature is temporarily unavailable. Please try again."
+          );
+        }
+      })
+      .finally(() => {
+        if (
+          requestId ===
+          customerSignatureRequestIdRef.current
+        ) {
+          setCustomerSignatureLoading(
             false
           );
         }
@@ -6171,6 +6274,129 @@ function JobCreationForm() {
                     />
                   </div>
                 </section>
+
+                {/* Customer Signature */}
+                {viewJob.status?.toUpperCase() ===
+                  "COMPLETED" && (
+                  <section
+                    className="job-view-section"
+                    data-testid="customer-signature-section"
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        justifyContent: "space-between",
+                        gap: "10px",
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <div>
+                        <h4
+                          className="job-view-section-title"
+                        >
+                          Customer Signature
+                        </h4>
+                        <span
+                          className="job-view-section-subtitle"
+                        >
+                          Backend-authoritative signature captured for this completed job
+                        </span>
+                      </div>
+                    </div>
+
+                    {customerSignatureLoading && (
+                      <div
+                        style={{
+                          marginTop: "10px",
+                          padding: "12px",
+                          background: "#F8FAFC",
+                          border: "1px solid #E2E8F0",
+                          borderRadius: "9px",
+                          fontSize: "10px",
+                          color: "#64748B",
+                        }}
+                      >
+                        Loading customer signature...
+                      </div>
+                    )}
+
+                    {customerSignatureError && (
+                      <div
+                        role="alert"
+                        style={{
+                          marginTop: "10px",
+                          padding: "9px",
+                          background: "#FEF2F2",
+                          border: "1px solid #FECACA",
+                          color: "#7A2020",
+                          borderRadius: "8px",
+                          fontSize: "10px",
+                          lineHeight: 1.4,
+                        }}
+                      >
+                        {customerSignatureError}
+                      </div>
+                    )}
+
+                    {!customerSignatureLoading &&
+                      !customerSignatureError &&
+                      customerSignatureDetails && (
+                        <div
+                          style={{
+                            marginTop: "10px",
+                            padding: "12px",
+                            background: "#F8FAFC",
+                            border: "1px solid #E2E8F0",
+                            borderRadius: "9px",
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "center",
+                              alignItems: "center",
+                              minHeight: "150px",
+                              padding: "10px",
+                              background: "#FFFFFF",
+                              border: "1px solid #E5E7EB",
+                              borderRadius: "8px",
+                            }}
+                          >
+                            <img
+                              src={
+                                customerSignatureDetails.signature_data
+                              }
+                              alt="Customer signature"
+                              style={{
+                                display: "block",
+                                maxWidth: "100%",
+                                width: "100%",
+                                height: "auto",
+                                maxHeight: "240px",
+                                objectFit: "contain",
+                              }}
+                            />
+                          </div>
+
+                          <div
+                            style={{
+                              marginTop: "8px",
+                              fontSize: "9px",
+                              color: "#64748B",
+                            }}
+                          >
+                            Signed at: {" "}
+                            {customerSignatureDetails.signed_at
+                              ? new Date(
+                                  customerSignatureDetails.signed_at
+                                ).toLocaleString()
+                              : "N/A"}
+                          </div>
+                        </div>
+                      )}
+                  </section>
+                )}
 
                 {/* Payment + Invoice */}
                 <section

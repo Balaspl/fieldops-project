@@ -87,6 +87,14 @@ const TechnicianJobHistoryPage = lazy(
 const TechnicianBillingReportPage = lazy(
   () => import("./pages/technician/TechnicianBillingReportPage"),
 );
+
+const TechnicianPerformanceReportPage = lazy(
+  () =>
+    import(
+      "./pages/technician/TechnicianPerformanceReportPage"
+    ),
+);
+
 const TechnicianNotificationsPage = lazy(
   () => import("./pages/technician/TechnicianNotificationsPage"),
 );
@@ -763,6 +771,9 @@ function AppInner() {
 
       case "tech_jobs":
         return "Loading Assigned Jobs...";
+      
+      case "tech_performance_report":
+        return "Loading Technician Performance Report...";
 
       case "cust_requests":
       case "cust_create_request":
@@ -1872,6 +1883,39 @@ function AppInner() {
               <button
                 className="nav-item-style"
                 style={getItemStyle(
+                  "tech_performance_report",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "tech_performance_report",
+                  )
+                }
+              >
+                <Activity
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
+                <span
+                  className="nav-text"
+                  style={
+                    sidebarCollapsed
+                      ? {
+                          display:
+                            "none",
+                        }
+                      : {}
+                  }
+                >
+                  Performance Report
+                </span>
+              </button>
+
+              <button
+                className="nav-item-style"
+                style={getItemStyle(
                   "tech_notifications",
                 )}
                 onClick={() =>
@@ -2924,6 +2968,11 @@ function AppInner() {
               {activeTab ===
                 "tech_billing_reports" && (
                 <TechnicianBillingReportPage />
+              )}
+
+              {activeTab ===
+                "tech_performance_report" && (
+                <TechnicianPerformanceReportPage />
               )}
 
               {activeTab ===

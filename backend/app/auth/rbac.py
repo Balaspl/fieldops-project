@@ -102,6 +102,12 @@ class Permission(str, Enum):
     CUSTOMER_SIGNATURES_MANAGE = "customer_signatures:manage"
 
     # --------------------------------------------------
+    # Job Expenses
+    # --------------------------------------------------
+
+    JOB_EXPENSES_MANAGE = "job_expenses:manage"
+
+    # --------------------------------------------------
     # Technicians
     # --------------------------------------------------
 
@@ -377,8 +383,8 @@ ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
         Permission.GPS_TRACK_OWN,
         Permission.COMPLETION_DOCUMENTS_MANAGE,
         Permission.CUSTOMER_SIGNATURES_MANAGE,
+        Permission.JOB_EXPENSES_MANAGE,
         Permission.REPORTS_VIEW,
-        Permission.REPORTS_DOWNLOAD,
     },
 
     # ==================================================

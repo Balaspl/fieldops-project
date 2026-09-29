@@ -1,123 +1,207 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import React from 'react';
-import { CustomerTrackingPage } from '../../../pages/CustomerTrackingPage';
-import { useCustomerTrackingStore } from '../../../store/customerTrackingStore';
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+} from "vitest";
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+} from "@testing-library/react";
+import React from "react";
 
-// Mock Zustand Store
-vi.mock('../../../store/customerTrackingStore', () => {
-  const store = {
-    job: null,
-    technician: null,
-    latestGps: null,
-    eta: null,
-    expired: false,
-    loading: false,
-    error: null,
-    fetchTrackingInfo: vi.fn(),
-  };
-  return {
-    useCustomerTrackingStore: () => store,
-  };
-});
+import CustomerTrackingPage from "../../../pages/customer/CustomerTrackingPage";
+import { getCustomerJobs } from "../../../services/customerPortalService";
 
-// Mock @react-google-maps/api
-vi.mock('@react-google-maps/api', () => ({
-  GoogleMap: ({ children }: any) => <div data-testid="mock-google-map">{children}</div>,
-  MarkerF: () => <div data-testid="mock-marker" />,
-  useJsApiLoader: () => ({ isLoaded: true, loadError: null }),
+/* -------------------------------------------------------------------------- */
+/*                               Service Mocks                                */
+/* -------------------------------------------------------------------------- */
+
+vi.mock("../../../services/customerPortalService", () => ({
+  getCustomerJobs: vi.fn(),
 }));
 
-describe('CustomerTrackingPage', () => {
+/* -------------------------------------------------------------------------- */
+/*                              Component Mocks                               */
+/* -------------------------------------------------------------------------- */
+
+vi.mock("../JobLiveTrackingMap", () => ({
+  default: ({ jobId }: { jobId?: string | number }) => (
+    <div data-testid="job-live-tracking-map">
+      Live map for job {jobId ?? ""}
+    </div>
+  ),
+}));
+
+/* -------------------------------------------------------------------------- */
+/*                                  Mocks                                     */
+/* -------------------------------------------------------------------------- */
+
+const mockedGetCustomerJobs = vi.mocked(getCustomerJobs);
+
+/* -------------------------------------------------------------------------- */
+/*                                Test Data                                   */
+/* -------------------------------------------------------------------------- */
+
+const completedJob = {
+  id: 123,
+  customer_name: "Alice",
+  issue_description: "AC broken",
+  service_type: "HVAC Repair",
+  status: "COMPLETED",
+  location: "123 Main St",
+  site_address: "123 Main St",
+  site_latitude: 13.0827,
+  site_longitude: 80.2707,
+  created_at: "2026-09-29T08:00:00.000Z",
+  assigned_technician_id: "7",
+  assigned_technician_name: "Vijay",
+  assigned_technician_phone: "9876543210",
+};
+
+const activeJob = {
+  id: 456,
+  customer_name: "Bob",
+  issue_description: "AC check",
+  service_type: "HVAC Maintenance",
+  status: "EN_ROUTE",
+  location: "456 Main St",
+  site_address: "456 Main St",
+  site_latitude: 13.0827,
+  site_longitude: 80.2707,
+  created_at: "2026-09-29T08:30:00.000Z",
+  assigned_technician_id: "7",
+  assigned_technician_name: "Vijay",
+  assigned_technician_phone: "9876543210",
+  assigned_technician_photo: null,
+  technician_latitude: 13.09,
+  technician_longitude: 80.28,
+};
+
+/* -------------------------------------------------------------------------- */
+/*                               Test Helpers                                 */
+/* -------------------------------------------------------------------------- */
+
+const renderPage = () =>
+  render(
+    <CustomerTrackingPage token="test-token" />
+  );
+
+/* -------------------------------------------------------------------------- */
+/*                                   Tests                                    */
+/* -------------------------------------------------------------------------- */
+
+describe("CustomerTrackingPage", () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
   });
 
-  it('renders loading spinner when loading is true', () => {
-    const store = useCustomerTrackingStore();
-    store.loading = true;
-    store.job = null;
-
-    render(<CustomerTrackingPage token="test-token" />);
-
-    expect(screen.getByText('Securing tracking connection...')).toBeDefined();
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
-  it('renders expired notice when link is expired', () => {
-    const store = useCustomerTrackingStore();
-    store.loading = false;
-    store.expired = true;
-    store.job = null;
+  it("renders loading state while customer jobs are being fetched", () => {
+    mockedGetCustomerJobs.mockImplementation(
+      () => new Promise(() => {})
+    );
 
-    render(<CustomerTrackingPage token="expired-token" />);
+    renderPage();
 
-    expect(screen.getByText('Tracking Link Expired')).toBeDefined();
-    expect(screen.getByText(/links automatically expire 24 hours/)).toBeDefined();
+    expect(
+      screen.getByText("Loading job tracking...")
+    ).toBeDefined();
   });
 
-  it('renders service completed view when status is COMPLETED', () => {
-    const store = useCustomerTrackingStore();
-    store.loading = false;
-    store.expired = false;
-    store.job = {
-      id: '123',
-      customer_name: 'Alice',
-      issue_description: 'AC broken',
-      service_type: 'HVAC Repair',
-      status: 'COMPLETED',
-      site_latitude: 13.0827,
-      site_longitude: 80.2707,
-      site_address: '123 Main St',
-      scheduled_window: '2:00 PM - 4:00 PM',
-    };
-    store.technician = {
-      name: 'Vijay',
-      rating: 4.8,
-      avatar: 'V',
-    };
+  it("renders the empty state when no customer jobs are returned", async () => {
+    mockedGetCustomerJobs.mockResolvedValue({
+      data: [],
+    } as any);
 
-    render(<CustomerTrackingPage token="completed-token" />);
+    renderPage();
 
-    expect(screen.getByText('Service Completed!')).toBeDefined();
-    expect(screen.getByText(/has completed the work/)).toBeDefined();
-    expect(screen.getByText('How was your service?')).toBeDefined();
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "No active or tracked jobs found."
+        )
+      ).toBeDefined();
+    });
+
+    expect(mockedGetCustomerJobs).toHaveBeenCalledTimes(1);
   });
 
-  it('renders live tracking dashboard with details and map when active', () => {
-    const store = useCustomerTrackingStore();
-    store.loading = false;
-    store.expired = false;
-    store.job = {
-      id: '123',
-      customer_name: 'Alice',
-      issue_description: 'AC check',
-      service_type: 'HVAC Maintenance',
-      status: 'EN_ROUTE',
-      site_latitude: 13.0827,
-      site_longitude: 80.2707,
-      site_address: '123 Main St',
-      scheduled_window: '2:00 PM - 4:00 PM',
-    };
-    store.technician = {
-      name: 'Vijay',
-      rating: 4.8,
-      avatar: 'V',
-    };
-    store.latestGps = {
-      latitude: 13.0900,
-      longitude: 80.2800,
-      timestamp: new Date().toISOString(),
-    };
-    store.eta = 15;
+  it("renders a completed customer job with completion state", async () => {
+    mockedGetCustomerJobs.mockResolvedValue({
+      data: [completedJob],
+    } as any);
 
-    render(<CustomerTrackingPage token="active-token" />);
+    renderPage();
 
-    expect(screen.getByText('FieldOps Live Track')).toBeDefined();
-    expect(screen.getByText('Arriving in 15 minutes')).toBeDefined();
-    expect(screen.getByText('En Route (On the Way)')).toBeDefined();
-    expect(screen.getByText('Vijay')).toBeDefined();
-    expect(screen.getByText('HVAC Maintenance')).toBeDefined();
-    expect(screen.getByText('123 Main St')).toBeDefined();
-    expect(screen.getByTestId('mock-google-map')).toBeDefined();
+    expect(
+      await screen.findByText("JOB #123")
+    ).toBeDefined();
+
+    expect(
+      screen.getByText("HVAC Repair")
+    ).toBeDefined();
+
+    expect(
+      screen.getByText("✓ Service Completed")
+    ).toBeDefined();
+
+    expect(
+      screen.getByText("Vijay")
+    ).toBeDefined();
+  });
+
+  it("renders an en-route job and opens the live tracking map", async () => {
+    mockedGetCustomerJobs.mockResolvedValue({
+      data: [activeJob],
+    } as any);
+
+    renderPage();
+
+    expect(
+      await screen.findByText("JOB #456")
+    ).toBeDefined();
+
+    expect(
+      screen.getByText("Real-Time Job Tracking")
+    ).toBeDefined();
+
+    expect(
+      screen.getByText("EN ROUTE")
+    ).toBeDefined();
+
+    expect(
+      screen.getByText("Vijay")
+    ).toBeDefined();
+
+    const liveMapButton =
+      screen.getByRole("button", {
+        name: "LIVE MAP",
+      });
+
+    expect(liveMapButton).toBeDefined();
+
+    fireEvent.click(liveMapButton);
+
+    expect(
+      await screen.findByText(
+        "Live Technician Tracking"
+      )
+    ).toBeDefined();
+
+    expect(
+      screen.getByTestId("job-live-tracking-map")
+    ).toBeDefined();
+
+    expect(
+      screen.getByText(/Live map for job 456/)
+    ).toBeDefined();
   });
 });

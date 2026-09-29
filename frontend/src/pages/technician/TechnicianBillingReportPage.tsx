@@ -7,6 +7,7 @@ import {
 
 import api from "../../services/api";
 import { getTechnicianBillingReports } from "../../services/technicianPortalService";
+import { getCustomerSignature } from "../../services/planningService";
 
 interface BillingReport {
   id: number;
@@ -24,6 +25,12 @@ interface BillingReport {
   completed_at: string;
 }
 
+interface CustomerSignatureState {
+  data: string | null;
+  loading: boolean;
+  error: string | null;
+}
+
 const money = (value: number) =>
   `₹${Number(value || 0).toLocaleString("en-IN", {
     minimumFractionDigits: 2,
@@ -35,6 +42,11 @@ export default function TechnicianBillingReportPage() {
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [visibleSignatureReportId, setVisibleSignatureReportId] =
+    useState<number | null>(null);
+  const [signatureState, setSignatureState] = useState<
+    Record<number, CustomerSignatureState>
+  >({});
 
   const loadReports = async () => {
     setLoading(true);
@@ -57,6 +69,59 @@ export default function TechnicianBillingReportPage() {
   useEffect(() => {
     void loadReports();
   }, []);
+
+  const handleToggleSignature = async (report: BillingReport) => {
+    const current = signatureState[report.id];
+
+    if (visibleSignatureReportId === report.id) {
+      setVisibleSignatureReportId(null);
+      return;
+    }
+
+    setVisibleSignatureReportId(report.id);
+
+    if (current?.data || current?.loading || current?.error) {
+      return;
+    }
+
+    setSignatureState((prev) => ({
+      ...prev,
+      [report.id]: {
+        data: null,
+        loading: true,
+        error: null,
+      },
+    }));
+
+    try {
+      const response = await getCustomerSignature(report.job_id);
+
+      setSignatureState((prev) => ({
+        ...prev,
+        [report.id]: {
+          data: response.signature_data,
+          loading: false,
+          error: null,
+        },
+      }));
+    } catch (err: any) {
+      const status = err?.response?.status;
+
+      setSignatureState((prev) => ({
+        ...prev,
+        [report.id]: {
+          data: null,
+          loading: false,
+          error:
+            status === 404
+              ? "Customer signature is not available for this job."
+              : status === 403
+                ? "You are not authorized to view this customer signature."
+                : "Failed to load the customer signature.",
+        },
+      }));
+    }
+  };
 
   const handleDownload = async (report: BillingReport) => {
     if (downloading !== null) {
@@ -230,7 +295,10 @@ export default function TechnicianBillingReportPage() {
         </div>
       ) : (
         <div style={styles.list}>
-          {reports.map((report) => (
+          {reports.map((report) => {
+            const signature = signatureState[report.id];
+
+            return (
             <div
               key={report.id}
               style={styles.card}
@@ -318,6 +386,57 @@ export default function TechnicianBillingReportPage() {
                 </div>
               </div>
 
+              <div style={styles.signatureSection}>
+                <div style={styles.signatureHeader}>
+                  <div>
+                    <div style={styles.signatureTitle}>
+                      Customer Signature
+                    </div>
+                    <div style={styles.signatureSubtitle}>
+                      Captured during job completion
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    style={styles.signatureButton}
+                    onClick={() =>
+                      void handleToggleSignature(report)
+                    }
+                  >
+                    {visibleSignatureReportId === report.id
+                      ? "Hide Signature"
+                      : "View Signature"}
+                  </button>
+                </div>
+
+                {visibleSignatureReportId === report.id && (
+                  <div style={styles.signatureContent}>
+                    {signature?.loading ? (
+                      <span style={styles.signatureMessage}>
+                        Loading customer signature...
+                      </span>
+                    ) : signature?.error ? (
+                      <span style={styles.signatureError}>
+                        {signature.error}
+                      </span>
+                    ) : signature?.data ? (
+                      <div style={styles.signatureImageWrap}>
+                        <img
+                          src={signature.data}
+                          alt={`Customer signature for job #${report.job_id}`}
+                          style={styles.signatureImage}
+                        />
+                      </div>
+                    ) : (
+                      <span style={styles.signatureMessage}>
+                        Customer signature is not available.
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <div style={styles.footer}>
                 <span>
                   Submitted:{" "}
@@ -351,7 +470,8 @@ export default function TechnicianBillingReportPage() {
                 </button>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -509,6 +629,84 @@ const styles = {
     background: "#ECFDF5",
     borderRadius: "9px",
     padding: "10px 12px",
+  },
+
+  signatureSection: {
+    marginTop: "16px",
+    paddingTop: "14px",
+    borderTop: "1px solid #F0F0F0",
+    background: "#FAFCFB",
+    borderRadius: "10px",
+    padding: "14px",
+  },
+
+  signatureHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: "12px",
+  },
+
+  signatureTitle: {
+    fontSize: "13px",
+    fontWeight: 700,
+    color: "#1F2933",
+  },
+
+  signatureSubtitle: {
+    marginTop: "3px",
+    fontSize: "11px",
+    color: "#9CA3AF",
+  },
+
+  signatureButton: {
+    border: "1px solid #D1D5DB",
+    borderRadius: "8px",
+    background: "#fff",
+    color: "#166534",
+    padding: "8px 12px",
+    fontSize: "12px",
+    fontWeight: 700,
+    cursor: "pointer",
+    whiteSpace: "nowrap" as const,
+  },
+
+  signatureContent: {
+    marginTop: "12px",
+    minHeight: "120px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    border: "1px dashed #D1D5DB",
+    borderRadius: "9px",
+    background: "#fff",
+    padding: "12px",
+  },
+
+  signatureImageWrap: {
+    width: "100%",
+    maxWidth: "520px",
+    background: "#fff",
+    borderRadius: "8px",
+    padding: "8px",
+  },
+
+  signatureImage: {
+    display: "block",
+    width: "100%",
+    maxHeight: "180px",
+    objectFit: "contain" as const,
+  },
+
+  signatureMessage: {
+    fontSize: "12px",
+    color: "#6B7280",
+  },
+
+  signatureError: {
+    fontSize: "12px",
+    color: "#991B1B",
+    textAlign: "center" as const,
   },
 
   footer: {
