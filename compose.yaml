@@ -99,6 +99,7 @@ services:
       KAFKA_PRODUCER_USERNAME: "${KAFKA_PRODUCER_USERNAME:?KAFKA_PRODUCER_USERNAME must be set}"
       KAFKA_AUDIT_USERNAME: "${KAFKA_AUDIT_USERNAME:?KAFKA_AUDIT_USERNAME must be set}"
       KAFKA_AUDIT_CONSUMER_GROUP: "${KAFKA_AUDIT_CONSUMER_GROUP:-fieldops-audit}"
+      KAFKA_DISPATCH_USERNAME: "${KAFKA_DISPATCH_USERNAME:?KAFKA_DISPATCH_USERNAME must be set}"
       KAFKA_JOB_EVENTS_PARTITIONS: "${KAFKA_JOB_EVENTS_PARTITIONS:-6}"
       KAFKA_GPS_EVENTS_PARTITIONS: "${KAFKA_GPS_EVENTS_PARTITIONS:-12}"
       KAFKA_SLA_EVENTS_PARTITIONS: "${KAFKA_SLA_EVENTS_PARTITIONS:-6}"
@@ -235,6 +236,34 @@ services:
           --operation DESCRIBE \
           --group "fieldops-job-assigned-e2e-" \
           --resource-pattern-type prefixed
+
+        # Allow the audit consumer to read audit events.
+        /opt/kafka/bin/kafka-acls.sh \
+          --bootstrap-server kafka:9092 \
+          --add \
+          --allow-principal "User:$$KAFKA_AUDIT_USERNAME" \
+          --operation READ \
+          --operation DESCRIBE \
+          --topic "fieldops.audit.events"
+
+        # Allow dynamic consumer groups used by the audit Kafka E2E tests.
+        /opt/kafka/bin/kafka-acls.sh \
+          --bootstrap-server kafka:9092 \
+          --add \
+          --allow-principal "User:$$KAFKA_AUDIT_USERNAME" \
+          --operation READ \
+          --operation DESCRIBE \
+          --group "fieldops-audit-e2e-" \
+          --resource-pattern-type prefixed
+
+        # Allow the producer to publish audit events.
+        /opt/kafka/bin/kafka-acls.sh \
+          --bootstrap-server kafka:9092 \
+          --add \
+          --allow-principal "User:$$KAFKA_PRODUCER_USERNAME" \
+          --operation WRITE \
+          --operation DESCRIBE \
+          --topic "fieldops.audit.events"
 
 volumes:
   kafka_data:

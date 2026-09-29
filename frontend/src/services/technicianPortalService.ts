@@ -24,6 +24,9 @@ export interface TechnicianStatusUpdateResponse {
   technician_status: string;
 }
 
+
+
+
 // ---------------------------------------------------------------------------
 // Profile
 // ---------------------------------------------------------------------------
@@ -71,6 +74,35 @@ export const startTechnicianJob = (jobId: number) =>
 
 export const onSiteTechnicianJob = (jobId: number) =>
   api.post(`/api/technician/jobs/${jobId}/on-site`);
+
+// ---------------------------------------------------------------------------
+// Job expenses
+// ---------------------------------------------------------------------------
+
+export interface TechnicianJobExpense {
+  id: number;
+  job_id: number;
+  technician_id: number;
+  amount: string | number;
+  description: string;
+  submitted_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TechnicianJobExpenseCreate {
+  amount: string;
+  description: string;
+}
+
+export const submitTechnicianJobExpense = (
+  jobId: number,
+  data: TechnicianJobExpenseCreate,
+) =>
+  api.post<TechnicianJobExpense>(
+    `/api/technician/jobs/${jobId}/expenses`,
+    data,
+  );
 
 export const pauseTechnicianJob = (jobId: number) =>
   api.post(`/api/technician/jobs/${jobId}/pause`);
@@ -133,9 +165,7 @@ export const downloadTechnicianBillingReport = async (
   const blob = new Blob(
     [response.data],
     {
-      type:
-        response.headers?.["content-type"] ||
-        "application/pdf",
+      type: "application/pdf",
     },
   );
 

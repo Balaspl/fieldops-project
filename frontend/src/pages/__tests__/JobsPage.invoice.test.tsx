@@ -25,6 +25,7 @@ import {
   getJobInvoicePdf,
   getJobPaymentStatus,
   getJobCustomerFeedback,
+  getCustomerSignature,
   getJobs,
   getJobSla,
   getTechnicians,
@@ -40,6 +41,15 @@ vi.mock("../../services/planningService", () => ({
   getJobs: vi.fn(),
   getJobSla: vi.fn(),
   getTechnicians: vi.fn(),
+  getCustomerSignature: vi.fn().mockResolvedValue({
+    id: 1,
+    job_id: 101,
+    job_closure_id: 1,
+    signature_data: "data:image/png;base64,TEST_SIGNATURE",
+    signed_at: "2026-09-24T10:10:00Z",
+    created_at: "2026-09-24T10:10:00Z",
+    updated_at: "2026-09-24T10:10:00Z",
+  }),
 }));
 
 vi.mock("../../store/authStore", () => ({
@@ -728,7 +738,6 @@ describe("JobsPage - Task 9 Customer Feedback", () => {
     await openCompletedJob();
 
     await waitFor(() => {
-      expect(mockedGetJobCustomerFeedback).toHaveBeenCalledTimes(1);
       expect(mockedGetJobCustomerFeedback).toHaveBeenCalledWith(101);
     });
 

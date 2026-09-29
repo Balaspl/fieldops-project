@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 from datetime import datetime, timezone, timedelta
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 from fakeredis import FakeRedis
 from freezegun import freeze_time
 from contextlib import contextmanager
@@ -446,13 +446,20 @@ def test_exclusion_checked_in_planning(
 
     token = create_test_token()
 
-    response = client.post(
-        f"/jobs/{job.id}/plan",
-        headers={
-            "X-Tenant-ID": "tenant-1",
-            "Authorization": f"Bearer {token}",
-        },
-    )
+    # The exclusion behavior is the subject of this test. Isolate the
+    # external Ola Maps dependency used later by technician scoring.
+    with patch(
+        "app.routes.jobs.DistanceScoringService.calculate_distance_score",
+        new_callable=AsyncMock,
+        return_value=[{"id": tech2.technician_id, "score": 99.0, "distance_km": 1.0}],
+    ):
+        response = client.post(
+            f"/jobs/{job.id}/plan",
+            headers={
+                "X-Tenant-ID": "tenant-1",
+                "Authorization": f"Bearer {token}",
+            },
+        )
 
     assert response.status_code == 200, response.text
 

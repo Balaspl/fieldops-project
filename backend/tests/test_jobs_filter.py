@@ -3841,7 +3841,9 @@ def test_accept_job_publishes_job_started_event(monkeypatch):
 
         job.status = "ASSIGNED"
         job.assigned_technician_id = tech.technician_id
+        job.assigned_at = datetime.now(timezone.utc)
         tech.current_jobs = 0
+        db.commit()
         db.commit = lambda: None
 
         redis_client = FakeAcceptRedis(
@@ -3875,7 +3877,7 @@ def test_accept_job_publishes_job_started_event(monkeypatch):
             background_tasks=background_tasks,
         )
 
-        assert result["status"] == "EN_ROUTE"
+        assert result["status"] == "ACCEPTED"
 
         assert len(background_tasks.tasks) == 1
 
@@ -3902,6 +3904,8 @@ def test_accept_job_publishes_job_started_event(monkeypatch):
 
     finally:
         db.close()
+
+        
 def test_accept_job_kafka_failure_does_not_rollback(monkeypatch):
     from app.routes.jobs import accept_job
     from fastapi import BackgroundTasks
@@ -3930,9 +3934,10 @@ def test_accept_job_kafka_failure_does_not_rollback(monkeypatch):
 
         job.status = "ASSIGNED"
         job.assigned_technician_id = tech.technician_id
+        job.assigned_at = datetime.now(timezone.utc)
         tech.current_jobs = 0
 
-        db.commit = lambda: None
+        db.commit()
 
         redis_client = FakeAcceptRedis(
             lock_result=True,
@@ -3960,8 +3965,8 @@ def test_accept_job_kafka_failure_does_not_rollback(monkeypatch):
             background_tasks=background_tasks,
         )
 
-        assert result["status"] == "EN_ROUTE"
-        assert job.status == "EN_ROUTE"
+        assert result["status"] == "ACCEPTED"
+        assert job.status == "ACCEPTED"
 
         assert len(background_tasks.tasks) == 1
 
@@ -3978,7 +3983,7 @@ def test_accept_job_kafka_failure_does_not_rollback(monkeypatch):
         )
 
         # The authoritative job transition remains successful.
-        assert job.status == "EN_ROUTE"
+        assert job.status == "ACCEPTED"
 
     finally:
         db.close()
@@ -4014,6 +4019,7 @@ def test_accept_job_already_en_route_does_not_publish_job_started():
 
         job.status = "EN_ROUTE"
         job.assigned_technician_id = tech.technician_id
+        job.assigned_at = datetime.now(timezone.utc)
         tech.current_jobs = 1
 
         db.commit = lambda: None
@@ -4047,7 +4053,7 @@ def test_accept_job_already_en_route_does_not_publish_job_started():
 
         assert exc_info.value.status_code == 400
         assert exc_info.value.detail == (
-            "Job is not in ASSIGNED status"
+            "Job is not available for acceptance: EN_ROUTE"
         )
 
         assert len(background_tasks.tasks) == 0
@@ -4086,9 +4092,10 @@ def test_accept_job_kafka_publish_false_does_not_rollback():
 
         job.status = "ASSIGNED"
         job.assigned_technician_id = tech.technician_id
+        job.assigned_at = datetime.now(timezone.utc)
         tech.current_jobs = 0
 
-        db.commit = lambda: None
+        db.commit()
 
         redis_client = FakeAcceptRedis(
             lock_result=True,
@@ -4126,8 +4133,8 @@ def test_accept_job_kafka_publish_false_does_not_rollback():
             redis_client=redis_client,
         )
 
-        assert result["status"] == "EN_ROUTE"
-        assert job.status == "EN_ROUTE"
+        assert result["status"] == "ACCEPTED"
+        assert job.status == "ACCEPTED"
 
         for task in background_tasks.tasks:
             asyncio.run(
@@ -4342,6 +4349,7 @@ def test_reject_job_success(monkeypatch):
 
         job.status = "ASSIGNED"
         job.assigned_technician_id = tech.technician_id
+        job.assigned_at = datetime.now(timezone.utc)
         tech.current_jobs = 1
         tech.technician_status = "EN_ROUTE"
 
@@ -4495,6 +4503,7 @@ def test_reject_job_commit_failure(monkeypatch):
 
         job.status = "ASSIGNED"
         job.assigned_technician_id = tech.technician_id
+        job.assigned_at = datetime.now(timezone.utc)
 
         def broken_commit():
             raise RuntimeError("forced reject commit failure")
@@ -4657,6 +4666,7 @@ def test_reassign_job_validation_branches(monkeypatch):
         assert tech is not None
 
         job.assigned_technician_id = tech.technician_id
+        job.assigned_at = datetime.now(timezone.utc)
         db.commit = lambda: None
 
         with pytest.raises(HTTPException) as exc_info:
@@ -9088,3 +9098,1612 @@ def test_bulk_cancel_mutation_generic_exception():
     assert exc_info.value.detail == "Bulk cancellation failed"
     assert db.rollback_count == 1
 
+# Append this block to backend/tests/test_jobs_filter.py
+# Targets the current 3845-line backend/app/routes/jobs.py.
+
+import pytest
+from datetime import date, datetime, timezone, timedelta
+from types import SimpleNamespace
+from app.models import Job, Technician
+from app.auth.rbac import UserRole
+
+
+def _cov_user(role):
+    from app.auth.dependencies import AuthenticatedUser
+
+    user_id = "1" if role == UserRole.TECHNICIAN else "coverage-user"
+    return AuthenticatedUser(
+        user_id=user_id,
+        tenant_id="tenant-1",
+        role=role,
+        jti="coverage-jti",
+        session_id="coverage-session",
+    )
+
+
+def _cov_request(kafka_producer=None, headers=None):
+    from starlette.requests import Request
+    from types import SimpleNamespace
+
+    request = Request(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "path": "/coverage",
+            "headers": headers or [],
+            "app": SimpleNamespace(
+                state=SimpleNamespace(kafka_producer=kafka_producer)
+            ),
+        }
+    )
+    return request
+
+
+class _CovQuery:
+    def __init__(self, first_value=None, all_values=None, count_value=None):
+        self.first_value = first_value
+        self.all_values = list(all_values or [])
+        self.count_value = count_value
+
+    def filter(self, *args, **kwargs):
+        return self
+
+    def order_by(self, *args, **kwargs):
+        return self
+
+    def offset(self, *args, **kwargs):
+        return self
+
+    def limit(self, *args, **kwargs):
+        return self
+
+    def with_for_update(self):
+        return self
+
+    def first(self):
+        return self.first_value
+
+    def all(self):
+        return list(self.all_values)
+
+    def count(self):
+        return self.count_value if self.count_value is not None else len(self.all_values)
+
+
+class _CovDB:
+    def __init__(self, mapping=None):
+        self.mapping = mapping or {}
+
+    def query(self, model):
+        key = model.__name__
+        value = self.mapping.get(key)
+        values = self.mapping.get(f"{key}[]")
+        return _CovQuery(
+            first_value=value,
+            all_values=values if values is not None else ([] if value is None else [value]),
+        )
+
+
+def test_cov_require_any_job_permission_denied_branch():
+    from app.routes.jobs import require_any_job_permission
+    from app.auth.rbac import Permission
+    from fastapi import HTTPException
+
+    dependency = require_any_job_permission(Permission.JOBS_VIEW_ALL)
+
+    with pytest.raises(HTTPException) as exc_info:
+        dependency(_cov_user(UserRole.CUSTOMER))
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Insufficient permissions"
+
+
+@pytest.mark.parametrize(
+    "publish_result",
+    [True, False],
+)
+def test_cov_create_job_kafka_publish_results(monkeypatch, publish_result):
+    from app.routes.jobs import create_job
+    from app.schemas import JobCreate
+    from fastapi import BackgroundTasks
+    import asyncio
+
+    class Producer:
+        async def publish(self, event):
+            assert event.payload["event_type"] == "job-created"
+            assert event.topic == "fieldops.job.events"
+            return publish_result
+
+    db = TestingSessionLocal()
+
+    try:
+        data = JobCreate(
+            customer_name="Coverage Customer",
+            location="Coverage Zone",
+            issue_description="Coverage issue",
+            priority="LOW",
+            service_type="HVAC Repair",
+            contact_number="9000000099",
+            preferred_service_date=date.today(),
+            status="ACTIVE",
+            required_skill="HVAC Repair",
+            sla_deadline=None,
+            attempt_count=0,
+        )
+
+        request = _cov_request(Producer())
+        background_tasks = BackgroundTasks()
+
+        result = create_job(
+            job=data,
+            request=request,
+            background_tasks=background_tasks,
+            user_tenant=(None, "tenant-1"),
+            db=db,
+        )
+
+        assert result.customer_name == "Coverage Customer"
+        assert len(background_tasks.tasks) == 1
+
+        task = background_tasks.tasks[0]
+        asyncio.run(task.func(*task.args, **task.kwargs))
+    finally:
+        db.close()
+
+
+def test_cov_create_job_kafka_publish_exception():
+    from app.routes.jobs import create_job
+    from app.schemas import JobCreate
+    from fastapi import BackgroundTasks
+    import asyncio
+
+    class Producer:
+        async def publish(self, event):
+            raise RuntimeError("Kafka unavailable")
+
+    db = TestingSessionLocal()
+
+    try:
+        data = JobCreate(
+            customer_name="Coverage Kafka Error",
+            location="Coverage Zone",
+            issue_description="Coverage issue",
+            priority="LOW",
+            service_type="HVAC Repair",
+            contact_number="9000000098",
+            preferred_service_date=date.today(),
+            status="ACTIVE",
+            required_skill="HVAC Repair",
+            sla_deadline=None,
+            attempt_count=0,
+        )
+
+        request = _cov_request(Producer())
+        background_tasks = BackgroundTasks()
+
+        result = create_job(
+            job=data,
+            request=request,
+            background_tasks=background_tasks,
+            user_tenant=(None, "tenant-1"),
+            db=db,
+        )
+
+        assert result.customer_name == "Coverage Kafka Error"
+        asyncio.run(
+            background_tasks.tasks[0].func(
+                *background_tasks.tasks[0].args,
+                **background_tasks.tasks[0].kwargs,
+            )
+        )
+    finally:
+        db.close()
+
+
+def test_cov_create_job_kafka_prepare_exception():
+    from app.routes.jobs import create_job
+    from app.schemas import JobCreate
+    from fastapi import BackgroundTasks
+
+    class Producer:
+        async def publish(self, event):
+            return True
+
+    class BrokenTasks(BackgroundTasks):
+        def add_task(self, func, *args, **kwargs):
+            raise RuntimeError("background task registration failed")
+
+    db = TestingSessionLocal()
+
+    try:
+        data = JobCreate(
+            customer_name="Coverage Prepare Error",
+            location="Coverage Zone",
+            issue_description="Coverage issue",
+            priority="LOW",
+            service_type="HVAC Repair",
+            contact_number="9000000097",
+            preferred_service_date=date.today(),
+            status="ACTIVE",
+            required_skill="HVAC Repair",
+            sla_deadline=None,
+            attempt_count=0,
+        )
+
+        result = create_job(
+            job=data,
+            request=_cov_request(Producer()),
+            background_tasks=BrokenTasks(),
+            user_tenant=(None, "tenant-1"),
+            db=db,
+        )
+
+        assert result.customer_name == "Coverage Prepare Error"
+    finally:
+        db.close()
+
+
+def test_cov_get_jobs_sla_deadline_fallback_branches():
+    from app.routes.jobs import get_jobs
+    from fastapi import Response
+    from types import SimpleNamespace
+
+    aware_datetime = datetime.now(timezone.utc) + timedelta(minutes=20)
+
+    jobs = [
+        SimpleNamespace(
+            id=801,
+            tenant_id="tenant-1",
+            customer_tenant_id="tenant-1",
+            status="ACTIVE",
+            sla_deadline=None,
+            preferred_service_date=aware_datetime,
+            customer_name="Aware Fallback",
+            location="North",
+            issue_description="Issue",
+        ),
+        SimpleNamespace(
+            id=802,
+            tenant_id="tenant-1",
+            customer_tenant_id="tenant-1",
+            status="ACTIVE",
+            sla_deadline=None,
+            preferred_service_date=date.today(),
+            customer_name="Date Fallback",
+            location="South",
+            issue_description="Issue",
+        ),
+        SimpleNamespace(
+            id=803,
+            tenant_id="tenant-1",
+            customer_tenant_id="tenant-1",
+            status="ACTIVE",
+            sla_deadline=None,
+            preferred_service_date=None,
+            customer_name="No Deadline",
+            location="East",
+            issue_description="Issue",
+        ),
+    ]
+
+    result = get_jobs(
+        response=Response(),
+        sla="WITHIN_SLA",
+        technician_id=None,
+        page=None,
+        limit=None,
+        user_tenant=(_cov_user(UserRole.DISPATCHER), "tenant-1"),
+        current_user=_cov_user(UserRole.DISPATCHER),
+        db=_CovDB({"Job[]": jobs}),
+    )
+
+    assert result is not None
+
+
+def test_cov_accept_job_technician_record_none(monkeypatch):
+    from app.routes.jobs import accept_job
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(
+        "app.routes.jobs.get_technician_for_current_user",
+        lambda *args, **kwargs: None,
+    )
+
+    db = TestingSessionLocal()
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            accept_job(
+                job_id=101,
+                current_user=_cov_user(UserRole.TECHNICIAN),
+                db=db,
+                redis_client=_CovRedis(),
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "Technician record not found"
+    finally:
+        db.close()
+
+
+def test_cov_accept_job_missing_assigned_timestamp():
+    from app.routes.jobs import accept_job
+    from fastapi import HTTPException
+
+    db = TestingSessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == 101).first()
+        assert job is not None
+
+        job.status = "ASSIGNED"
+        job.assigned_technician_id = 1
+        job.assigned_at = None
+        db.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            accept_job(
+                job_id=101,
+                current_user=_cov_user(UserRole.TECHNICIAN),
+                db=db,
+                redis_client=_CovRedis(),
+            )
+
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.detail == "Assignment timestamp is missing"
+    finally:
+        db.close()
+
+
+def test_cov_accept_job_aware_timestamp_and_accepted_at(monkeypatch):
+    from app.routes.jobs import accept_job, TimerService
+
+    db = TestingSessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == 101).first()
+        assert job is not None
+
+        job.status = "ASSIGNED"
+        job.assigned_technician_id = 1
+        db.commit()
+
+        job.assigned_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+        setattr(job, "accepted_at", None)
+
+        monkeypatch.setattr(db, "refresh", lambda obj: None)
+        monkeypatch.setattr(TimerService, "cancel_timer", lambda *args, **kwargs: None)
+
+        result = accept_job(
+            job_id=101,
+            current_user=_cov_user(UserRole.TECHNICIAN),
+            db=db,
+            redis_client=_CovRedis(),
+        )
+
+        assert result["status"] == "ACCEPTED"
+        assert job.accepted_at is not None
+    finally:
+        db.close()
+
+
+def test_cov_accept_job_status_changed_after_lock(monkeypatch):
+    from app.routes.jobs import accept_job, TimerService
+    from fastapi import HTTPException
+
+    db = TestingSessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == 101).first()
+        assert job is not None
+        job.status = "ASSIGNED"
+        job.assigned_technician_id = 1
+        job.assigned_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+        db.commit()
+
+        def refresh_after_lock(obj):
+            obj.status = "EN_ROUTE"
+
+        monkeypatch.setattr(db, "refresh", refresh_after_lock)
+        monkeypatch.setattr(TimerService, "cancel_timer", lambda *args, **kwargs: None)
+
+        with pytest.raises(HTTPException) as exc_info:
+            accept_job(
+                job_id=101,
+                current_user=_cov_user(UserRole.TECHNICIAN),
+                db=db,
+                redis_client=_CovRedis(),
+            )
+
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.detail == "Job is no longer available"
+    finally:
+        db.close()
+
+
+def test_cov_accept_job_assignment_changed_after_lock(monkeypatch):
+    from app.routes.jobs import accept_job, TimerService
+    from fastapi import HTTPException
+
+    db = TestingSessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == 101).first()
+        assert job is not None
+        job.status = "ASSIGNED"
+        job.assigned_technician_id = 1
+        job.assigned_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+        db.commit()
+
+        def refresh_after_lock(obj):
+            obj.assigned_technician_id = 999
+
+        monkeypatch.setattr(db, "refresh", refresh_after_lock)
+        monkeypatch.setattr(TimerService, "cancel_timer", lambda *args, **kwargs: None)
+
+        with pytest.raises(HTTPException) as exc_info:
+            accept_job(
+                job_id=101,
+                current_user=_cov_user(UserRole.TECHNICIAN),
+                db=db,
+                redis_client=_CovRedis(),
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "Technician not assigned to this job"
+    finally:
+        db.close()
+
+
+def test_cov_accept_job_second_expiry(monkeypatch):
+    from app.routes.jobs import accept_job, TimerService
+    from fastapi import HTTPException
+
+    RealDatetime = datetime
+    assigned_at = RealDatetime.now(timezone.utc)
+    call_counter = {"value": 0}
+
+    class FakeDatetime(RealDatetime):
+        @classmethod
+        def now(cls, tz=None):
+            call_counter["value"] += 1
+            seconds = 100 if call_counter["value"] == 1 else 601
+            return assigned_at + timedelta(seconds=seconds)
+
+    db = TestingSessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == 101).first()
+        assert job is not None
+        job.status = "ASSIGNED"
+        job.assigned_technician_id = 1
+        job.assigned_at = assigned_at
+        db.commit()
+        job.assigned_at = assigned_at
+
+        monkeypatch.setattr("app.routes.jobs.datetime", FakeDatetime)
+        monkeypatch.setattr(db, "refresh", lambda obj: None)
+        monkeypatch.setattr(TimerService, "cancel_timer", lambda *args, **kwargs: None)
+
+        with pytest.raises(HTTPException) as exc_info:
+            accept_job(
+                job_id=101,
+                current_user=_cov_user(UserRole.TECHNICIAN),
+                db=db,
+                redis_client=_CovRedis(),
+            )
+
+        assert exc_info.value.status_code == 423
+        assert exc_info.value.detail == "Acceptance window expired"
+    finally:
+        db.close()
+
+
+def test_cov_accept_job_kafka_prepare_exception(monkeypatch):
+    from app.routes.jobs import accept_job, TimerService
+    from fastapi import BackgroundTasks
+    from types import SimpleNamespace
+
+    class Producer:
+        async def publish(self, event):
+            return True
+
+    def exploding_message(*args, **kwargs):
+        raise RuntimeError("event construction failed")
+
+    monkeypatch.setattr("app.routes.jobs.MessageEnvelope", exploding_message)
+    monkeypatch.setattr(TimerService, "cancel_timer", lambda *args, **kwargs: None)
+
+    db = TestingSessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == 101).first()
+        assert job is not None
+        job.status = "ASSIGNED"
+        job.assigned_technician_id = 1
+        job.assigned_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+        db.commit()
+
+        result = accept_job(
+            job_id=101,
+            current_user=_cov_user(UserRole.TECHNICIAN),
+            db=db,
+            redis_client=_CovRedis(),
+            request=_cov_request(Producer()),
+            background_tasks=BackgroundTasks(),
+        )
+
+        assert result["status"] == "ACCEPTED"
+    finally:
+        db.close()
+
+
+def test_cov_accept_job_lock_release_exception(monkeypatch):
+    from app.routes.jobs import accept_job, TimerService
+
+    class DeleteExplodingRedis(_CovRedis):
+        def delete(self, *keys):
+            raise RuntimeError("delete failed")
+
+    monkeypatch.setattr(TimerService, "cancel_timer", lambda *args, **kwargs: None)
+
+    db = TestingSessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == 101).first()
+        assert job is not None
+        job.status = "ASSIGNED"
+        job.assigned_technician_id = 1
+        job.assigned_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+        db.commit()
+
+        result = accept_job(
+            job_id=101,
+            current_user=_cov_user(UserRole.TECHNICIAN),
+            db=db,
+            redis_client=DeleteExplodingRedis(),
+        )
+
+        assert result["status"] == "ACCEPTED"
+    finally:
+        db.close()
+
+
+def test_cov_reassign_job_current_technician_missing():
+    from app.routes.jobs import reassign_job, JobReassignRequest
+    from fastapi import HTTPException
+    from types import SimpleNamespace
+
+    job = SimpleNamespace(
+        id=901,
+        tenant_id="tenant-1",
+        assigned_technician_id=999,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        reassign_job(
+            job_id=901,
+            req=JobReassignRequest(
+                new_tech_id="tech-2",
+                reason="Current technician is unavailable",
+            ),
+            current_user=_cov_user(UserRole.DISPATCHER),
+            db=_CovDB({"Job": job, "Technician": None}),
+            redis_client=_CovRedis(),
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Current technician not found"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("publish_result", [True, False])
+async def test_cov_assign_job_kafka_publish_results(monkeypatch, publish_result):
+    from app.routes.jobs import assign_job, JobAssignRequest, TimerService, CooldownService
+    from app.services.socket_manager import sio
+    from unittest.mock import AsyncMock
+
+    class Producer:
+        async def publish(self, event):
+            assert event.payload["event_type"] == "job-assigned"
+            assert event.topic == "fieldops.job.events"
+            return publish_result
+
+    monkeypatch.setattr(sio, "emit", AsyncMock())
+    monkeypatch.setattr(
+        "app.services.socket_manager.emit_notification",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(TimerService, "start_timer", lambda *args, **kwargs: None)
+    monkeypatch.setattr(CooldownService, "clear_cooldown", lambda *args, **kwargs: None)
+
+    db = TestingSessionLocal()
+    try:
+        from fastapi import BackgroundTasks
+
+        background_tasks = BackgroundTasks()
+        result = await assign_job(
+            job_id=101,
+            req=JobAssignRequest(
+                tech_id="tech-1",
+                justification="Coverage assignment for this technician",
+            ),
+            current_user=_cov_user(UserRole.DISPATCHER),
+            db=db,
+            redis_client=_CovRedis(),
+            request=_cov_request(Producer()),
+            background_tasks=background_tasks,
+        )
+
+        assert result["status"] == "ASSIGNED"
+        assert len(background_tasks.tasks) == 1
+        task = background_tasks.tasks[0]
+        await task.func(*task.args, **task.kwargs)
+    finally:
+        db.close()
+
+
+class _CovRedis:
+    def __init__(self, lock_result=True):
+        self.lock_result = lock_result
+        self.deleted_keys = []
+
+    def set(self, key, value, nx=True, ex=10):
+        return self.lock_result
+
+    def exists(self, key):
+        return False
+
+    def delete(self, *keys):
+        self.deleted_keys.extend(keys)
+        return len(keys)
+
+    def ttl(self, key):
+        return 30
+
+    def get(self, key):
+        return "1"
+
+
+@pytest.mark.asyncio
+async def test_cov_assign_job_kafka_publish_exception(monkeypatch):
+    from app.routes.jobs import assign_job, JobAssignRequest, TimerService, CooldownService
+    from app.services.socket_manager import sio
+    from unittest.mock import AsyncMock
+    from fastapi import BackgroundTasks
+
+    class Producer:
+        async def publish(self, event):
+            raise RuntimeError("Kafka unavailable")
+
+    monkeypatch.setattr(sio, "emit", AsyncMock())
+    monkeypatch.setattr(
+        "app.services.socket_manager.emit_notification",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(TimerService, "start_timer", lambda *args, **kwargs: None)
+    monkeypatch.setattr(CooldownService, "clear_cooldown", lambda *args, **kwargs: None)
+
+    db = TestingSessionLocal()
+    try:
+        background_tasks = BackgroundTasks()
+        result = await assign_job(
+            job_id=101,
+            req=JobAssignRequest(
+                tech_id="tech-1",
+                justification="Coverage assignment for Kafka test",
+            ),
+            current_user=_cov_user(UserRole.DISPATCHER),
+            db=db,
+            redis_client=_CovRedis(),
+            request=_cov_request(Producer()),
+            background_tasks=background_tasks,
+        )
+
+        assert result["status"] == "ASSIGNED"
+        assert len(background_tasks.tasks) == 1
+        task = background_tasks.tasks[0]
+        await task.func(*task.args, **task.kwargs)
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_cov_assign_job_kafka_prepare_exception(monkeypatch):
+    from app.routes.jobs import assign_job, JobAssignRequest, TimerService, CooldownService
+    from app.services.socket_manager import sio
+    from unittest.mock import AsyncMock
+    from fastapi import BackgroundTasks
+
+    class Producer:
+        async def publish(self, event):
+            return True
+
+    def exploding_message(*args, **kwargs):
+        raise RuntimeError("assignment event construction failed")
+
+    monkeypatch.setattr("app.routes.jobs.MessageEnvelope", exploding_message)
+    monkeypatch.setattr(sio, "emit", AsyncMock())
+    monkeypatch.setattr(
+        "app.services.socket_manager.emit_notification",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(TimerService, "start_timer", lambda *args, **kwargs: None)
+    monkeypatch.setattr(CooldownService, "clear_cooldown", lambda *args, **kwargs: None)
+
+    db = TestingSessionLocal()
+    try:
+        result = await assign_job(
+            job_id=101,
+            req=JobAssignRequest(
+                tech_id="tech-1",
+                justification="Coverage assignment prep exception",
+            ),
+            current_user=_cov_user(UserRole.DISPATCHER),
+            db=db,
+            redis_client=_CovRedis(),
+            request=_cov_request(Producer()),
+            background_tasks=BackgroundTasks(),
+        )
+        assert result["status"] == "ASSIGNED"
+    finally:
+        db.close()
+
+
+def test_cov_timeline_not_found():
+    from app.routes.jobs import get_job_timeline
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_job_timeline(
+            job_id=999999,
+            current_user=_cov_user(UserRole.DISPATCHER),
+            db=_CovDB({"Job": None}),
+            page=1,
+            page_size=25,
+            category=None,
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+def test_cov_timeline_invalid_category():
+    from app.routes.jobs import get_job_timeline
+    from fastapi import HTTPException
+    from types import SimpleNamespace
+
+    job = SimpleNamespace(id=901, tenant_id="tenant-1")
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_job_timeline(
+            job_id=901,
+            current_user=_cov_user(UserRole.DISPATCHER),
+            db=_CovDB({"Job": job}),
+            page=1,
+            page_size=25,
+            category="INVALID",
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+def test_cov_timeline_success_with_filter_and_page(monkeypatch):
+    from app.routes.jobs import get_job_timeline
+    from types import SimpleNamespace
+
+    job = SimpleNamespace(id=901, tenant_id="tenant-1")
+    events = [
+        {"event_category": "STATUS", "id": 1},
+        {"event_category": "CREATION", "id": 2},
+        {"event_category": "STATUS", "id": 3},
+    ]
+
+    monkeypatch.setattr(
+        "app.services.job_timeline_service.build_job_timeline",
+        lambda db, job: events,
+    )
+
+    result = get_job_timeline(
+        job_id=901,
+        current_user=_cov_user(UserRole.DISPATCHER),
+        db=_CovDB({"Job": job}),
+        page=2,
+        page_size=1,
+        category=" status ",
+    )
+
+    assert result["total"] == 2
+    assert result["events"] == [{"event_category": "STATUS", "id": 3}]
+    assert result["has_more"] is False
+
+
+def test_cov_audit_history_not_found():
+    from app.routes.jobs import get_job_audit_history
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_job_audit_history(
+            job_id=999999,
+            current_user=_cov_user(UserRole.DISPATCHER),
+            db=_CovDB({"Job": None}),
+            event_type=None,
+            source=None,
+            page=1,
+            page_size=25,
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+def test_cov_audit_history_invalid_source():
+    from app.routes.jobs import get_job_audit_history
+    from fastapi import HTTPException
+    from types import SimpleNamespace
+
+    job = SimpleNamespace(id=902, tenant_id="tenant-1")
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_job_audit_history(
+            job_id=902,
+            current_user=_cov_user(UserRole.DISPATCHER),
+            db=_CovDB({"Job": job}),
+            source="unknown",
+            event_type=None,
+            page=1,
+            page_size=25,
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+def test_cov_audit_history_success_filters_and_whitelists(monkeypatch):
+    from app.routes.jobs import get_job_audit_history
+    from types import SimpleNamespace
+
+    job = SimpleNamespace(id=902, tenant_id="tenant-1")
+    events = [
+        {
+            "id": 1,
+            "job_id": 902,
+            "event_type": "JOB_ACCEPTED",
+            "event_category": "STATUS",
+            "title": "Accepted",
+            "description": "Accepted",
+            "timestamp": "2026-09-29T01:00:00Z",
+            "from_status": "ASSIGNED",
+            "to_status": "ACCEPTED",
+            "actor_name": "Alice",
+            "actor_role": "Technician",
+            "source": "audit_event",
+            "is_current": True,
+            "internal_secret": "must-not-leak",
+        },
+        {
+            "id": 2,
+            "job_id": 902,
+            "event_type": "OTHER",
+            "event_category": "STATUS",
+            "source": "enterprise_audit",
+        },
+    ]
+
+    monkeypatch.setattr(
+        "app.services.job_timeline_service.build_job_timeline",
+        lambda db, job: events,
+    )
+
+    result = get_job_audit_history(
+        job_id=902,
+        current_user=_cov_user(UserRole.DISPATCHER),
+        db=_CovDB({"Job": job}),
+        event_type=" job_accepted ",
+        source=" AUDIT_EVENT ",
+        page=1,
+        page_size=25,
+    )
+
+    assert result["total"] == 1
+    assert result["events"][0]["event_type"] == "JOB_ACCEPTED"
+    assert "internal_secret" not in result["events"][0]
+
+
+def test_cov_payment_status_not_found():
+    from app.routes.jobs import get_job_payment_status
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_job_payment_status(
+            job_id=999,
+            current_user=_cov_user(UserRole.DISPATCHER),
+            db=_CovDB({"Job": None}),
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+def test_cov_payment_status_technician_forbidden(monkeypatch):
+    from app.routes.jobs import get_job_payment_status
+    from fastapi import HTTPException
+    from types import SimpleNamespace
+
+    job = SimpleNamespace(id=903, tenant_id="tenant-1", assigned_technician_id=2)
+    tech = SimpleNamespace(technician_id=1)
+
+    monkeypatch.setattr(
+        "app.routes.jobs.get_technician_for_current_user",
+        lambda *args, **kwargs: tech,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_job_payment_status(
+            job_id=903,
+            current_user=_cov_user(UserRole.TECHNICIAN),
+            db=_CovDB({"Job": job, "JobPaymentStatus": None}),
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "This job is not assigned to you"
+
+
+def test_cov_payment_status_missing():
+    from app.routes.jobs import get_job_payment_status
+    from types import SimpleNamespace
+
+    job = SimpleNamespace(id=904, tenant_id="tenant-1")
+
+    result = get_job_payment_status(
+        job_id=904,
+        current_user=_cov_user(UserRole.DISPATCHER),
+        db=_CovDB({"Job": job, "JobPaymentStatus": None}),
+    )
+
+    assert result["status"] == "UNAVAILABLE"
+    assert result["updated_at"] is None
+
+
+def test_cov_payment_status_invalid_value_maps_to_unavailable():
+    from app.routes.jobs import get_job_payment_status
+    from types import SimpleNamespace
+
+    job = SimpleNamespace(id=905, tenant_id="tenant-1")
+    payment = SimpleNamespace(
+        invoice_id=500,
+        status="unexpected",
+        updated_at=None,
+    )
+
+    result = get_job_payment_status(
+        job_id=905,
+        current_user=_cov_user(UserRole.DISPATCHER),
+        db=_CovDB({"Job": job, "JobPaymentStatus": payment}),
+    )
+
+    assert result["status"] == "UNAVAILABLE"
+    assert result["invoice_id"] == 500
+
+
+def test_cov_customer_feedback_not_found():
+    from app.routes.jobs import get_job_customer_feedback
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_job_customer_feedback(
+            job_id=999,
+            current_user=_cov_user(UserRole.DISPATCHER),
+            db=_CovDB({"Job": None}),
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+def test_cov_customer_feedback_empty():
+    from app.routes.jobs import get_job_customer_feedback
+    from types import SimpleNamespace
+
+    job = SimpleNamespace(id=906, tenant_id="tenant-1")
+
+    result = get_job_customer_feedback(
+        job_id=906,
+        current_user=_cov_user(UserRole.DISPATCHER),
+        db=_CovDB({"Job": job, "CustomerFeedback": None}),
+    )
+
+    assert result == {
+        "job_id": 906,
+        "has_feedback": False,
+        "feedback": None,
+    }
+
+
+def test_cov_customer_feedback_success():
+    from app.routes.jobs import get_job_customer_feedback
+    from types import SimpleNamespace
+
+    created = datetime.now(timezone.utc) - timedelta(hours=1)
+    updated = datetime.now(timezone.utc)
+    job = SimpleNamespace(id=907, tenant_id="tenant-1")
+    feedback = SimpleNamespace(
+        id=700,
+        rating=4,
+        comment="Good service",
+        created_at=created,
+        updated_at=updated,
+    )
+
+    result = get_job_customer_feedback(
+        job_id=907,
+        current_user=_cov_user(UserRole.DISPATCHER),
+        db=_CovDB({"Job": job, "CustomerFeedback": feedback}),
+    )
+
+    assert result["has_feedback"] is True
+    assert result["feedback"]["rating"] == 4
+    assert result["feedback"]["comment"] == "Good service"
+    assert result["feedback"]["created_at"] == created.isoformat()
+    assert result["feedback"]["updated_at"] == updated.isoformat()
+
+
+def test_cov_invoice_record_not_found():
+    from app.routes.jobs import _get_job_invoice_record
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        _get_job_invoice_record(
+            db=_CovDB({"Job": None}),
+            job_id=999,
+            current_user=_cov_user(UserRole.DISPATCHER),
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+def test_cov_invoice_record_technician_forbidden(monkeypatch):
+    from app.routes.jobs import _get_job_invoice_record
+    from fastapi import HTTPException
+    from types import SimpleNamespace
+
+    job = SimpleNamespace(id=908, tenant_id="tenant-1", assigned_technician_id=2)
+    tech = SimpleNamespace(technician_id=1)
+
+    monkeypatch.setattr(
+        "app.routes.jobs.get_technician_for_current_user",
+        lambda *args, **kwargs: tech,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _get_job_invoice_record(
+            db=_CovDB({"Job": job}),
+            job_id=908,
+            current_user=_cov_user(UserRole.TECHNICIAN),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_cov_invoice_record_closure_missing():
+    from app.routes.jobs import _get_job_invoice_record
+    from fastapi import HTTPException
+    from types import SimpleNamespace
+
+    job = SimpleNamespace(id=909, tenant_id="tenant-1")
+
+    with pytest.raises(HTTPException) as exc_info:
+        _get_job_invoice_record(
+            db=_CovDB({"Job": job, "JobClosure": None}),
+            job_id=909,
+            current_user=_cov_user(UserRole.DISPATCHER),
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Invoice data is not available for this job"
+
+
+def test_cov_invoice_record_success_dispatcher():
+    from app.routes.jobs import _get_job_invoice_record
+    from types import SimpleNamespace
+
+    completed = datetime.now(timezone.utc)
+    created = completed - timedelta(minutes=5)
+    job = SimpleNamespace(
+        id=910,
+        tenant_id="tenant-1",
+        customer_name=None,
+        service_type=None,
+        location=None,
+        site_address="Fallback Address",
+    )
+    closure = SimpleNamespace(
+        id=5010,
+        subtotal=1000.0,
+        labour_cost=600.0,
+        material_cost=400.0,
+        work_summary=None,
+        completed_at=completed,
+        created_at=created,
+    )
+
+    result = _get_job_invoice_record(
+        db=_CovDB({"Job": job, "JobClosure": closure}),
+        job_id=910,
+        current_user=_cov_user(UserRole.DISPATCHER),
+    )
+
+    assert result["id"] == 5010
+    assert result["customer_name"] == "N/A"
+    assert result["service_type"] == "Service"
+    assert result["location"] == "Fallback Address"
+    assert result["work_summary"] == "N/A"
+    assert result["gst_amount"] == 50.0
+    assert result["total_amount"] == 1050.0
+
+
+def test_cov_invoice_record_success_technician(monkeypatch):
+    from app.routes.jobs import _get_job_invoice_record
+    from types import SimpleNamespace
+
+    job = SimpleNamespace(
+        id=911,
+        tenant_id="tenant-1",
+        customer_name="Technician Customer",
+        service_type="HVAC Repair",
+        location="North Zone",
+        assigned_technician_id=1,
+    )
+    tech = SimpleNamespace(technician_id=1)
+    closure = SimpleNamespace(
+        id=5011,
+        subtotal=200.0,
+        labour_cost=100.0,
+        material_cost=100.0,
+        work_summary="Repaired",
+        completed_at=None,
+        created_at=None,
+    )
+
+    monkeypatch.setattr(
+        "app.routes.jobs.get_technician_for_current_user",
+        lambda *args, **kwargs: tech,
+    )
+
+    result = _get_job_invoice_record(
+        db=_CovDB({"Job": job, "JobClosure": closure}),
+        job_id=911,
+        current_user=_cov_user(UserRole.TECHNICIAN),
+    )
+
+    assert result["job_id"] == 911
+    assert result["work_summary"] == "Repaired"
+    assert result["completed_at"] is None
+    assert result["created_at"] is None
+
+
+def test_cov_get_job_invoice_wrapper(monkeypatch):
+    from app.routes.jobs import get_job_invoice
+
+    expected = {"job_id": 912, "status": "ok"}
+    monkeypatch.setattr(
+        "app.routes.jobs._get_job_invoice_record",
+        lambda **kwargs: expected,
+    )
+
+    result = get_job_invoice(
+        job_id=912,
+        current_user=_cov_user(UserRole.DISPATCHER),
+        db=object(),
+    )
+
+    assert result == expected
+
+
+def test_cov_download_invoice_pdf_not_found():
+    from app.routes.jobs import download_job_invoice_pdf
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        download_job_invoice_pdf(
+            job_id=999,
+            current_user=_cov_user(UserRole.DISPATCHER),
+            db=_CovDB({"Job": None}),
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+def test_cov_download_invoice_pdf_closure_missing():
+    from app.routes.jobs import download_job_invoice_pdf
+    from fastapi import HTTPException
+    from types import SimpleNamespace
+
+    job = SimpleNamespace(id=913, tenant_id="tenant-1")
+
+    with pytest.raises(HTTPException) as exc_info:
+        download_job_invoice_pdf(
+            job_id=913,
+            current_user=_cov_user(UserRole.DISPATCHER),
+            db=_CovDB({"Job": job, "JobClosure": None}),
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Invoice data is not available for this job"
+
+
+def test_cov_download_invoice_pdf_success_wraps_work_summary():
+    from app.routes.jobs import download_job_invoice_pdf
+    from types import SimpleNamespace
+
+    completed = datetime.now(timezone.utc)
+    created = completed - timedelta(minutes=5)
+    job = SimpleNamespace(
+        id=914,
+        tenant_id="tenant-1",
+        customer_name="PDF Customer",
+        service_type="HVAC Repair",
+        location="Coimbatore",
+        site_address=None,
+    )
+    closure = SimpleNamespace(
+        id=5014,
+        subtotal=2500.0,
+        labour_cost=1500.0,
+        material_cost=1000.0,
+        work_summary=" ".join(f"repairword{i}" for i in range(120)),
+        completed_at=completed,
+        created_at=created,
+    )
+
+    response = download_job_invoice_pdf(
+        job_id=914,
+        current_user=_cov_user(UserRole.DISPATCHER),
+        db=_CovDB({"Job": job, "JobClosure": closure}),
+    )
+
+    assert response.media_type == "application/pdf"
+    assert "invoice_job_914.pdf" in response.headers["content-disposition"]
+
+
+def test_cov_valid_transitions_technician_forbidden(monkeypatch):
+    from app.routes.jobs import get_job_valid_transitions
+    from fastapi import HTTPException
+    from types import SimpleNamespace
+
+    job = SimpleNamespace(id=915, tenant_id="tenant-1", assigned_technician_id=2)
+    tech = SimpleNamespace(technician_id=1)
+
+    monkeypatch.setattr(
+        "app.routes.jobs.get_technician_for_current_user",
+        lambda *args, **kwargs: tech,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_job_valid_transitions(
+            id="915",
+            current_user=_cov_user(UserRole.TECHNICIAN),
+            db=_CovDB({"Job": job}),
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Technician not assigned to this job"
+
+
+def test_cov_transition_technician_forbidden(monkeypatch):
+    from app.routes.jobs import transition_job_endpoint, TransitionRequest
+    from fastapi import HTTPException
+    from types import SimpleNamespace
+
+    job = SimpleNamespace(
+        id=916,
+        tenant_id="tenant-1",
+        assigned_technician_id=2,
+        status="ACTIVE",
+    )
+    tech = SimpleNamespace(technician_id=1)
+
+    monkeypatch.setattr(
+        "app.routes.jobs.get_technician_for_current_user",
+        lambda *args, **kwargs: tech,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        transition_job_endpoint(
+            id="916",
+            payload=TransitionRequest(status="IN_PROGRESS", reason="coverage"),
+            request=_cov_request(),
+            current_user=_cov_user(UserRole.TECHNICIAN),
+            db=_CovDB({"Job": job}),
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Job not found"
+
+
+async def _cov_transition_runner(monkeypatch, aware):
+    from app.routes.jobs import transition_job_endpoint, TransitionRequest
+    from fastapi import BackgroundTasks
+    from types import SimpleNamespace
+    published = []
+
+    class Producer:
+        async def publish(self, event):
+            published.append(event)
+            return False
+
+    job = SimpleNamespace(
+        id=917 if not aware else 918,
+        tenant_id="tenant-1",
+        assigned_technician_id=None,
+        status="ACTIVE",
+    )
+
+    def fake_transition(target, **kwargs):
+        job.status = target
+        stamp = datetime.now(timezone.utc)
+        if not aware:
+            stamp = stamp.replace(tzinfo=None)
+        job.in_progress_at = stamp
+
+    job.transition = fake_transition
+
+    db = _TransitionCommitDB(job)
+    background_tasks = BackgroundTasks()
+
+    result = transition_job_endpoint(
+        id=str(job.id),
+        payload=TransitionRequest(status="IN_PROGRESS", reason="coverage transition"),
+        request=_cov_request(
+            Producer(),
+            headers=[(b"x-correlation-id", b"cov-correlation")],
+        ),
+        current_user=_cov_user(UserRole.DISPATCHER),
+        db=db,
+        background_tasks=background_tasks,
+    )
+
+    assert result["status"] == "success"
+    assert len(background_tasks.tasks) == 1
+
+    task = background_tasks.tasks[0]
+    await task.func(*task.args, **task.kwargs)
+    assert len(published) == 1
+    assert published[0].payload["event_type"] == "job-status"
+
+
+class _TransitionCommitDB(_CovDB):
+    def __init__(self, job):
+        super().__init__({"Job": job})
+        self.commits = 0
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_cov_transition_naive_timestamp_publish_false(monkeypatch):
+    await _cov_transition_runner(monkeypatch, aware=False)
+
+
+@pytest.mark.asyncio
+async def test_cov_transition_aware_timestamp_publish_false(monkeypatch):
+    await _cov_transition_runner(monkeypatch, aware=True)
+
+
+def test_cov_transition_kafka_prepare_exception(monkeypatch):
+    from app.routes.jobs import transition_job_endpoint, TransitionRequest
+    from fastapi import BackgroundTasks
+    from types import SimpleNamespace
+
+    job = SimpleNamespace(
+        id=919,
+        tenant_id="tenant-1",
+        assigned_technician_id=None,
+        status="ACTIVE",
+    )
+
+    def fake_transition(target, **kwargs):
+        job.status = target
+        job.in_progress_at = datetime.now(timezone.utc)
+
+    job.transition = fake_transition
+
+    monkeypatch.setattr(
+        "app.routes.jobs.MessageEnvelope",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("status event construction failed")
+        ),
+    )
+
+    result = transition_job_endpoint(
+        id="919",
+        payload=TransitionRequest(status="IN_PROGRESS", reason="prepare failure"),
+        request=_cov_request(type("Producer", (), {})()),
+        current_user=_cov_user(UserRole.DISPATCHER),
+        db=_TransitionCommitDB(job),
+        background_tasks=BackgroundTasks(),
+    )
+
+    assert result["status"] == "success"
+
+
+def test_cov_close_job_dispatcher_forbidden():
+    from app.routes.jobs import close_job_endpoint
+    from app.schemas import JobClosureCreate
+    from fastapi import HTTPException
+
+    payload = JobClosureCreate(
+        work_summary="Coverage close",
+        after_images=["after.jpg"],
+        labour_cost=10,
+        material_cost=5,
+    )
+
+    db = TestingSessionLocal()
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            close_job_endpoint(
+                job_id=101,
+                payload=payload,
+                current_user=_cov_user(UserRole.DISPATCHER),
+                db=db,
+            )
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "Only technicians can close jobs"
+    finally:
+        db.close()
+
+
+def test_cov_close_job_technician_record_none(monkeypatch):
+    from app.routes.jobs import close_job_endpoint
+    from app.schemas import JobClosureCreate
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(
+        "app.routes.jobs.get_technician_for_current_user",
+        lambda *args, **kwargs: None,
+    )
+
+    payload = JobClosureCreate(
+        work_summary="Coverage close",
+        after_images=["after.jpg"],
+        labour_cost=10,
+        material_cost=5,
+    )
+
+    db = TestingSessionLocal()
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            close_job_endpoint(
+                job_id=101,
+                payload=payload,
+                current_user=_cov_user(UserRole.TECHNICIAN),
+                db=db,
+            )
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "Technician record not found"
+    finally:
+        db.close()
+
+
+def test_cov_capture_customer_signature_dispatcher_forbidden():
+    from app.routes.jobs import capture_customer_signature_endpoint
+    from fastapi import HTTPException
+    from types import SimpleNamespace
+
+    with pytest.raises(HTTPException) as exc_info:
+        capture_customer_signature_endpoint(
+            job_id=920,
+            payload=SimpleNamespace(signature_data="data:image/png;base64,AAAA"),
+            current_user=_cov_user(UserRole.DISPATCHER),
+            db=object(),
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Only technicians can capture customer signatures"
+
+
+def test_cov_capture_customer_signature_success(monkeypatch):
+    from app.routes.jobs import capture_customer_signature_endpoint
+    from types import SimpleNamespace
+
+    technician = SimpleNamespace(tech_id="tech-1", technician_id=1)
+    expected = SimpleNamespace(id=77, job_id=920)
+
+    monkeypatch.setattr(
+        "app.routes.jobs.get_technician_for_current_user",
+        lambda *args, **kwargs: technician,
+    )
+    monkeypatch.setattr(
+        "app.routes.jobs.capture_customer_signature",
+        lambda **kwargs: expected,
+    )
+
+    result = capture_customer_signature_endpoint(
+        job_id=920,
+        payload=SimpleNamespace(signature_data="data:image/png;base64,AAAA"),
+        current_user=_cov_user(UserRole.TECHNICIAN),
+        db=object(),
+    )
+
+    assert result is expected
+
+
+def test_cov_get_customer_signature_technician_path(monkeypatch):
+    from app.routes.jobs import get_customer_signature_endpoint
+    from types import SimpleNamespace
+
+    technician = SimpleNamespace(tech_id="tech-1")
+    expected = SimpleNamespace(id=88, job_id=921)
+
+    monkeypatch.setattr(
+        "app.routes.jobs.get_technician_for_current_user",
+        lambda *args, **kwargs: technician,
+    )
+    monkeypatch.setattr(
+        "app.routes.jobs.get_customer_signature",
+        lambda **kwargs: expected,
+    )
+
+    result = get_customer_signature_endpoint(
+        job_id=921,
+        current_user=_cov_user(UserRole.TECHNICIAN),
+        db=object(),
+    )
+
+    assert result is expected
+
+
+def test_cov_get_customer_signature_dispatcher_job_not_found():
+    from app.routes.jobs import get_customer_signature_endpoint
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_customer_signature_endpoint(
+            job_id=922,
+            current_user=_cov_user(UserRole.DISPATCHER),
+            db=_CovDB({"Job": None}),
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Job not found"
+
+
+def test_cov_get_customer_signature_dispatcher_signature_not_found():
+    from app.routes.jobs import get_customer_signature_endpoint
+    from fastapi import HTTPException
+    from types import SimpleNamespace
+
+    job = SimpleNamespace(id=923, tenant_id="tenant-1")
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_customer_signature_endpoint(
+            job_id=923,
+            current_user=_cov_user(UserRole.DISPATCHER),
+            db=_CovDB({"Job": job, "CustomerSignature": None}),
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Customer signature not found"
+
+
+def test_cov_get_customer_signature_dispatcher_success():
+    from app.routes.jobs import get_customer_signature_endpoint
+    from types import SimpleNamespace
+
+    job = SimpleNamespace(id=924, tenant_id="tenant-1")
+    signature = SimpleNamespace(id=99, job_id=924)
+
+    result = get_customer_signature_endpoint(
+        job_id=924,
+        current_user=_cov_user(UserRole.DISPATCHER),
+        db=_CovDB({"Job": job, "CustomerSignature": signature}),
+    )
+
+    assert result is signature
+
+
+def test_cov_get_customer_signature_final_forbidden():
+    from app.routes.jobs import get_customer_signature_endpoint
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_customer_signature_endpoint(
+            job_id=925,
+            current_user=_cov_user(UserRole.CUSTOMER),
+            db=object(),
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "You are not authorized to view customer signatures"

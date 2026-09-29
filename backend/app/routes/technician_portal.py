@@ -8,6 +8,7 @@ and their own notifications.
 
 import uuid
 import logging
+import base64
 from datetime import datetime, timezone, date
 from io import BytesIO
 
@@ -31,12 +32,14 @@ from app.services.customer_notification_services import (create_customer_job_sta
 from ..models.user import User
 from ..models import ServiceRequest
 from ..models.job_closure import JobClosure
+from ..models.customer_signature import CustomerSignature
 from ..portal_schemas import (
     TechnicianProfileCreate, TechnicianProfileUpdate, TechnicianProfileResponse,
     TechnicianJobResponse, TechnicianJobRejectRequest, TechnicianJobCompleteRequest,
     TechnicianDashboardResponse, ChangePasswordRequest,
 )
-from ..schemas import TechnicianAvailabilityUpdate
+from ..schemas import TechnicianAvailabilityUpdate, JobExpenseCreate, JobExpenseResponse
+from ..services.job_expense_service import create_job_expense
 from ..services.enterprise_audit import audit_log, AuditAction
 
 logger = logging.getLogger(__name__)
@@ -557,6 +560,41 @@ async def get_job_detail(
         raise HTTPException(status_code=403, detail="Job not found or not assigned to you")
 
     return job
+
+
+@router.post(
+    "/jobs/{job_id}/expenses",
+    response_model=JobExpenseResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def submit_job_expense(
+    job_id: int,
+    data: JobExpenseCreate,
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.JOB_EXPENSES_MANAGE)
+    ),
+    db: Session = Depends(get_db),
+):
+    """Submit an expense for a job assigned to the authenticated technician."""
+    tech = _get_tech_for_user(
+        db,
+        current_user.user_id,
+        current_user.tenant_id,
+    )
+
+    if not tech:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Technician record not found",
+        )
+
+    return create_job_expense(
+        db=db,
+        job_id=job_id,
+        expense_data=data,
+        technician_id=tech.technician_id,
+        tenant_id=str(current_user.tenant_id),
+    )
 
 
 @router.post("/jobs/{job_id}/accept")
@@ -1395,10 +1433,10 @@ async def get_billing_reports(
 @router.get("/billing-reports/{closure_id}/pdf")
 async def download_billing_report_pdf(
     closure_id: int,
-    current_user: AuthenticatedUser = Depends(require_permission(Permission.REPORTS_DOWNLOAD)),
+    current_user: AuthenticatedUser = Depends(require_permission(Permission.REPORTS_VIEW)),
     db: Session = Depends(get_db),
 ):
-    """Generate and download a PDF billing report for one submitted closure."""
+    """Generate and download a PDF billing report for the authenticated technician."""
     tech = _get_tech_for_user(db, current_user.user_id, current_user.tenant_id)
     if not tech:
         raise HTTPException(status_code=403, detail="Technician record not found")
@@ -1417,6 +1455,7 @@ async def download_billing_report_pdf(
 
     closure, job = row
     from reportlab.lib.pagesizes import A4
+    from reportlab.lib.utils import ImageReader
     from reportlab.pdfgen import canvas
 
     subtotal = round(float(closure.subtotal or 0), 2)
@@ -1481,6 +1520,66 @@ async def download_billing_report_pdf(
         pdf.drawString(50, y, label)
         pdf.drawRightString(width - 50, y, f"INR {float(amount):,.2f}")
         y -= 20
+
+    # Include the backend-authoritative customer signature captured for this job.
+    signature = (
+        db.query(CustomerSignature)
+        .filter(
+            CustomerSignature.job_id == job.id,
+            CustomerSignature.tenant_id == current_user.tenant_id,
+        )
+        .first()
+    )
+
+    y -= 8
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(50, y, "Customer Signature")
+    y -= 18
+
+    if signature and signature.signature_data:
+        try:
+            encoded = signature.signature_data.split(",", 1)[1]
+            signature_bytes = base64.b64decode(encoded, validate=True)
+            signature_image = ImageReader(BytesIO(signature_bytes))
+            image_width, image_height = signature_image.getSize()
+
+            max_width = 240
+            max_height = 100
+            scale = min(
+                max_width / float(image_width or 1),
+                max_height / float(image_height or 1),
+                1.0,
+            )
+            draw_width = image_width * scale
+            draw_height = image_height * scale
+
+            if y - draw_height - 35 < 55:
+                pdf.showPage()
+                y = height - 60
+
+            pdf.setFont("Helvetica", 9)
+            pdf.setStrokeColorRGB(0.75, 0.75, 0.75)
+            pdf.rect(50, y - draw_height - 8, max_width, draw_height + 16, stroke=1, fill=0)
+            pdf.drawImage(
+                signature_image,
+                50,
+                y - draw_height,
+                width=draw_width,
+                height=draw_height,
+                preserveAspectRatio=True,
+                mask="auto",
+            )
+            y -= draw_height + 22
+
+            pdf.setFillColorRGB(0.35, 0.35, 0.35)
+            pdf.drawString(50, y, f"Signed at: {signature.signed_at.isoformat()}")
+            pdf.setFillColorRGB(0, 0, 0)
+        except Exception:
+            pdf.setFont("Helvetica", 9)
+            pdf.drawString(50, y, "Customer signature is unavailable for this report.")
+    else:
+        pdf.setFont("Helvetica", 9)
+        pdf.drawString(50, y, "No customer signature was recorded for this report.")
 
     pdf.setFont("Helvetica-Oblique", 9)
     pdf.drawString(50, 45, "Generated from the FieldOps technician billing report.")

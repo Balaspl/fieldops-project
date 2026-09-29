@@ -582,8 +582,8 @@ def test_metrics_collection_via_route_endpoints():
                 "summary": "Test Route",
                 "legs": [
                     {
-                        "distance": {"value": 5000},
-                        "duration": {"value": 600},
+                        "distance": 5000,
+                        "duration": 600,
                     }
                 ],
                 "overview_polyline": {
@@ -593,9 +593,14 @@ def test_metrics_collection_via_route_endpoints():
         ],
     }
 
+    # The GPS route endpoint now uses OlaMapsClient. Its transport is
+    # implemented through ClientSession.request(..., method="POST").
+    # Mock the transport boundary so this test verifies endpoint
+    # metrics/cache behavior without making a real network request.
     with patch(
-        "aiohttp.ClientSession.get",
-        return_value=MockResponse(mock_api_response, 200),
+        "app.services.ola_map_client.OlaMapsClient._request",
+        new_callable=AsyncMock,
+        return_value=(mock_api_response, 200),
     ):
         # First request - cache miss
         response = client.get(

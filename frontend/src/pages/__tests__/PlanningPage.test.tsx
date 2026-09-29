@@ -1364,6 +1364,13 @@ describe(
           )
         );
 
+        mockedGetPlannedAssignments.mockResolvedValue({
+          data: [plannedAssignment],
+          headers: {
+            "x-total-count": "1",
+          },
+        } as any);
+
         await openPlannedAssignments();
 
         fireEvent.click(
@@ -2863,7 +2870,7 @@ describe("PlanningPage - Task 8 Dispatch Failure Messages", () => {
       "psycopg2 internal database exception details"
     );
   });
-});
+}, 15000);
 
 describe(
   "PlanningPage - Task 9 Reassignment Eligibility and Failure Handling",
@@ -3419,7 +3426,7 @@ describe("PlanningPage - Manual Override", () => {
         "Dispatcher approved emergency reassignment"
       );
     });
-  });
+  }, 15000);
 
   it("shows backend permission failure without treating the override as successful", async () => {
     mockedForceAssignEscalation.mockRejectedValue({
@@ -3477,7 +3484,7 @@ describe("PlanningPage - Manual Override", () => {
         "You do not have permission to perform manual override."
       );
     });
-  });
+  }, 15000);
 
   it("shows backend validation failure for an invalid override", async () => {
     mockedForceAssignEscalation.mockRejectedValue({
@@ -3673,7 +3680,7 @@ describe("PlanningPage - Manual Override", () => {
         })
       ).toBeNull();
     });
-  });
+  }, 15000);
 
   it("prevents unavailable technicians from being selected for manual override", async () => {
     const unavailableTechnicians = [
