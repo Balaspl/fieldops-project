@@ -19,6 +19,11 @@ export interface TechGpsData {
   photoUrl?: string | null;
   assignedJobs?: string[]; // list of job IDs assigned to this technician
   jobType?: string | null; // e.g. 'HVAC', 'Plumbing', 'Electrical'
+
+  // ── Freshness (used by JobLiveTrackingMap) ──────────────────────────────
+  receivedAt?: number; // Date.now() in the browser when the WS message arrived
+  ageAtReceipt?: number; // server-reported age (seconds) at that moment; 0 for live frames
+  source?: string; // "live" | "latest_cache" | "scheduler" | "batch"
 }
 
 export interface JobData {
@@ -106,14 +111,22 @@ export const useTrackingStore = create<TrackingState>((set) => ({
         name: `Technician #${idStr.slice(0, 4)}`,
         status: 'Available',
       };
-      
+
+      const hasFix = data.latitude != null && data.longitude != null;
+
       const merged = {
         ...existing,
         ...data,
         lastPing: data.lastPing || (
-          data.latitude != null && data.longitude != null
+          hasFix
             ? new Date().toISOString()
             : existing.lastPing
+        ),
+        // Any caller that supplies a fix gets a receivedAt, even if it forgot to set one.
+        receivedAt: data.receivedAt ?? (
+          hasFix
+            ? Date.now()
+            : (existing as Partial<TechGpsData>).receivedAt
         ),
       };
 
