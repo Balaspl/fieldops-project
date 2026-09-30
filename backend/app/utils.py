@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import math
 
 def calculate_distance(loc1: str, loc2: str) -> float:
@@ -81,3 +83,37 @@ def is_skill_matching(tech_skill: str, job_skill: str, job_service_type: str) ->
         return True
 
     return False
+
+
+"""
+app/utils/time.py
+─────────────────
+UTC helpers so every timestamp that leaves the backend carries an explicit
+timezone. A naive ISO string ("2026-09-29T10:00:00") is read by browsers as
+LOCAL time, which makes every ping look ~5.5 h old in IST.
+"""
+
+
+from datetime import datetime, timezone
+from typing import Optional
+
+
+def as_utc(dt: datetime) -> datetime:
+    """Return an aware UTC datetime. Naive datetimes are assumed to be UTC."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def iso_utc(dt: Optional[datetime]) -> Optional[str]:
+    """ISO-8601 string in UTC with a trailing 'Z'. None stays None."""
+    if dt is None:
+        return None
+    if not isinstance(dt, datetime):
+        return str(dt)
+    return as_utc(dt).isoformat().replace("+00:00", "Z")
+
+
+def parse_iso_utc(value: str) -> datetime:
+    """Parse an ISO string (with 'Z' or offset, or naive) into aware UTC."""
+    return as_utc(datetime.fromisoformat(value.replace("Z", "+00:00")))

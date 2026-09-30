@@ -138,6 +138,7 @@ export default function TechnicianLocationTracker({
         (
           currentPosition,
         ) => {
+
           if (stopped) {
             return;
           }
@@ -203,10 +204,10 @@ export default function TechnicianLocationTracker({
             true,
 
           maximumAge:
-            5000,
+            0,
 
           timeout:
-            15000,
+            8000,
         },
       );
 
@@ -276,8 +277,7 @@ export default function TechnicianLocationTracker({
       ).toUpperCase();
 
     const isLiveTracking =
-      jobStatus ===
-      "EN_ROUTE";
+    TRACKED_STATUSES.has(jobStatus);
 
     // =======================================================
     // SENDING FREQUENCY
@@ -285,7 +285,7 @@ export default function TechnicianLocationTracker({
 
     const minimumClientInterval =
       isLiveTracking
-        ? 5000
+        ? 2000
         : 30000;
 
     if (
