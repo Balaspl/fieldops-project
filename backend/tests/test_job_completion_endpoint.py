@@ -1,6 +1,7 @@
 import pytest
 from datetime import date
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 from app.services.job_status_machine import SideEffectError
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -969,3 +970,155 @@ def test_close_endpoint_failed_validation_creates_no_event_or_closure():
     )
 
     db.close()
+
+def test_close_endpoint_publishes_job_completed_kafka_event():
+    db = TestingSessionLocal()
+    tech, job = _create_tech_and_job(db)
+    job_id = job.id
+    tech_id = tech.tech_id
+    db.close()
+
+    kafka_producer = SimpleNamespace(
+        publish=AsyncMock(return_value=True)
+    )
+    app.state.kafka_producer = kafka_producer
+
+    try:
+        response = client.post(
+            f"/jobs/{job_id}/close",
+            json=completion_payload(),
+            headers={
+                "Authorization": "Bearer test-token",
+                "X-Correlation-ID": "completion-correlation-123",
+            },
+        )
+
+        assert response.status_code == 200
+
+        kafka_producer.publish.assert_awaited_once()
+
+        event = kafka_producer.publish.await_args.args[0]
+
+        expected_event_id = (
+            f"job-completed:tenant-1:{job_id}:{response.json()['id']}"
+        )
+
+        assert event.topic == "fieldops.events"
+        assert event.payload["event_type"] == "job-completed"
+        assert event.payload["event_id"] == expected_event_id
+        assert event.payload["job_id"] == str(job_id)
+        assert event.payload["tenant_id"] == "tenant-1"
+        assert event.payload["technician_id"] == str(tech_id)
+        assert event.payload["closure_id"] == str(response.json()["id"])
+        assert event.payload["completed_at"]
+        assert event.payload["schema_version"] == 1
+        assert event.payload["correlation_id"] == (
+            "completion-correlation-123"
+        )
+    finally:
+        app.state.kafka_producer = None
+
+def test_close_endpoint_kafka_failure_does_not_rollback_completion():
+    db = TestingSessionLocal()
+    tech, job = _create_tech_and_job(db)
+    job_id = job.id
+    tech_id = tech.tech_id
+    db.close()
+
+    kafka_producer = SimpleNamespace(
+        publish=AsyncMock(side_effect=RuntimeError("Kafka unavailable"))
+    )
+    app.state.kafka_producer = kafka_producer
+
+    try:
+        response = client.post(
+            f"/jobs/{job_id}/close",
+            json=completion_payload(),
+            headers={
+                "Authorization": "Bearer test-token",
+                "X-Correlation-ID": "completion-failure-123",
+            },
+        )
+
+        assert response.status_code == 200
+        kafka_producer.publish.assert_awaited_once()
+
+        db = TestingSessionLocal()
+        completed_job = db.query(Job).filter(Job.id == job_id).first()
+
+        assert completed_job.status == "COMPLETED"
+        assert completed_job.completed_by == tech_id
+    finally:
+        db.close()
+        app.state.kafka_producer = None
+
+def test_close_endpoint_kafka_publish_false_does_not_rollback_completion():
+    db = TestingSessionLocal()
+    _, job = _create_tech_and_job(db)
+    job_id = job.id
+    db.close()
+
+    kafka_producer = SimpleNamespace(
+        publish=AsyncMock(return_value=False)
+    )
+    app.state.kafka_producer = kafka_producer
+
+    try:
+        response = client.post(
+            f"/jobs/{job_id}/close",
+            json=completion_payload(),
+            headers={
+                "Authorization": "Bearer test-token",
+                "X-Correlation-ID": "completion-false-123",
+            },
+        )
+
+        assert response.status_code == 200
+        kafka_producer.publish.assert_awaited_once()
+
+        db = TestingSessionLocal()
+        completed_job = db.query(Job).filter(Job.id == job_id).first()
+
+        assert completed_job.status == "COMPLETED"
+        assert completed_job.completed_at is not None
+        assert completed_job.completed_by is not None
+    finally:
+        db.close()
+        app.state.kafka_producer = None
+
+def test_close_endpoint_handles_job_completed_event_preparation_failure():
+    db = TestingSessionLocal()
+    _, job = _create_tech_and_job(db)
+    job_id = job.id
+    db.close()
+
+    kafka_producer = SimpleNamespace(
+        publish=AsyncMock(return_value=True)
+    )
+    app.state.kafka_producer = kafka_producer
+
+    try:
+        with patch(
+            "app.routes.jobs.MessageEnvelope",
+            side_effect=RuntimeError("event preparation failed"),
+        ):
+            response = client.post(
+                f"/jobs/{job_id}/close",
+                json=completion_payload(),
+                headers={
+                    "Authorization": "Bearer test-token",
+                    "X-Correlation-ID": "completion-prep-failure-123",
+                },
+            )
+
+        assert response.status_code == 200
+        kafka_producer.publish.assert_not_awaited()
+
+        db = TestingSessionLocal()
+        completed_job = db.query(Job).filter(Job.id == job_id).first()
+
+        assert completed_job.status == "COMPLETED"
+        assert completed_job.completed_at is not None
+    finally:
+        db.close()
+        app.state.kafka_producer = None

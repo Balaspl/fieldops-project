@@ -9,7 +9,7 @@ from app.services.kafka.topics import (
 
 def test_default_kafka_topics():
     assert get_kafka_topics() == DEFAULT_KAFKA_TOPICS
-    assert len(DEFAULT_KAFKA_TOPICS) == 7
+    assert len(DEFAULT_KAFKA_TOPICS) == 8
     assert len(DEFAULT_KAFKA_TOPICS) == len(set(DEFAULT_KAFKA_TOPICS))
 
 
