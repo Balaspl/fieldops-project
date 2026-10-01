@@ -3613,6 +3613,8 @@ def close_job_endpoint(
         require_permission(Permission.JOBS_STATUS_UPDATE)
     ),
     db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = None,
+    request: Request = None,
 ):
     """
     Close a job assigned to the authenticated technician.
@@ -3662,7 +3664,7 @@ def close_job_endpoint(
 
     # The closure service performs the authoritative lifecycle transition,
     # validation, transaction, audit event, and event publishing.
-    return close_job(
+    closure_record = close_job(
         db=db,
         job_id=job.id,
         closure_data=payload,
@@ -3670,6 +3672,93 @@ def close_job_endpoint(
         tenant_id=str(current_user.tenant_id),
         user_role=current_user.role.value,
     )
+
+    # Kafka job-completed event is published only after the
+    # authoritative completion transaction succeeds.
+    kafka_producer = (
+        getattr(request.app.state, "kafka_producer", None)
+        if request is not None
+        else None
+    )
+
+    if kafka_producer is not None and background_tasks is not None:
+        try:
+            effective_tenant_id = str(current_user.tenant_id)
+            correlation_id = (
+                request.headers.get("X-Correlation-ID")
+                if request is not None
+                else None
+            )
+
+            event_id = (
+                f"job-completed:"
+                f"{effective_tenant_id}:"
+                f"{job.id}:"
+                f"{closure_record.id}"
+            )
+
+            event_payload = {
+                "event_type": "job-completed",
+                "event_id": event_id,
+                "job_id": str(job.id),
+                "tenant_id": effective_tenant_id,
+                "technician_id": str(technician.tech_id),
+                "closure_id": str(closure_record.id),
+                "completed_at": closure_record.completed_at.isoformat(),
+                "schema_version": 1,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+            if correlation_id:
+                event_payload["correlation_id"] = correlation_id
+
+            event = MessageEnvelope(
+                sender=AgentAddress(
+                    agent_type="dispatch",
+                    agent_id="job-completed-producer",
+                    tenant_id=effective_tenant_id,
+                ),
+                message_type=MessageType.EVENT,
+                payload=event_payload,
+                topic="fieldops.events",
+            )
+
+            async def publish_job_completed_event():
+                try:
+                    published = await kafka_producer.publish(event)
+
+                    if published:
+                        logger.info(
+                            "Published job-completed event: "
+                            "job_id=%s event_id=%s",
+                            job.id,
+                            event_id,
+                        )
+                    else:
+                        logger.error(
+                            "Failed to publish job-completed event: "
+                            "job_id=%s event_id=%s",
+                            job.id,
+                            event_id,
+                        )
+                except Exception:
+                    logger.exception(
+                        "Unexpected error while publishing "
+                        "job-completed event: job_id=%s event_id=%s",
+                        job.id,
+                        event_id,
+                    )
+
+            background_tasks.add_task(publish_job_completed_event)
+
+        except Exception:
+            logger.exception(
+                "Unexpected error while preparing job-completed event: "
+                "job_id=%s",
+                job.id,
+            )
+
+    return closure_record
 
 
 @router.get(

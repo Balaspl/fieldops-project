@@ -3,6 +3,7 @@ from typing import Final
 
 
 DEFAULT_KAFKA_TOPICS: Final[tuple[str, ...]] = (
+    "fieldops.events",
     "fieldops.job.events",
     "fieldops.gps.events",
     "fieldops.sla.events",
@@ -14,6 +15,7 @@ DEFAULT_KAFKA_TOPICS: Final[tuple[str, ...]] = (
 
 
 DEFAULT_KAFKA_PARTITIONS: Final[dict[str, int]] = {
+    "fieldops.events": 3,
     "fieldops.job.events": 6,
     "fieldops.gps.events": 12,
     "fieldops.sla.events": 6,

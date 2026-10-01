@@ -26,7 +26,7 @@ The Kafka broker runs as a single-node KRaft broker/controller in the repository
 | `KAFKA_LISTENERS` | `INTERNAL://:9092,EXTERNAL://:29092,CONTROLLER://:9093` | Broker and controller listener bindings |
 | `KAFKA_ADVERTISED_LISTENERS` | `INTERNAL://kafka:9092,EXTERNAL://localhost:29092` | Addresses advertised to Kafka clients |
 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:29092` | Backend producer/consumer bootstrap address |
-| `KAFKA_TOPICS` | `fieldops.job.events,fieldops.gps.events,fieldops.sla.events,fieldops.notification.events,fieldops.billing.events,fieldops.payment.events,fieldops.audit.events` | Comma-separated FieldOps Kafka topics initialized by `kafka-init` |
+| `KAFKA_TOPICS` | `fieldops.events,fieldops.job.events,fieldops.gps.events,fieldops.sla.events,fieldops.notification.events,fieldops.billing.events,fieldops.payment.events,fieldops.audit.events` | Comma-separated FieldOps Kafka topics initialized by `kafka-init` |
 | `KAFKA_CONSUMER_GROUP` | `fieldops` | Consumer group used by the backend consumer |
 | `KAFKA_DISPATCH_CONSUMER_GROUP` | `fieldops-dispatch` | Consumer group for dispatch processing |
 | `KAFKA_GPS_CONSUMER_GROUP` | `fieldops-gps` | Consumer group for GPS tracking |
@@ -42,6 +42,8 @@ The Kafka broker runs as a single-node KRaft broker/controller in the repository
 | `KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR` | `1` | Replication factor for Kafka transaction state |
 | `KAFKA_TRANSACTION_STATE_LOG_MIN_ISR` | `1` | Minimum in-sync replicas for Kafka transaction state |
 | `KAFKA_ACKS` | `all` | Producer acknowledgement level used for durable event publication |
+| `KAFKA_EVENTS_PARTITIONS` | `3` | Partition count for the generic `fieldops.events` stream |
+| `KAFKA_EVENTS_RETENTION_MS` | `604800000` | Retention for the generic `fieldops.events` stream (7 days) |
 
 Deployment environments should set `KAFKA_ADVERTISED_LISTENERS` and `KAFKA_BOOTSTRAP_SERVERS` to addresses reachable by the corresponding clients.
 
@@ -55,6 +57,7 @@ Topic partition strategy:
 
 | Topic | Partitions | Partition Key | Ordering Scope |
 |---|---:|---|---|
+| `fieldops.events` | `3` | `message_id` | Message identity |
 | `fieldops.job.events` | `6` | `job_id` | Same job |
 | `fieldops.gps.events` | `12` | `job_id` | Same job |
 | `fieldops.sla.events` | `6` | `job_id` | Same job |
@@ -62,6 +65,8 @@ Topic partition strategy:
 | `fieldops.billing.events` | `3` | `tenant_id` | Same tenant |
 | `fieldops.payment.events` | `3` | `tenant_id` | Same tenant |
 | `fieldops.audit.events` | `6` | `tenant_id` | Same tenant |
+
+The `fieldops.events` stream carries generic domain events such as `job-started` and `job-completed`. The producer uses the message identity as the partition key for this generic stream.
 
 The local Kafka broker uses a replication factor of `1` because it is a single-broker development setup.
 
@@ -89,6 +94,7 @@ KAFKA_SASL_PASSWORD=<configured password>
 
 | Principal | Resource | Permission |
 |---|---|---|
+| `fieldops-producer` | `fieldops.events` | WRITE |
 | `fieldops-producer` | `fieldops.job.events` | WRITE |
 | `fieldops-producer` | `fieldops.gps.events` | WRITE |
 | `fieldops-producer` | `fieldops.sla.events` | WRITE |

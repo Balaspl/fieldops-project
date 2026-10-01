@@ -132,6 +132,25 @@ After the database transaction commits, the service publishes a `JOB_COMPLETED` 
 
 Redis publication is intentionally post-commit. A Redis failure does not roll back an already committed database completion or convert it into a false API failure.
 
+After the authoritative database transaction commits successfully, the endpoint schedules a Kafka `job-completed` event through the existing Kafka producer. Kafka is not the source of truth for job completion.
+
+The Kafka event is published to `fieldops.events` using the canonical event envelope and includes:
+
+- `event_type`: `job-completed`
+- `event_id`: deterministic value in the form `job-completed:{tenant_id}:{job_id}:{closure_id}`
+- `job_id`: completed job identifier
+- `tenant_id`: authenticated tenant identifier
+- `technician_id`: technician who completed the job
+- `closure_id`: persisted `JobClosure` identifier
+- `completed_at`: authoritative persisted completion timestamp
+- `schema_version`: `1`
+- `timestamp`: UTC event publication timestamp
+- `correlation_id`: optional `X-Correlation-ID` request header value
+
+The event is scheduled only after successful completion persistence. Kafka publication failure, a `false` publication result, or an event-preparation exception is logged and does not roll back the already committed completion.
+
+The stable event ID provides deterministic idempotency metadata for downstream consumers. No duplicate completion business logic is performed by Kafka.
+
 ## Response
 
 The endpoint returns the canonical `JobClosureResponse`. The response includes the closure ID, job ID, technician ID, completion summary, images, costs, subtotal, and completion timestamps.

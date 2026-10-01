@@ -94,12 +94,22 @@ services:
         condition: service_healthy
 
     environment:
-      KAFKA_TOPICS: "${KAFKA_TOPICS:-fieldops.job.events,fieldops.gps.events,fieldops.sla.events,fieldops.notification.events,fieldops.billing.events,fieldops.payment.events,fieldops.audit.events}"
+      KAFKA_TOPICS: "${KAFKA_TOPICS:-fieldops.events,fieldops.job.events,fieldops.gps.events,fieldops.sla.events,fieldops.notification.events,fieldops.billing.events,fieldops.payment.events,fieldops.audit.events}"
       KAFKA_REPLICATION_FACTOR: "${KAFKA_REPLICATION_FACTOR:-1}"
+
       KAFKA_PRODUCER_USERNAME: "${KAFKA_PRODUCER_USERNAME:?KAFKA_PRODUCER_USERNAME must be set}"
+
+      # Generic domain-event consumer credentials.
+      KAFKA_SASL_USERNAME: "${KAFKA_SASL_USERNAME:?KAFKA_SASL_USERNAME must be set}"
+      KAFKA_CONSUMER_GROUP: "${KAFKA_CONSUMER_GROUP:-fieldops-consumer}"
+
       KAFKA_AUDIT_USERNAME: "${KAFKA_AUDIT_USERNAME:?KAFKA_AUDIT_USERNAME must be set}"
       KAFKA_AUDIT_CONSUMER_GROUP: "${KAFKA_AUDIT_CONSUMER_GROUP:-fieldops-audit}"
+
       KAFKA_DISPATCH_USERNAME: "${KAFKA_DISPATCH_USERNAME:?KAFKA_DISPATCH_USERNAME must be set}"
+      KAFKA_DISPATCH_CONSUMER_GROUP: "${KAFKA_DISPATCH_CONSUMER_GROUP:-fieldops-dispatch}"
+
+      KAFKA_EVENTS_PARTITIONS: "${KAFKA_EVENTS_PARTITIONS:-3}"
       KAFKA_JOB_EVENTS_PARTITIONS: "${KAFKA_JOB_EVENTS_PARTITIONS:-6}"
       KAFKA_GPS_EVENTS_PARTITIONS: "${KAFKA_GPS_EVENTS_PARTITIONS:-12}"
       KAFKA_SLA_EVENTS_PARTITIONS: "${KAFKA_SLA_EVENTS_PARTITIONS:-6}"
@@ -107,6 +117,8 @@ services:
       KAFKA_BILLING_EVENTS_PARTITIONS: "${KAFKA_BILLING_EVENTS_PARTITIONS:-3}"
       KAFKA_PAYMENT_EVENTS_PARTITIONS: "${KAFKA_PAYMENT_EVENTS_PARTITIONS:-3}"
       KAFKA_AUDIT_EVENTS_PARTITIONS: "${KAFKA_AUDIT_EVENTS_PARTITIONS:-6}"
+
+      KAFKA_EVENTS_RETENTION_MS: "${KAFKA_EVENTS_RETENTION_MS:-604800000}"
       KAFKA_JOB_EVENTS_RETENTION_MS: "${KAFKA_JOB_EVENTS_RETENTION_MS:-2592000000}"
       KAFKA_GPS_EVENTS_RETENTION_MS: "${KAFKA_GPS_EVENTS_RETENTION_MS:-604800000}"
       KAFKA_SLA_EVENTS_RETENTION_MS: "${KAFKA_SLA_EVENTS_RETENTION_MS:-2592000000}"
@@ -114,7 +126,7 @@ services:
       KAFKA_BILLING_EVENTS_RETENTION_MS: "${KAFKA_BILLING_EVENTS_RETENTION_MS:-7776000000}"
       KAFKA_PAYMENT_EVENTS_RETENTION_MS: "${KAFKA_PAYMENT_EVENTS_RETENTION_MS:-7776000000}"
       KAFKA_AUDIT_EVENTS_RETENTION_MS: "${KAFKA_AUDIT_EVENTS_RETENTION_MS:-15552000000}"
-      KAFKA_DISPATCH_CONSUMER_GROUP: "${KAFKA_DISPATCH_CONSUMER_GROUP:-fieldops-dispatch}"
+
     entrypoint: ["/bin/sh", "-c"]
 
     command:
@@ -123,6 +135,7 @@ services:
 
         get_partitions() {
           case "$$1" in
+            fieldops.events) echo "$$KAFKA_EVENTS_PARTITIONS" ;;
             fieldops.job.events) echo "$$KAFKA_JOB_EVENTS_PARTITIONS" ;;
             fieldops.gps.events) echo "$$KAFKA_GPS_EVENTS_PARTITIONS" ;;
             fieldops.sla.events) echo "$$KAFKA_SLA_EVENTS_PARTITIONS" ;;
@@ -133,8 +146,10 @@ services:
             *) echo "Unknown topic: $$1" >&2; return 1 ;;
           esac
         }
+
         get_retention_ms() {
           case "$$1" in
+            fieldops.events) echo "$$KAFKA_EVENTS_RETENTION_MS" ;;
             fieldops.job.events) echo "$$KAFKA_JOB_EVENTS_RETENTION_MS" ;;
             fieldops.gps.events) echo "$$KAFKA_GPS_EVENTS_RETENTION_MS" ;;
             fieldops.sla.events) echo "$$KAFKA_SLA_EVENTS_RETENTION_MS" ;;
@@ -145,6 +160,7 @@ services:
             *) echo "Unknown topic: $$1" >&2; return 1 ;;
           esac
         }
+
         validate_retention() {
           case "$$1" in
             ''|*[!0-9]*)
@@ -157,6 +173,7 @@ services:
               ;;
           esac
         }
+
         IFS=','
         for topic in $$KAFKA_TOPICS; do
           topic=$$(echo "$$topic" | xargs)
@@ -183,6 +200,7 @@ services:
                 --topic "$$topic" \
                 --partitions "$$partitions"
             fi
+
             /opt/kafka/bin/kafka-configs.sh \
               --bootstrap-server kafka:9092 \
               --entity-type topics \
@@ -255,6 +273,42 @@ services:
           --operation DESCRIBE \
           --group "fieldops-audit-e2e-" \
           --resource-pattern-type prefixed
+
+        # Allow the generic consumer to read domain events.
+        /opt/kafka/bin/kafka-acls.sh \
+          --bootstrap-server kafka:9092 \
+          --add \
+          --allow-principal "User:$$KAFKA_SASL_USERNAME" \
+          --operation READ \
+          --operation DESCRIBE \
+          --topic "fieldops.events"
+
+        /opt/kafka/bin/kafka-acls.sh \
+          --bootstrap-server kafka:9092 \
+          --add \
+          --allow-principal "User:$$KAFKA_SASL_USERNAME" \
+          --operation READ \
+          --operation DESCRIBE \
+          --group "$$KAFKA_CONSUMER_GROUP"
+
+        # Allow dynamic consumer groups used by generic domain-event Kafka E2E tests.
+        /opt/kafka/bin/kafka-acls.sh \
+          --bootstrap-server kafka:9092 \
+          --add \
+          --allow-principal "User:$$KAFKA_SASL_USERNAME" \
+          --operation READ \
+          --operation DESCRIBE \
+          --group "fieldops-job-completed-e2e-" \
+          --resource-pattern-type prefixed
+
+        # Allow the producer to publish generic domain events.
+        /opt/kafka/bin/kafka-acls.sh \
+          --bootstrap-server kafka:9092 \
+          --add \
+          --allow-principal "User:$$KAFKA_PRODUCER_USERNAME" \
+          --operation WRITE \
+          --operation DESCRIBE \
+          --topic "fieldops.events"
 
         # Allow the producer to publish audit events.
         /opt/kafka/bin/kafka-acls.sh \
