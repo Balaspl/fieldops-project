@@ -12,6 +12,7 @@ from .database import SessionLocal
 from . import models
 from .logger import logger
 from .services.eta_service import ETAService
+from .services.ola_map_client import OlaMapsClient
 from .services.task_queue import PriorityTaskQueue
 from .redis_client import get_redis_client
 from .services.socket_manager import ws_manager
@@ -367,28 +368,31 @@ def update_eta_task(self, technician_id: str, job_id, ping_id: str = None, corre
     """
     Recalculate ETA for a technician/job pair and broadcast the result to job WebSocket subscribers.
 
-    This task is triggered by the GPSPing after_insert event listener registered in models.py.
-    It honours the 30-second per-job throttle enforced by the event listener (i.e. it will not be
-    enqueued if the throttle key is still active) so that at-most one ETA update is broadcast
-    per job every 30 seconds.
+    The ETAService is constructed with the task's database session, the shared Redis
+    client, and the existing Ola Maps client so the task follows the same authoritative
+    ETA path used by the customer portal.
 
-    Steps:
-      1. Call ETAService (Google Maps → Haversine fallback) for duration & distance.
-      2. Persist an ETAHistory row.
-      3. Broadcast the result via Socket.io to the ``job:{job_id}`` room.
+    The task accepts both the current ETAService contract (minutes/km) and the legacy
+    seconds/meters contract used by older callers/tests. Broadcasts expose explicit
+    status/source/message fields so customers can distinguish live, estimated and
+    unavailable ETA states without calculating anything on the client.
     """
     import asyncio
 
-    # Resolve tenant from the job record so we don't need it in the signature
     db = SessionLocal()
     try:
-        eta_service = ETAService()
+        redis_client = get_redis_client()
+        maps_client = OlaMapsClient(redis_client)
+        eta_service = ETAService(db, redis_client, maps_client)
 
         # 1. Compute ETA
         loop = asyncio.new_event_loop()
         try:
             eta_result = loop.run_until_complete(
-                eta_service.calculate_eta(technician_id=technician_id, job_id=job_id)
+                eta_service.calculate_eta(
+                    technician_id=technician_id,
+                    job_id=job_id,
+                )
             )
         finally:
             loop.close()
@@ -399,15 +403,17 @@ def update_eta_task(self, technician_id: str, job_id, ping_id: str = None, corre
             )
             return
 
-        # 2. Persist ETAHistory row using the actual model schema
-        now = datetime.now(timezone.utc)
+        if not isinstance(eta_result, dict):
+            raise TypeError("ETAService result must be a dictionary")
 
-        # Parse the ISO-8601 ETA string into a datetime for the DateTime column
+        # 2. Normalize the ETA contract for persistence and broadcasting.
+        now = datetime.now(timezone.utc)
         eta_raw = eta_result.get("eta")
+
         if isinstance(eta_raw, str):
             from datetime import datetime as _dt
             try:
-                eta_dt = _dt.fromisoformat(eta_raw)
+                eta_dt = _dt.fromisoformat(eta_raw.replace("Z", "+00:00"))
             except ValueError:
                 eta_dt = now
         elif isinstance(eta_raw, datetime):
@@ -415,13 +421,62 @@ def update_eta_task(self, technician_id: str, job_id, ping_id: str = None, corre
         else:
             eta_dt = now
 
-        # ETAService returns seconds/meters; ETAHistory stores minutes/km
-        duration_seconds = eta_result.get("duration_seconds", 0) or 0
-        distance_meters = eta_result.get("distance_meters", 0) or 0
-        traffic_delay_seconds = eta_result.get("traffic_delay_seconds", 0) or 0
+        # Current ETAService returns minutes/km; older task callers used seconds/meters.
+        duration_minutes_raw = eta_result.get("duration_minutes")
+        if duration_minutes_raw is not None:
+            duration_minutes = float(duration_minutes_raw or 0)
+        else:
+            duration_seconds = float(eta_result.get("duration_seconds") or 0)
+            duration_minutes = duration_seconds / 60.0
 
-        # Resolve job's tenant_id for the history row
-        job_record = db.query(models.Job).filter(models.Job.id == int(job_id)).first()
+        distance_km_raw = eta_result.get("distance_km")
+        if distance_km_raw is not None:
+            distance_km = float(distance_km_raw or 0)
+        else:
+            distance_meters = float(eta_result.get("distance_meters") or 0)
+            distance_km = distance_meters / 1000.0
+
+        traffic_delay_minutes_raw = eta_result.get("traffic_delay_minutes")
+        if traffic_delay_minutes_raw is not None:
+            traffic_delay_minutes = float(traffic_delay_minutes_raw or 0)
+        else:
+            traffic_delay_seconds = float(eta_result.get("traffic_delay_seconds") or 0)
+            traffic_delay_minutes = traffic_delay_seconds / 60.0
+
+        status_value = str(eta_result.get("status") or "").strip().lower()
+        confidence_value = str(eta_result.get("confidence") or "").strip().lower()
+
+        if not status_value:
+            if confidence_value in {"estimated", "low"}:
+                status_value = "estimated"
+            elif eta_raw:
+                status_value = "calculated"
+            else:
+                status_value = "unknown"
+
+        if not confidence_value:
+            confidence_value = {
+                "calculated": "calculated",
+                "estimated": "estimated",
+                "unknown": "unknown",
+            }.get(status_value, "unknown")
+
+        source_value = str(
+            eta_result.get("source")
+            or ("estimated" if status_value == "estimated" else status_value)
+        ).strip().lower()
+
+        message_value = (
+            eta_result.get("message")
+            or eta_result.get("disclaimer")
+        )
+
+        # Resolve job's tenant_id for the history row.
+        job_record = (
+            db.query(models.Job)
+            .filter(models.Job.id == int(job_id))
+            .first()
+        )
         tenant_id = (job_record.tenant_id if job_record else None) or "unknown"
 
         history = models.ETAHistory(
@@ -429,9 +484,9 @@ def update_eta_task(self, technician_id: str, job_id, ping_id: str = None, corre
             job_id=int(job_id),
             tenant_id=tenant_id,
             eta=eta_dt,
-            duration_minutes=round(duration_seconds / 60, 2),
-            distance_km=round(distance_meters / 1000, 3),
-            traffic_delay_minutes=round(traffic_delay_seconds / 60, 2),
+            duration_minutes=round(duration_minutes, 2),
+            distance_km=round(distance_km, 3),
+            traffic_delay_minutes=round(traffic_delay_minutes, 2),
             source_ping_id=ping_id,
         )
         db.add(history)
@@ -439,44 +494,56 @@ def update_eta_task(self, technician_id: str, job_id, ping_id: str = None, corre
 
         logger.info(
             f"[update_eta_task] Stored ETAHistory for tech={technician_id} job={job_id} "
-            f"eta={eta_raw} confidence={eta_result.get('confidence')}"
+            f"eta={eta_raw} status={status_value} confidence={confidence_value}"
         )
 
-        # 3. Broadcast to WebSocket subscribers
+        # 3. Broadcast a customer-safe, authoritative ETA update.
         broadcast_payload = {
             "type": "eta_update",
             "job_id": str(job_id),
             "technician_id": technician_id,
-            "eta": eta_raw if isinstance(eta_raw, str) else eta_dt.isoformat(),
-            "duration_minutes": round(duration_seconds / 60, 1),
-            "distance_km": round(distance_meters / 1000, 2),
-            "traffic_delay_minutes": round(traffic_delay_seconds / 60, 1),
-            "confidence": eta_result.get("confidence", "calculated"),
+            "eta": eta_raw if isinstance(eta_raw, str) else (
+                eta_dt.isoformat() if eta_raw is not None else None
+            ),
+            "status": status_value,
+            "source": source_value,
+            "duration_minutes": round(duration_minutes, 1),
+            "distance_km": round(distance_km, 2),
+            "traffic_delay_minutes": round(traffic_delay_minutes, 1),
+            "confidence": confidence_value,
+            "message": message_value,
             "disclaimer": eta_result.get("disclaimer"),
             "updated_at": now.isoformat(),
         }
 
         ws_loop = asyncio.new_event_loop()
         try:
-            ws_loop.run_until_complete(ws_manager.broadcast_to_job(str(job_id), broadcast_payload))
+            ws_loop.run_until_complete(
+                ws_manager.broadcast_to_job(
+                    str(job_id),
+                    broadcast_payload,
+                )
+            )
         finally:
             ws_loop.close()
 
     except Exception as exc:
         logger.error(
             f"[update_eta_task] Failed for tech={technician_id} job={job_id}: {exc}",
-            exc_info=True
+            exc_info=True,
         )
         db.rollback()
         try:
-            raise self.retry(exc=exc, countdown=5 ** (self.request.retries + 1))
+            raise self.retry(
+                exc=exc,
+                countdown=5 ** (self.request.retries + 1),
+            )
         except Exception:
             logger.error(
                 f"[update_eta_task] All retries exhausted for tech={technician_id} job={job_id}"
             )
     finally:
         db.close()
-
 
 @celery_app.task
 def process_job_status_transition_task(job_id, from_status, to_status, actor_id, actor_role, reason, correlation_id=None):

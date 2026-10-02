@@ -355,7 +355,22 @@ export default function TechnicianLocationTracker({
             ? "Sharing live location"
             : "Location recorded",
         );
-      } catch (error) {
+      } catch (error: any) {
+        console.error(
+          "[TechnicianLocationTracker] GPS ping failed:",
+          error,
+        );
+
+        console.error(
+          "[TechnicianLocationTracker] Response status:",
+          error?.response?.status,
+        );
+
+        console.error(
+          "[TechnicianLocationTracker] Response data:",
+          error?.response?.data,
+        );
+
         setStatus(
           "Could not send location; will retry",
         );

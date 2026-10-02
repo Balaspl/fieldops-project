@@ -55,11 +55,10 @@ from .organization import Organization  # noqa: F401
 from .enterprise_audit import EnterpriseAuditLog  # noqa: F401
 from .job_closure import JobClosure  # noqa: F401
 
-# Task 8 — backend-authoritative payment status
 from .payment_status import JobPaymentStatus  # noqa: F401
 
-# Task 9 — customer feedback
 from .customer_feedback import CustomerFeedback  # noqa: F401
+from .customer_support_request import CustomerSupportRequest  # noqa: F401
 
 # Portal models
 from .technician_profile import TechnicianProfile  # noqa: F401

@@ -309,6 +309,146 @@ def test_task_5_2_migration(alembic_config, engine):
         f"{sorted(missing_columns)}"
     )
 
+
+    # --------------------------------------------------------
+    # 8A. Verify customer_profiles_extended table
+    # --------------------------------------------------------
+
+    with engine.connect() as conn:
+        exists = conn.execute(
+            text(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                      AND table_name = 'customer_profiles_extended'
+                )
+                """
+            )
+        ).scalar()
+
+    assert exists is True, (
+        "customer_profiles_extended table does not exist"
+    )
+
+    # --------------------------------------------------------
+    # 8B. Verify customer_profiles_extended columns
+    # --------------------------------------------------------
+
+    with engine.connect() as conn:
+        columns = conn.execute(
+            text(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'customer_profiles_extended'
+                ORDER BY ordinal_position
+                """
+            )
+        ).scalars().all()
+
+    required_customer_profile_columns = {
+        "id",
+        "user_id",
+        "tenant_id",
+        "full_name",
+        "mobile_number",
+        "address",
+        "city",
+        "state",
+        "pincode",
+        "company_name",
+        "profile_completed",
+        "created_at",
+        "updated_at",
+    }
+
+    missing_customer_profile_columns = (
+        required_customer_profile_columns - set(columns)
+    )
+
+    assert not missing_customer_profile_columns, (
+        "Missing customer_profiles_extended columns: "
+        f"{sorted(missing_customer_profile_columns)}"
+    )
+
+    # --------------------------------------------------------
+    # 8C. Verify customer profile user uniqueness
+    # --------------------------------------------------------
+
+    with engine.connect() as conn:
+        unique_constraints = conn.execute(
+            text(
+                """
+                SELECT constraint_name
+                FROM information_schema.table_constraints
+                WHERE table_schema = 'public'
+                  AND table_name = 'customer_profiles_extended'
+                  AND constraint_type = 'UNIQUE'
+                """
+            )
+        ).scalars().all()
+
+    assert (
+        "uq_customer_profiles_extended_user_id"
+        in unique_constraints
+    ), (
+        "customer_profiles_extended.user_id must have "
+        "a unique constraint"
+    )
+
+    # --------------------------------------------------------
+    # 8D. Verify customer profile foreign keys
+    # --------------------------------------------------------
+
+    with engine.connect() as conn:
+        foreign_keys = conn.execute(
+            text(
+                """
+                SELECT
+                    kcu.column_name,
+                    ccu.table_name AS referenced_table,
+                    ccu.column_name AS referenced_column
+                FROM information_schema.table_constraints AS tc
+                JOIN information_schema.key_column_usage AS kcu
+                  ON tc.constraint_name = kcu.constraint_name
+                 AND tc.table_schema = kcu.table_schema
+                JOIN information_schema.constraint_column_usage AS ccu
+                  ON ccu.constraint_name = tc.constraint_name
+                 AND ccu.table_schema = tc.table_schema
+                WHERE tc.constraint_type = 'FOREIGN KEY'
+                  AND tc.table_schema = 'public'
+                  AND tc.table_name = 'customer_profiles_extended'
+                """
+            )
+        ).all()
+
+    foreign_key_map = {
+        row.column_name: (
+            row.referenced_table,
+            row.referenced_column,
+        )
+        for row in foreign_keys
+    }
+
+    assert foreign_key_map.get("user_id") == (
+        "users",
+        "id",
+    ), (
+        "customer_profiles_extended.user_id must reference "
+        "users.id"
+    )
+
+    assert foreign_key_map.get("tenant_id") == (
+        "organizations",
+        "id",
+    ), (
+        "customer_profiles_extended.tenant_id must reference "
+        "organizations.id"
+    )
+
     # --------------------------------------------------------
     # 9. Verify only one Alembic revision
     # --------------------------------------------------------

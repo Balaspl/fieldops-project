@@ -19,15 +19,53 @@ export default function CustomerPortalDashboard({
   const [stats, setStats] = useState<any>(null);
   const [recent, setRecent] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadDashboard = async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Both values come from the backend's authenticated customer scope.
+      // The client does not supply or calculate tenant/object ownership.
+      const [dRes, srRes] = await Promise.all([
+        getCustomerDashboard(),
+        getServiceRequests(),
+      ]);
+
+      setStats(dRes.data);
+      setRecent(
+        Array.isArray(srRes.data)
+          ? srRes.data.slice(0, 5)
+          : [],
+      );
+    } catch (err: any) {
+      const status = err?.response?.status;
+
+      if (status === 401) {
+        setError(
+          "Your session has expired. Please sign in again.",
+        );
+      } else if (status === 403) {
+        setError(
+          "You do not have permission to access the customer portal.",
+        );
+      } else {
+        setError(
+          "We couldn't load your customer dashboard. Please try again.",
+        );
+      }
+
+      // Avoid displaying stale data after an unsuccessful refresh.
+      setStats(null);
+      setRecent([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    Promise.all([getCustomerDashboard(), getServiceRequests()])
-      .then(([dRes, srRes]) => {
-        setStats(dRes.data);
-        setRecent((srRes.data || []).slice(0, 5));
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    void loadDashboard();
   }, []);
 
   const cards = [
@@ -83,8 +121,79 @@ export default function CustomerPortalDashboard({
           justifyContent: "center",
           color: "#9CA3AF",
         }}
+        role="status"
+        aria-live="polite"
       >
         Loading dashboard...
+      </div>
+    );
+
+  if (error)
+    return (
+      <div
+        style={{
+          padding: "24px",
+          height: "100%",
+          overflowY: "auto",
+          background: "#EEF4F1",
+          fontFamily: "'Inter', sans-serif",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <div
+          style={{
+            width: "100%",
+            maxWidth: "520px",
+            background: "#fff",
+            borderRadius: "14px",
+            padding: "28px",
+            border: "1px solid #E3ECE7",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+            textAlign: "center",
+          }}
+          role="alert"
+        >
+          <div
+            style={{
+              fontSize: "16px",
+              fontWeight: 700,
+              color: "#1F2933",
+              marginBottom: "8px",
+            }}
+          >
+            Unable to load customer dashboard
+          </div>
+
+          <div
+            style={{
+              fontSize: "14px",
+              lineHeight: 1.5,
+              color: "#6B7280",
+              marginBottom: "18px",
+            }}
+          >
+            {error}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => void loadDashboard()}
+            style={{
+              padding: "10px 18px",
+              border: "none",
+              borderRadius: "10px",
+              background: "#7AB38A",
+              color: "#fff",
+              fontSize: "14px",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Try Again
+          </button>
+        </div>
       </div>
     );
 

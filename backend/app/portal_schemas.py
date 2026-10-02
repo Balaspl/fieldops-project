@@ -87,6 +87,15 @@ class TechnicianProfileResponse(BaseModel):
 # ──────────────────────────────────────────────────
 
 class CustomerProfileCreate(BaseModel):
+    """
+    Backend-authoritative input contract for creating a customer profile.
+
+    Authorization identity is intentionally NOT accepted from the payload.
+    The customer user_id and tenant_id are derived from the authenticated
+    request context in the customer portal routes.
+    """
+    model_config = ConfigDict(extra="forbid")
+
     full_name: str = Field(..., min_length=2, max_length=200)
     mobile_number: str = Field(..., min_length=10, max_length=20)
     address: Optional[str] = None
@@ -95,18 +104,84 @@ class CustomerProfileCreate(BaseModel):
     pincode: Optional[str] = None
     company_name: Optional[str] = None
 
+    @field_validator("full_name")
+    @classmethod
+    def validate_full_name(cls, v):
+        v = v.strip()
+
+        if len(v) < 2:
+            raise ValueError(
+                "Full name must contain at least 2 characters"
+            )
+
+        if not v:
+            raise ValueError("Full name is required")
+
+        if not all(
+            character.isalpha() or character.isspace()
+            for character in v
+        ):
+            raise ValueError(
+                "Full name must contain letters and spaces only"
+            )
+
+        return v
+
     @field_validator("mobile_number")
     @classmethod
     def validate_mobile(cls, v):
-        digits = "".join(c for c in v if c.isdigit())
-        if len(digits) < 10:
-            raise ValueError("Mobile number must have at least 10 digits")
+        v = v.strip()
+
+        if not v.isdigit():
+            raise ValueError(
+                "Mobile number must contain digits only"
+            )
+
+        if len(v) != 10:
+            raise ValueError(
+                "Mobile number must contain exactly 10 digits"
+            )
+
+        return v
+
+    @field_validator("pincode")
+    @classmethod
+    def validate_pincode(cls, v):
+        if v is None:
+            return v
+
+        v = v.strip()
+
+        if not v:
+            return None
+
+        if not v.isdigit():
+            raise ValueError(
+                "Pincode must contain digits only"
+            )
+
+        if len(v) != 6:
+            raise ValueError(
+                "Pincode must contain exactly 6 digits"
+            )
+
         return v
 
 
 class CustomerProfileUpdate(CustomerProfileCreate):
-    full_name: Optional[str] = Field(None, min_length=2, max_length=200)
-    mobile_number: Optional[str] = Field(None, min_length=10, max_length=20)
+    """
+    Partial update contract for an existing customer profile.
+    """
+    full_name: Optional[str] = Field(
+        None,
+        min_length=2,
+        max_length=200,
+    )
+    mobile_number: Optional[str] = Field(
+        None,
+        min_length=10,
+        max_length=20,
+    )
 
 
 class CustomerProfileResponse(BaseModel):
@@ -241,7 +316,9 @@ class ServiceRequestUpdate(BaseModel):
         v = v.strip()
 
         if not v.isdigit():
-            raise ValueError("Contact number must contain numbers only")
+            raise ValueError(
+                "Contact number must contain numbers only"
+            )
 
         if len(v) != 10:
             raise ValueError(
@@ -413,6 +490,82 @@ class ChangePasswordRequest(BaseModel):
 
 
 # ──────────────────────────────────────────────────
+# Customer Invoice Schema
+# ──────────────────────────────────────────────────
+
+class CustomerInvoiceResponse(BaseModel):
+    """Customer-safe, backend-authoritative invoice view for one job."""
+
+    id: str
+    job_id: int
+    customer_name: str
+    service_type: str
+    location: str
+    work_summary: str
+    labour_cost: float
+    material_cost: float
+    subtotal: float
+    gst_rate: float
+    gst_amount: float
+    total_amount: float
+    completed_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+class CustomerPaymentStatusResponse(BaseModel):
+    """Customer-safe, backend-authoritative payment status for one job."""
+
+    job_id: int
+    invoice_id: Optional[int] = None
+    status: str
+    updated_at: Optional[datetime] = None
+
+class CustomerPaymentHistoryResponse(BaseModel):
+    """Customer-safe payment history entry built from persisted billing records."""
+
+    invoice_id: str
+    job_id: int
+    service_type: str
+    total_amount: float
+    payment_status: str
+    payment_status_updated_at: Optional[datetime] = None
+    invoice_created_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    
+# ──────────────────────────────────────────────────
+# Customer Feedback Schemas
+# ──────────────────────────────────────────────────
+
+class CustomerFeedbackSubmitRequest(BaseModel):
+    """Validated customer feedback submission for one completed job."""
+
+    rating: int = Field(
+        ...,
+        ge=1,
+        le=5,
+    )
+    comment: Optional[str] = None
+
+
+class CustomerFeedbackRecordResponse(BaseModel):
+    """Customer-safe feedback record returned after submission or lookup."""
+
+    id: int
+    rating: int
+    comment: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CustomerFeedbackResponse(BaseModel):
+    """Customer-scoped feedback state for one job."""
+
+    job_id: int
+    has_feedback: bool
+    feedback: Optional[CustomerFeedbackRecordResponse] = None
+
+# ──────────────────────────────────────────────────
 # Customer Job Tracking Schema
 # ──────────────────────────────────────────────────
 
@@ -430,14 +583,95 @@ class CustomerJobTrackingResponse(BaseModel):
     assigned_technician_name: Optional[str] = None
     assigned_technician_photo: Optional[str] = None
     assigned_technician_phone: Optional[str] = None
+    assigned_technician_skills: Optional[List[str]] = None
+    assigned_technician_experience: Optional[str] = None
+    assigned_technician_certifications: Optional[List[str]] = None
+
+    # Customer-visible ETA contract. The backend remains authoritative for
+    # calculation, caching, fallback selection, and access control.
+    estimated_arrival: Optional[datetime] = None
+    eta_status: Optional[str] = None
+    eta_source: Optional[str] = None
+    eta_confidence: Optional[str] = None
+    eta_duration_minutes: Optional[float] = None
+    eta_distance_km: Optional[float] = None
+    eta_traffic_delay_minutes: Optional[float] = None
+    eta_message: Optional[str] = None
+    eta_updated_at: Optional[datetime] = None
+
     technician_latitude: Optional[float] = None
     technician_longitude: Optional[float] = None
     technician_accuracy: Optional[float] = None
     technician_last_ping: Optional[datetime] = None
     live_tracking: bool = False
     tracking_tenant_id: Optional[str] = None
-    estimated_arrival: Optional[datetime] = None
     created_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ──────────────────────────────────────────────────
+# Customer Support Request Schemas
+# ──────────────────────────────────────────────────
+
+class CustomerSupportRequestCreate(BaseModel):
+    """
+    Customer-submitted support request.
+
+    Customer identity and tenant scope are derived from the
+    authenticated request context and are never accepted from
+    the client payload.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    subject: str = Field(
+        ...,
+        min_length=3,
+        max_length=200,
+    )
+
+    description: str = Field(
+        ...,
+        min_length=10,
+        max_length=5000,
+    )
+
+    @field_validator("subject")
+    @classmethod
+    def validate_subject(cls, v):
+        v = v.strip()
+
+        if len(v) < 3:
+            raise ValueError(
+                "Subject must contain at least 3 characters"
+            )
+
+        return v
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, v):
+        v = v.strip()
+
+        if len(v) < 10:
+            raise ValueError(
+                "Description must contain at least 10 characters"
+            )
+
+        return v
+
+
+class CustomerSupportRequestResponse(BaseModel):
+    """Backend-authoritative customer support request response."""
+
+    id: int
+    request_number: str
+    subject: str
+    description: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

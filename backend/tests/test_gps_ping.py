@@ -252,11 +252,10 @@ def test_second_ping_after_30s_accepted(setup_db):
     response = client.post("/api/v1/gps/ping", headers={"X-Tenant-ID": "tenant-1", "Authorization": "Bearer mock-token-admin"}, json=payload)
     assert response.status_code == 201
 
-    # Simulate 30s expiry by deleting the Redis key
-    mock_redis.delete("gps:live_interval:tenant-1:tech-1:101")
+    # Simulate 30s expiry by deleting the current Redis throttle key
+    mock_redis.delete("gps:interval:tenant-1:tech-1:101")
 
-    # The current production throttle is still active for this request path.
-    # It silently skips duplicate pings instead of returning 429/201.
+    # Ping 2 is allowed after the throttle key is removed.
     response = client.post("/api/v1/gps/ping", headers={"X-Tenant-ID": "tenant-1", "Authorization": "Bearer mock-token-admin"}, json=payload)
     assert response.status_code == 201
     data = response.json()
@@ -407,15 +406,13 @@ def test_interval_reset_on_job_status_transition(setup_db):
     job.status = "EN_ROUTE"
     db.commit()
 
-    # The current implementation keeps the same throttle key across status
-    # transitions. EN_ROUTE changes the interval for newly admitted pings but
-    # does not reset an already-created key.
+    # Changing the job status resets the existing interval key,
+    # so the first EN_ROUTE ping is accepted immediately.
     response = client.post("/api/v1/gps/ping", headers={"X-Tenant-ID": "tenant-1", "Authorization": "Bearer mock-token-admin"}, json=payload)
-    assert response.status_code == 200
-    assert response.json()["status"] == "skipped"
-    assert response.json()["interval_ms"] == 1500
+    assert response.status_code == 201
+    assert response.json()["status"] == "stored"
 
-    # Still inside the existing throttle key: also skipped.
+    # the next ping is inside the new en_rOUTE throttle window.
     response = client.post("/api/v1/gps/ping", headers={"X-Tenant-ID": "tenant-1", "Authorization": "Bearer mock-token-admin"}, json=payload)
     assert response.status_code == 200
     assert response.json()["status"] == "skipped"
@@ -629,17 +626,15 @@ def test_admin_bypass_interval(setup_db):
     response = client.post("/api/v1/gps/ping", headers={"X-Tenant-ID": "tenant-1", "Authorization": "Bearer mock-token-admin"}, json=payload)
     assert response.status_code == 201
 
-    # bypass_interval is retained for API compatibility but is ignored by the
-    # current live-tracking throttle. The second ping is therefore skipped.
+    # bypass_interval=true skips the GPS interval throttle for this request.
     response = client.post(
         "/api/v1/gps/ping?bypass_interval=true",
         headers={"X-Tenant-ID": "tenant-1", "Authorization": "Bearer mock-token-admin"},
         json=payload
     )
-    assert response.status_code == 200
+    assert response.status_code == 201
     data = response.json()
-    assert data["status"] == "skipped"
-    assert data["reason"] == "throttled"
+    assert data["status"] == "stored"
 
 
 def test_celery_task_retries_and_dlq(setup_db):
