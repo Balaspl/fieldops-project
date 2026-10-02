@@ -1,44 +1,30 @@
 """
 app/services/tracking_manager.py
-────────────────────────────────
+================================
 
 WebSocket ConnectionManager for real-time GPS tracking.
 
-Changes in this version
-───────────────────────
-1. DEAD SOCKETS ARE CLOSED, NOT SILENTLY UNSUBSCRIBED.
-   Previously, when one send timed out or failed, the socket was removed from
-   every channel (and its heartbeat cancelled) but the WebSocket itself stayed
-   open. The customer looked connected but never received another update.
-   Now a failed send / failed heartbeat closes the socket (code 1011), so the
-   browser gets `onclose`, reconnects and re-subscribes.
-2. PER-SOCKET SEND LOCK. Broadcasts, heartbeat pings, subscribe acks and the
-   latest-position snapshot can run concurrently for the same socket. All
-   sends now go through one helper that serialises them and applies a timeout.
-3. SNAPSHOT AGE. The "latest position" snapshot sent on subscribe now carries
-   `age_seconds` (computed on the server from `server_ts` / `broadcast_at`),
-   so the frontend can show "Last known location · N s ago" instead of
-   treating an old cached point as a live fix.
-4. BROADCAST VALIDATION CACHE: expired entries are pruned, invalid results are
-   cached only briefly, DB errors are not cached, and concurrent validations
-   for the same (tenant, technician, job) share one DB query.
-5. Redundant customer-channel branch removed; subscribe() refuses sockets
-   that disconnected during validation; per-connection subscription cap;
-   connection cap and send timeout are configurable through environment
-   variables.
+This version reconciles the existing tracking/security work:
 
-Existing behaviour that is intentionally unchanged:
-    • Single WebSocket receive loop (in routes/tracking.py)
-    • Heartbeat never calls receive_json()
-    • Latest technician GPS sent immediately on job subscription
-    • Redis latest-location cache
-    • DB validation runs off the async event loop
-    • Multi-tenant authorization rules
+1. JWT authentication is mandatory.
+2. Per-tenant connection limits are enforced.
+3. Customer subscriptions are allowed only for explicitly owned jobs.
+4. Technician subscriptions are restricted to their own technician/jobs.
+5. Internal roles remain tenant-scoped.
+6. Tenant-admin child-tenant access remains supported.
+7. Redis latest-location snapshots are sent immediately on job subscription.
+8. Snapshot age is calculated on the server.
+9. Every socket send is serialized through a per-socket lock.
+10. Slow/dead sockets are closed and cleaned up so the browser can reconnect.
+11. Broadcast messages are validated against technician/job ownership.
+12. Broadcast validation is cached, with short-lived invalid results.
+13. Concurrent validation for the same resource shares one in-flight result.
+14. Heartbeat only sends; it never reads from the socket.
+15. Subscription and connection limits remain configurable.
+16. Security events are persisted without blocking the WebSocket event loop.
+17. Older TenantValidator.validate_channel() callers remain supported.
 
-Environment variables (all optional)
-    WS_MAX_CONNECTIONS_PER_TENANT        default 100
-    WS_SEND_TIMEOUT_S                    default 5
-    WS_MAX_SUBSCRIPTIONS_PER_CONNECTION  default 20
+The main WebSocket receive loop remains in routes/tracking.py.
 """
 
 from __future__ import annotations
@@ -53,7 +39,7 @@ from typing import Any
 
 import jwt
 import msgpack
-from fastapi import WebSocket, WebSocketDisconnect  # noqa: F401 (kept for importers)
+from fastapi import WebSocket, WebSocketDisconnect  # noqa: F401
 
 from ..database import SessionLocal
 from ..logger import logger
@@ -65,7 +51,7 @@ from ..logger import logger
 
 try:
     import redis.asyncio as redis
-except ImportError:
+except ImportError:  # pragma: no cover
     redis = None
 
 
@@ -95,47 +81,35 @@ ALLOWED_ROLES = {
 # ============================================================================
 
 MAX_CONNECTIONS_PER_TENANT = int(
-    os.getenv("WS_MAX_CONNECTIONS_PER_TENANT", "100")
+    os.getenv(
+        "WS_MAX_CONNECTIONS_PER_TENANT",
+        "100",
+    )
 )
 
 MAX_SUBSCRIPTIONS_PER_CONNECTION = int(
-    os.getenv("WS_MAX_SUBSCRIPTIONS_PER_CONNECTION", "20")
+    os.getenv(
+        "WS_MAX_SUBSCRIPTIONS_PER_CONNECTION",
+        "20",
+    )
 )
 
 HEARTBEAT_INTERVAL_S = 30
 
-# IMPORTANT:
-#
-# We DO NOT call websocket.receive_json() from the heartbeat.
-#
-# The main websocket endpoint in tracking.py is the only coroutine allowed
-# to receive messages.
-
-
-# ============================================================================
-# BROADCAST CACHE / SEND LIMITS
-# ============================================================================
-
+# Validation cache.
 BROADCAST_VALIDATION_TTL_S = 60
-
-# A failed validation (unknown job/technician) is cached only briefly so a job
-# that was just created is not blocked for a full minute.
 INVALID_VALIDATION_TTL_S = 5
-
 VALID_CACHE_MAX_ENTRIES = 5000
 
-# A client that cannot accept a message within this time is treated as dead
-# and its socket is closed so it reconnects cleanly.
+# Maximum time spent waiting for a single socket send.
 BROADCAST_SEND_TIMEOUT_S = float(
-    os.getenv("WS_SEND_TIMEOUT_S", "5")
+    os.getenv(
+        "WS_SEND_TIMEOUT_S",
+        "5",
+    )
 )
 
 LATEST_LOCATION_TTL_S = 120
-
-
-# ============================================================================
-# REDIS CONFIG
-# ============================================================================
 
 REDIS_URL = (
     os.getenv("REDIS_URL")
@@ -147,30 +121,51 @@ GPS_LATEST_PREFIX = "gps:latest:"
 
 
 # ============================================================================
-# TIME HELPERS (local so this file has no new import dependencies)
+# TIME HELPERS
 # ============================================================================
 
-def _as_utc(dt: datetime) -> datetime:
-    """Return a timezone-aware UTC datetime (naive values are assumed UTC)."""
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+def _as_utc(value: datetime) -> datetime:
+    """
+    Return a timezone-aware UTC datetime.
+
+    Naive values are treated as UTC because persisted GPS timestamps in the
+    existing system are normalized to UTC.
+    """
+    if value.tzinfo is None:
+        return value.replace(
+            tzinfo=timezone.utc
+        )
+
+    return value.astimezone(
+        timezone.utc
+    )
 
 
-def _parse_iso_utc(value: Any) -> datetime | None:
-    """Parse an ISO-8601 string / datetime into aware UTC, or None."""
+def _parse_iso_utc(
+    value: Any,
+) -> datetime | None:
+    """
+    Parse a datetime or ISO-8601 value to aware UTC.
+    """
     if not value:
         return None
 
     try:
-        if isinstance(value, datetime):
+        if isinstance(
+            value,
+            datetime,
+        ):
             return _as_utc(value)
 
         return _as_utc(
             datetime.fromisoformat(
-                str(value).replace("Z", "+00:00")
+                str(value).replace(
+                    "Z",
+                    "+00:00",
+                )
             )
         )
+
     except Exception:
         return None
 
@@ -179,13 +174,16 @@ def _parse_iso_utc(value: Any) -> datetime | None:
 # JWT HELPER
 # ============================================================================
 
-def decode_ws_token(token: str) -> dict[str, Any]:
+def decode_ws_token(
+    token: str,
+) -> dict[str, Any]:
     """
-    Decode and validate WebSocket JWT token.
+    Decode and validate the WebSocket JWT.
     """
-
     if not token:
-        raise jwt.InvalidTokenError("Missing WebSocket token")
+        raise jwt.InvalidTokenError(
+            "Missing WebSocket token"
+        )
 
     return jwt.decode(
         token,
@@ -212,47 +210,52 @@ def log_security_event(
     technician_id: str | None = None,
     job_id: str | None = None,
 ):
+    """
+    Log a security event and persist it when the audit model is available.
+
+    Security logging must never break the live WebSocket path.
+    """
+
     extra_fields = {
         "event": event_type,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(
+            timezone.utc
+        ).isoformat(),
         "severity": severity,
         "action_taken": action_taken,
     }
 
-    if user_tenant:
-        extra_fields["user_tenant"] = user_tenant
+    optional_fields = {
+        "user_tenant": user_tenant,
+        "attempted_channel": attempted_channel,
+        "ip_address": ip_address,
+        "websocket_id": websocket_id,
+        "payload_tenant": payload_tenant,
+        "target_tenant": target_tenant,
+        "technician_id": technician_id,
+        "job_id": (
+            str(job_id)
+            if job_id is not None
+            else None
+        ),
+    }
 
-    if attempted_channel:
-        extra_fields["attempted_channel"] = attempted_channel
+    for key, value in optional_fields.items():
+        if value:
+            extra_fields[key] = value
 
-    if ip_address:
-        extra_fields["ip_address"] = ip_address
+    message = (
+        f"Security event: {event_type} - "
+        f"{json.dumps(extra_fields)}"
+    )
 
-    if websocket_id:
-        extra_fields["websocket_id"] = websocket_id
-
-    if payload_tenant:
-        extra_fields["payload_tenant"] = payload_tenant
-
-    if target_tenant:
-        extra_fields["target_tenant"] = target_tenant
-
-    if technician_id:
-        extra_fields["technician_id"] = technician_id
-
-    if job_id:
-        extra_fields["job_id"] = str(job_id)
-
-    if severity in {"critical", "error"}:
-        logger.error(
-            f"Security event: {event_type} - "
-            f"{json.dumps(extra_fields)}"
-        )
+    if severity in {
+        "critical",
+        "error",
+    }:
+        logger.error(message)
     else:
-        logger.warning(
-            f"Security event: {event_type} - "
-            f"{json.dumps(extra_fields)}"
-        )
+        logger.warning(message)
 
     try:
         from ..models import SecurityAuditLog
@@ -269,7 +272,11 @@ def log_security_event(
             payload_tenant=payload_tenant,
             target_tenant=target_tenant,
             technician_id=technician_id,
-            job_id=str(job_id) if job_id is not None else None,
+            job_id=(
+                str(job_id)
+                if job_id is not None
+                else None
+            ),
             tenant_id=(
                 user_tenant
                 or target_tenant
@@ -282,7 +289,8 @@ def log_security_event(
 
     except Exception as exc:
         logger.error(
-            f"Failed to save security audit log: {exc}"
+            "Failed to save security audit log: "
+            f"{exc}"
         )
 
 
@@ -308,17 +316,20 @@ class ValidationResult:
 
 class TenantValidator:
     """
-    Authorization validator.
+    Synchronous database-backed authorization validator.
 
-    DB work is performed synchronously inside worker threads by the
-    ConnectionManager so the FastAPI event loop is not blocked.
+    The ConnectionManager executes this validation in worker threads so
+    synchronous SQLAlchemy work does not block the WebSocket event loop.
     """
 
-    def __init__(self, db):
+    def __init__(
+        self,
+        db,
+    ):
         self.db = db
 
     # ------------------------------------------------------------------------
-    # SYNC VALIDATION
+    # PRIMARY VALIDATION
     # ------------------------------------------------------------------------
 
     def validate_channel_sync(
@@ -328,6 +339,9 @@ class TenantValidator:
         jwt_role: str,
         user_id: str | None = None,
     ) -> ValidationResult:
+        """
+        Validate a channel against JWT tenant, role and ownership.
+        """
 
         parts = channel.split(":")
 
@@ -338,19 +352,37 @@ class TenantValidator:
             return ValidationResult(
                 False,
                 "INVALID_CHANNEL_FORMAT",
-                "Channel must follow format: tenant:{tenant_id}:...",
+                (
+                    "Channel must follow format: "
+                    "tenant:{tenant_id}:..."
+                ),
             )
 
-        channel_tenant_id = parts[1]
+        channel_tenant_id = str(
+            parts[1]
+        )
+
+        role = str(
+            jwt_role or ""
+        ).lower()
+
+        authenticated_user_id = str(
+            user_id or ""
+        )
 
         # ====================================================================
         # CUSTOMER
+        # ====================================================================
         #
-        # Customers may only subscribe to tenant:{job_tenant}:job:{job_id}
-        # for a job that belongs to one of their own service requests.
+        # Customer tracking is intentionally different from ordinary
+        # same-tenant access.
+        #
+        # The customer can belong to customer-tenant while the actual Job
+        # belongs to provider-tenant. The ServiceRequest ownership relationship
+        # is the explicit authorization bridge.
         # ====================================================================
 
-        if jwt_role == "customer":
+        if role == "customer":
 
             if (
                 len(parts) != 4
@@ -360,23 +392,34 @@ class TenantValidator:
                 return ValidationResult(
                     False,
                     "RESOURCE_ACCESS_DENIED",
-                    "Customers may only access job tracking streams",
+                    (
+                        "Customers may only access "
+                        "job tracking streams"
+                    ),
                 )
 
-            from ..models import Job, ServiceRequest
+            from ..models import (
+                Job,
+                ServiceRequest,
+            )
 
-            job_id = int(parts[3])
+            job_id = int(
+                parts[3]
+            )
 
             owned = (
                 self.db.query(Job.id)
                 .join(
                     ServiceRequest,
-                    ServiceRequest.linked_job_id == Job.id,
+                    ServiceRequest.linked_job_id
+                    == Job.id,
                 )
                 .filter(
                     Job.id == job_id,
-                    ServiceRequest.customer_user_id == str(user_id),
-                    ServiceRequest.tenant_id == jwt_tenant_id,
+                    ServiceRequest.customer_user_id
+                    == authenticated_user_id,
+                    ServiceRequest.tenant_id
+                    == jwt_tenant_id,
                 )
                 .first()
             )
@@ -385,22 +428,33 @@ class TenantValidator:
                 return ValidationResult(
                     False,
                     "RESOURCE_ACCESS_DENIED",
-                    "Customer is not authorized for this job",
+                    (
+                        "Customer is not authorized "
+                        "for this job"
+                    ),
                 )
 
             actual_job_tenant = (
-                self.db.query(Job.tenant_id)
+                self.db.query(
+                    Job.tenant_id
+                )
                 .filter(
                     Job.id == job_id
                 )
                 .scalar()
             )
 
-            if channel_tenant_id != actual_job_tenant:
+            if (
+                str(channel_tenant_id)
+                != str(actual_job_tenant)
+            ):
                 return ValidationResult(
                     False,
                     "INVALID_JOB_CHANNEL",
-                    "Job channel does not match the job owner",
+                    (
+                        "Job channel does not "
+                        "match the job owner"
+                    ),
                 )
 
             return ValidationResult(True)
@@ -409,34 +463,45 @@ class TenantValidator:
         # TECHNICIAN
         # ====================================================================
 
-        if jwt_role == "technician":
-
-            user_id = str(user_id or "")
+        if role == "technician":
 
             if (
-                channel_tenant_id != jwt_tenant_id
+                channel_tenant_id
+                != str(jwt_tenant_id)
                 or len(parts) != 4
             ):
                 return ValidationResult(
                     False,
                     "RESOURCE_ACCESS_DENIED",
-                    "Technicians may only access their own tracking resources",
+                    (
+                        "Technicians may only access "
+                        "their own tracking resources"
+                    ),
                 )
 
-            from ..models import Technician, Job
+            from ..models import (
+                Job,
+                Technician,
+            )
 
             numeric_user_id = (
-                int(user_id)
-                if user_id.isdigit()
+                int(authenticated_user_id)
+                if authenticated_user_id.isdigit()
                 else -1
             )
 
             technician = (
-                self.db.query(Technician)
+                self.db.query(
+                    Technician
+                )
                 .filter(
-                    Technician.tenant_id == jwt_tenant_id,
+                    Technician.tenant_id
+                    == jwt_tenant_id,
                     (
-                        (Technician.tech_id == user_id)
+                        (
+                            Technician.tech_id
+                            == authenticated_user_id
+                        )
                         | (
                             Technician.technician_id
                             == numeric_user_id
@@ -446,30 +511,41 @@ class TenantValidator:
                 .first()
             )
 
-            authorized = False
-
-            if (
-                technician
-                and parts[2] == "technician"
-            ):
-                authorized = (
-                    parts[3]
-                    in {
-                        str(technician.tech_id),
-                        str(technician.technician_id),
-                    }
+            if technician is None:
+                return ValidationResult(
+                    False,
+                    "RESOURCE_ACCESS_DENIED",
+                    (
+                        "Technicians may only access "
+                        "their own tracking resources"
+                    ),
                 )
 
+            if parts[2] == "technician":
+
+                allowed = parts[3] in {
+                    str(
+                        technician.tech_id
+                    ),
+                    str(
+                        technician.technician_id
+                    ),
+                }
+
             elif (
-                technician
-                and parts[2] == "job"
+                parts[2] == "job"
                 and parts[3].isdigit()
             ):
-                authorized = (
-                    self.db.query(Job.id)
+
+                allowed = (
+                    self.db.query(
+                        Job.id
+                    )
                     .filter(
-                        Job.id == int(parts[3]),
-                        Job.tenant_id == jwt_tenant_id,
+                        Job.id
+                        == int(parts[3]),
+                        Job.tenant_id
+                        == jwt_tenant_id,
                         Job.assigned_technician_id
                         == technician.technician_id,
                     )
@@ -477,11 +553,17 @@ class TenantValidator:
                     is not None
                 )
 
-            if not authorized:
+            else:
+                allowed = False
+
+            if not allowed:
                 return ValidationResult(
                     False,
                     "RESOURCE_ACCESS_DENIED",
-                    "Technicians may only access their own tracking resources",
+                    (
+                        "Technicians may only access "
+                        "their own tracking resources"
+                    ),
                 )
 
             return ValidationResult(True)
@@ -490,22 +572,29 @@ class TenantValidator:
         # SAME TENANT
         # ====================================================================
 
-        if channel_tenant_id == jwt_tenant_id:
+        if (
+            channel_tenant_id
+            == str(jwt_tenant_id)
+        ):
             return ValidationResult(True)
 
         # ====================================================================
-        # TENANT ADMIN
+        # TENANT ADMIN -> CHILD TENANTS
         # ====================================================================
 
-        if jwt_role == "tenant_admin":
+        if role == "tenant_admin":
 
             from ..models import Tenant
 
             child = (
-                self.db.query(Tenant)
+                self.db.query(
+                    Tenant
+                )
                 .filter(
-                    Tenant.id == channel_tenant_id,
-                    Tenant.parent_tenant_id == jwt_tenant_id,
+                    Tenant.id
+                    == channel_tenant_id,
+                    Tenant.parent_tenant_id
+                    == jwt_tenant_id,
                 )
                 .first()
             )
@@ -513,11 +602,65 @@ class TenantValidator:
             if child:
                 return ValidationResult(True)
 
+        # ====================================================================
+        # DENY CROSS-TENANT ACCESS
+        # ====================================================================
+
         return ValidationResult(
             False,
             "CROSS_TENANT_ACCESS",
-            "Access denied: channel belongs to different tenant",
+            (
+                "Access denied: channel belongs "
+                "to different tenant"
+            ),
         )
+
+    # ------------------------------------------------------------------------
+    # BACKWARD-COMPATIBILITY WRAPPER
+    # ------------------------------------------------------------------------
+
+    async def validate_channel(
+        self,
+        websocket: WebSocket,
+        channel: str,
+        jwt_tenant_id: str,
+        jwt_role: str,
+        user_id: str | None = None,
+    ) -> bool:
+        """
+        Compatibility wrapper for older callers.
+
+        New production code uses validate_channel_sync() through the
+        ConnectionManager worker-thread path. This method remains available
+        so older tests/in-process callers do not break after the merge.
+        """
+
+        result = self.validate_channel_sync(
+            channel=channel,
+            jwt_tenant_id=jwt_tenant_id,
+            jwt_role=jwt_role,
+            user_id=user_id,
+        )
+
+        if not result.allowed:
+            try:
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "code": (
+                            result.code
+                            or "RESOURCE_ACCESS_DENIED"
+                        ),
+                        "message": (
+                            result.message
+                            or "Access denied"
+                        ),
+                    }
+                )
+            except Exception:
+                pass
+
+        return result.allowed
 
 
 # ============================================================================
@@ -525,50 +668,53 @@ class TenantValidator:
 # ============================================================================
 
 class ConnectionManager:
+    """
+    Manages authenticated WebSocket connections and channel subscriptions.
+    """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+    ) -> None:
 
-        # tenant_id -> list[WebSocket]
+        # tenant_id -> connected WebSockets
         self.active_connections: dict[
             str,
             list[WebSocket],
         ] = {}
 
-        # channel -> set[WebSocket]
+        # channel -> subscribed WebSockets
         self.channel_subscriptions: dict[
             str,
             set[WebSocket],
         ] = {}
 
-        # websocket -> metadata
+        # id(websocket) -> metadata
         self.connection_metadata: dict[
             int,
-            dict,
+            dict[str, Any],
         ] = {}
 
-        # websocket -> heartbeat task
+        # id(websocket) -> heartbeat task
         self._heartbeat_tasks: dict[
             int,
             asyncio.Task,
         ] = {}
 
-        # websocket -> send lock (serialises every send to one socket)
+        # id(websocket) -> socket send lock
         self._send_locks: dict[
             int,
             asyncio.Lock,
         ] = {}
 
-        # broadcast validation cache
-        #
-        # key:   (tenant, technician, job)
-        # value: (expires_at, valid)
+        # (tenant, technician, job) ->
+        # (expires_at, validation_result)
         self._valid_cache: dict[
             tuple[str, str, str],
             tuple[float, bool],
         ] = {}
 
-        # in-flight validations, so concurrent broadcasts for the same
-        # (tenant, technician, job) share a single DB query
+        # (tenant, technician, job) ->
+        # in-flight Future[bool]
         self._validation_inflight: dict[
             tuple[str, str, str],
             asyncio.Future,
@@ -587,9 +733,7 @@ class ConnectionManager:
 
     async def _get_redis(self):
         """
-        Lazily create a Redis async client.
-
-        Redis is used only for latest GPS lookup here.
+        Lazily create the async Redis client.
         """
 
         if redis is None:
@@ -606,14 +750,16 @@ class ConnectionManager:
 
             except Exception as exc:
                 logger.error(
-                    f"[ws:redis] Failed to create Redis client: {exc}"
+                    "[ws:redis] Failed to create "
+                    f"Redis client: {exc}"
                 )
+
                 return None
 
         return self._redis
 
     # ========================================================================
-    # SAFE SEND (the ONLY place that writes to a client socket)
+    # SAFE SOCKET SEND
     # ========================================================================
 
     async def _send_json(
@@ -622,35 +768,49 @@ class ConnectionManager:
         message: dict,
     ) -> bool:
         """
-        Send one JSON message to one client.
+        Send a JSON frame through the socket's serialized send queue.
 
-        • Serialised per socket (no interleaved concurrent sends).
-        • Bounded by BROADCAST_SEND_TIMEOUT_S (includes waiting for the lock).
-        • Never raises. Returns True on success, False on any failure.
+        Every socket has exactly one send lock so heartbeat frames,
+        subscription acknowledgements, snapshots and broadcasts cannot
+        interleave.
 
-        A False result means the client cannot receive data reliably; callers
-        should treat the socket as dead (see _drop_connection()).
+        Returns:
+            True  -> message delivered
+            False -> socket could not accept the message
         """
 
-        lock = self._send_locks.get(id(websocket))
+        websocket_id = id(
+            websocket
+        )
+
+        lock = self._send_locks.get(
+            websocket_id
+        )
 
         if lock is None:
-            return False
+            lock = asyncio.Lock()
+            self._send_locks[
+                websocket_id
+            ] = lock
 
-        async def _do_send() -> None:
+        async def do_send() -> None:
             async with lock:
-                await websocket.send_json(message)
+                await websocket.send_json(
+                    message
+                )
 
         try:
             await asyncio.wait_for(
-                _do_send(),
+                do_send(),
                 timeout=BROADCAST_SEND_TIMEOUT_S,
             )
+
             return True
 
+        except asyncio.CancelledError:
+            raise
+
         except Exception:
-            # Includes asyncio.TimeoutError, RuntimeError (socket closed),
-            # and transport errors. CancelledError is NOT swallowed.
             return False
 
     async def _send_error(
@@ -659,7 +819,6 @@ class ConnectionManager:
         code: str,
         message: str,
     ) -> None:
-
         await self._send_json(
             websocket,
             {
@@ -670,7 +829,7 @@ class ConnectionManager:
         )
 
     # ========================================================================
-    # DROP DEAD CONNECTION
+    # DEAD CONNECTION HANDLING
     # ========================================================================
 
     async def _drop_connection(
@@ -680,21 +839,20 @@ class ConnectionManager:
         reason: str = "connection lost",
     ) -> None:
         """
-        Close a socket that can no longer receive messages and remove it from
-        all registries.
+        Close and fully unregister a dead socket.
 
-        Closing the socket matters: the browser then fires `onclose`, opens a
-        new connection and subscribes again. Removing the socket from the
-        registries WITHOUT closing it (the old behaviour) left the client
-        connected but permanently unsubscribed.
+        Closing is important because browsers need an actual close event to
+        trigger the frontend reconnect path.
         """
 
-        meta = self.connection_metadata.get(
-            id(websocket),
-            {},
+        websocket_id = id(
+            websocket
         )
 
-        tenant_id = meta.get("tenant_id", "")
+        meta = self.connection_metadata.get(
+            websocket_id,
+            {},
+        )
 
         self._total_dropped_connections += 1
 
@@ -711,11 +869,16 @@ class ConnectionManager:
 
         await self._cleanup_connection(
             websocket,
-            tenant_id,
+            str(
+                meta.get(
+                    "tenant_id",
+                    "",
+                )
+            ),
         )
 
     # ========================================================================
-    # AUTHENTICATION
+    # CONNECTION / AUTHENTICATION
     # ========================================================================
 
     async def connect(
@@ -723,9 +886,14 @@ class ConnectionManager:
         websocket: WebSocket,
         token: str,
     ) -> dict | None:
+        """
+        Authenticate and register a WebSocket connection.
+        """
 
         try:
-            claims = decode_ws_token(token)
+            claims = decode_ws_token(
+                token
+            )
 
         except jwt.ExpiredSignatureError:
 
@@ -745,84 +913,150 @@ class ConnectionManager:
 
             return None
 
-        tenant_id = claims.get("tenant_id")
-        user_id = claims.get("user_id") or claims.get('sub')
-        role = claims.get("role")
+        tenant_id = claims.get(
+            "tenant_id"
+        )
 
+        user_id = (
+            claims.get("user_id")
+            or claims.get("sub")
+        )
+
+        role = str(
+            claims.get("role")
+            or ""
+        ).lower()
+
+        # All authorization-bound identity information is mandatory.
         if (
             not tenant_id
+            or not user_id
             or role not in ALLOWED_ROLES
         ):
             await websocket.close(
                 code=1008,
-                reason="Invalid role or tenant",
+                reason=(
+                    "Invalid role, tenant, "
+                    "or user"
+                ),
             )
 
             return None
 
-        if (
-            len(
-                self.active_connections.get(
-                    tenant_id,
-                    [],
-                )
+        tenant_id = str(
+            tenant_id
+        )
+
+        user_id = str(
+            user_id
+        )
+
+        current_connections = len(
+            self.active_connections.get(
+                tenant_id,
+                [],
             )
+        )
+
+        if (
+            current_connections
             >= MAX_CONNECTIONS_PER_TENANT
         ):
             await websocket.close(
                 code=1008,
-                reason="Tenant connection limit exceeded",
+                reason=(
+                    "Tenant connection "
+                    "limit exceeded"
+                ),
             )
 
             return None
 
         await websocket.accept()
 
-        websocket_key = id(websocket)
+        websocket_id = id(
+            websocket
+        )
 
         self.active_connections.setdefault(
             tenant_id,
             [],
-        ).append(websocket)
+        ).append(
+            websocket
+        )
 
         self.connection_metadata[
-            websocket_key
+            websocket_id
         ] = {
             "tenant_id": tenant_id,
             "user_id": user_id,
             "role": role,
-            "connected_at": datetime.now(
-                timezone.utc
-            ).isoformat(),
+            "connected_at": (
+                datetime.now(
+                    timezone.utc
+                ).isoformat()
+            ),
         }
 
         self._send_locks[
-            websocket_key
+            websocket_id
         ] = asyncio.Lock()
 
+        self._heartbeat_tasks[
+            websocket_id
+        ] = asyncio.create_task(
+            self._heartbeat(
+                websocket,
+                tenant_id,
+                user_id,
+            )
+        )
+
         logger.info(
-            f"[ws:connect] tenant={tenant_id} "
+            "[ws:connect] "
+            f"tenant={tenant_id} "
             f"user={user_id} "
             f"role={role} "
             f"total_tenant="
             f"{len(self.active_connections[tenant_id])}"
         )
 
-        # Start heartbeat.
-        #
-        # IMPORTANT:
-        # _heartbeat NEVER calls receive_json().
-        self._heartbeat_tasks[
-            websocket_key
-        ] = asyncio.create_task(
-            self._heartbeat(
-                websocket,
-                tenant_id,
-                str(user_id or ""),
-            )
+        return claims
+
+    # ========================================================================
+    # SUBSCRIPTION HELPERS
+    # ========================================================================
+
+    def _subscription_count(
+        self,
+        websocket: WebSocket,
+    ) -> int:
+        return sum(
+            websocket in subscribers
+            for subscribers
+            in self.channel_subscriptions.values()
         )
 
-        return claims
+    def _same_connection_tenant(
+        self,
+        websocket_id: int,
+        tenant_id: str,
+    ) -> bool:
+        meta = self.connection_metadata.get(
+            websocket_id
+        )
+
+        if not meta:
+            return False
+
+        return str(
+            meta.get(
+                "tenant_id",
+                "",
+            )
+        ) == str(
+            tenant_id
+        )
 
     # ========================================================================
     # SUBSCRIBE
@@ -834,73 +1068,89 @@ class ConnectionManager:
         channel: str,
         tenant_id: str,
     ) -> bool:
-
-        websocket_key = id(websocket)
+        websocket_id = id(
+            websocket
+        )
 
         meta = self.connection_metadata.get(
-            websocket_key
+            websocket_id
         )
 
         if meta is None:
-            # Socket is not registered (already dropped / disconnected).
             return False
 
-        jwt_role = meta.get("role")
-
-        user_id = meta.get("user_id") or meta.get("sub")
-
-        print("========== WS SUBSCRIBE DEBUG ==========")
-        print("role:", jwt_role)
-        print("user_id:", user_id)
-        print("sub:", meta.get("sub"))
-        print("meta:", meta)
-        print("channel:", channel)
-        print("tenant_id:", tenant_id)
-        print("========================================")
-
-        # --------------------------------------------------------------------
-        # Per-connection subscription cap.
-        # --------------------------------------------------------------------
-
-        already_subscribed = websocket in self.channel_subscriptions.get(
-            channel,
-            (),
+        connection_tenant = str(
+            meta.get(
+                "tenant_id",
+                "",
+            )
         )
 
-        if not already_subscribed:
-
-            current_count = sum(
-                1
-                for subscribers in self.channel_subscriptions.values()
-                if websocket in subscribers
+        # The connection's JWT tenant is authoritative.
+        if not self._same_connection_tenant(
+            websocket_id,
+            tenant_id,
+        ):
+            await self._send_error(
+                websocket,
+                "CROSS_TENANT_ACCESS",
+                (
+                    "Access denied: "
+                    "connection tenant mismatch"
+                ),
             )
 
-            if current_count >= MAX_SUBSCRIPTIONS_PER_CONNECTION:
+            return False
 
-                await self._send_error(
-                    websocket,
-                    "SUBSCRIPTION_LIMIT",
-                    "Too many subscriptions on this connection",
-                )
+        already_subscribed = (
+            websocket
+            in self.channel_subscriptions.get(
+                channel,
+                (),
+            )
+        )
 
-                return False
+        if (
+            not already_subscribed
+            and self._subscription_count(
+                websocket
+            )
+            >= MAX_SUBSCRIPTIONS_PER_CONNECTION
+        ):
+            await self._send_error(
+                websocket,
+                "SUBSCRIPTION_LIMIT",
+                (
+                    "Too many subscriptions "
+                    "on this connection"
+                ),
+            )
 
-        # --------------------------------------------------------------------
-        # Validate in worker thread.
-        # --------------------------------------------------------------------
+            return False
 
-        def validate():
-
+        def validate() -> ValidationResult:
             db = SessionLocal()
 
             try:
-                validator = TenantValidator(db)
+                validator = TenantValidator(
+                    db
+                )
 
                 return validator.validate_channel_sync(
                     channel=channel,
-                    jwt_tenant_id=tenant_id,
-                    jwt_role=jwt_role,
-                    user_id=user_id,
+                    jwt_tenant_id=connection_tenant,
+                    jwt_role=str(
+                        meta.get(
+                            "role",
+                            "",
+                        )
+                    ),
+                    user_id=str(
+                        meta.get(
+                            "user_id",
+                            "",
+                        )
+                    ),
                 )
 
             finally:
@@ -910,11 +1160,64 @@ class ConnectionManager:
             validate
         )
 
-        # The client may have disconnected while we were validating.
-        if websocket_key not in self.connection_metadata:
+        # Validation could finish after the browser disconnected.
+        if (
+            websocket_id
+            not in self.connection_metadata
+        ):
             return False
 
         if not result.allowed:
+
+            if (
+                result.code
+                == "CROSS_TENANT_ACCESS"
+            ):
+                parts = channel.split(
+                    ":"
+                )
+
+                target_tenant = (
+                    parts[1]
+                    if (
+                        len(parts) > 1
+                        and parts[0] == "tenant"
+                    )
+                    else None
+                )
+
+                client = getattr(
+                    websocket,
+                    "client",
+                    None,
+                )
+
+                ip_address = getattr(
+                    client,
+                    "host",
+                    None,
+                )
+
+                await self._audit_subscription_security(
+                    event_type=(
+                        "cross_tenant_access_attempt"
+                    ),
+                    severity="warning",
+                    user_tenant=connection_tenant,
+                    attempted_channel=channel,
+                    ip_address=ip_address,
+                    websocket_id=(
+                        f"ws-{websocket_id}"
+                    ),
+                    action_taken=(
+                        "subscription_rejected"
+                    ),
+                    target_tenant=(
+                        str(target_tenant)
+                        if target_tenant
+                        else None
+                    ),
+                )
 
             await self._send_error(
                 websocket,
@@ -926,14 +1229,13 @@ class ConnectionManager:
 
             return False
 
-        # --------------------------------------------------------------------
-        # Register subscription.
-        # --------------------------------------------------------------------
-
+        # Register exactly once.
         self.channel_subscriptions.setdefault(
             channel,
             set(),
-        ).add(websocket)
+        ).add(
+            websocket
+        )
 
         sent = await self._send_json(
             websocket,
@@ -952,13 +1254,10 @@ class ConnectionManager:
             return False
 
         logger.info(
-            f"[ws:subscribe] channel={channel}"
+            "[ws:subscribe] "
+            f"tenant={connection_tenant} "
+            f"channel={channel}"
         )
-
-        # --------------------------------------------------------------------
-        # Send the latest technician position immediately, so the customer
-        # does not wait for the next GPS ping.
-        # --------------------------------------------------------------------
 
         await self._send_latest_job_position(
             websocket,
@@ -968,7 +1267,7 @@ class ConnectionManager:
         return True
 
     # ========================================================================
-    # SEND LATEST JOB POSITION
+    # LATEST JOB POSITION
     # ========================================================================
 
     async def _send_latest_job_position(
@@ -976,8 +1275,14 @@ class ConnectionManager:
         websocket: WebSocket,
         channel: str,
     ) -> None:
+        """
+        Send the cached latest technician location immediately for job
+        subscriptions.
+        """
 
-        parts = channel.split(":")
+        parts = channel.split(
+            ":"
+        )
 
         if (
             len(parts) != 4
@@ -986,8 +1291,13 @@ class ConnectionManager:
         ):
             return
 
-        tenant_id = parts[1]
-        job_id = parts[3]
+        tenant_id = str(
+            parts[1]
+        )
+
+        job_id = str(
+            parts[3]
+        )
 
         redis_client = await self._get_redis()
 
@@ -1001,145 +1311,203 @@ class ConnectionManager:
         )
 
         try:
-
-            raw = await redis_client.get(key)
+            raw = await redis_client.get(
+                key
+            )
 
             if not raw:
                 return
 
-            latest = self._decode_latest_location(raw)
+            latest = (
+                self._decode_latest_location(
+                    raw
+                )
+            )
 
             if not latest:
                 return
 
-            # Defence in depth: never deliver a cached point that belongs
-            # to another tenant.
-            if str(latest.get("tenant_id", tenant_id)) != tenant_id:
-                logger.error(
-                    f"[ws:latest] tenant mismatch for {key}; snapshot skipped"
+            # Defence in depth.
+            latest_tenant = str(
+                latest.get(
+                    "tenant_id",
+                    "",
                 )
+            )
+
+            if latest_tenant != tenant_id:
+                logger.error(
+                    "[ws:latest] tenant mismatch "
+                    f"for {key}; snapshot skipped"
+                )
+
                 return
 
-            # Tell the frontend this is a cached position and HOW OLD it is.
-            # Age is computed on the server, so it does not depend on the
-            # client's clock or on the technician device's clock.
-            latest["type"] = "position_update"
-            latest["source"] = "latest_cache"
+            latest["type"] = (
+                "position_update"
+            )
+
+            latest["source"] = (
+                "latest_cache"
+            )
 
             sent_at = _parse_iso_utc(
-                latest.get("server_ts")
-                or latest.get("broadcast_at")
+                latest.get(
+                    "server_ts"
+                )
+                or latest.get(
+                    "broadcast_at"
+                )
             )
 
             if sent_at is not None:
+                age_seconds = (
+                    datetime.now(
+                        timezone.utc
+                    )
+                    - sent_at
+                ).total_seconds()
+
                 latest["age_seconds"] = round(
                     max(
                         0.0,
-                        (
-                            datetime.now(timezone.utc)
-                            - sent_at
-                        ).total_seconds(),
+                        age_seconds,
                     ),
                     1,
                 )
-            else:
-                latest["age_seconds"] = None
 
-            delivered = await self._send_json(
+            else:
+                latest[
+                    "age_seconds"
+                ] = None
+
+            if not await self._send_json(
                 websocket,
                 latest,
-            )
-
-            if not delivered:
+            ):
                 await self._drop_connection(
                     websocket,
                     reason="send failed",
                 )
+
                 return
 
             logger.debug(
-                f"[ws:latest] sent latest GPS "
+                "[ws:latest] sent latest GPS "
                 f"tenant={tenant_id} "
                 f"job={job_id} "
-                f"age={latest.get('age_seconds')}"
+                f"age="
+                f"{latest.get('age_seconds')}"
             )
 
         except Exception as exc:
-
             logger.warning(
-                f"[ws:latest] failed to send latest "
-                f"location for {key}: {exc}"
+                "[ws:latest] failed for "
+                f"{key}: {exc}"
             )
 
     # ========================================================================
-    # DECODE REDIS LOCATION
+    # REDIS SNAPSHOT DECODER
     # ========================================================================
 
     @staticmethod
     def _decode_latest_location(
         raw: Any,
     ) -> dict | None:
+        """
+        Decode either MessagePack or JSON latest-location data.
 
-        try:
+        Supports both a direct location dictionary and the position-batch
+        envelope used by Redis pub/sub.
+        """
 
-            if isinstance(raw, bytes):
-
-                # Try MessagePack first.
-                try:
-                    data = msgpack.unpackb(
-                        raw,
-                        raw=False,
-                    )
-
-                    if isinstance(data, dict):
-
-                        # Redis may contain an envelope.
-                        if "updates" in data:
-                            updates = data.get(
-                                "updates"
-                            )
-
-                            if updates:
-                                return dict(
-                                    updates[-1]
-                                )
-
-                        return dict(data)
-
-                except Exception:
-                    pass
-
-                # Then JSON.
-                try:
-                    decoded = raw.decode(
-                        "utf-8"
-                    )
-
-                    data = json.loads(
-                        decoded
-                    )
-
-                    if isinstance(data, dict):
-                        return data
-
-                except Exception:
-                    pass
-
-            if isinstance(raw, str):
-
-                data = json.loads(raw)
-
-                if isinstance(data, dict):
-                    return data
-
-            if isinstance(raw, dict):
-                return dict(raw)
-
-        except Exception as exc:
-
-            logger.warning(
-                f"[ws:latest] decode failed: {exc}"
+        if isinstance(
+            raw,
+            dict,
+        ):
+            return dict(
+                raw
             )
+
+        if isinstance(
+            raw,
+            str,
+        ):
+            try:
+                data = json.loads(
+                    raw
+                )
+
+                if isinstance(
+                    data,
+                    dict,
+                ):
+                    return dict(
+                        data
+                    )
+
+            except Exception:
+                return None
+
+            return None
+
+        if not isinstance(
+            raw,
+            bytes,
+        ):
+            return None
+
+        # MessagePack first.
+        try:
+            data = msgpack.unpackb(
+                raw,
+                raw=False,
+            )
+
+            if isinstance(
+                data,
+                dict,
+            ):
+                updates = data.get(
+                    "updates"
+                )
+
+                if (
+                    isinstance(
+                        updates,
+                        list,
+                    )
+                    and updates
+                ):
+                    return dict(
+                        updates[-1]
+                    )
+
+                return dict(
+                    data
+                )
+
+        except Exception:
+            pass
+
+        # JSON fallback.
+        try:
+            data = json.loads(
+                raw.decode(
+                    "utf-8"
+                )
+            )
+
+            if isinstance(
+                data,
+                dict,
+            ):
+                return dict(
+                    data
+                )
+
+        except Exception:
+            pass
 
         return None
 
@@ -1153,30 +1521,62 @@ class ConnectionManager:
         channel: str,
         tenant_id: str,
     ) -> bool:
+        websocket_id = id(
+            websocket
+        )
 
         meta = self.connection_metadata.get(
-            id(websocket)
+            websocket_id
         )
 
         if meta is None:
             return False
 
-        jwt_role = meta.get("role")
+        if not self._same_connection_tenant(
+            websocket_id,
+            tenant_id,
+        ):
+            await self._send_error(
+                websocket,
+                "CROSS_TENANT_ACCESS",
+                (
+                    "Access denied: "
+                    "connection tenant mismatch"
+                ),
+            )
 
-        user_id = meta.get("user_id")
+            return False
 
-        def validate():
+        connection_tenant = str(
+            meta.get(
+                "tenant_id",
+                "",
+            )
+        )
 
+        def validate() -> ValidationResult:
             db = SessionLocal()
 
             try:
-                validator = TenantValidator(db)
+                validator = TenantValidator(
+                    db
+                )
 
                 return validator.validate_channel_sync(
                     channel=channel,
-                    jwt_tenant_id=tenant_id,
-                    jwt_role=jwt_role,
-                    user_id=user_id,
+                    jwt_tenant_id=connection_tenant,
+                    jwt_role=str(
+                        meta.get(
+                            "role",
+                            "",
+                        )
+                    ),
+                    user_id=str(
+                        meta.get(
+                            "user_id",
+                            "",
+                        )
+                    ),
                 )
 
             finally:
@@ -1187,7 +1587,6 @@ class ConnectionManager:
         )
 
         if not result.allowed:
-
             await self._send_error(
                 websocket,
                 result.code
@@ -1198,25 +1597,24 @@ class ConnectionManager:
 
             return False
 
-        subscriptions = (
+        subscribers = (
             self.channel_subscriptions.get(
                 channel
             )
         )
 
-        if subscriptions:
-
-            subscriptions.discard(
+        if subscribers:
+            subscribers.discard(
                 websocket
             )
 
-            if not subscriptions:
+            if not subscribers:
                 self.channel_subscriptions.pop(
                     channel,
                     None,
                 )
 
-        await self._send_json(
+        sent = await self._send_json(
             websocket,
             {
                 "type": "unsubscribed",
@@ -1224,44 +1622,210 @@ class ConnectionManager:
             },
         )
 
+        if not sent:
+            await self._drop_connection(
+                websocket,
+                reason="send failed",
+            )
+
+            return False
+
         return True
 
     # ========================================================================
-    # BROADCAST VALIDATION
+    # VALIDATION CACHE
     # ========================================================================
 
     def _prune_valid_cache(
         self,
         now: float,
     ) -> None:
-        """Keep the validation cache bounded."""
+        """
+        Remove expired entries and keep the cache bounded.
+        """
 
-        if len(self._valid_cache) < VALID_CACHE_MAX_ENTRIES:
-            return
-
-        expired = [
+        expired_keys = [
             key
-            for key, (expires_at, _valid)
-            in self._valid_cache.items()
+            for key, (
+                expires_at,
+                _,
+            ) in self._valid_cache.items()
             if expires_at <= now
         ]
 
-        for key in expired:
+        for key in expired_keys:
             self._valid_cache.pop(
                 key,
                 None,
             )
 
-        if len(self._valid_cache) >= VALID_CACHE_MAX_ENTRIES:
-            self._valid_cache.clear()
+        if (
+            len(self._valid_cache)
+            < VALID_CACHE_MAX_ENTRIES
+        ):
+            return
+
+        # Keep the entries with the longest remaining TTL. This avoids an
+        # unbounded dictionary while preserving currently useful validations.
+        live_entries = [
+            (
+                key,
+                value,
+            )
+            for key, value
+            in self._valid_cache.items()
+            if value[0] > now
+        ]
+
+        live_entries.sort(
+            key=lambda item: item[1][0]
+        )
+
+        keep_count = max(
+            0,
+            VALID_CACHE_MAX_ENTRIES - 1,
+        )
+
+        self._valid_cache = dict(
+            live_entries[
+                -keep_count:
+            ]
+            if keep_count
+            else []
+        )
+
+    # ========================================================================
+    # SUBSCRIPTION SECURITY AUDIT
+    # ========================================================================
+
+    async def _audit_subscription_security(
+        self,
+        *,
+        event_type: str,
+        severity: str,
+        user_tenant: str | None,
+        attempted_channel: str | None,
+        ip_address: str | None,
+        websocket_id: str | None,
+        action_taken: str,
+        target_tenant: str | None = None,
+    ) -> None:
+        """
+        Persist subscription security events off the event loop.
+        """
+
+        def write() -> None:
+            db = SessionLocal()
+
+            try:
+                log_security_event(
+                    db=db,
+                    event_type=event_type,
+                    severity=severity,
+                    user_tenant=user_tenant,
+                    attempted_channel=attempted_channel,
+                    ip_address=ip_address,
+                    websocket_id=websocket_id,
+                    action_taken=action_taken,
+                    target_tenant=target_tenant,
+                )
+
+            except Exception as exc:
+                logger.error(
+                    "[ws:audit] subscription "
+                    f"audit failed: {exc}"
+                )
+
+            finally:
+                db.close()
+
+        try:
+            await asyncio.to_thread(
+                write
+            )
+
+        except Exception as exc:
+            logger.error(
+                "[ws:audit] subscription audit "
+                f"task failed: {exc}"
+            )
+
+    # ========================================================================
+    # BROADCAST SECURITY AUDIT
+    # ========================================================================
+
+    async def _audit_broadcast_security(
+        self,
+        *,
+        event_type: str,
+        severity: str,
+        payload_tenant: str | None,
+        target_tenant: str | None,
+        technician_id: str | None = None,
+        job_id: str | None = None,
+    ) -> None:
+        """
+        Persist broadcast security events off the event loop.
+        """
+
+        def write() -> None:
+            db = SessionLocal()
+
+            try:
+                log_security_event(
+                    db=db,
+                    event_type=event_type,
+                    severity=severity,
+                    user_tenant=None,
+                    attempted_channel=None,
+                    ip_address=None,
+                    websocket_id=None,
+                    action_taken="message_dropped",
+                    payload_tenant=payload_tenant,
+                    target_tenant=target_tenant,
+                    technician_id=technician_id,
+                    job_id=job_id,
+                )
+
+            except Exception as exc:
+                logger.error(
+                    "[ws:audit] broadcast security "
+                    f"log failed: {exc}"
+                )
+
+            finally:
+                db.close()
+
+        try:
+            await asyncio.to_thread(
+                write
+            )
+
+        except Exception as exc:
+            logger.error(
+                "[ws:audit] broadcast security "
+                f"task failed: {exc}"
+            )
+
+    # ========================================================================
+    # BROADCAST VALIDATION
+    # ========================================================================
 
     async def _validate_broadcast(
         self,
         channel: str,
         message: dict,
     ) -> bool:
+        """
+        Validate that a broadcast's tenant, technician and job agree with
+        persisted database ownership.
 
-        parts = channel.split(":")
+        This protects the cross-instance Redis -> local WebSocket path.
+        """
+
+        parts = channel.split(
+            ":"
+        )
 
         target_tenant_id = (
             parts[1]
@@ -1272,6 +1836,7 @@ class ConnectionManager:
             else None
         )
 
+        # Non-standard channels are not used by the GPS listener.
         if not target_tenant_id:
             return True
 
@@ -1283,14 +1848,43 @@ class ConnectionManager:
             logger.error(
                 "[ws:broadcast] Missing tenant_id"
             )
+
+            await self._audit_broadcast_security(
+                event_type=(
+                    "broadcast_missing_tenant"
+                ),
+                severity="critical",
+                payload_tenant=None,
+                target_tenant=str(
+                    target_tenant_id
+                ),
+            )
+
             return False
 
-        if payload_tenant != target_tenant_id:
+        payload_tenant = str(
+            payload_tenant
+        )
 
+        if (
+            payload_tenant
+            != str(target_tenant_id)
+        ):
             logger.error(
                 "[ws:broadcast] Tenant mismatch "
                 f"payload={payload_tenant} "
                 f"channel={target_tenant_id}"
+            )
+
+            await self._audit_broadcast_security(
+                event_type=(
+                    "broadcast_tenant_mismatch"
+                ),
+                severity="critical",
+                payload_tenant=payload_tenant,
+                target_tenant=str(
+                    target_tenant_id
+                ),
             )
 
             return False
@@ -1310,7 +1904,7 @@ class ConnectionManager:
         )
 
         cache_key = (
-            target_tenant_id,
+            str(target_tenant_id),
             technician_id,
             job_id,
         )
@@ -1321,8 +1915,7 @@ class ConnectionManager:
             cache_key
         )
 
-        if cached:
-
+        if cached is not None:
             expires_at, valid = cached
 
             if now < expires_at:
@@ -1333,94 +1926,155 @@ class ConnectionManager:
                 None,
             )
 
-        # --------------------------------------------------------------------
-        # Another broadcast is already validating the same key
-        # (for example the job / technician / all channels of one update).
-        # Wait for its result instead of running the same DB query again.
-        # --------------------------------------------------------------------
-
-        inflight = self._validation_inflight.get(
-            cache_key
+        # Another broadcast can already be validating the same resource.
+        inflight = (
+            self._validation_inflight.get(
+                cache_key
+            )
         )
 
         if inflight is not None:
-            return await inflight
+            try:
+                return await inflight
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                return False
 
-        # --------------------------------------------------------------------
-        # Perform DB validation outside the event loop.
-        # --------------------------------------------------------------------
+        loop = asyncio.get_running_loop()
 
-        def validate_db():
+        future: asyncio.Future = (
+            loop.create_future()
+        )
 
+        self._validation_inflight[
+            cache_key
+        ] = future
+
+        validation_result = (
+            "resource_mismatch"
+        )
+
+        valid = False
+        cacheable = True
+
+        def validate_db() -> str:
             db = SessionLocal()
 
             try:
-
                 from ..models import (
-                    Technician,
                     Job,
+                    Technician,
                 )
+
+                # ------------------------------------------------------------
+                # Technician lookup
+                # ------------------------------------------------------------
+
+                technician_query = (
+                    db.query(
+                        Technician
+                    )
+                    .filter(
+                        Technician.tenant_id
+                        == payload_tenant
+                    )
+                )
+
+                if technician_id.isdigit():
+                    numeric_id = int(
+                        technician_id
+                    )
+
+                    technician_query = (
+                        technician_query.filter(
+                            (
+                                Technician.tech_id
+                                == technician_id
+                            )
+                            | (
+                                Technician.technician_id
+                                == numeric_id
+                            )
+                        )
+                    )
+
+                else:
+                    technician_query = (
+                        technician_query.filter(
+                            Technician.tech_id
+                            == technician_id
+                        )
+                    )
 
                 technician = (
-                    db.query(Technician)
-                    .filter(
-                        Technician.tech_id
-                        == technician_id,
-                        Technician.tenant_id
-                        == payload_tenant,
-                    )
-                    .first()
+                    technician_query.first()
                 )
 
-                if not technician:
-                    return False
+                if technician is None:
+                    return (
+                        "technician_mismatch"
+                    )
 
-                if not job_id:
-                    return False
+                # ------------------------------------------------------------
+                # Job lookup
+                # ------------------------------------------------------------
 
-                try:
-                    job_db_id = int(job_id)
-                except (
-                    ValueError,
-                    TypeError,
-                ):
-                    return False
+                if not job_id.isdigit():
+                    return "job_mismatch"
 
                 job = (
-                    db.query(Job)
+                    db.query(
+                        Job
+                    )
                     .filter(
-                        Job.id == job_db_id,
+                        Job.id
+                        == int(job_id),
                         Job.tenant_id
                         == payload_tenant,
                     )
                     .first()
                 )
 
-                return job is not None
+                if job is None:
+                    return "job_mismatch"
+
+                # ------------------------------------------------------------
+                # Assignment lookup
+                # ------------------------------------------------------------
+
+                if (
+                    job.assigned_technician_id
+                    != technician.technician_id
+                ):
+                    return (
+                        "assignment_mismatch"
+                    )
+
+                return "valid"
 
             finally:
                 db.close()
 
-        future = asyncio.get_running_loop().create_future()
-
-        self._validation_inflight[
-            cache_key
-        ] = future
-
-        valid = False
-        cacheable = True
-
         try:
-            valid = await asyncio.to_thread(
-                validate_db
+            validation_result = (
+                await asyncio.to_thread(
+                    validate_db
+                )
+            )
+
+            valid = (
+                validation_result
+                == "valid"
             )
 
         except Exception as exc:
-            # A DB error must not be cached as "invalid".
+            # DB outage must not be cached as "invalid".
             cacheable = False
 
             logger.error(
-                f"[ws:broadcast] validation failed for {cache_key}: {exc}"
+                "[ws:broadcast] validation failed "
+                f"for {cache_key}: {exc}"
             )
 
         finally:
@@ -1430,11 +2084,53 @@ class ConnectionManager:
             )
 
             if not future.done():
-                future.set_result(valid)
+                future.set_result(
+                    valid
+                )
+
+        # Audit an invalid but successfully evaluated resource.
+        if (
+            not valid
+            and cacheable
+        ):
+            event_type = {
+                "technician_mismatch": (
+                    "broadcast_technician_tenant_mismatch"
+                ),
+                "job_mismatch": (
+                    "broadcast_job_tenant_mismatch"
+                ),
+                "assignment_mismatch": (
+                    "broadcast_job_assignment_mismatch"
+                ),
+            }.get(
+                validation_result,
+                "broadcast_resource_mismatch",
+            )
+
+            await self._audit_broadcast_security(
+                event_type=event_type,
+                severity="critical",
+                payload_tenant=str(
+                    payload_tenant
+                ),
+                target_tenant=str(
+                    target_tenant_id
+                ),
+                technician_id=(
+                    technician_id
+                    or None
+                ),
+                job_id=(
+                    job_id
+                    or None
+                ),
+            )
 
         if cacheable:
-
-            self._prune_valid_cache(now)
+            self._prune_valid_cache(
+                now
+            )
 
             ttl = (
                 BROADCAST_VALIDATION_TTL_S
@@ -1445,7 +2141,8 @@ class ConnectionManager:
             self._valid_cache[
                 cache_key
             ] = (
-                time.monotonic() + ttl,
+                time.monotonic()
+                + ttl,
                 valid,
             )
 
@@ -1460,6 +2157,9 @@ class ConnectionManager:
         channel: str,
         message: dict,
     ) -> int:
+        """
+        Broadcast a validated message to all local subscribers.
+        """
 
         subscribers = (
             self.channel_subscriptions.get(
@@ -1470,84 +2170,70 @@ class ConnectionManager:
         if not subscribers:
             return 0
 
-        # --------------------------------------------------------------------
-        # Security validation.
-        # --------------------------------------------------------------------
-
-        valid = await self._validate_broadcast(
+        # Validate before copying the subscriber list.
+        if not await self._validate_broadcast(
             channel,
             message,
-        )
-
-        if not valid:
+        ):
             return 0
 
-        # Re-read subscribers: they may have changed while validating.
-        sockets = [
-            ws
-            for ws in list(
-                self.channel_subscriptions.get(
-                    channel,
-                    (),
-                )
+        # Subscribers can change while DB validation runs.
+        sockets = list(
+            self.channel_subscriptions.get(
+                channel,
+                (),
             )
-            if id(ws) in self._send_locks
-        ]
+        )
 
         if not sockets:
             return 0
 
-        # --------------------------------------------------------------------
-        # Send concurrently. Each send is serialised per socket and bounded
-        # by BROADCAST_SEND_TIMEOUT_S, so one slow client cannot block the
-        # others.
-        # --------------------------------------------------------------------
-
         outcomes = await asyncio.gather(
             *(
-                self._send_json(ws, message)
-                for ws in sockets
-            ),
+                self._send_json(
+                    websocket,
+                    message,
+                )
+                for websocket in sockets
+            )
         )
+
+        stale: list[
+            WebSocket
+        ] = []
 
         sent = 0
 
-        stale: list[WebSocket] = []
-
-        for ws, success in zip(
+        for websocket, success in zip(
             sockets,
             outcomes,
         ):
-
             if success:
-
                 sent += 1
 
                 self._total_messages_broadcast += 1
 
             else:
+                stale.append(
+                    websocket
+                )
 
-                stale.append(ws)
-
-        # --------------------------------------------------------------------
-        # Failed sockets are CLOSED (not just unsubscribed) so the browser
-        # reconnects and re-subscribes.
-        # --------------------------------------------------------------------
-
+        # Failed sockets are explicitly closed so the browser reconnects.
         if stale:
-
             logger.warning(
-                f"[ws:broadcast] dropping {len(stale)} unresponsive "
+                "[ws:broadcast] dropping "
+                f"{len(stale)} unresponsive "
                 f"socket(s) on channel={channel}"
             )
 
             await asyncio.gather(
                 *(
                     self._drop_connection(
-                        ws,
+                        websocket,
                         reason="send failed",
                     )
-                    for ws in stale
+                    for websocket
+                    in stale
                 ),
                 return_exceptions=True,
             )
@@ -1563,6 +2249,9 @@ class ConnectionManager:
         websocket: WebSocket,
         tenant_id: str,
     ) -> None:
+        """
+        Public idempotent disconnect entry point.
+        """
 
         await self._cleanup_connection(
             websocket,
@@ -1570,7 +2259,7 @@ class ConnectionManager:
         )
 
     # ========================================================================
-    # CLEANUP (idempotent)
+    # CLEANUP
     # ========================================================================
 
     async def _cleanup_connection(
@@ -1578,8 +2267,13 @@ class ConnectionManager:
         websocket: WebSocket,
         tenant_id: str,
     ) -> None:
+        """
+        Fully remove a socket from every manager registry.
+        """
 
-        websocket_id = id(websocket)
+        websocket_id = id(
+            websocket
+        )
 
         was_registered = (
             websocket_id
@@ -1587,16 +2281,18 @@ class ConnectionManager:
         )
 
         if not tenant_id:
-            tenant_id = self.connection_metadata.get(
-                websocket_id,
-                {},
-            ).get(
-                "tenant_id",
-                "",
+            tenant_id = str(
+                self.connection_metadata.get(
+                    websocket_id,
+                    {},
+                ).get(
+                    "tenant_id",
+                    "",
+                )
             )
 
         # --------------------------------------------------------------------
-        # Cancel heartbeat.
+        # Cancel heartbeat
         # --------------------------------------------------------------------
 
         heartbeat_task = (
@@ -1606,13 +2302,16 @@ class ConnectionManager:
             )
         )
 
-        if heartbeat_task:
+        if heartbeat_task is not None:
 
             current_task = (
                 asyncio.current_task()
             )
 
-            if heartbeat_task is not current_task:
+            if (
+                heartbeat_task
+                is not current_task
+            ):
 
                 heartbeat_task.cancel()
 
@@ -1626,38 +2325,43 @@ class ConnectionManager:
                     pass
 
         # --------------------------------------------------------------------
-        # Remove tenant connection.
+        # Remove tenant connection
         # --------------------------------------------------------------------
 
-        if (
-            tenant_id
-            and tenant_id
-            in self.active_connections
-        ):
+        tenant_connections = (
+            self.active_connections.get(
+                tenant_id
+            )
+        )
+
+        if tenant_connections:
 
             try:
-
-                self.active_connections[
-                    tenant_id
-                ].remove(websocket)
+                tenant_connections.remove(
+                    websocket
+                )
 
             except ValueError:
                 pass
 
-            if not self.active_connections[
-                tenant_id
-            ]:
-                del self.active_connections[
-                    tenant_id
-                ]
+            if not tenant_connections:
+                self.active_connections.pop(
+                    tenant_id,
+                    None,
+                )
 
         # --------------------------------------------------------------------
-        # Remove channel subscriptions.
+        # Remove subscriptions
         # --------------------------------------------------------------------
 
-        empty_channels = []
+        empty_channels: list[
+            str
+        ] = []
 
-        for channel, subscribers in list(
+        for (
+            channel,
+            subscribers,
+        ) in list(
             self.channel_subscriptions.items()
         ):
 
@@ -1671,14 +2375,13 @@ class ConnectionManager:
                 )
 
         for channel in empty_channels:
-
             self.channel_subscriptions.pop(
                 channel,
                 None,
             )
 
         # --------------------------------------------------------------------
-        # Remove metadata and send lock.
+        # Remove metadata and send lock
         # --------------------------------------------------------------------
 
         self.connection_metadata.pop(
@@ -1693,7 +2396,8 @@ class ConnectionManager:
 
         if was_registered:
             logger.info(
-                f"[ws:disconnect] tenant={tenant_id}"
+                "[ws:disconnect] "
+                f"tenant={tenant_id}"
             )
 
     # ========================================================================
@@ -1706,20 +2410,12 @@ class ConnectionManager:
         tenant_id: str,
         user_id: str,
     ) -> None:
-
         """
-        Send an application-level ping every HEARTBEAT_INTERVAL_S.
+        Send application heartbeat pings.
 
-        IMPORTANT:
-        This coroutine NEVER calls receive_json(). The websocket endpoint in
-        routes/tracking.py is the only reader of incoming messages.
+        This method NEVER reads from the WebSocket.
 
-        The frontend uses these pings as a liveness signal: if no message of
-        any kind arrives for ~75 s it closes the socket and reconnects.
-
-        If a ping cannot be delivered, the socket is closed and removed, so a
-        half-open connection cannot linger as a zombie (and cannot keep
-        consuming one of the tenant's connection slots).
+        routes/tracking.py remains the only receive_json() loop.
         """
 
         try:
@@ -1730,7 +2426,7 @@ class ConnectionManager:
                     HEARTBEAT_INTERVAL_S
                 )
 
-                ping_ts = (
+                ping_timestamp = (
                     datetime.now(
                         timezone.utc
                     ).isoformat()
@@ -1740,15 +2436,17 @@ class ConnectionManager:
                     websocket,
                     {
                         "type": "ping",
-                        "timestamp": ping_ts,
+                        "timestamp": (
+                            ping_timestamp
+                        ),
                     },
                 )
 
                 if not delivered:
 
                     logger.warning(
-                        "[ws:heartbeat] "
-                        f"ping failed user={user_id}; closing socket"
+                        "[ws:heartbeat] ping failed "
+                        f"user={user_id}; closing socket"
                     )
 
                     await self._drop_connection(
@@ -1759,69 +2457,79 @@ class ConnectionManager:
                     return
 
         except asyncio.CancelledError:
-
             return
 
         except Exception as exc:
-
             logger.warning(
-                "[ws:heartbeat] "
-                f"heartbeat stopped user={user_id}: "
-                f"{exc}"
+                "[ws:heartbeat] stopped "
+                f"user={user_id} "
+                f"tenant={tenant_id}: {exc}"
             )
 
     # ========================================================================
     # METRICS
     # ========================================================================
 
-    def get_metrics(self) -> dict:
+    def get_metrics(
+        self,
+    ) -> dict:
+        """
+        Return connection/broadcast metrics.
+        """
 
         active_by_tenant = {
             tenant: len(sockets)
-            for tenant, sockets
+            for (
+                tenant,
+                sockets,
+            )
             in self.active_connections.items()
         }
 
         return {
-            "active_connections_by_tenant":
-                active_by_tenant,
-
-            "total_active_connections":
+            "active_connections_by_tenant": (
+                active_by_tenant
+            ),
+            "total_active_connections": (
                 sum(
                     active_by_tenant.values()
-                ),
-
-            "total_messages_broadcast":
-                self._total_messages_broadcast,
-
-            "total_dropped_connections":
-                self._total_dropped_connections,
-
-            "uptime_seconds":
-                round(
+                )
+            ),
+            "total_messages_broadcast": (
+                self._total_messages_broadcast
+            ),
+            "total_dropped_connections": (
+                self._total_dropped_connections
+            ),
+            "uptime_seconds": round(
+                (
                     time.monotonic()
-                    - self._started_at,
-                    1,
+                    - self._started_at
                 ),
-
-            "validation_cache_entries":
+                1,
+            ),
+            "validation_cache_entries": (
                 len(
                     self._valid_cache
-                ),
-
-            "subscriptions":
+                )
+            ),
+            "subscriptions": (
                 len(
                     self.channel_subscriptions
-                ),
-
-            "send_timeout_s":
-                BROADCAST_SEND_TIMEOUT_S,
-
-            "heartbeat_interval_s":
-                HEARTBEAT_INTERVAL_S,
-
-            "max_connections_per_tenant":
-                MAX_CONNECTIONS_PER_TENANT,
+                )
+            ),
+            "send_timeout_s": (
+                BROADCAST_SEND_TIMEOUT_S
+            ),
+            "heartbeat_interval_s": (
+                HEARTBEAT_INTERVAL_S
+            ),
+            "max_connections_per_tenant": (
+                MAX_CONNECTIONS_PER_TENANT
+            ),
+            "max_subscriptions_per_connection": (
+                MAX_SUBSCRIPTIONS_PER_CONNECTION
+            ),
         }
 
 

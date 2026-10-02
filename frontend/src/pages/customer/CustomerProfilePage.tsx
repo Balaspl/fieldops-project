@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { User, Save, AlertCircle, CheckCircle } from "lucide-react";
 import {
   getCustomerProfile,
@@ -31,6 +31,33 @@ const requiredStarStyle = {
   marginLeft: "3px",
 };
 
+const getProfileErrorMessage = (
+  error: any,
+  action: "load" | "save",
+) => {
+  const status = error?.response?.status;
+
+  if (status === 401) {
+    return "Your session has expired. Please sign in again.";
+  }
+
+  if (status === 403) {
+    return "You do not have permission to access your customer profile.";
+  }
+
+  if (status === 404 && action === "save") {
+    return "Your customer profile was not found. Please try creating it first.";
+  }
+
+  if (status === 409 && action === "save") {
+    return "Your customer profile already exists. Please reload the profile and try again.";
+  }
+
+  return action === "load"
+    ? "We couldn't load your customer profile. Please try again."
+    : "We couldn't save your customer profile. Please try again.";
+};
+
 export default function CustomerProfilePage() {
   const { user } = useAuthStore();
 
@@ -51,69 +78,127 @@ export default function CustomerProfilePage() {
     company_name: "",
   });
 
+  const applyProfileResponse = useCallback(
+    (profile: any) => {
+      if (profile?.profile_completed) {
+        setIsNew(false);
+
+        setForm({
+          full_name: profile.full_name || "",
+          mobile_number:
+            profile.mobile_number || "",
+          address: profile.address || "",
+          city: profile.city || "",
+          state: profile.state || "",
+          pincode: profile.pincode || "",
+          company_name:
+            profile.company_name || "",
+        });
+
+        return;
+      }
+
+      setIsNew(true);
+
+      setForm((current) => ({
+        ...current,
+        full_name:
+          current.full_name ||
+          (user
+            ? `${user.first_name} ${user.last_name}`.trim()
+            : ""),
+        mobile_number:
+          current.mobile_number ||
+          "",
+      }));
+    },
+    [user],
+  );
+
+  const loadProfile = useCallback(
+    async () => {
+      setLoading(true);
+      setError("");
+
+      try {
+        const response =
+          await getCustomerProfile();
+
+        applyProfileResponse(
+          response?.data,
+        );
+      } catch (requestError: any) {
+        setError(
+          getProfileErrorMessage(
+            requestError,
+            "load",
+          ),
+        );
+      } finally {
+        setLoading(false);
+      }
+    },
+    [applyProfileResponse],
+  );
+
   useEffect(() => {
-    getCustomerProfile()
-      .then((r) => {
-        const p = r.data;
-
-        if (p.profile_completed) {
-          setIsNew(false);
-
-          setForm({
-            full_name: p.full_name || "",
-            mobile_number: p.mobile_number || "",
-            address: p.address || "",
-            city: p.city || "",
-            state: p.state || "",
-            pincode: p.pincode || "",
-            company_name: p.company_name || "",
-          });
-        } else {
-          setForm((f) => ({
-            ...f,
-            full_name: user
-              ? `${user.first_name} ${user.last_name}`.trim()
-              : "",
-          }));
-        }
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [user]);
+    void loadProfile();
+  }, [loadProfile]);
 
   // -----------------------------------------
   // VALIDATION
   // -----------------------------------------
   const validateForm = () => {
-    const fullName = form.full_name.trim();
-    const mobileNumber = form.mobile_number.trim();
-    const email = (user?.email || "").trim();
-    const address = form.address.trim();
-    const city = form.city.trim();
-    const state = form.state.trim();
-    const pincode = form.pincode.trim();
+    const fullName =
+      form.full_name.trim();
+
+    const mobileNumber =
+      form.mobile_number.trim();
+
+    const email =
+      (user?.email || "").trim();
+
+    const address =
+      form.address.trim();
+
+    const city =
+      form.city.trim();
+
+    const state =
+      form.state.trim();
+
+    const pincode =
+      form.pincode.trim();
 
     // Full Name - required
     if (!fullName) {
-      setError("Full name is required");
+      setError(
+        "Full name is required",
+      );
       return false;
     }
 
     // Full Name - letters and spaces only
     if (!/^[A-Za-z ]+$/.test(fullName)) {
-      setError("Full name must contain letters and spaces only");
+      setError(
+        "Full name must contain letters and spaces only",
+      );
       return false;
     }
 
     // Mobile Number - required
     if (!mobileNumber) {
-      setError("Mobile number is required");
+      setError(
+        "Mobile number is required",
+      );
       return false;
     }
 
     // Mobile Number - exactly 10 digits
     if (!/^\d{10}$/.test(mobileNumber)) {
-      setError("Mobile number must contain exactly 10 digits");
+      setError(
+        "Mobile number must contain exactly 10 digits",
+      );
       return false;
     }
 
@@ -124,14 +209,22 @@ export default function CustomerProfilePage() {
     }
 
     // Email - only fieldops.com or gmail.com
-    if (!/^[^\s@]+@(fieldops\.com|gmail\.com)$/i.test(email)) {
-      setError("Email must be a valid @fieldops.com or @gmail.com address");
+    if (
+      !/^[^\s@]+@(fieldops\.com|gmail\.com)$/i.test(
+        email,
+      )
+    ) {
+      setError(
+        "Email must be a valid @fieldops.com or @gmail.com address",
+      );
       return false;
     }
 
     // Address - required
     if (!address) {
-      setError("Address is required");
+      setError(
+        "Address is required",
+      );
       return false;
     }
 
@@ -149,13 +242,17 @@ export default function CustomerProfilePage() {
 
     // Pincode - required
     if (!pincode) {
-      setError("Pincode is required");
+      setError(
+        "Pincode is required",
+      );
       return false;
     }
 
     // Pincode - exactly 6 digits
     if (!/^\d{6}$/.test(pincode)) {
-      setError("Pincode must contain exactly 6 digits");
+      setError(
+        "Pincode must contain exactly 6 digits",
+      );
       return false;
     }
 
@@ -166,6 +263,10 @@ export default function CustomerProfilePage() {
   // SAVE / CREATE / UPDATE
   // -----------------------------------------
   const handleSave = async () => {
+    if (saving) {
+      return;
+    }
+
     setError("");
     setSuccess("");
 
@@ -178,23 +279,41 @@ export default function CustomerProfilePage() {
 
     try {
       if (isNew) {
-        await createCustomerProfile(form);
-
-        // Once profile is created,
-        // user stays in Edit Profile mode
-        setIsNew(false);
-
-        setSuccess("Profile created successfully!");
+        await createCustomerProfile(
+          form,
+        );
       } else {
-        await updateCustomerProfile(form);
-
-        setSuccess("Profile updated successfully!");
+        await updateCustomerProfile(
+          form,
+        );
       }
-    } catch (e: any) {
+
+      /*
+       * Re-read the profile from the backend
+       * after every successful mutation.
+       *
+       * This keeps the UI authoritative and
+       * avoids assuming the submitted payload
+       * is the final persisted representation.
+       */
+      const response =
+        await getCustomerProfile();
+
+      applyProfileResponse(
+        response?.data,
+      );
+
+      setSuccess(
+        isNew
+          ? "Profile created successfully!"
+          : "Profile updated successfully!",
+      );
+    } catch (requestError: any) {
       setError(
-        e.response?.data?.detail ||
-          e.response?.data?.message ||
-          "Failed to save profile",
+        getProfileErrorMessage(
+          requestError,
+          "save",
+        ),
       );
     } finally {
       setSaving(false);
@@ -204,9 +323,12 @@ export default function CustomerProfilePage() {
   // -----------------------------------------
   // INPUT UPDATE
   // -----------------------------------------
-  const upd = (key: string, value: string) => {
-    setForm((f) => ({
-      ...f,
+  const upd = (
+    key: string,
+    value: string,
+  ) => {
+    setForm((current) => ({
+      ...current,
       [key]: value,
     }));
 
@@ -234,8 +356,10 @@ export default function CustomerProfilePage() {
           paddingTop: "80px",
           color: "#9CA3AF",
         }}
+        role="status"
+        aria-live="polite"
       >
-        Loading...
+        Loading customer profile...
       </div>
     );
   }
@@ -257,8 +381,10 @@ export default function CustomerProfilePage() {
           padding: "45px 20px 20px",
           maxWidth: "1100px",
           margin: "40px auto 0",
-          boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
-          border: "1px solid #E3ECE7",
+          boxShadow:
+            "0 2px 8px rgba(0,0,0,0.06)",
+          border:
+            "1px solid #E3ECE7",
         }}
       >
         {/* Header */}
@@ -273,9 +399,14 @@ export default function CustomerProfilePage() {
             gap: "10px",
           }}
         >
-          <User size={22} color="#7AAE8A" />
+          <User
+            size={22}
+            color="#7AAE8A"
+          />
 
-          {isNew ? "Complete Your Profile" : "Edit Profile"}
+          {isNew
+            ? "Complete Your Profile"
+            : "Edit Profile"}
         </h2>
 
         <p
@@ -293,9 +424,11 @@ export default function CustomerProfilePage() {
         {/* Error Message */}
         {error && (
           <div
+            role="alert"
             style={{
               background: "#FEF2F2",
-              border: "1px solid #FECACA",
+              border:
+                "1px solid #FECACA",
               borderRadius: "8px",
               padding: "10px 14px",
               color: "#991B1B",
@@ -306,17 +439,46 @@ export default function CustomerProfilePage() {
               gap: "8px",
             }}
           >
-            <AlertCircle size={16} />
-            {error}
+            <AlertCircle
+              size={16}
+            />
+            <span>{error}</span>
+
+            {!saving && (
+              <button
+                type="button"
+                onClick={() =>
+                  void loadProfile()
+                }
+                style={{
+                  marginLeft: "auto",
+                  border:
+                    "1px solid #FCA5A5",
+                  borderRadius: "7px",
+                  background:
+                    "#FFFFFF",
+                  color: "#991B1B",
+                  padding:
+                    "6px 10px",
+                  fontSize: "12px",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                Retry
+              </button>
+            )}
           </div>
         )}
 
         {/* Success Message */}
         {success && (
           <div
+            role="status"
             style={{
               background: "#F0FFF4",
-              border: "1px solid #C6F6D5",
+              border:
+                "1px solid #C6F6D5",
               borderRadius: "8px",
               padding: "10px 14px",
               color: "#22543D",
@@ -327,7 +489,9 @@ export default function CustomerProfilePage() {
               gap: "8px",
             }}
           >
-            <CheckCircle size={16} />
+            <CheckCircle
+              size={16}
+            />
             {success}
           </div>
         )}
@@ -336,147 +500,294 @@ export default function CustomerProfilePage() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "1fr 1fr",
+            gridTemplateColumns:
+              "1fr 1fr",
             gap: "16px",
           }}
         >
           {/* Full Name */}
-          <div style={{ gridColumn: "1 / -1" }}>
-            <label style={labelStyle}>
+          <div
+            style={{
+              gridColumn:
+                "1 / -1",
+            }}
+          >
+            <label
+              style={labelStyle}
+            >
               Full Name
-              <span style={requiredStarStyle}>*</span>
+              <span
+                style={
+                  requiredStarStyle
+                }
+              >
+                *
+              </span>
             </label>
 
             <input
               type="text"
               style={inputStyle}
-              value={form.full_name}
-              onChange={(e) => upd("full_name", e.target.value)}
+              value={
+                form.full_name
+              }
+              onChange={(e) =>
+                upd(
+                  "full_name",
+                  e.target.value,
+                )
+              }
               placeholder="Enter your full name"
+              disabled={saving}
             />
           </div>
 
           {/* Mobile Number */}
           <div>
-            <label style={labelStyle}>
+            <label
+              style={labelStyle}
+            >
               Mobile Number
-              <span style={requiredStarStyle}>*</span>
+              <span
+                style={
+                  requiredStarStyle
+                }
+              >
+                *
+              </span>
             </label>
 
             <input
               type="text"
               inputMode="numeric"
               style={inputStyle}
-              value={form.mobile_number}
+              value={
+                form.mobile_number
+              }
               onChange={(e) => {
-                const value = e.target.value.replace(/\D/g, "").slice(0, 10);
-                upd("mobile_number", value);
+                const value =
+                  e.target.value
+                    .replace(
+                      /\D/g,
+                      "",
+                    )
+                    .slice(
+                      0,
+                      10,
+                    );
+
+                upd(
+                  "mobile_number",
+                  value,
+                );
               }}
               maxLength={10}
               placeholder="10 digit mobile number"
+              disabled={saving}
             />
           </div>
 
           {/* Email */}
           <div>
-            <label style={labelStyle}>
+            <label
+              style={labelStyle}
+            >
               Email
-              <span style={requiredStarStyle}>*</span>
+              <span
+                style={
+                  requiredStarStyle
+                }
+              >
+                *
+              </span>
             </label>
 
             <input
               type="email"
               style={{
                 ...inputStyle,
-                background: "#F3F4F6",
+                background:
+                  "#F3F4F6",
               }}
-              value={user?.email || ""}
+              value={
+                user?.email || ""
+              }
               disabled
             />
           </div>
 
           {/* Address */}
-          <div style={{ gridColumn: "1 / -1" }}>
-            <label style={labelStyle}>
+          <div
+            style={{
+              gridColumn:
+                "1 / -1",
+            }}
+          >
+            <label
+              style={labelStyle}
+            >
               Address
-              <span style={requiredStarStyle}>*</span>
+              <span
+                style={
+                  requiredStarStyle
+                }
+              >
+                *
+              </span>
             </label>
 
             <textarea
               style={{
                 ...inputStyle,
                 minHeight: "80px",
-                resize: "vertical",
+                resize:
+                  "vertical",
               }}
-              value={form.address}
-              onChange={(e) => upd("address", e.target.value)}
+              value={
+                form.address
+              }
+              onChange={(e) =>
+                upd(
+                  "address",
+                  e.target.value,
+                )
+              }
               placeholder="Enter your address"
+              disabled={saving}
             />
           </div>
 
           {/* City */}
           <div>
-            <label style={labelStyle}>
+            <label
+              style={labelStyle}
+            >
               City
-              <span style={requiredStarStyle}>*</span>
+              <span
+                style={
+                  requiredStarStyle
+                }
+              >
+                *
+              </span>
             </label>
 
             <input
               type="text"
               style={inputStyle}
-              value={form.city}
-              onChange={(e) => upd("city", e.target.value)}
+              value={
+                form.city
+              }
+              onChange={(e) =>
+                upd(
+                  "city",
+                  e.target.value,
+                )
+              }
               placeholder="Enter your city"
+              disabled={saving}
             />
           </div>
 
           {/* State */}
           <div>
-            <label style={labelStyle}>
+            <label
+              style={labelStyle}
+            >
               State
-              <span style={requiredStarStyle}>*</span>
+              <span
+                style={
+                  requiredStarStyle
+                }
+              >
+                *
+              </span>
             </label>
 
             <input
               type="text"
               style={inputStyle}
-              value={form.state}
-              onChange={(e) => upd("state", e.target.value)}
+              value={
+                form.state
+              }
+              onChange={(e) =>
+                upd(
+                  "state",
+                  e.target.value,
+                )
+              }
               placeholder="Enter your state"
+              disabled={saving}
             />
           </div>
 
           {/* Pincode */}
           <div>
-            <label style={labelStyle}>
+            <label
+              style={labelStyle}
+            >
               Pincode
-              <span style={requiredStarStyle}>*</span>
+              <span
+                style={
+                  requiredStarStyle
+                }
+              >
+                *
+              </span>
             </label>
 
             <input
               type="text"
               inputMode="numeric"
               style={inputStyle}
-              value={form.pincode}
+              value={
+                form.pincode
+              }
               onChange={(e) => {
-                const value = e.target.value.replace(/\D/g, "").slice(0, 6);
-                upd("pincode", value);
+                const value =
+                  e.target.value
+                    .replace(
+                      /\D/g,
+                      "",
+                    )
+                    .slice(
+                      0,
+                      6,
+                    );
+
+                upd(
+                  "pincode",
+                  value,
+                );
               }}
               maxLength={6}
               placeholder="6 digit pincode"
+              disabled={saving}
             />
           </div>
 
           {/* Company - OPTIONAL */}
           <div>
-            <label style={labelStyle}>Company (optional)</label>
+            <label
+              style={labelStyle}
+            >
+              Company (optional)
+            </label>
 
             <input
               type="text"
               style={inputStyle}
-              value={form.company_name}
-              onChange={(e) => upd("company_name", e.target.value)}
+              value={
+                form.company_name
+              }
+              onChange={(e) =>
+                upd(
+                  "company_name",
+                  e.target.value,
+                )
+              }
               placeholder="Enter company name"
+              disabled={saving}
             />
           </div>
         </div>
@@ -486,30 +797,46 @@ export default function CustomerProfilePage() {
           style={{
             marginTop: "24px",
             display: "flex",
-            justifyContent: "flex-end",
+            justifyContent:
+              "flex-end",
           }}
         >
           <button
-            onClick={handleSave}
+            type="button"
+            onClick={() =>
+              void handleSave()
+            }
             disabled={saving}
             style={{
-              padding: "12px 28px",
+              padding:
+                "12px 28px",
               border: "none",
               borderRadius: "10px",
               fontSize: "14px",
               fontWeight: 700,
-              cursor: saving ? "not-allowed" : "pointer",
+              cursor: saving
+                ? "not-allowed"
+                : "pointer",
               background: "#7AAE8A",
               color: "#fff",
               display: "flex",
-              alignItems: "center",
+              alignItems:
+                "center",
               gap: "8px",
-              opacity: saving ? 0.7 : 1,
+              opacity: saving
+                ? 0.7
+                : 1,
             }}
           >
-            <Save size={16} />
+            <Save
+              size={16}
+            />
 
-            {saving ? "Saving..." : isNew ? "Complete Profile" : "Save Changes"}
+            {saving
+              ? "Saving..."
+              : isNew
+              ? "Complete Profile"
+              : "Save Changes"}
           </button>
         </div>
       </div>

@@ -408,9 +408,17 @@ export default function LoginPage({
 
   const [trustDevice, setTrustDevice] = useState(false);
 
+  /*
+   * Normal login is submitted directly to /auth/login rather than
+   * through the Zustand login action. Therefore the store-level
+   * isLoading flag is not updated for this request. Keep a local
+   * loading state for the login form so duplicate submissions are
+   * prevented and the UI accurately reflects the in-flight request.
+   */
+  const [loginLoading, setLoginLoading] = useState(false);
+
   const {
     authenticateWithTokens,
-    isLoading,
     error,
     clearError,
   } = useAuthStore();
@@ -446,10 +454,11 @@ export default function LoginPage({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!email.trim() || !password) {
+    if (loginLoading || !email.trim() || !password) {
       return;
     }
 
+    setLoginLoading(true);
     setLoginError("");
     setMfaError("");
     clearError();
@@ -591,6 +600,8 @@ export default function LoginPage({
           "Unable to sign in. Please try again."
         );
       }
+    } finally {
+      setLoginLoading(false);
     }
   };
 
@@ -1651,13 +1662,13 @@ export default function LoginPage({
               type="submit"
               style={{
                 ...styles.button,
-                ...(isLoading
+                ...(loginLoading
                   ? styles.buttonDisabled
                   : {}),
               }}
-              disabled={isLoading}
+              disabled={loginLoading}
             >
-              {isLoading ? (
+              {loginLoading ? (
                 <>
                   <div
                     style={{

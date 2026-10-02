@@ -18,6 +18,7 @@ import {
   PlusCircle,
   FileText,
   Navigation,
+  Headphones,
 } from "lucide-react";
 import useAuthStore from "./store/authStore";
 
@@ -121,8 +122,15 @@ const CustomerNotificationsPage = lazy(
 const CustomerServiceHistoryPage = lazy(
   () => import("./pages/customer/CustomerServiceHistoryPage"),
 );
+const CustomerInvoicePage = lazy(
+  () => import("./pages/customer/CustomerInvoicePage"),
+);
 const CustomerSettingsPage = lazy(
   () => import("./pages/customer/CustomerSettingsPage"),
+);
+
+const CustomerSupportPage = lazy(
+  () => import("./pages/customer/CustomerSupportPage"),
 );
 
 interface NotificationItem {
@@ -659,7 +667,7 @@ const localCss = `
 `;
 
 function AppInner() {
-  const { user, logout } = useAuthStore();
+  const { user, accessToken, logout } = useAuthStore();
   const { addToast } = useToast();
   useEffect(() => {
   const handleSSOCallback = async () => {
@@ -781,6 +789,12 @@ function AppInner() {
 
       case "cust_tracking":
         return "Loading Real-Time Job Tracking...";
+
+      case "cust_support":
+        return "Loading Customer Support...";
+
+      case "cust_invoices":
+        return "Loading Customer Invoices...";
 
       default:
         return "Loading page...";
@@ -2141,6 +2155,40 @@ function AppInner() {
               <button
                 className="nav-item-style"
                 style={getItemStyle(
+                  "cust_invoices",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "cust_invoices",
+                  )
+                }
+              >
+                <FileText
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
+                <span
+                  className="nav-text"
+                  style={
+                    isMobileLayout ||
+                    sidebarCollapsed
+                      ? {
+                          display:
+                            "none",
+                        }
+                      : {}
+                  }
+                >
+                  Invoices
+                </span>
+              </button>
+
+              <button
+                className="nav-item-style"
+                style={getItemStyle(
                   "cust_notifications",
                 )}
                 onClick={() =>
@@ -2203,6 +2251,40 @@ function AppInner() {
                   }
                 >
                   Service History
+                </span>
+              </button>
+
+              <button
+                className="nav-item-style"
+                style={getItemStyle(
+                  "cust_support",
+                )}
+                onClick={() =>
+                  handleTabChange(
+                    "cust_support",
+                  )
+                }
+              >
+                <Headphones
+                  size={18}
+                  style={{
+                    flexShrink: 0,
+                  }}
+                />
+
+                <span
+                  className="nav-text"
+                  style={
+                    isMobileLayout ||
+                    sidebarCollapsed
+                      ? {
+                          display:
+                            "none",
+                        }
+                      : {}
+                  }
+                >
+                  Support
                 </span>
               </button>
 
@@ -3021,7 +3103,7 @@ function AppInner() {
 
               {activeTab ===
                 "cust_tracking" && (
-                <CustomerJobTrackingPage />
+                <CustomerJobTrackingPage token={accessToken || ""} />
               )}
 
               {activeTab ===
@@ -3030,10 +3112,18 @@ function AppInner() {
               )}
 
               {activeTab ===
+                "cust_invoices" && (
+                <CustomerInvoicePage />
+              )}
+
+              {activeTab ===
                 "cust_history" && (
                 <CustomerServiceHistoryPage />
               )}
-
+              {activeTab ===
+                "cust_support" && (
+                <CustomerSupportPage />
+              )}
               {activeTab ===
                 "cust_settings" && (
                 <CustomerSettingsPage />

@@ -1,4 +1,3 @@
-
 /**
  * Authentication store (Zustand).
  *
@@ -123,6 +122,19 @@ const useAuthStore = create<AuthState>(
           user,
         } = response.data;
 
+        /*
+         * Mark this as a local JWT authentication flow.
+         *
+         * The authenticated user's role and tenant are still
+         * determined by the backend. We only persist the
+         * authentication mode so the frontend can restore the
+         * correct session type after a browser reload.
+         */
+        localStorage.setItem(
+          "auth_mode",
+          "local"
+        );
+
         // Store normal JWT session
         localStorage.setItem(
           "access_token",
@@ -185,6 +197,20 @@ const useAuthStore = create<AuthState>(
       refreshToken: string,
       user: AuthUser
     ) => {
+      /*
+       * This authentication flow uses local JWT tokens.
+       *
+       * Persist the mode so the frontend can restore
+       * the same authenticated session after a browser reload.
+       *
+       * The backend remains authoritative for the user's
+       * role and tenant scope.
+       */
+      localStorage.setItem(
+        "auth_mode",
+        "local"
+      );
+
       localStorage.setItem(
         "access_token",
         accessToken
@@ -268,7 +294,15 @@ const useAuthStore = create<AuthState>(
          *
          * We intentionally DO NOT store the
          * HttpOnly access token.
+         *
+         * Mark the session as SSO so it is not
+         * mistaken for a local JWT session.
          */
+        localStorage.setItem(
+          "auth_mode",
+          "sso"
+        );
+
         localStorage.setItem(
           "tenant_id",
           user.tenant_id
@@ -281,15 +315,18 @@ const useAuthStore = create<AuthState>(
 
         set({
           user,
+
           /*
            * The access token is intentionally null
            * for an HttpOnly-cookie SSO session.
            */
           accessToken: null,
+
           refreshToken:
             localStorage.getItem(
               "refresh_token"
             ),
+
           isAuthenticated: true,
           isLoading: false,
           error: null,
@@ -336,6 +373,15 @@ const useAuthStore = create<AuthState>(
           refresh_token,
           user,
         } = response.data;
+
+        /*
+         * Registration returns a normal JWT session,
+         * so persist it as local authentication.
+         */
+        localStorage.setItem(
+          "auth_mode",
+          "local"
+        );
 
         localStorage.setItem(
           "access_token",
@@ -417,6 +463,10 @@ const useAuthStore = create<AuthState>(
       );
 
       localStorage.removeItem(
+        "auth_mode"
+      );
+
+      localStorage.removeItem(
         "token"
       );
 
@@ -467,6 +517,15 @@ const useAuthStore = create<AuthState>(
           user,
         } = response.data;
 
+        /*
+         * A successful refresh means this is
+         * a local JWT authentication session.
+         */
+        localStorage.setItem(
+          "auth_mode",
+          "local"
+        );
+
         localStorage.setItem(
           "access_token",
           access_token
@@ -493,10 +552,13 @@ const useAuthStore = create<AuthState>(
 
         set({
           accessToken: access_token,
+
           refreshToken:
             newRefresh || refreshToken,
+
           user:
             user || get().user,
+
           isAuthenticated: true,
         });
 
@@ -537,7 +599,17 @@ const useAuthStore = create<AuthState>(
           const user =
             JSON.parse(
               userStr
-            );
+            ) as AuthUser;
+
+          /*
+           * Existing JWT sessions created before
+           * auth_mode was persisted are treated as
+           * local JWT sessions.
+           */
+          localStorage.setItem(
+            "auth_mode",
+            "local"
+          );
 
           set({
             user,
@@ -551,6 +623,22 @@ const useAuthStore = create<AuthState>(
            */
           localStorage.removeItem(
             "user"
+          );
+
+          localStorage.removeItem(
+            "access_token"
+          );
+
+          localStorage.removeItem(
+            "refresh_token"
+          );
+
+          localStorage.removeItem(
+            "tenant_id"
+          );
+
+          localStorage.removeItem(
+            "auth_mode"
           );
 
           set({
@@ -596,6 +684,17 @@ const useAuthStore = create<AuthState>(
         JSON.stringify(updatedUser)
       );
 
+      /*
+       * Keep tenant information synchronized
+       * if an updated user object contains it.
+       */
+      if (updatedUser.tenant_id) {
+        localStorage.setItem(
+          "tenant_id",
+          updatedUser.tenant_id
+        );
+      }
+
       set({
         user: updatedUser,
       });
@@ -604,4 +703,3 @@ const useAuthStore = create<AuthState>(
 );
 
 export default useAuthStore;
-

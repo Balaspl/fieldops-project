@@ -44,7 +44,11 @@ import msgpack
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi import Depends, HTTPException, status
 
-from ..auth.dependencies import AuthenticatedUser, get_current_user
+from ..auth.dependencies import (
+    AuthenticatedUser,
+    SSO_ACCESS_COOKIE,
+    get_current_user,
+)
 from ..logger import logger
 from ..services.tracking_manager import connection_manager
 from ..services.broadcast_scheduler import REDIS_GPS_CHANNEL
@@ -133,8 +137,17 @@ async def ws_tracking(
     parameter is only compared with it; a mismatch closes the connection.
     """
 
-    # Authenticate and accept
-    claims = await connection_manager.connect(websocket, token)
+    # Authenticate using the explicit WebSocket token when provided.
+    # For browser SSO, fall back to the HttpOnly access-token cookie.
+    ws_token = (
+        token
+        or websocket.cookies.get(SSO_ACCESS_COOKIE, "")
+    )
+
+    claims = await connection_manager.connect(
+        websocket,
+        ws_token,
+    )
 
     if claims is None:
         return  # connect() already closed with 1008

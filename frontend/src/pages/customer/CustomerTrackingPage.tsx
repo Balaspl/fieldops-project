@@ -26,11 +26,25 @@ type CustomerJob = {
   site_longitude?: number | string | null;
 
   created_at?: string | null;
+  completed_at?: string | null;
 
-  assigned_technician_id?: string | null;
+  assigned_technician_id?: number | null;
   assigned_technician_name?: string | null;
   assigned_technician_phone?: string | null;
   assigned_technician_photo?: string | null;
+  assigned_technician_skills?: string[] | null;
+  assigned_technician_experience?: string | null;
+  assigned_technician_certifications?: string[] | null;
+
+  estimated_arrival?: string | null;
+  eta_status?: string | null;
+  eta_source?: string | null;
+  eta_confidence?: string | null;
+  eta_duration_minutes?: number | null;
+  eta_distance_km?: number | null;
+  eta_traffic_delay_minutes?: number | null;
+  eta_message?: string | null;
+  eta_updated_at?: string | null;
 
   technician_latitude?: number | string | null;
   technician_longitude?: number | string | null;
@@ -78,11 +92,17 @@ const statusStyle: Record<string, StatusStyle> = {
     bg: "#E5E7EB",
     fg: "#374151",
   },
+
+  CANCELLED: {
+    bg: "#FEE2E2",
+    fg: "#991B1B",
+  },
 };
 
 const TERMINAL_STATUSES = new Set([
   "COMPLETED",
   "CLOSED",
+  "CANCELLED",
 ]);
 
 function normalizeJobStatus(status: unknown): string {
@@ -156,6 +176,44 @@ function hasValidCoordinates(
   );
 }
 
+function formatEtaTime(value: unknown): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const timestamp = new Date(String(value));
+  if (Number.isNaN(timestamp.getTime())) {
+    return null;
+  }
+
+  return timestamp.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function formatEtaDuration(value: unknown): string | null {
+  const minutes = toFiniteNumber(value);
+  if (minutes === null || minutes < 0) {
+    return null;
+  }
+
+  const rounded = Math.round(minutes);
+  if (rounded < 1) {
+    return "Arriving now";
+  }
+
+  if (rounded >= 60) {
+    const hours = Math.floor(rounded / 60);
+    const remainder = rounded % 60;
+    return remainder > 0
+      ? `${hours}h ${remainder}m`
+      : `${hours}h`;
+  }
+
+  return `${rounded} min`;
+}
+
 interface CustomerTrackingPageProps {
   token: string;
 }
@@ -166,6 +224,9 @@ export default function CustomerTrackingPage({
   const [jobs, setJobs] = useState<CustomerJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [hasActiveJobs, setHasActiveJobs] =
+    useState(false);
 
   const [liveJob, setLiveJob] =
     useState<CustomerJob | null>(null);
@@ -173,11 +234,12 @@ export default function CustomerTrackingPage({
   /**
    * Load customer jobs.
    *
-   * The polling is intentionally kept here because it also
-   * detects when the technician completes the job.
+   * Poll only while at least one non-terminal job exists.
+   * Historical terminal jobs do not need continuous refreshes.
    */
   useEffect(() => {
     let stopped = false;
+    let timer: number | undefined;
 
     const loadJobs = async () => {
       try {
@@ -193,15 +255,57 @@ export default function CustomerTrackingPage({
           ? response.data
           : [];
 
+        const activeJobsExist =
+          nextJobs.some(
+            (job) =>
+              !TERMINAL_STATUSES.has(
+                normalizeJobStatus(job.status)
+              )
+          );
+
         setJobs(nextJobs);
-      } catch (error) {
-        /*
-         * Keep the previous successful data on transient
-         * network/backend failures.
-         */
+        setHasActiveJobs(activeJobsExist);
+        setError(null);
+
+        if (
+          !stopped &&
+          activeJobsExist
+        ) {
+          timer = window.setTimeout(
+            loadJobs,
+            5000
+          );
+        }
+      } catch (requestError: any) {
+        if (stopped) {
+          return;
+        }
+
+        const status =
+          requestError?.response?.status;
+
+        if (status === 401) {
+          setError(
+            "Your session has expired. Please sign in again."
+          );
+        } else if (status === 403) {
+          setError(
+            "You do not have permission to view these jobs."
+          );
+        } else {
+          setError(
+            "We couldn't refresh your job tracking data."
+          );
+        }
+
         console.error(
           "Failed to load customer jobs:",
-          error
+          requestError
+        );
+
+        timer = window.setTimeout(
+          loadJobs,
+          5000
         );
       } finally {
         if (!stopped) {
@@ -213,14 +317,12 @@ export default function CustomerTrackingPage({
 
     void loadJobs();
 
-    const timer = window.setInterval(
-      loadJobs,
-      5000
-    );
-
     return () => {
       stopped = true;
-      window.clearInterval(timer);
+
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+      }
     };
   }, []);
 
@@ -301,6 +403,8 @@ export default function CustomerTrackingPage({
           alignItems: "center",
           justifyContent: "center",
         }}
+        role="status"
+        aria-live="polite"
       >
         <div
           style={{
@@ -395,6 +499,45 @@ export default function CustomerTrackingPage({
           )}
         </div>
       </div>
+
+      {error && (
+        <div
+          role="alert"
+          style={{
+            marginBottom: "14px",
+            padding: "12px 14px",
+            borderRadius: "10px",
+            border: "1px solid #FCD34D",
+            background: "#FFFBEB",
+            color: "#92400E",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "12px",
+            flexWrap: "wrap",
+            fontSize: "13px",
+          }}
+        >
+          <span>{error}</span>
+
+          <button
+            type="button"
+            onClick={() => setError(null)}
+            style={{
+              border: "1px solid #D97706",
+              borderRadius: "8px",
+              background: "#FFFFFF",
+              color: "#92400E",
+              padding: "7px 12px",
+              fontSize: "12px",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* NO JOBS */}
       {jobs.length === 0 ? (
@@ -572,26 +715,50 @@ export default function CustomerTrackingPage({
                   </div>
                 </div>
 
-                {/* CREATED DATE */}
+                {/* JOB DATES */}
                 <div
                   style={{
                     display: "flex",
-                    alignItems:
-                      "center",
+                    flexDirection: "column",
                     gap: "7px",
                     marginBottom: "16px",
                     fontSize: "12px",
                     color: "#64748B",
                   }}
                 >
-                  <Clock size={14} />
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "7px",
+                    }}
+                  >
+                    <Clock size={14} />
 
-                  Created:{" "}
-                  {job.created_at
-                    ? new Date(
-                        job.created_at
-                      ).toLocaleDateString()
-                    : "N/A"}
+                    Created:{" "}
+                    {job.created_at
+                      ? new Date(
+                          job.created_at
+                        ).toLocaleDateString()
+                      : "N/A"}
+                  </div>
+
+                  {job.completed_at && (
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "7px",
+                      }}
+                    >
+                      <Clock size={14} />
+
+                      Completed:{" "}
+                      {new Date(
+                        job.completed_at
+                      ).toLocaleDateString()}
+                    </div>
+                  )}
                 </div>
 
                 {/* TECHNICIAN */}
@@ -697,7 +864,9 @@ export default function CustomerTrackingPage({
                         </div>
 
                         {job.assigned_technician_phone && (
-                          <div
+                          <a
+                            href={`tel:${job.assigned_technician_phone}`}
+                            aria-label={`Call ${job.assigned_technician_name}`}
                             style={{
                               fontSize: "12px",
                               color: "#64748B",
@@ -708,6 +877,8 @@ export default function CustomerTrackingPage({
                               gap: "4px",
                               marginTop:
                                 "3px",
+                              textDecoration:
+                                "none",
                             }}
                           >
                             <Phone
@@ -717,7 +888,7 @@ export default function CustomerTrackingPage({
                             {
                               job.assigned_technician_phone
                             }
-                          </div>
+                          </a>
                         )}
                       </div>
                     </div>
@@ -734,9 +905,324 @@ export default function CustomerTrackingPage({
                       to assign a technician...
                     </div>
                   )}
+
+                  {job.assigned_technician_name && (
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns:
+                          "repeat(auto-fit, minmax(150px, 1fr))",
+                        gap: "10px",
+                        marginTop: "14px",
+                      }}
+                    >
+                      {job.assigned_technician_skills &&
+                        job.assigned_technician_skills.length > 0 && (
+                          <div
+                            style={{
+                              padding: "10px",
+                              borderRadius: "8px",
+                              background: "#FFFFFF",
+                              border: "1px solid #E2E8F0",
+                            }}
+                          >
+                            <div
+                              style={{
+                                fontSize: "11px",
+                                fontWeight: 700,
+                                color: "#64748B",
+                                textTransform: "uppercase",
+                                letterSpacing: "0.4px",
+                                marginBottom: "5px",
+                              }}
+                            >
+                              Skills
+                            </div>
+
+                            <div
+                              style={{
+                                fontSize: "12px",
+                                color: "#334155",
+                                lineHeight: 1.45,
+                              }}
+                            >
+                              {job.assigned_technician_skills.join(", ")}
+                            </div>
+                          </div>
+                        )}
+
+                      {job.assigned_technician_experience && (
+                        <div
+                          style={{
+                            padding: "10px",
+                            borderRadius: "8px",
+                            background: "#FFFFFF",
+                            border: "1px solid #E2E8F0",
+                          }}
+                        >
+                          <div
+                            style={{
+                              fontSize: "11px",
+                              fontWeight: 700,
+                              color: "#64748B",
+                              textTransform: "uppercase",
+                              letterSpacing: "0.4px",
+                              marginBottom: "5px",
+                            }}
+                          >
+                            Experience
+                          </div>
+
+                          <div
+                            style={{
+                              fontSize: "12px",
+                              color: "#334155",
+                              lineHeight: 1.45,
+                            }}
+                          >
+                            {job.assigned_technician_experience}
+                          </div>
+                        </div>
+                      )}
+
+                      {job.assigned_technician_certifications &&
+                        job.assigned_technician_certifications.length > 0 && (
+                          <div
+                            style={{
+                              padding: "10px",
+                              borderRadius: "8px",
+                              background: "#FFFFFF",
+                              border: "1px solid #E2E8F0",
+                            }}
+                          >
+                            <div
+                              style={{
+                                fontSize: "11px",
+                                fontWeight: 700,
+                                color: "#64748B",
+                                textTransform: "uppercase",
+                                letterSpacing: "0.4px",
+                                marginBottom: "5px",
+                              }}
+                            >
+                              Certifications
+                            </div>
+
+                            <div
+                              style={{
+                                fontSize: "12px",
+                                color: "#334155",
+                                lineHeight: 1.45,
+                              }}
+                            >
+                              {job.assigned_technician_certifications.join(", ")}
+                            </div>
+                          </div>
+                        )}
+                    </div>
+                  )}
+
+                  {job.assigned_technician_name &&
+                    !job.assigned_technician_phone &&
+                    !job.assigned_technician_skills?.length &&
+                    !job.assigned_technician_experience &&
+                    !job.assigned_technician_certifications?.length && (
+                      <div
+                        style={{
+                          marginTop: "10px",
+                          fontSize: "12px",
+                          color: "#94A3B8",
+                          fontStyle: "italic",
+                        }}
+                      >
+                        Additional technician details are currently unavailable.
+                      </div>
+                    )}
                 </div>
 
-                {/* COMPLETED */}
+                {/* ETA */}
+                {job.assigned_technician_id != null && (
+                  <div
+                    data-testid={`eta-card-${job.id}`}
+                    style={{
+                      marginTop: "12px",
+                      padding: "14px",
+                      borderRadius: "10px",
+                      background:
+                        job.eta_status === "calculated"
+                          ? "#F0FDF4"
+                          : job.eta_status === "estimated"
+                            ? "#FFFBEB"
+                            : "#F8FAFC",
+                      border:
+                        job.eta_status === "calculated"
+                          ? "1px solid #BBF7D0"
+                          : job.eta_status === "estimated"
+                            ? "1px solid #FDE68A"
+                            : "1px solid #E2E8F0",
+                    }}
+                  >
+                    {job.estimated_arrival ? (
+                      <>
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            gap: "10px",
+                            flexWrap: "wrap",
+                          }}
+                        >
+                          <div>
+                            <div
+                              style={{
+                                fontSize: "11px",
+                                fontWeight: 700,
+                                color: "#64748B",
+                                textTransform: "uppercase",
+                                letterSpacing: "0.5px",
+                              }}
+                            >
+                              Estimated Arrival
+                            </div>
+
+                            <div
+                              style={{
+                                fontSize: "20px",
+                                fontWeight: 800,
+                                color:
+                                  job.eta_status === "calculated"
+                                    ? "#166534"
+                                    : "#92400E",
+                                marginTop: "4px",
+                              }}
+                            >
+                              {formatEtaTime(job.estimated_arrival) ||
+                                "ETA unavailable"}
+                            </div>
+                          </div>
+
+                          <span
+                            style={{
+                              fontSize: "11px",
+                              fontWeight: 700,
+                              padding: "5px 9px",
+                              borderRadius: "999px",
+                              background:
+                                job.eta_status === "calculated"
+                                  ? "#DCFCE7"
+                                  : "#FEF3C7",
+                              color:
+                                job.eta_status === "calculated"
+                                  ? "#166534"
+                                  : "#92400E",
+                            }}
+                          >
+                            {job.eta_status === "calculated"
+                              ? "LIVE ETA"
+                              : job.eta_status === "estimated"
+                                ? "ESTIMATED"
+                                : "ETA"}
+                          </span>
+                        </div>
+
+                        {formatEtaDuration(job.eta_duration_minutes) && (
+                          <div
+                            style={{
+                              marginTop: "6px",
+                              fontSize: "12px",
+                              color: "#475569",
+                              fontWeight: 600,
+                            }}
+                          >
+                            Approximate travel time: {formatEtaDuration(job.eta_duration_minutes)}
+                          </div>
+                        )}
+
+                        {job.eta_distance_km != null && (
+                          <div
+                            style={{
+                              marginTop: "4px",
+                              fontSize: "12px",
+                              color: "#64748B",
+                            }}
+                          >
+                            Route distance: {Number(job.eta_distance_km).toFixed(1)} km
+                          </div>
+                        )}
+
+                        {job.eta_traffic_delay_minutes != null &&
+                          Number(job.eta_traffic_delay_minutes) > 0 && (
+                            <div
+                              style={{
+                                marginTop: "4px",
+                                fontSize: "12px",
+                                color: "#92400E",
+                              }}
+                            >
+                              Traffic delay: +{Math.round(Number(job.eta_traffic_delay_minutes))} min
+                            </div>
+                          )}
+
+                        {job.eta_message && (
+                          <div
+                            style={{
+                              marginTop: "7px",
+                              fontSize: "12px",
+                              color: "#64748B",
+                              lineHeight: 1.45,
+                            }}
+                          >
+                            {job.eta_message}
+                          </div>
+                        )}
+
+                        {job.eta_updated_at && (
+                          <div
+                            style={{
+                              marginTop: "7px",
+                              fontSize: "11px",
+                              color: "#94A3B8",
+                            }}
+                          >
+                            Updated {new Date(job.eta_updated_at).toLocaleTimeString([], {
+                              hour: "numeric",
+                              minute: "2-digit",
+                              second: "2-digit",
+                            })}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div>
+                        <div
+                          style={{
+                            fontSize: "12px",
+                            fontWeight: 700,
+                            color: "#64748B",
+                            textTransform: "uppercase",
+                            letterSpacing: "0.5px",
+                          }}
+                        >
+                          Estimated Arrival
+                        </div>
+
+                        <div
+                          style={{
+                            marginTop: "5px",
+                            fontSize: "13px",
+                            color: "#64748B",
+                          }}
+                        >
+                          {job.eta_message ||
+                            "ETA is currently unavailable. The latest route data could not be provided."}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* TERMINAL STATUS */}
                 {isTerminal && (
                   <div
                     style={{
@@ -745,17 +1231,26 @@ export default function CustomerTrackingPage({
                         "11px 14px",
                       borderRadius: "9px",
                       background:
-                        "#ECFDF5",
+                        rawStatus === "CANCELLED"
+                          ? "#FEF2F2"
+                          : "#ECFDF5",
                       border:
-                        "1px solid #A7F3D0",
-                      color: "#065F46",
+                        rawStatus === "CANCELLED"
+                          ? "1px solid #FECACA"
+                          : "1px solid #A7F3D0",
+                      color:
+                        rawStatus === "CANCELLED"
+                          ? "#991B1B"
+                          : "#065F46",
                       fontSize: "13px",
                       fontWeight: 700,
                       textAlign:
                         "center",
                     }}
                   >
-                    ✓ Service Completed
+                    {rawStatus === "CANCELLED"
+                      ? "✕ Service Cancelled"
+                      : "✓ Service Completed"}
                   </div>
                 )}
 

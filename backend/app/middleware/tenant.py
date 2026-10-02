@@ -76,9 +76,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     DEFAULT_LIMIT = (100, 60)
 
     async def dispatch(self, request: Request, call_next):
-        # Skip rate limiting for health checks and static files
+        # Skip rate limiting for health checks, static files, and GPS.
+        # GPS has its own tenant/technician/job-scoped throttling.
         path = request.url.path
-        if path in ("/", "/docs", "/openapi.json", "/redoc"):
+        if (
+            path in ("/", "/docs", "/openapi.json", "/redoc")
+            or path.startswith("/api/v1/gps")
+        ):
             return await call_next(request)
 
         # Get client identifier
