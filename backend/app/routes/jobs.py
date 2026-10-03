@@ -3119,6 +3119,7 @@ def transition_job_endpoint(
 def bulk_cancel_jobs(
     payload: BulkJobCancellationRequest,
     request: Request,
+    background_tasks: BackgroundTasks = None,
     current_user: AuthenticatedUser = Depends(
         require_permission(Permission.JOBS_CANCEL)
     ),
@@ -3297,6 +3298,101 @@ def bulk_cancel_jobs(
 
         # One transaction for the complete bulk operation.
         db.commit()
+
+        # Publish job-cancelled events only after the authoritative
+        # cancellation transaction succeeds.
+        kafka_producer = (
+            getattr(request.app.state, "kafka_producer", None)
+            if request is not None
+            else None
+        )
+
+        if kafka_producer is not None and background_tasks is not None:
+            try:
+                effective_tenant_id = str(current_user.tenant_id)
+                correlation_id = (
+                    request.headers.get("X-Correlation-ID")
+                    if request is not None
+                    else None
+                )
+
+                for job_id in job_ids:
+                    cancelled_job = jobs_by_id[job_id]
+                    cancelled_at = cancelled_job.cancelled_at
+
+                    event_id = (
+                        f"job-cancelled:"
+                        f"{effective_tenant_id}:"
+                        f"{cancelled_job.id}:"
+                        f"{cancelled_at.isoformat()}"
+                    )
+
+                    event_payload = {
+                        "event_type": "job-cancelled",
+                        "event_id": event_id,
+                        "job_id": str(cancelled_job.id),
+                        "tenant_id": effective_tenant_id,
+                        "cancelled_by": str(cancelled_job.cancelled_by),
+                        "cancellation_reason": cancelled_job.cancellation_reason,
+                        "cancelled_at": cancelled_at.isoformat(),
+                        "schema_version": 1,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+
+                    if correlation_id:
+                        event_payload["correlation_id"] = correlation_id
+
+                    event = MessageEnvelope(
+                        sender=AgentAddress(
+                            agent_type="dispatch",
+                            agent_id="job-cancelled-producer",
+                            tenant_id=effective_tenant_id,
+                        ),
+                        message_type=MessageType.EVENT,
+                        payload=event_payload,
+                        topic="fieldops.events",
+                    )
+
+                    async def publish_job_cancelled_event(
+                        event=event,
+                        job_id=cancelled_job.id,
+                        event_id=event_id,
+                    ):
+                        try:
+                            published = await kafka_producer.publish(event)
+
+                            if published:
+                                logger.info(
+                                    "Published job-cancelled event: "
+                                    "job_id=%s event_id=%s",
+                                    job_id,
+                                    event_id,
+                                )
+                            else:
+                                logger.error(
+                                    "Failed to publish job-cancelled event: "
+                                    "job_id=%s event_id=%s",
+                                    job_id,
+                                    event_id,
+                                )
+                        except Exception:
+                            logger.exception(
+                                "Unexpected error while publishing "
+                                "job-cancelled event: job_id=%s event_id=%s",
+                                job_id,
+                                event_id,
+                            )
+
+                    background_tasks.add_task(
+                        publish_job_cancelled_event
+                    )
+
+            except Exception:
+                logger.exception(
+                    "Failed to prepare job-cancelled events "
+                    "for tenant %s",
+                    str(current_user.tenant_id),
+                )
 
     except InvalidTransitionError as exc:
         db.rollback()

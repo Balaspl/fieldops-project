@@ -66,7 +66,7 @@ Topic partition strategy:
 | `fieldops.payment.events` | `3` | `tenant_id` | Same tenant |
 | `fieldops.audit.events` | `6` | `tenant_id` | Same tenant |
 
-The `fieldops.events` stream carries generic domain events such as `job-started` and `job-completed`. The producer uses the message identity as the partition key for this generic stream.
+The `fieldops.events` stream carries generic domain events such as `job-started`, `job-completed`, and `job-cancelled`. The producer uses the message identity as the partition key for this generic stream.
 
 The local Kafka broker uses a replication factor of `1` because it is a single-broker development setup.
 
