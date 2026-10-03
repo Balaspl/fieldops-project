@@ -8612,6 +8612,334 @@ def test_bulk_cancel_success():
     finally:
         db.close()
 
+def test_bulk_cancel_publishes_job_cancelled_kafka_event():
+    from app.routes.jobs import (
+        bulk_cancel_jobs,
+        BulkJobCancellationRequest,
+    )
+
+    db = TestingSessionLocal()
+
+    try:
+        job = db.query(Job).filter(Job.id == 101).first()
+        assert job is not None
+
+        job.status = "CREATED"
+        db.commit()
+
+        user = AuthenticatedUser(
+            user_id="test-dispatcher",
+            tenant_id="tenant-1",
+            role=UserRole.DISPATCHER,
+            jti="test-jti",
+            session_id="test-session",
+        )
+
+        payload = BulkJobCancellationRequest(
+            job_ids=[101],
+            reason="Customer requested cancellation",
+        )
+
+        kafka_producer = SimpleNamespace(
+            publish=AsyncMock(return_value=True)
+        )
+
+        request = make_test_request()
+        request.scope["app"].state.kafka_producer = kafka_producer
+        request.scope["headers"] = [
+            (b"x-correlation-id", b"cancel-correlation-123")
+        ]
+
+        class BackgroundTasksCapture:
+            def __init__(self):
+                self.tasks = []
+
+            def add_task(self, func, *args, **kwargs):
+                self.tasks.append((func, args, kwargs))
+
+        background_tasks = BackgroundTasksCapture()
+
+        result = bulk_cancel_jobs(
+            payload=payload,
+            request=request,
+            background_tasks=background_tasks,
+            current_user=user,
+            db=db,
+        )
+
+        assert result.total_cancelled == 1
+        assert len(background_tasks.tasks) == 1
+
+        task_func, task_args, task_kwargs = background_tasks.tasks[0]
+
+        awaitable = task_func(*task_args, **task_kwargs)
+        asyncio.run(asyncio.wait_for(awaitable, timeout=5))
+
+        kafka_producer.publish.assert_awaited_once()
+
+        event = kafka_producer.publish.await_args.args[0]
+
+        assert event.topic == "fieldops.events"
+        assert event.payload["event_type"] == "job-cancelled"
+        assert event.payload["job_id"] == "101"
+        assert event.payload["tenant_id"] == "tenant-1"
+        assert event.payload["cancelled_by"] == "test-dispatcher"
+        assert event.payload["cancellation_reason"] == (
+            "Customer requested cancellation"
+        )
+        assert event.payload["schema_version"] == 1
+        assert event.payload["correlation_id"] == (
+            "cancel-correlation-123"
+        )
+        assert event.payload["cancelled_at"]
+        assert event.payload["timestamp"]
+        assert event.payload["event_id"].startswith(
+            "job-cancelled:tenant-1:101:"
+        )
+
+    finally:
+        db.close()
+
+def test_bulk_cancel_kafka_publish_false_does_not_rollback():
+    from app.routes.jobs import (
+        bulk_cancel_jobs,
+        BulkJobCancellationRequest,
+    )
+
+    db = TestingSessionLocal()
+
+    try:
+        job = db.query(Job).filter(Job.id == 101).first()
+        assert job is not None
+
+        job.status = "CREATED"
+        db.commit()
+
+        user = AuthenticatedUser(
+            user_id="test-dispatcher",
+            tenant_id="tenant-1",
+            role=UserRole.DISPATCHER,
+            jti="test-jti",
+            session_id="test-session",
+        )
+
+        payload = BulkJobCancellationRequest(
+            job_ids=[101],
+            reason="Customer requested cancellation",
+        )
+
+        kafka_producer = SimpleNamespace(
+            publish=AsyncMock(return_value=False)
+        )
+
+        request = make_test_request()
+        request.scope["app"].state.kafka_producer = kafka_producer
+
+        class BackgroundTasksCapture:
+            def __init__(self):
+                self.tasks = []
+
+            def add_task(self, func, *args, **kwargs):
+                self.tasks.append((func, args, kwargs))
+
+        background_tasks = BackgroundTasksCapture()
+
+        result = bulk_cancel_jobs(
+            payload=payload,
+            request=request,
+            background_tasks=background_tasks,
+            current_user=user,
+            db=db,
+        )
+
+        assert result.total_cancelled == 1
+        assert len(background_tasks.tasks) == 1
+
+        task_func, task_args, task_kwargs = background_tasks.tasks[0]
+
+        awaitable = task_func(*task_args, **task_kwargs)
+        asyncio.run(asyncio.wait_for(awaitable, timeout=5))
+
+        kafka_producer.publish.assert_awaited_once()
+
+        db.expire_all()
+        cancelled_job = (
+            db.query(Job)
+            .filter(Job.id == 101)
+            .first()
+        )
+
+        assert cancelled_job is not None
+        assert cancelled_job.status == "CANCELLED"
+        assert cancelled_job.cancellation_reason == (
+            "Customer requested cancellation"
+        )
+
+    finally:
+        db.close()
+
+def test_bulk_cancel_kafka_publish_exception_does_not_rollback():
+    from app.routes.jobs import (
+        bulk_cancel_jobs,
+        BulkJobCancellationRequest,
+    )
+
+    db = TestingSessionLocal()
+
+    try:
+        job = db.query(Job).filter(Job.id == 101).first()
+        assert job is not None
+
+        job.status = "CREATED"
+        db.commit()
+
+        user = AuthenticatedUser(
+            user_id="test-dispatcher",
+            tenant_id="tenant-1",
+            role=UserRole.DISPATCHER,
+            jti="test-jti",
+            session_id="test-session",
+        )
+
+        payload = BulkJobCancellationRequest(
+            job_ids=[101],
+            reason="Customer requested cancellation",
+        )
+
+        kafka_producer = SimpleNamespace(
+            publish=AsyncMock(
+                side_effect=RuntimeError("Kafka unavailable")
+            )
+        )
+
+        request = make_test_request()
+        request.scope["app"].state.kafka_producer = kafka_producer
+
+        class BackgroundTasksCapture:
+            def __init__(self):
+                self.tasks = []
+
+            def add_task(self, func, *args, **kwargs):
+                self.tasks.append((func, args, kwargs))
+
+        background_tasks = BackgroundTasksCapture()
+
+        result = bulk_cancel_jobs(
+            payload=payload,
+            request=request,
+            background_tasks=background_tasks,
+            current_user=user,
+            db=db,
+        )
+
+        assert result.total_cancelled == 1
+        assert len(background_tasks.tasks) == 1
+
+        task_func, task_args, task_kwargs = background_tasks.tasks[0]
+
+        awaitable = task_func(*task_args, **task_kwargs)
+
+        # The publisher catches the Kafka exception internally.
+        asyncio.run(asyncio.wait_for(awaitable, timeout=5))
+
+        kafka_producer.publish.assert_awaited_once()
+
+        db.expire_all()
+
+        cancelled_job = (
+            db.query(Job)
+            .filter(Job.id == 101)
+            .first()
+        )
+
+        assert cancelled_job is not None
+        assert cancelled_job.status == "CANCELLED"
+        assert cancelled_job.cancellation_reason == (
+            "Customer requested cancellation"
+        )
+
+    finally:
+        db.close()
+
+def test_bulk_cancel_event_preparation_failure_does_not_rollback(monkeypatch):
+    from app.routes.jobs import (
+        bulk_cancel_jobs,
+        BulkJobCancellationRequest,
+        MessageEnvelope,
+    )
+
+    db = TestingSessionLocal()
+
+    try:
+        job = db.query(Job).filter(Job.id == 101).first()
+        assert job is not None
+
+        job.status = "CREATED"
+        db.commit()
+
+        user = AuthenticatedUser(
+            user_id="test-dispatcher",
+            tenant_id="tenant-1",
+            role=UserRole.DISPATCHER,
+            jti="test-jti",
+            session_id="test-session",
+        )
+
+        payload = BulkJobCancellationRequest(
+            job_ids=[101],
+            reason="Customer requested cancellation",
+        )
+
+        request = make_test_request()
+        request.scope["app"].state.kafka_producer = SimpleNamespace(
+            publish=AsyncMock(return_value=True)
+        )
+
+        class BackgroundTasksCapture:
+            def __init__(self):
+                self.tasks = []
+
+            def add_task(self, func, *args, **kwargs):
+                self.tasks.append((func, args, kwargs))
+
+        background_tasks = BackgroundTasksCapture()
+
+        def failing_message_envelope(*args, **kwargs):
+            raise RuntimeError("Event preparation failed")
+
+        monkeypatch.setattr(
+            "app.routes.jobs.MessageEnvelope",
+            failing_message_envelope,
+        )
+
+        result = bulk_cancel_jobs(
+            payload=payload,
+            request=request,
+            background_tasks=background_tasks,
+            current_user=user,
+            db=db,
+        )
+
+        assert result.total_cancelled == 1
+        assert background_tasks.tasks == []
+
+        db.expire_all()
+        cancelled_job = (
+            db.query(Job)
+            .filter(Job.id == 101)
+            .first()
+        )
+
+        assert cancelled_job is not None
+        assert cancelled_job.status == "CANCELLED"
+        assert cancelled_job.cancellation_reason == (
+            "Customer requested cancellation"
+        )
+
+
+    finally:
+        db.close()
+
 
 def test_bulk_cancel_invalid_transition():
     from app.routes.jobs import (

@@ -350,3 +350,116 @@ async def test_job_completed_event_e2e():
 
         await consumer.stop()
         await producer.stop()
+@pytest.mark.asyncio
+async def test_job_cancelled_event_e2e():
+    topic = "fieldops.events"
+    group_id = os.getenv("KAFKA_CONSUMER_GROUP", "fieldops")
+
+    producer = KafkaProducer()
+
+    consumer = KafkaConsumerManager(
+        topic=topic,
+        group_id=group_id,
+        bootstrap_servers="localhost:29092",
+    )
+
+    received = asyncio.Event()
+    messages = []
+
+    run_id = uuid.uuid4().hex
+    job_id = f"E2E-CANCELLED-JOB-{run_id}"
+    cancelled_at = "2026-10-01T11:00:00+00:00"
+    event_id = (
+        f"job-cancelled:tenant-e2e:{job_id}:{cancelled_at}"
+    )
+
+    async def handler(message):
+        payload = message.get("payload", {})
+
+        if (
+            payload.get("event_type") == "job-cancelled"
+            and payload.get("event_id") == event_id
+        ):
+            messages.append(message)
+            received.set()
+
+    consumer_task = None
+
+    try:
+        await producer.start()
+
+        try:
+            await consumer.start()
+        except TopicAuthorizationFailedError:
+            pytest.skip(
+                "Kafka broker does not grant the generic consumer identity "
+                "read access to fieldops.events."
+            )
+
+        consumer_task = asyncio.create_task(
+            consumer.consume(handler)
+        )
+
+        message = MessageEnvelope(
+            sender=AgentAddress(
+                agent_type="dispatch",
+                agent_id="job-cancelled-producer",
+                tenant_id="tenant-e2e",
+            ),
+            recipient=None,
+            message_type=MessageType.EVENT,
+            payload={
+                "event_type": "job-cancelled",
+                "event_id": event_id,
+                "job_id": job_id,
+                "tenant_id": "tenant-e2e",
+                "cancelled_by": "E2E-DISPATCHER-001",
+                "cancellation_reason": "E2E cancellation test",
+                "cancelled_at": cancelled_at,
+                "schema_version": 1,
+                "timestamp": "2026-10-01T11:00:01+00:00",
+                "correlation_id": "e2e-cancellation-001",
+            },
+            topic=topic,
+        )
+
+        result = await producer.publish(message)
+
+        assert result is True
+
+        await asyncio.wait_for(
+            received.wait(),
+            timeout=10,
+        )
+
+        assert len(messages) == 1
+
+        received_payload = messages[0]["payload"]
+
+        assert received_payload["event_type"] == "job-cancelled"
+        assert received_payload["event_id"] == event_id
+        assert received_payload["job_id"] == job_id
+        assert received_payload["tenant_id"] == "tenant-e2e"
+        assert received_payload["cancelled_by"] == "E2E-DISPATCHER-001"
+        assert (
+            received_payload["cancellation_reason"]
+            == "E2E cancellation test"
+        )
+        assert received_payload["cancelled_at"] == cancelled_at
+        assert received_payload["schema_version"] == 1
+        assert (
+            received_payload["correlation_id"]
+            == "e2e-cancellation-001"
+        )
+
+    finally:
+        if consumer_task is not None:
+            consumer_task.cancel()
+
+            try:
+                await consumer_task
+            except asyncio.CancelledError:
+                pass
+
+        await consumer.stop()
+        await producer.stop()
