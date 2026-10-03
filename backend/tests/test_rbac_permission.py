@@ -430,3 +430,86 @@ def test_all_permissions_are_known():
 
     for permission in assigned_permissions:
         assert isinstance(permission, Permission)
+
+
+
+# ============================================================
+# 9. Manager role is not part of the supported role taxonomy
+# ============================================================
+
+@pytest.mark.parametrize(
+    "manager_role",
+    [
+        "manager",
+        "Manager",
+        "MANAGER",
+        "org_manager",
+        "organization_manager",
+    ],
+)
+def test_unsupported_manager_role_denied(manager_role):
+    """
+    MANAGER is not an authoritative FieldOps role.
+
+    An arbitrary manager-labelled role must never receive
+    privileged permissions.
+    """
+    assert has_permission(
+        manager_role,
+        Permission.ORG_MANAGE,
+    ) is False
+
+    assert has_permission(
+        manager_role,
+        Permission.ORG_CREATE,
+    ) is False
+
+
+# ============================================================
+# 10. SUPER_ADMIN cannot create organizations
+# ============================================================
+
+def test_super_admin_cannot_create_organization():
+    """
+    SUPER_ADMIN manages an existing organization but cannot
+    create a new organization.
+
+    Organization creation is performed through the onboarding
+    flow, which creates the initial SUPER_ADMIN.
+    """
+    assert has_permission(
+        UserRole.SUPER_ADMIN,
+        Permission.ORG_CREATE,
+    ) is False
+
+
+# ============================================================
+# 11. SUPER_ADMIN can manage the organization
+# ============================================================
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        "manager",
+        "admin",
+        "administrator",
+        "superuser",
+        "organization_manager",
+        "unknown",
+    ],
+)
+
+def test_unsupported_roles_cannot_manage_organizations(role):
+    """
+    Privileged organization access must come from the
+    authoritative RBAC role/permission mapping only.
+    """
+    assert has_permission(
+        role,
+        Permission.ORG_MANAGE,
+    ) is False
+
+    assert has_permission(
+        role,
+        Permission.ORG_CREATE,
+    ) is False

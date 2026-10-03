@@ -243,6 +243,7 @@ ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
     #   - another SUPER_ADMIN
     #
     UserRole.SUPER_ADMIN: {
+
         # Users
         Permission.USERS_CREATE,
         Permission.USERS_MANAGE,
@@ -510,3 +511,4 @@ def can_manage_role(
         return target_role == UserRole.TECHNICIAN
 
     return False
+

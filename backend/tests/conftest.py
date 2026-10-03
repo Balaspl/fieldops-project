@@ -1,15 +1,17 @@
 import pytest
 import time
 import os
+os.environ["RATE_LIMIT_ENABLED"] = "false"
 import app.database
 import app.redis_client
 from app.services.ai.FieldOpsAI.services.communication_service import CommunicationService
-
+from datetime import date
 from app.services.ai.FieldOpsAI.schemas.communication import (
     CommunicationContext,
     CommunicationDecision,
     CommunicationRecipient,
 )
+from app.models_legacy import Job
 os.environ.setdefault(
     "AI_GUARDRAIL_AUDIT_HMAC_KEY",
     "test-only-fieldops-audit-key",
@@ -548,3 +550,190 @@ def override_auth():
         get_current_user_or_tenant,
         None,
     )
+
+from fastapi.testclient import TestClient
+
+
+@pytest.fixture
+def client():
+    """
+    FastAPI test client for authorization/integration tests.
+
+    Uses the same application instance configured by conftest.py.
+    """
+    return TestClient(app.main.app)
+
+@pytest.fixture
+def authenticated_user_without_edit_permission():
+    """
+    Authenticated user who intentionally does not have JOBS_EDIT.
+
+    CUSTOMER is used because it should not have dispatcher-level job
+    editing privileges.
+    """
+    return make_test_user(UserRole.CUSTOMER)
+
+
+@pytest.fixture
+def authenticated_user_without_delete_permission():
+    """
+    Authenticated user who does not have job delete permission.
+    """
+    return make_test_user(UserRole.CUSTOMER)
+
+
+@pytest.fixture
+def authenticated_customer():
+    """
+    Authenticated customer used for customer ownership tests.
+    """
+    return make_test_user(UserRole.CUSTOMER)
+
+
+@pytest.fixture
+def authenticated_technician():
+    """
+    Authenticated technician used for technician ownership tests.
+
+    This is kept as a compatibility alias for authorization tests
+    that use the authenticated_technician fixture name.
+    """
+    return make_test_user(UserRole.TECHNICIAN)
+
+
+@pytest.fixture
+def customer_job(db_session, authenticated_customer):
+    """
+    Job belonging to the authenticated customer.
+    """
+    user = authenticated_customer
+
+    job = Job(
+        tenant_id=user.tenant_id,
+        customer_tenant_id=user.tenant_id,
+        customer_name="Authenticated Customer",
+        location="Chennai",
+        issue_description="Customer own job",
+        priority="MEDIUM",
+        service_type="HVAC",
+        contact_number="9876543210",
+        preferred_service_date=date(2030, 1, 1),
+        status="CREATED",
+        required_skill="HVAC",
+    )
+
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    return job
+
+
+@pytest.fixture
+def another_customer_job(db_session):
+    """
+    Job belonging to another customer/tenant.
+    """
+    job = Job(
+        tenant_id="another-customer-tenant",
+        customer_tenant_id="another-customer-tenant",
+        customer_name="Another Customer",
+        location="Private Location",
+        issue_description="Private customer issue",
+        priority="HIGH",
+        service_type="HVAC",
+        contact_number="9000000000",
+        preferred_service_date=date(2030, 1, 1),
+        status="CREATED",
+        required_skill="HVAC",
+    )
+
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    return job
+
+
+@pytest.fixture
+def unassigned_job(db_session, authenticated_technician):
+    """
+    Job in the technician's tenant but not assigned to the technician.
+    """
+    user = authenticated_technician
+
+    job = Job(
+        tenant_id=user.tenant_id,
+        customer_tenant_id=user.tenant_id,
+        customer_name="Unassigned Customer",
+        location="Chennai",
+        issue_description="Unassigned technician test",
+        priority="MEDIUM",
+        service_type="HVAC",
+        contact_number="9876543210",
+        preferred_service_date=date(2030, 1, 1),
+        status="CREATED",
+        required_skill="HVAC",
+        assigned_technician_id=None,
+    )
+
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    return job
+
+
+@pytest.fixture
+def another_technician_job(db_session):
+    """
+    Job assigned to another technician.
+    """
+    # Use a technician ID that is different from the authenticated
+    # technician used by the test.
+    job = Job(
+        tenant_id="tenant-1",
+        customer_tenant_id="tenant-1",
+        customer_name="Another Technician Customer",
+        location="Chennai",
+        issue_description="Another technician private job",
+        priority="HIGH",
+        service_type="HVAC",
+        contact_number="8888888888",
+        preferred_service_date=date(2030, 1, 1),
+        status="ASSIGNED",
+        required_skill="HVAC",
+        assigned_technician_id=999999,
+    )
+
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    return job
+
+
+@pytest.fixture
+def protected_job(db_session):
+    """
+    Job used by unauthorized mutation/delete tests.
+    """
+    job = Job(
+        tenant_id="tenant-1",
+        customer_tenant_id="tenant-1",
+        customer_name="Protected Customer",
+        location="Chennai",
+        issue_description="Protected job",
+        priority="HIGH",
+        service_type="HVAC",
+        contact_number="9876543210",
+        preferred_service_date=date(2030, 1, 1),
+        status="CREATED",
+        required_skill="HVAC",
+    )
+
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    return job
