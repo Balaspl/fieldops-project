@@ -61,6 +61,8 @@ from .services.kafka.monitoring import kafka_monitoring
 from app.sentiment.dashboard import router as sentiment_dashboard_router
 from .routes import oauth2, sso
 
+from .middleware.rate_limit import status_router
+
 scheduler = None
 redis_async_client = None
 redis_pubsub_client = None
@@ -323,35 +325,7 @@ app = FastAPI(
 
 
 # CORS — handles configured origins or development wildcard
-cors_origins_raw = os.getenv(
-    "CORS_ALLOWED_ORIGINS",
-    "http://localhost:5173,http://localhost:3000,*",
-).split(",")
 
-cors_origins = [
-    origin.strip()
-    for origin in cors_origins_raw
-    if origin.strip()
-]
-
-if "*" in cors_origins:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=["X-Correlation-ID"],
-    )
-else:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=["X-Correlation-ID"],
-    )
 
 
 # Security headers middleware
@@ -387,6 +361,36 @@ async def add_correlation_id(request: Request, call_next):
     finally:
         correlation_id_ctx.reset(token)
 
+
+cors_origins_raw = os.getenv(
+    "CORS_ALLOWED_ORIGINS",
+    "http://localhost:5173,http://localhost:3000,*",
+).split(",")
+
+cors_origins = [
+    origin.strip()
+    for origin in cors_origins_raw
+    if origin.strip()
+]
+
+if "*" in cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["X-Correlation-ID"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["X-Correlation-ID"],
+    )
 
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -528,7 +532,7 @@ app.include_router(sentiment_dashboard_router)
 
 app.include_router(oauth2.router)
 app.include_router(sso.router)
-
+app.include_router(status_router)
 
 # Lifespan events handled via asynccontextmanager lifespan handler
 

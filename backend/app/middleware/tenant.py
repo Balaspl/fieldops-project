@@ -17,6 +17,7 @@ from typing import Optional
 from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+from .rate_limit import RateLimitMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -53,73 +54,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
         return response
 
-
-class RateLimitMiddleware(BaseHTTPMiddleware):
-    """
-    Redis-backed rate limiting middleware.
-
-    Applies different limits based on endpoint:
-    - Auth endpoints (login, register): 10 requests/minute
-    - General API: 100 requests/minute
-    - GPS ping endpoints: 60 requests/minute
-    """
-
-    # Rate limit configs: (max_requests, window_seconds)
-    RATE_LIMITS = {
-        "/auth/login": (10, 60),
-        "/auth/register": (5, 60),
-        "/auth/forgot-password": (3, 300),
-        "/auth/refresh": (20, 60),
-        "/auth/sso/login": (20, 60),
-        "/auth/sso/callback": (30, 60),
-    }
-    DEFAULT_LIMIT = (100, 60)
-
-    async def dispatch(self, request: Request, call_next):
-        # Skip rate limiting for health checks, static files, and GPS.
-        # GPS has its own tenant/technician/job-scoped throttling.
-        path = request.url.path
-        if (
-            path in ("/", "/docs", "/openapi.json", "/redoc")
-            or path.startswith("/api/v1/gps")
-        ):
-            return await call_next(request)
-
-        # Get client identifier
-        client_ip = request.client.host if request.client else "unknown"
-
-        # Determine rate limit for this path
-        max_requests, window = self.DEFAULT_LIMIT
-        for prefix, limits in self.RATE_LIMITS.items():
-            if path.startswith(prefix):
-                max_requests, window = limits
-                break
-
-        # Check rate limit via Redis
-        from ..redis_client import get_redis_client
-        redis = get_redis_client()
-
-        if redis:
-            rate_key = f"rate_limit:{client_ip}:{path}"
-            try:
-                current = redis.incr(rate_key)
-                if current == 1:
-                    redis.expire(rate_key, window)
-                if current and current > max_requests:
-                    logger.warning(
-                        "Rate limit exceeded: ip=%s path=%s count=%s limit=%s",
-                        client_ip, path, current, max_requests,
-                    )
-                    return JSONResponse(
-                        status_code=429,
-                        content={"detail": "Too many requests. Please try again later."},
-                        headers={"Retry-After": str(window)},
-                    )
-            except Exception as e:
-                # Redis failure should not block requests
-                logger.warning("Rate limit check failed: %s", e)
-
-        return await call_next(request)
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
     MAX_BODY_SIZE = 1024 * 1024  # 1 MB
 

@@ -31,6 +31,7 @@ from ..database import get_db
 from ..logger import logger
 from ..redis_client import get_redis_client
 from ..utils import as_utc, iso_utc, parse_iso_utc
+from ..middleware.rate_limit import RateLimitPolicy, rate_limit_dependency
 from .dispatch import verify_jwt_token
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -53,6 +54,22 @@ class TechnicianAvailabilityLocationRequest(BaseModel):
 router = APIRouter(
     prefix="/api/v1/gps",
     tags=["GPS"],
+)
+
+
+# Centralized post-authentication API abuse limits.
+# These are abuse ceilings; the existing GPS 30s/5s and batch 5s
+# business throttles below are intentionally preserved unchanged.
+GPS_PING_RATE_LIMIT = rate_limit_dependency(
+    RateLimitPolicy("gps_ping", 60, 60, False)
+)
+
+GPS_BATCH_RATE_LIMIT = rate_limit_dependency(
+    RateLimitPolicy("gps_batch", 12, 60, False)
+)
+
+GPS_AVAILABILITY_RATE_LIMIT = rate_limit_dependency(
+    RateLimitPolicy("gps_availability", 30, 60, False)
 )
 
 
@@ -702,6 +719,7 @@ def get_gps_history(
     "/ping",
     status_code=status.HTTP_201_CREATED,
     response_model=schemas.GPSPingResponse,
+    dependencies=[Depends(GPS_PING_RATE_LIMIT)],
 )
 async def gps_ping(
     request: Request,
@@ -1412,6 +1430,7 @@ async def gps_ping(
 @router.post(
     "/batch",
     status_code=207,
+    dependencies=[Depends(GPS_BATCH_RATE_LIMIT)],
 )
 async def gps_batch(
     request: Request,
@@ -2319,6 +2338,7 @@ async def gps_batch(
 @router.post(
     "/availability",
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(GPS_AVAILABILITY_RATE_LIMIT)],
 )
 async def update_technician_availability_location(
     payload: TechnicianAvailabilityLocationRequest,
