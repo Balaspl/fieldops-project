@@ -30,6 +30,12 @@ from ..auth.rbac import Permission
 from ..database import get_db
 from ..logger import logger
 from ..redis_client import get_redis_client
+from app.services.ai.FieldOpsAI.schemas.agent_messages import (
+    AgentAddress,
+    MessageType,
+    MessageEnvelope,
+    GPSLocationEventMessage,
+)
 from ..utils import as_utc, iso_utc, parse_iso_utc
 from ..middleware.rate_limit import RateLimitPolicy, rate_limit_dependency
 from .dispatch import verify_jwt_token
@@ -339,6 +345,111 @@ def _read_eta(
 
     return None, None
 
+
+
+async def _publish_gps_location_event(
+    request: Request,
+    *,
+    ping_id: str,
+    technician_id: str,
+    job_id: str,
+    tenant_id: str,
+    latitude: float,
+    longitude: float,
+    accuracy: Optional[float],
+    altitude: Optional[float],
+    timestamp: datetime,
+    correlation_id: str,
+) -> bool:
+    """Publish one committed GPS fix to Kafka.
+
+    The GPSPing database row is the source of truth. Kafka is downstream
+    fan-out only, so Kafka failures must never roll back a committed fix.
+    """
+    kafka_producer = getattr(request.app.state, "kafka_producer", None)
+    if kafka_producer is None:
+        logger.warning(
+            "GPS ping committed but Kafka producer is unavailable",
+            extra={
+                "ping_id": ping_id,
+                "technician_id": technician_id,
+                "job_id": str(job_id),
+                "tenant_id": tenant_id,
+                "correlation_id": correlation_id,
+            },
+        )
+        return False
+
+    event_id = f"gps-location:{tenant_id}:{ping_id}"
+    event_payload = {
+        "event_type": "GPS-location",
+        "event_id": event_id,
+        "technician_id": str(technician_id),
+        "job_id": str(job_id),
+        "tenant_id": str(tenant_id),
+        "latitude": float(latitude),
+        "longitude": float(longitude),
+        "accuracy": float(accuracy) if accuracy is not None else None,
+        "altitude": float(altitude) if altitude is not None else None,
+        "timestamp": iso_utc(timestamp),
+        "schema_version": 1,
+        "correlation_id": correlation_id,
+    }
+
+    event = GPSLocationEventMessage(
+        sender=AgentAddress(
+            agent_type="dispatch",
+            agent_id="gps-location-producer",
+            tenant_id=str(tenant_id),
+        ),
+        payload=event_payload,
+        correlation_id=correlation_id,
+        contract_version="1.0",
+        topic="fieldops.gps.events",
+        metadata={
+            "event_id": event_id,
+            "schema_version": 1,
+        },
+    )
+
+    try:
+        published = await kafka_producer.publish(event)
+        if not published:
+            logger.warning(
+                "GPS ping committed but Kafka publish returned False",
+                extra={
+                    "ping_id": ping_id,
+                    "event_id": event_id,
+                    "topic": "fieldops.gps.events",
+                    "correlation_id": correlation_id,
+                    "tenant_id": tenant_id,
+                },
+            )
+            return False
+
+        logger.info(
+            "GPS-location Kafka event published",
+            extra={
+                "ping_id": ping_id,
+                "event_id": event_id,
+                "topic": "fieldops.gps.events",
+                "correlation_id": correlation_id,
+                "tenant_id": tenant_id,
+            },
+        )
+        return True
+    except Exception as exc:
+        logger.warning(
+            f"GPS ping committed but Kafka publication failed: {exc}",
+            extra={
+                "ping_id": ping_id,
+                "event_id": event_id,
+                "topic": "fieldops.gps.events",
+                "correlation_id": correlation_id,
+                "tenant_id": tenant_id,
+            },
+        )
+        return False
 
 def _build_update(
     *,
@@ -1341,6 +1452,21 @@ async def gps_ping(
 
         db.commit()
 
+        # Kafka is downstream of the authoritative DB commit.
+        await _publish_gps_location_event(
+            request,
+            ping_id=ping_id,
+            technician_id=payload.technician_id,
+            job_id=payload.job_id,
+            tenant_id=tenant_id,
+            latitude=payload.latitude,
+            longitude=payload.longitude,
+            accuracy=payload.accuracy,
+            altitude=payload.altitude,
+            timestamp=payload.timestamp,
+            correlation_id=correlation_id,
+        )
+
         # ── 9. Publish only after commit. ───────────────────────────────────
         eta, eta_minutes = _read_eta(
             redis_client,
@@ -2128,6 +2254,23 @@ async def gps_batch(
             )
 
             db.commit()
+
+            # Every committed GPSPing gets its own GPS-location event.
+            # Redis remains the live-tracking fan-out path.
+            for d in insert_dicts:
+                await _publish_gps_location_event(
+                    request,
+                    ping_id=str(d["id"]),
+                    technician_id=str(d["technician_id"]),
+                    job_id=str(d["job_id"]),
+                    tenant_id=str(d["tenant_id"]),
+                    latitude=d["latitude"],
+                    longitude=d["longitude"],
+                    accuracy=d["accuracy"],
+                    altitude=d["altitude"],
+                    timestamp=d["timestamp"],
+                    correlation_id=correlation_id,
+                )
 
             # Live publish: only the NEWEST ping per
             # (technician, job), and only if recent.
