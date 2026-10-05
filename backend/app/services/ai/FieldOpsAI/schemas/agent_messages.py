@@ -39,7 +39,7 @@ import re
 import math
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, ClassVar, Dict, Optional
 from uuid import uuid4
 
 from pydantic import (
@@ -130,6 +130,7 @@ def _validate_topic(value: Any) -> str:
 def _validate_json_and_privacy(
     data: Any,
     path: str = "",
+    allow_gps_coordinates: bool = False,
 ) -> None:
     """
     Recursively validate that data is JSON-compatible and contains
@@ -151,12 +152,22 @@ def _validate_json_and_privacy(
                     f"got {type(key).__name__!r} at {path!r}."
                 )
             key_path = f"{path}.{key}" if path else key
-            if key.lower() in _FORBIDDEN_KEYS:
+            if (
+                key.lower() in _FORBIDDEN_KEYS
+                and not (
+                    allow_gps_coordinates
+                    and key.lower() in {"latitude", "longitude"}
+                )
+            ):
                 raise ValueError(
                     f"Forbidden sensitive key {key!r} found at path {key_path!r}. "
                     "This key is not permitted in message payloads or metadata."
                 )
-            _validate_json_and_privacy(val, path=key_path)
+            _validate_json_and_privacy(
+                val,
+                path=key_path,
+                allow_gps_coordinates=allow_gps_coordinates,
+            )
     elif isinstance(data, float):
         if not math.isfinite(data):
             raise ValueError(
@@ -368,6 +379,10 @@ class MessageEnvelope(BaseModel):
         validate_default=True,
     )
 
+    # GPS coordinates are sensitive by default. Only a dedicated
+    # GPS event message may opt in to carrying latitude/longitude.
+    allow_gps_coordinates: ClassVar[bool] = False
+
     message_id: UUID4 = Field(
         default_factory=uuid4,
         description="Unique UUID4 identifier for this message.",
@@ -517,7 +532,11 @@ class MessageEnvelope(BaseModel):
         if not isinstance(value, dict):
             raise ValueError("payload must be a dictionary.")
         value = copy.deepcopy(value)
-        _validate_json_and_privacy(value, path="payload")
+        _validate_json_and_privacy(
+            value,
+            path="payload",
+            allow_gps_coordinates=cls.allow_gps_coordinates,
+        )
         return value
 
     @field_validator("metadata", mode="before")
@@ -708,6 +727,72 @@ class EventMessage(BaseMessage):
         default=MessageType.EVENT,
         frozen=True,
     )
+
+
+# ==========================================================
+# GPS Location Event Message
+# ==========================================================
+
+
+class GPSLocationEventMessage(EventMessage):
+    """
+    Dedicated GPS location event.
+
+    GPS coordinates are allowed only for this message type.
+    All other message types continue to use the global privacy
+    protection that forbids latitude/longitude keys.
+    """
+
+    allow_gps_coordinates: ClassVar[bool] = True
+
+    topic: str = Field(
+        default="fieldops.gps.events",
+        min_length=1,
+        max_length=100,
+        description="Kafka topic for technician GPS location events.",
+    )
+
+    message_type: MessageType = Field(
+        default=MessageType.EVENT,
+        frozen=True,
+    )
+
+    @model_validator(mode="after")
+    def validate_gps_event(self) -> "GPSLocationEventMessage":
+        """
+        Enforce the GPS event contract and coordinate bounds.
+        """
+        if self.topic != "fieldops.gps.events":
+            raise ValueError(
+                "GPS location events must use topic 'fieldops.gps.events'."
+            )
+
+        if self.payload.get("event_type") != "GPS-location":
+            raise ValueError(
+                "GPS location events must have event_type 'GPS-location'."
+            )
+
+        if "latitude" not in self.payload or "longitude" not in self.payload:
+            raise ValueError(
+                "GPS location events require latitude and longitude."
+            )
+
+        latitude = self.payload["latitude"]
+        longitude = self.payload["longitude"]
+
+        if not isinstance(latitude, (int, float)) or isinstance(latitude, bool):
+            raise ValueError("GPS latitude must be a numeric value.")
+
+        if not isinstance(longitude, (int, float)) or isinstance(longitude, bool):
+            raise ValueError("GPS longitude must be a numeric value.")
+
+        if not -90 <= latitude <= 90:
+            raise ValueError("GPS latitude must be between -90 and 90.")
+
+        if not -180 <= longitude <= 180:
+            raise ValueError("GPS longitude must be between -180 and 180.")
+
+        return self
 
 
 # ==========================================================

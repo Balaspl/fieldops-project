@@ -3,14 +3,14 @@ import time
 import json
 from datetime import datetime, timezone, timedelta
 from fastapi.testclient import TestClient
-from unittest.mock import MagicMock
-
+from unittest.mock import MagicMock, AsyncMock
 from app.main import app
 from app.models import Job, Technician, GPSPing, GPSRejectedPingLog, GPSPurgeAuditLog
 from app.database import Base, get_db
 from app.redis_client import get_redis_client
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
+from app.services.ai.FieldOpsAI.schemas.agent_messages import MessageType
 from sqlalchemy.orm import sessionmaker
 from app.celery_app import celery_app
 from app.auth.dependencies import get_current_user, AuthenticatedUser
@@ -123,6 +123,9 @@ def override_current_user():
     return AuthenticatedUser("test-admin", "tenant-1", UserRole.SUPER_ADMIN, "test-session")
 
 client = TestClient(app)
+class MockKafkaProducer:
+    def __init__(self):
+        self.publish = AsyncMock(return_value=True)
 
 @pytest.fixture(autouse=True)
 def setup_db(monkeypatch):
@@ -162,6 +165,77 @@ def apply_overrides():
     app.dependency_overrides[get_current_user] = override_current_user
     yield
     app.dependency_overrides.clear()
+
+def test_gps_location_kafka_event_published(setup_db):
+    db = setup_db
+
+    kafka = MockKafkaProducer()
+    app.state.kafka_producer = kafka
+
+    tech = Technician(
+        tech_id="tech-1",
+        technician_name="Tech 1",
+        technician_skill="HVAC",
+        technician_location="0,0",
+        tenant_id="tenant-1",
+    )
+    db.add(tech)
+    db.commit()
+    db.refresh(tech)
+
+    job = Job(
+        id=101,
+        customer_name="Alice",
+        location="1,1",
+        issue_description="Leak",
+        priority="HIGH",
+        service_type="Plumbing",
+        contact_number="123456",
+        status="ASSIGNED",
+        assigned_technician_id=tech.technician_id,
+        tenant_id="tenant-1",
+        preferred_service_date=datetime.now().date(),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    payload = {
+        "technician_id": "tech-1",
+        "job_id": "101",
+        "latitude": 12.34,
+        "longitude": 56.78,
+        "timestamp": "2026-06-25T12:00:00Z",
+    }
+
+    response = client.post(
+        "/api/v1/gps/ping",
+        headers={
+            "X-Tenant-ID": "tenant-1",
+            "Authorization": "Bearer mock-token-admin",
+        },
+        json=payload,
+    )
+
+    assert response.status_code == 201
+
+    kafka.publish.assert_awaited_once()
+
+    event = kafka.publish.await_args.args[0]
+
+    assert event.topic == "fieldops.gps.events"
+    assert event.message_type == MessageType.EVENT
+
+    assert event.payload["event_type"] == "GPS-location"
+    assert event.payload["technician_id"] == "tech-1"
+    assert event.payload["job_id"] == "101"
+    assert event.payload["tenant_id"] == "tenant-1"
+    assert event.payload["latitude"] == 12.34
+    assert event.payload["longitude"] == 56.78
+    assert event.payload["schema_version"] == 1
+
+    assert event.payload["correlation_id"] == event.correlation_id
+    assert event.payload["event_id"].startswith("gps-location:tenant-1:")
 
 
 def test_first_ping_accepted(setup_db):
