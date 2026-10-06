@@ -246,7 +246,54 @@ class AIMessageGenerator:
             )
 
         # --------------------------------------------------
-        # 2. Sanitize PII from communication context
+        # 2. Fast local budget preflight
+        # --------------------------------------------------
+
+        # A denied budget request should take the deterministic fallback
+        # path without first paying the cost of full PII detection/NER.
+        # The estimate is based only on an in-memory serialization and
+        # the budget service receives the token count, never the payload.
+        # The estimate is intentionally conservative; it is a fast gate
+        # only, and PII sanitization is still mandatory before any provider
+        # request when the request is allowed to proceed.
+        try:
+            raw_context_json = context.model_dump_json(
+                exclude_none=True,
+            )
+            raw_prompt_length = (
+                len(
+                    f"Generate a {channel} communication message "
+                    f"using template '{template_key}'.\nContext:\n"
+                )
+                + len(raw_context_json)
+            )
+            estimated_input_tokens = max(
+                1,
+                (raw_prompt_length + 3) // 4,
+            )
+
+            budget_decision = self.budget_manager.check(
+                estimated_input_tokens=estimated_input_tokens,
+                max_output_tokens=512,
+                category=channel.lower(),
+                provider="groq",
+                model="openai/gpt-oss-120b",
+            )
+
+        except Exception:
+            return self._fallback(
+                context=context,
+                template_key=template_key,
+            )
+
+        if not budget_decision.allowed:
+            return self._fallback(
+                context=context,
+                template_key=template_key,
+            )
+
+        # --------------------------------------------------
+        # 3. Sanitize PII from communication context
         # --------------------------------------------------
 
         try:
@@ -312,32 +359,6 @@ class AIMessageGenerator:
                 template_key=template_key,
             )
 
-        # --------------------------------------------------
-        # 5. Estimate tokens and check budget
-        # --------------------------------------------------
-
-        # This is an approximate token estimate.
-        # The budget manager uses it before the external
-        # provider request is made.
-        estimated_input_tokens = len(sanitized_prompt) // 4
-
-        try:
-            # Check per-request, daily and rate limits.
-            budget_decision = self.budget_manager.check(
-            estimated_input_tokens=estimated_input_tokens,
-            max_output_tokens=512,
-            category=channel.lower(),
-            provider="groq",
-            model="openai/gpt-oss-120b",
-        )
-
-        except Exception:
-            # If the budget system itself is unavailable,
-            # fail safely by using the local fallback.
-            return self._fallback(
-                context=context,
-                template_key=template_key,
-            )
 
         # --------------------------------------------------
         # 6. Budget exceeded → deterministic fallback

@@ -75,6 +75,36 @@ class CustomerSupportRequest(Base):
         default="OPEN",
     )
 
+    # Optional link to the customer's service job.
+    related_job_id = Column(
+        Integer,
+        ForeignKey(
+            "jobs.id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+    )
+
+    # Staff-entered resolution information.
+    resolution_note = Column(
+        Text,
+        nullable=True,
+    )
+
+    resolved_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    resolved_by = Column(
+        String(36),
+        ForeignKey(
+            "users.id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+    )
+
     created_at = Column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -102,5 +132,9 @@ class CustomerSupportRequest(Base):
             "idx_customer_support_tenant_customer",
             "tenant_id",
             "customer_user_id",
+        ),
+        Index(
+            "ix_customer_support_requests_related_job_id",
+            "related_job_id",
         ),
     )

@@ -254,6 +254,7 @@ const isSkillMatching = (techSkill: string, jobRequiredSkill?: string, jobServic
 
 interface PendingJob {
   id: number;
+  title?: string;
   customer_name: string;
   location?: string;
   priority?: string;
@@ -1295,16 +1296,22 @@ function PlanningDashboard() {
   );
 
   type DispatchConfirmation = {
-  action: string;
-  jobIds: number[];
-  technician?: string;
-  technicianId?: number | string;
-  details?: string;
-  reasonRequired?: boolean;
-  reasonPlaceholder?: string;
-  confirmLabel: string;
-  execute: (reason?: string) => Promise<void>;
-};
+    action: string;
+    jobIds: number[];
+    technician?: string;
+    technicianId?: number | string;
+    jobDetails?: PendingJob[];
+    technicianDetails?: {
+      name: string;
+      skills?: string;
+      location?: string;
+    };
+    details?: string;
+    reasonRequired?: boolean;
+    reasonPlaceholder?: string;
+    confirmLabel: string;
+    execute: (reason?: string) => Promise<void>;
+  };
 
   const [dispatchConfirmation, setDispatchConfirmation] =
     useState<DispatchConfirmation | null>(null);
@@ -1326,14 +1333,39 @@ function PlanningDashboard() {
       return;
     }
 
+    const jobDetails = confirmation.jobIds
+      .map((jobId) => pendingJobs.find((job) => job.id === jobId))
+      .filter((job): job is PendingJob => Boolean(job));
+
+    const technician = allTechsList.find(
+      (tech) =>
+        (confirmation.technicianId !== undefined &&
+          String(tech.technician_id) === String(confirmation.technicianId)) ||
+        (confirmation.technician &&
+          String(tech.technician_name).trim().toLowerCase() ===
+            String(confirmation.technician).trim().toLowerCase())
+    );
+
+    const enrichedConfirmation: DispatchConfirmation = {
+      ...confirmation,
+      jobDetails,
+      technicianDetails: technician
+        ? {
+            name: technician.technician_name,
+            skills: technician.technician_skill,
+            location: technician.technician_location,
+          }
+        : confirmation.technician
+          ? { name: confirmation.technician }
+          : undefined,
+    };
+
     setDispatchConfirmationReason("");
     setDispatchConfirmationError("");
-    setDispatchConfirmation(confirmation);
+    setDispatchConfirmation(enrichedConfirmation);
   };
 
   const closeDispatchConfirmation = () => {
-    if (dispatchConfirmationLoading) return;
-
     setDispatchConfirmation(null);
     setDispatchConfirmationReason("");
     setDispatchConfirmationError("");
@@ -1371,6 +1403,8 @@ function PlanningDashboard() {
       );
 
       setDispatchConfirmationError(message);
+    } finally {
+      setDispatchConfirmationLoading(false);
     }
   };
 
@@ -4611,7 +4645,7 @@ function PlanningDashboard() {
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              width: "min(520px, 95vw)",
+              width: "min(760px, 96vw)",
               maxHeight: "90vh",
               overflowY: "auto",
               background: "#FFFFFF",
@@ -4657,127 +4691,290 @@ function PlanningDashboard() {
               <button
                 type="button"
                 onClick={closeDispatchConfirmation}
-                disabled={dispatchConfirmationLoading}
                 aria-label="Close dispatch confirmation"
                 style={{
                   border: "none",
                   background: "transparent",
                   color: "#64748B",
                   fontSize: "22px",
-                  cursor: dispatchConfirmationLoading
-                    ? "not-allowed"
-                    : "pointer",
+                  cursor: "pointer",
                   padding: "2px 6px",
-                  opacity: dispatchConfirmationLoading ? 0.5 : 1,
                 }}
               >
                 ×
               </button>
             </div>
 
-            <div
-              style={{
-                padding: "20px",
-                display: "flex",
-                flexDirection: "column",
-                gap: "14px",
-              }}
-            >
               <div
                 style={{
-                  padding: "12px",
-                  borderRadius: "9px",
-                  background: "#F8FAFC",
-                  border: "1px solid #E2E8F0",
+                  padding: "20px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "14px",
                 }}
               >
                 <div
                   style={{
-                    fontSize: "10px",
-                    color: "#64748B",
-                    fontWeight: 700,
-                    textTransform: "uppercase",
-                    marginBottom: "5px",
+                    padding: "12px",
+                    borderRadius: "9px",
+                    background: "#F8FAFC",
+                    border: "1px solid #E2E8F0",
                   }}
                 >
-                  Intended Action
-                </div>
-
-                <div
-                  style={{
-                    fontSize: "14px",
-                    color: "#1F2937",
-                    fontWeight: 700,
-                  }}
-                >
-                  {dispatchConfirmation.action}
-                </div>
-              </div>
-
-              <div>
-                <div
-                  style={{
-                    fontSize: "11px",
-                    color: "#64748B",
-                    fontWeight: 700,
-                    marginBottom: "7px",
-                  }}
-                >
-                  Affected Job{dispatchConfirmation.jobIds.length > 1 ? "s" : ""}
-                </div>
-
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: "6px",
-                  }}
-                >
-                  {dispatchConfirmation.jobIds.map((jobId) => (
-                    <span
-                      key={jobId}
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        padding: "5px 9px",
-                        borderRadius: "6px",
-                        background: "#EEF6F1",
-                        border: "1px solid #CFE2D5",
-                        color: "#2F4F3E",
-                        fontSize: "11px",
-                        fontWeight: 700,
-                      }}
-                    >
-                      Job #{jobId}
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              {dispatchConfirmation.technician && (
-                <div>
                   <div
                     style={{
-                      fontSize: "11px",
+                      fontSize: "10px",
                       color: "#64748B",
                       fontWeight: 700,
+                      textTransform: "uppercase",
                       marginBottom: "5px",
                     }}
                   >
-                    Technician
+                    Intended Action
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "14px",
+                      color: "#1F2937",
+                      fontWeight: 700,
+                    }}
+                  >
+                    {dispatchConfirmation.action}
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "minmax(0, 1.35fr) minmax(230px, 0.85fr)",
+                    gap: "14px",
+                    alignItems: "stretch",
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: "14px",
+                      borderRadius: "10px",
+                      border: "1px solid #E2E8F0",
+                      background: "#FFFFFF",
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: "11px",
+                        color: "#64748B",
+                        fontWeight: 700,
+                        marginBottom: "10px",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      Customer Request
+                    </div>
+
+                    {dispatchConfirmation.jobDetails?.length ? (
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "10px",
+                        }}
+                      >
+                        {dispatchConfirmation.jobDetails.map((job) => {
+                          const title =
+                            job.title?.trim() ||
+                            job.issue_description?.split(":", 1)[0]?.trim() ||
+                            `Job #${job.id}`;
+
+                          return (
+                            <div
+                              key={job.id}
+                              style={{
+                                padding: "10px 12px",
+                                borderRadius: "8px",
+                                background: "#F8FAFC",
+                                border: "1px solid #E2E8F0",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "space-between",
+                                  gap: "8px",
+                                  marginBottom: "8px",
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    fontSize: "14px",
+                                    color: "#1F2937",
+                                    fontWeight: 700,
+                                  }}
+                                >
+                                  {title}
+                                </div>
+                                <span
+                                  style={{
+                                    flexShrink: 0,
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    padding: "4px 8px",
+                                    borderRadius: "6px",
+                                    background: "#EEF6F1",
+                                    border: "1px solid #CFE2D5",
+                                    color: "#2F4F3E",
+                                    fontSize: "10px",
+                                    fontWeight: 700,
+                                  }}
+                                >
+                                  Job #{job.id}
+                                </span>
+                              </div>
+
+                              <div
+                                style={{
+                                  display: "grid",
+                                  gridTemplateColumns: "95px minmax(0, 1fr)",
+                                  rowGap: "6px",
+                                  columnGap: "8px",
+                                  fontSize: "11px",
+                                }}
+                              >
+                                <span style={{ color: "#64748B", fontWeight: 700 }}>
+                                  Service Type
+                                </span>
+                                <span style={{ color: "#1F2937", fontWeight: 600 }}>
+                                  {job.service_type || "Not specified"}
+                                </span>
+                                <span style={{ color: "#64748B", fontWeight: 700 }}>
+                                  Location
+                                </span>
+                                <span
+                                  style={{
+                                    color: "#1F2937",
+                                    fontWeight: 600,
+                                    overflowWrap: "anywhere",
+                                  }}
+                                >
+                                  {job.location || "Not specified"}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: "12px", color: "#64748B" }}>
+                        Job details are currently unavailable.
+                      </div>
+                    )}
                   </div>
 
                   <div
                     style={{
-                      fontSize: "13px",
-                      color: "#1F2937",
-                      fontWeight: 600,
+                      padding: "14px",
+                      borderRadius: "10px",
+                      border: "1px solid #E2E8F0",
+                      background: "#FFFFFF",
                     }}
                   >
-                    {dispatchConfirmation.technician}
+                    <div
+                      style={{
+                        fontSize: "11px",
+                        color: "#64748B",
+                        fontWeight: 700,
+                        marginBottom: "10px",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      Technician
+                    </div>
+
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "9px",
+                      }}
+                    >
+                      <div>
+                        <div
+                          style={{
+                            fontSize: "10px",
+                            color: "#94A3B8",
+                            fontWeight: 700,
+                            marginBottom: "3px",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          Name
+                        </div>
+                        <div
+                          style={{
+                            fontSize: "14px",
+                            color: "#1F2937",
+                            fontWeight: 700,
+                          }}
+                        >
+                          {dispatchConfirmation.technicianDetails?.name ||
+                            dispatchConfirmation.technician ||
+                            "Not selected"}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div
+                          style={{
+                            fontSize: "10px",
+                            color: "#94A3B8",
+                            fontWeight: 700,
+                            marginBottom: "3px",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          Skills
+                        </div>
+                        <div
+                          style={{
+                            fontSize: "12px",
+                            color: "#1F2937",
+                            fontWeight: 600,
+                            lineHeight: 1.45,
+                          }}
+                        >
+                          {dispatchConfirmation.technicianDetails?.skills ||
+                            "Not specified"}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div
+                          style={{
+                            fontSize: "10px",
+                            color: "#94A3B8",
+                            fontWeight: 700,
+                            marginBottom: "3px",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          Current Location
+                        </div>
+                        <div
+                          style={{
+                            fontSize: "12px",
+                            color: "#1F2937",
+                            fontWeight: 600,
+                            lineHeight: 1.45,
+                            overflowWrap: "anywhere",
+                          }}
+                        >
+                          {dispatchConfirmation.technicianDetails?.location ||
+                            "Not available"}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              )}
 
               {dispatchConfirmation.action === "Manual Override" && (
                 <div
@@ -4873,7 +5070,6 @@ function PlanningDashboard() {
               <button
                 type="button"
                 onClick={closeDispatchConfirmation}
-                disabled={dispatchConfirmationLoading}
                 style={{
                   height: "36px",
                   padding: "0 14px",
@@ -4883,10 +5079,7 @@ function PlanningDashboard() {
                   color: "#475569",
                   fontSize: "12px",
                   fontWeight: 600,
-                  cursor: dispatchConfirmationLoading
-                    ? "not-allowed"
-                    : "pointer",
-                  opacity: dispatchConfirmationLoading ? 0.6 : 1,
+                  cursor: "pointer",
                 }}
               >
                 Cancel

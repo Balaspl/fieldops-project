@@ -799,6 +799,9 @@ const styles: Record<string, React.CSSProperties> = {
     width: "90%",
     maxWidth: "900px",
     minHeight: "auto",
+    maxHeight: "calc(100vh - 32px)",
+    display: "flex",
+    flexDirection: "column",
     boxShadow:
       "0 20px 30px -5px rgba(0,0,0,0.15)",
     border: "1px solid #e2e8f0",
@@ -841,6 +844,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     gap: "20px",
+    overflowY: "auto",
+    minHeight: 0,
   },
 
   errorAlert: {

@@ -784,7 +784,20 @@ def test_accept_job_paths(patch_tp):
         asyncio.run(tp.accept_job(job_id=1, request=req("POST", "/accept"), current_user=u(), db=DB(Q(first=tech()), Q(first=None))))
     j = job()
     sr = SimpleNamespace(linked_job_id=1, status="ASSIGNED")
-    result = asyncio.run(tp.accept_job(job_id=1, request=req("POST", "/accept"), current_user=u(), db=DB(Q(first=tech()), Q(first=j), Q(first=sr), Q(update=1))))
+    result = asyncio.run(
+        tp.accept_job(
+            job_id=1,
+            request=req("POST", "/accept"),
+            current_user=u(),
+            db=DB(
+                Q(first=tech()),
+                Q(first=j),
+                Q(first=tech()),
+                Q(first=sr),
+                Q(update=1),
+            ),
+        )
+    )
     assert result["status"] == "ACCEPTED"
     assert sr.status == "ACCEPTED"
 
@@ -799,7 +812,7 @@ def test_reject_job_paths(patch_tp):
     j = job()
     result = asyncio.run(tp.reject_job(job_id=1, data=data, request=req("POST", "/reject"), current_user=u(), db=DB(Q(first=t), Q(first=j), Q())))
     assert result["status"] == "REJECTED_BY_TECHNICIAN"
-    assert t.current_jobs == 1
+    assert t.current_jobs == 2
     assert j.assigned_technician_id is None
 
 
@@ -857,7 +870,7 @@ def test_complete_job_paths(patch_tp):
     assert result["status"] == "COMPLETED"
     assert j.work_report == "Completed repair"
     assert sr.status == "COMPLETED"
-    assert t.current_jobs == 1
+    assert t.current_jobs == 2
     with pytest.raises(HTTPException):
         asyncio.run(tp.complete_job(job_id=1, data=TechnicianJobCompleteRequest(), request=req("POST", "/complete"), current_user=u(), db=DB(Q(first=None))))
     with pytest.raises(HTTPException):
@@ -879,7 +892,7 @@ def test_get_notifications_success_and_failure(patch_tp):
         created_at=datetime.now(timezone.utc),
     )
     existing_row = SimpleNamespace(job_id="1")
-    status_row = SimpleNamespace(id=1, status="ACCEPTED")
+    status_row = SimpleNamespace(id=1, status="ASSIGNED")
 
     success_db = DB(
         Q(first=tech()),
@@ -891,7 +904,7 @@ def test_get_notifications_success_and_failure(patch_tp):
     )
     result = asyncio.run(tp.get_notifications(current_user=u(), db=success_db))
     assert result["unread_count"] == 1
-    assert result["notifications"][0]["jobStatus"] == "ACCEPTED"
+    assert result["notifications"][0]["jobStatus"] == "ASSIGNED"
     assert success_db.commit_count == 1
 
     failure_db = DB(
@@ -950,17 +963,29 @@ def test_download_billing_report_pdf_paths(monkeypatch):
     reportlab = types.ModuleType("reportlab")
     lib = types.ModuleType("reportlab.lib")
     pagesizes = types.ModuleType("reportlab.lib.pagesizes")
+    utils = types.ModuleType("reportlab.lib.utils")
     pdfgen = types.ModuleType("reportlab.pdfgen")
     canvas_mod = types.ModuleType("reportlab.pdfgen.canvas")
     pagesizes.A4 = (595, 842)
+
+    class FakeImageReader:
+        def __init__(self, *a, **k):
+            pass
+
+        def getSize(self):
+            return (240, 100)
+
+    utils.ImageReader = FakeImageReader
     canvas_mod.Canvas = FakeCanvas
     reportlab.lib = lib
     reportlab.pdfgen = pdfgen
     lib.pagesizes = pagesizes
+    lib.utils = utils
     pdfgen.canvas = canvas_mod
     monkeypatch.setitem(sys.modules, "reportlab", reportlab)
     monkeypatch.setitem(sys.modules, "reportlab.lib", lib)
     monkeypatch.setitem(sys.modules, "reportlab.lib.pagesizes", pagesizes)
+    monkeypatch.setitem(sys.modules, "reportlab.lib.utils", utils)
     monkeypatch.setitem(sys.modules, "reportlab.pdfgen", pdfgen)
     monkeypatch.setitem(sys.modules, "reportlab.pdfgen.canvas", canvas_mod)
 

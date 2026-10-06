@@ -37,6 +37,19 @@ export interface CustomerProfilePayload {
 
 export interface CustomerProfileResponse extends CustomerProfile {}
 
+export interface ReverseLocationResponse {
+  verified: boolean;
+  name?: string;
+  address?: string;
+  formatted_address?: string;
+  latitude?: number;
+  longitude?: number;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  message?: string;
+}
+
 export interface ChangeCustomerPasswordPayload {
   current_password: string;
   new_password: string;
@@ -73,6 +86,7 @@ export interface CustomerNotificationPreferencesUpdate {
 export interface CustomerSupportRequestCreate {
   subject: string;
   description: string;
+  related_job_id?: number | null;
 }
 
 export interface CustomerSupportRequestResponse {
@@ -80,9 +94,52 @@ export interface CustomerSupportRequestResponse {
   request_number: string;
   subject: string;
   description: string;
+  related_job_id: number | null;
   status: string;
+  resolution_note: string | null;
+  resolved_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface CustomerSupportAdminJob {
+  id: number;
+  customer_name: string | null;
+  service_type: string | null;
+  issue_description: string | null;
+  priority: string | null;
+  status: string | null;
+  location: string | null;
+  site_address: string | null;
+  preferred_service_date: string | null;
+  contact_number: string | null;
+  assigned_technician_name: string | null;
+  assigned_technician_phone: string | null;
+  assigned_at: string | null;
+  en_route_at: string | null;
+  on_site_at: string | null;
+  completed_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface CustomerSupportAdminRequest
+  extends CustomerSupportRequestResponse {
+  customer: {
+    name: string;
+    email: string | null;
+    phone_number: string | null;
+  };
+  job: CustomerSupportAdminJob | null;
+}
+
+export interface CustomerSupportAdminUpdate {
+  status:
+    | "OPEN"
+    | "IN_PROGRESS"
+    | "RESOLVED"
+    | "CLOSED";
+  resolution_note?: string | null;
 }
 // Profile
 export const getCustomerProfile = () =>
@@ -104,6 +161,17 @@ export const updateCustomerProfile = (
   api.put<CustomerProfileResponse>(
     "/api/customer/profile",
     data,
+  );
+
+export const reverseLocation = (
+  latitude: number,
+  longitude: number,
+) =>
+  api.get<ReverseLocationResponse>(
+    "/organizations/reverse-location",
+    {
+      params: { latitude, longitude },
+    },
   );
 
 export const changeCustomerPassword = (
@@ -185,6 +253,34 @@ export const createCustomerSupportRequest = (
 ) =>
   api.post<CustomerSupportRequestResponse>(
     "/api/customer/support-requests",
+    data,
+  );
+
+export const getAdminCustomerSupportRequests = (
+  status?: CustomerSupportAdminUpdate["status"],
+) =>
+  api.get<CustomerSupportAdminRequest[]>(
+    "/api/admin/customer-support",
+    {
+      params: status
+        ? { status }
+        : {},
+    },
+  );
+
+export const getAdminCustomerSupportRequest = (
+  id: number,
+) =>
+  api.get<CustomerSupportAdminRequest>(
+    `/api/admin/customer-support/${id}`,
+  );
+
+export const updateAdminCustomerSupportRequest = (
+  id: number,
+  data: CustomerSupportAdminUpdate,
+) =>
+  api.patch<CustomerSupportAdminRequest>(
+    `/api/admin/customer-support/${id}`,
     data,
   );
 
@@ -302,7 +398,14 @@ export const getCustomerPaymentStatus = (
 
 // Service History
 export const getServiceHistory = () =>
-  api.get(
+  api.get<
+    Array<{
+      linked_job_id?: number | null;
+      title?: string | null;
+      service_type?: string | null;
+      status?: string | null;
+    }>
+  >(
     "/api/customer/service-history",
   );
 

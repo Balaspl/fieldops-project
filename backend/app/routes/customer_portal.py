@@ -17,13 +17,14 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from math import radians, sin, cos, asin, sqrt
 from typing import Optional
 
 from ..database import get_db
 from ..auth.dependencies import (
+    get_current_user,
     AuthenticatedUser,
     require_permission,
     require_role,
@@ -556,7 +557,10 @@ async def create_service_request(
     Create ServiceRequest under customer's own tenant
     """
 
-    from ..utils import map_service_type_to_skill
+    from ..utils import (
+    is_skill_matching,
+    map_service_type_to_skill,
+)
 
     # ──────────────────────────────────────────────
     # Customer details
@@ -602,7 +606,21 @@ async def create_service_request(
     # Determine required technician skill
     # ──────────────────────────────────────────────
 
-    req_skill = data.service_type or "General"
+    raw_service_type = (data.service_type or "").strip()
+
+    if not raw_service_type:
+        raise HTTPException(
+            status_code=400,
+            detail="Service type is required.",
+        )
+
+    req_skill = map_service_type_to_skill(raw_service_type)
+
+    if req_skill == "Other":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported service type '{raw_service_type}'.",
+        )
 
     # ──────────────────────────────────────────────
     # Customer location
@@ -632,23 +650,24 @@ async def create_service_request(
     # Find all organizations having required skill
     # ──────────────────────────────────────────────
 
-    capable_technician_tenants = (
-    db.query(Technician.tenant_id)
-    .filter(
-        Technician.tenant_id.isnot(None),
-        Technician.technician_skill.isnot(None),
-        func.lower(
-            Technician.technician_skill
-        ).contains(req_skill.lower()),
+    technicians = (
+        db.query(Technician)
+        .filter(
+            Technician.tenant_id.isnot(None),
+            Technician.technician_skill.isnot(None),
+        )
+        .all()
     )
-    .distinct()
-    .all()
-)
 
     capable_tenant_ids = {
-        tenant_id
-        for (tenant_id,) in capable_technician_tenants
-        if tenant_id
+        technician.tenant_id
+        for technician in technicians
+        if technician.tenant_id
+        and is_skill_matching(
+            technician.technician_skill,
+            req_skill,
+            raw_service_type,
+        )
     }
 
     if not capable_tenant_ids:
@@ -1923,17 +1942,34 @@ async def list_customer_support_requests(
 )
 async def create_customer_support_request(
     data: CustomerSupportRequestCreate,
-    current_user: AuthenticatedUser = Depends(
-        require_permission(Permission.CUSTOMERS_CREATE_REQUEST)
-    ),
+    current_user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
     Create a customer support request.
 
-    Customer identity and tenant scope always come from the
+    Customer identity and tenant scope are derived from the
     authenticated user and are never accepted from the request body.
     """
+
+    related_job_id = data.related_job_id
+
+    if related_job_id is not None:
+        related_request = (
+            db.query(ServiceRequest)
+            .filter(
+                ServiceRequest.linked_job_id == related_job_id,
+                ServiceRequest.customer_user_id == current_user.user_id,
+                ServiceRequest.tenant_id == current_user.tenant_id,
+            )
+            .first()
+        )
+
+        if not related_request:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Related job not found for this customer.",
+            )
 
     support_request = CustomerSupportRequest(
         request_number=_generate_support_request_number(),
@@ -1942,6 +1978,7 @@ async def create_customer_support_request(
         subject=data.subject,
         description=data.description,
         status="OPEN",
+        related_job_id=related_job_id,
     )
 
     db.add(support_request)
@@ -2477,10 +2514,58 @@ async def get_customer_dashboard(
         == current_user.tenant_id,
     )
 
+    linked_job_status = (
+        select(Job.status)
+        .where(
+            Job.id == ServiceRequest.linked_job_id,
+            or_(
+                Job.customer_id == str(current_user.user_id),
+                Job.customer_id.is_(None),
+            ),
+        )
+        .limit(1)
+        .scalar_subquery()
+    )
+
+    effective_status = func.lower(
+        func.coalesce(
+            linked_job_status,
+            ServiceRequest.status,
+        )
+    )
+
     total = base.count()
-    pending = base.filter(ServiceRequest.status == "UNASSIGNED").count()
-    active = base.filter(ServiceRequest.status.in_(["ASSIGNED", "IN_PROGRESS"])).count()
-    completed = base.filter(ServiceRequest.status == "COMPLETED").count()
+
+    pending = base.filter(
+        effective_status.in_(
+            [
+                "unassigned",
+                "created",
+                "queued",
+            ]
+        )
+    ).count()
+
+    active = base.filter(
+        effective_status.in_(
+            [
+                "assigned",
+                "accepted",
+                "en_route",
+                "on_site",
+                "in_progress",
+            ]
+        )
+    ).count()
+
+    completed = base.filter(
+        effective_status.in_(
+            [
+                "completed",
+                "closed",
+            ]
+        )
+    ).count()
 
     return CustomerDashboardResponse(
         total_requests=total,

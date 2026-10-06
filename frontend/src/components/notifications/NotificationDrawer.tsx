@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { X, Briefcase, Clock, RefreshCw, Info, CheckCheck } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, type Variants } from "framer-motion";
 import { NotificationDrawerProps } from "../../types/notifications.ts";
 
 const formatAgo = (ts: string) => {
@@ -32,6 +32,12 @@ const getTypeIcon = (type: string) => {
 };
 
 const styles = {
+  container: {
+    position: "fixed",
+    inset: 0,
+    zindex: 999,
+  } as React.CSSProperties,
+
   backdrop: {
     position: "fixed",
     top: 0,
@@ -238,10 +244,12 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({
 
   const isMobile = windowWidth <= 640;
 
-  const drawerVariants = {
+  const drawerVariants: Variants = {
     hidden: isMobile ? { y: "100%", x: 0 } : { x: "100%", y: 0 },
     visible: { y: 0, x: 0, transition: { type: "tween", duration: 0.3 } },
-    exit: isMobile ? { y: "100%", x: 0 } : { x: "100%", y: 0, transition: { type: "tween", duration: 0.25 } }
+    exit: isMobile
+      ? { y: "100%", x: 0 }
+      : { x: "100%", y: 0, transition: { type: "tween", duration: 0.25 } }
   };
 
   const drawerResponsive: React.CSSProperties = {

@@ -515,10 +515,15 @@ app.include_router(admin_metrics.router)
 app.include_router(admin_tools.router)
 
 # ──── Portal Routes ────
-from .routes import technician_portal, customer_portal
+from .routes import (
+    technician_portal,
+    customer_portal,
+    admin_customer_support,
+)
 
 app.include_router(technician_portal.router)
 app.include_router(customer_portal.router)
+app.include_router(admin_customer_support.router)
 
 from .services.socket_manager import sio_app
 

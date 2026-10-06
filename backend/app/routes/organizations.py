@@ -672,6 +672,9 @@ async def reverse_location(
             "formatted_address": result["formatted_address"],
             "latitude": result["latitude"],
             "longitude": result["longitude"],
+            "city": result.get("city", ""),
+            "state": result.get("state", ""),
+            "pincode": result.get("pincode", ""),
         }
     except Exception as e:
         logger.error("Ola Maps reverse geocoding failed: %s", e)

@@ -119,27 +119,56 @@ def get_jobs_stats(
         # Total Jobs
         total_jobs = query.count()
 
-        # Jobs counts by status
+        # Normalize job status so CREATED/created, IN_PROGRESS/in progress,
+        # EN_ROUTE/en route, etc. are handled consistently.
+        normalized_status = func.upper(
+            func.replace(
+                func.replace(Job.status, " ", ""),
+                "_",
+                "",
+            )
+        )
+
+        # Completed jobs
         completed_count = query.filter(
-            func.lower(Job.status) == "completed"
+            normalized_status.in_(["COMPLETED", "CLOSED"])
         ).count()
 
+        # Cancelled jobs
         cancelled_count = query.filter(
-            func.lower(Job.status).in_(["cancelled", "canceled"])
+            normalized_status.in_(["CANCELLED", "CANCELED"])
         ).count()
 
+        # Jobs currently being worked
         in_progress_count = query.filter(
-            func.lower(Job.status) == "in progress"
+            normalized_status == "INPROGRESS"
         ).count()
 
+        # Assigned/accepted/on-route/on-site/paused jobs.
+        # These are active but not yet IN_PROGRESS.
         active_count = query.filter(
-            func.lower(Job.status) == "active",
-            Job.assigned_technician_id.isnot(None)
+            normalized_status.in_(
+                [
+                    "ASSIGNED",
+                    "ACCEPTED",
+                    "ENROUTE",
+                    "ONSITE",
+                    "PAUSED",
+                ]
+            )
         ).count()
 
+        # Jobs that have not yet been assigned to a technician.
         pending_count = query.filter(
-            func.lower(Job.status) == "active",
-            Job.assigned_technician_id.is_(None)
+            Job.assigned_technician_id.is_(None),
+            normalized_status.in_(
+                [
+                    "CREATED",
+                    "QUEUED",
+                    "ACTIVE",
+                    "UNASSIGNED",
+                ]
+            ),
         ).count()
 
         # Technician availability counts with tenant isolation

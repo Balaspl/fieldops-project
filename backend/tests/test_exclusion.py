@@ -287,7 +287,7 @@ def test_timeout_tech_excluded(setup_db):
         location="0,0",
         issue_description="Issue",
         priority="P4",
-        service_type="Service",
+        service_type="HVAC Repair",
         contact_number="123",
         preferred_service_date=datetime.now().date(),
         status="ASSIGNED",
@@ -337,7 +337,7 @@ def test_offline_tech_excluded(setup_db):
         location="0,0",
         issue_description="Issue",
         priority="P1",
-        service_type="Service",
+        service_type="HVAC Repair",
         contact_number="123",
         tenant_id="tenant-1",
         preferred_service_date=datetime.now().date(),
@@ -404,7 +404,7 @@ def test_exclusion_checked_in_planning(
         tenant_id="tenant-1",
         technician_name="Alice",
         technician_status="AVAILABLE",
-        technician_skill="Skill",
+        technician_skill="HVAC",
         technician_location="13.0800,80.2700",
     )
 
@@ -413,7 +413,7 @@ def test_exclusion_checked_in_planning(
         tenant_id="tenant-1",
         technician_name="Bob",
         technician_status="AVAILABLE",
-        technician_skill="Skill",
+        technician_skill="HVAC",
         technician_location="13.0800,80.2700",
     )
 
@@ -425,12 +425,12 @@ def test_exclusion_checked_in_planning(
         location="13.0569,80.2425",
         issue_description="Issue",
         priority="P1",
-        service_type="Service",
+        service_type="HVAC Repair",
         contact_number="123",
         tenant_id="tenant-1",
         preferred_service_date=datetime.now().date(),
         status="QUEUED",
-        required_skill="Skill",
+        required_skill="HVAC",
     )
 
     db.add(job)
@@ -511,7 +511,7 @@ def test_exclusion_persists_across_cycles(setup_db):
         location="0,0",
         issue_description="Issue",
         priority="P4",
-        service_type="Service",
+        service_type="HVAC Repair",
         contact_number="123",
         preferred_service_date=datetime.now().date(),
         status="ASSIGNED",
@@ -585,7 +585,7 @@ def test_manual_override_bypasses_exclusion(
         tenant_id="tenant-1",
         technician_name="Alice",
         technician_status="AVAILABLE",
-        technician_skill="Skill",
+        technician_skill="HVAC",
         technician_location="0,0",
     )
 
@@ -598,11 +598,11 @@ def test_manual_override_bypasses_exclusion(
         location="0,0",
         issue_description="Issue",
         priority="P1",
-        service_type="Service",
+        service_type="HVAC Repair",
         contact_number="123",
         preferred_service_date=datetime.now().date(),
         status="QUEUED",
-        required_skill="Skill",
+        required_skill="HVAC",
         tenant_id="tenant-1",
     )
 

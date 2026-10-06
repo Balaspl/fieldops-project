@@ -253,17 +253,54 @@ class OlaMapsClient:
         results = payload.get("results", [])
         if not results:
             return None
+        
         result = results[0]
         address = result.get("formatted_address")
         if not address:
             return None
+
+        components = result.get("address_components") or []
+
+        def component_value(*types: str) -> str:
+            for component in components:
+                component_types = set(component.get("types") or [])
+
+                if component_types.intersection(types):
+                    value = (
+                        component.get("long_name")
+                        or component.get("short_name")
+                        or ""
+                    )
+                    if value:
+                        return str(value)
+
+            return ""
+
+        city = component_value(
+            "locality",
+            "postal_town",
+            "administrative_area_level_2",
+            "administrative_area_level_3",
+        )
+
+        state = component_value(
+            "administrative_area_level_1",
+        )
+
+        pincode = component_value(
+            "postal_code",
+        )
+
         return {
             "name": result.get("name") or result.get("premise") or "",
             "formatted_address": address,
             "latitude": latitude,
             "longitude": longitude,
+            "city": city,
+            "state": state,
+            "pincode": pincode,
         }
-
+    
     def _fallback_route(self, origin_lat: float, origin_lng: float, dest_lat: float, dest_lng: float) -> dict:
         distance_meters = int(haversine_distance(origin_lat, origin_lng, dest_lat, dest_lng) * 1000)
         duration_seconds = int(distance_meters / 13.889)
