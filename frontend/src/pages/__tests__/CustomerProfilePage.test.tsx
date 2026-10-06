@@ -18,6 +18,7 @@ import {
   getCustomerProfile,
   createCustomerProfile,
   updateCustomerProfile,
+  reverseLocation,
 } from "../../services/customerPortalService";
 
 const authMocks = vi.hoisted(() => ({
@@ -42,6 +43,7 @@ vi.mock("../../services/customerPortalService", () => ({
   getCustomerProfile: vi.fn(),
   createCustomerProfile: vi.fn(),
   updateCustomerProfile: vi.fn(),
+  reverseLocation: vi.fn(),
 }));
 
 const mockedGetProfile =
@@ -52,6 +54,9 @@ const mockedCreateProfile =
 
 const mockedUpdateProfile =
   vi.mocked(updateCustomerProfile);
+
+const mockedReverseLocation =
+  vi.mocked(reverseLocation);
 
 const existingProfile = {
   id: "profile-101",
@@ -360,6 +365,64 @@ describe("CustomerProfilePage", () => {
     expect(
       mockedGetProfile,
     ).toHaveBeenCalledTimes(2);
+  });
+
+
+  it("fills the address from the browser current location", async () => {
+    mockedGetProfile.mockResolvedValueOnce({
+      data: existingProfile,
+    } as any);
+
+    mockedReverseLocation.mockResolvedValueOnce({
+      data: {
+        verified: true,
+        address: "Detected Current Address",
+        latitude: 13.0827,
+        longitude: 80.2707,
+      },
+    } as any);
+
+    const getCurrentPosition = vi.fn((
+      success: (position: GeolocationPosition) => void,
+    ) => {
+      success({
+        coords: {
+          latitude: 13.0827,
+          longitude: 80.2707,
+          accuracy: 10,
+          altitude: null,
+          altitudeAccuracy: null,
+          heading: null,
+          speed: null,
+        },
+        timestamp: Date.now(),
+      } as GeolocationPosition);
+    });
+
+    Object.defineProperty(navigator, "geolocation", {
+      configurable: true,
+      value: { getCurrentPosition },
+    });
+
+    renderPage();
+
+    await screen.findByText("Edit Profile");
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Use Current Location",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(
+        mockedReverseLocation,
+      ).toHaveBeenCalledWith(13.0827, 80.2707);
+    });
+
+    expect(
+      screen.getByDisplayValue("Detected Current Address"),
+    ).toBeTruthy();
   });
 
   it("maps a backend save failure to a customer-safe error", async () => {

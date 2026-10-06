@@ -42,17 +42,14 @@ def match_skill(
     db: Session = Depends(get_db)
 ):
     """
-    Find available technicians matching the required skill.
-    Falls back gracefully if exact match returns no results.
+    Find technicians whose skills match the requested service type.
+
+    No fallback to unrelated technicians is allowed.
     """
 
     user, tenant_id = user_tenant
 
-    pattern = f"%{job_type.strip()}%"
-
-    tech_query = db.query(models.Technician).filter(
-        models.Technician.technician_skill.ilike(pattern)
-    )
+    tech_query = db.query(models.Technician)
 
     if not user or not user.is_super_admin:
         tech_query = tech_query.filter(
@@ -61,17 +58,17 @@ def match_skill(
 
     technicians = tech_query.all()
 
-    if not technicians:
-        fallback_query = db.query(models.Technician)
+    matching_technicians = [
+        technician
+        for technician in technicians
+        if utils.is_skill_matching(
+            technician.technician_skill,
+            "",
+            job_type,
+        )
+    ]
 
-        if not user or not user.is_super_admin:
-            fallback_query = fallback_query.filter(
-                models.Technician.tenant_id == tenant_id
-            )
-
-        technicians = fallback_query.all()
-
-    return technicians
+    return matching_technicians
 
 
 @router.get(
@@ -109,16 +106,15 @@ def get_nearest_technician(
         )
 
     tech_query = db.query(models.Technician).filter(
-        models.Technician.technician_skill == job.required_skill,
         models.Technician.technician_status.in_(
             [
                 "AVAILABLE",
                 "ASSIGNED",
                 "Available",
-                "Assigned"
+                "Assigned",
             ]
         ),
-        models.Technician.current_jobs < models.Technician.max_jobs
+        models.Technician.current_jobs < models.Technician.max_jobs,
     )
 
     if not user or not user.is_super_admin:
@@ -127,6 +123,16 @@ def get_nearest_technician(
         )
 
     technicians = tech_query.all()
+
+    technicians = [
+        technician
+        for technician in technicians
+        if utils.is_skill_matching(
+            technician.technician_skill,
+            job.required_skill or "",
+            job.service_type or "",
+        )
+    ]
 
     if not technicians:
         raise HTTPException(
@@ -292,17 +298,16 @@ def assign_job(
         elif assignment.job_type:
 
             t_q = db.query(models.Technician).filter(
-                models.Technician.technician_skill == assignment.job_type,
                 models.Technician.technician_status.in_(
                     [
                         "AVAILABLE",
                         "ASSIGNED",
                         "Available",
-                        "Assigned"
+                        "Assigned",
                     ]
                 ),
                 models.Technician.current_jobs
-                < models.Technician.max_jobs
+                < models.Technician.max_jobs,
             )
 
             if not user or not user.is_super_admin:
@@ -312,17 +317,37 @@ def assign_job(
 
             technicians = t_q.all()
 
+            required_service_type = (
+                job.service_type
+                or assignment.job_type
+                or job.required_skill
+                or ""
+            )
+
+            technicians = [
+                technician
+                for technician in technicians
+                if utils.is_skill_matching(
+                    technician.technician_skill,
+                    job.required_skill or "",
+                    required_service_type,
+                )
+            ]
+
             if not technicians:
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"No available technicians found with skill: "
-                        f"{assignment.job_type}"
-                    )
+                        "No available technicians found with "
+                        f"required skill for service type: "
+                        f"{required_service_type}"
+                    ),
                 )
 
             technicians.sort(
-                key=lambda t: t.current_jobs
+                key=lambda technician: (
+                    technician.current_jobs or 0
+                )
             )
 
             technician = technicians[0]
@@ -373,16 +398,9 @@ def assign_job(
             job.assigned_by = str(user.user_id)
 
         # ============================================================
-        # 8. Update Technician Workload
+        # 8. Workload is updated only after technician acceptance.
+        # Assignment alone does not count toward active workload.
         # ============================================================
-
-        from ..workload_utils import update_workload_count
-
-        update_workload_count(
-            db,
-            technician.technician_id,
-            1
-        )
 
         # ============================================================
         # 9. Create Technician Notification
@@ -763,28 +781,22 @@ def assign_jobs_bulk(
         current_jobs = technician.current_jobs or 0
         max_jobs = technician.max_jobs
 
-        if max_jobs is not None:
-
-            requested_count = len(ordered_jobs)
-
-            if current_jobs + requested_count > max_jobs:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"Cannot assign {requested_count} jobs to "
-                        f"{technician.technician_name}. "
-                        f"Current workload: "
-                        f"{current_jobs}/{max_jobs}."
-                    )
+        if max_jobs is not None and current_jobs >= max_jobs:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Cannot assign jobs to "
+                    f"{technician.technician_name}. "
+                    f"Current workload: "
+                    f"{current_jobs}/{max_jobs}."
                 )
+            )
 
         # ============================================================
         # 7. Perform Mutations
         # ============================================================
 
         assigned_at = datetime.now(timezone.utc)
-
-        from ..workload_utils import update_workload_count
 
         results = []
 
@@ -824,14 +836,9 @@ def assign_jobs_bulk(
                 job.assigned_by = str(user.user_id)
 
             # --------------------------------------------------------
-            # Update Technician Workload
+            # Workload is updated only after technician acceptance.
+            # Bulk assignment alone does not count toward active workload.
             # --------------------------------------------------------
-
-            update_workload_count(
-                db,
-                technician.technician_id,
-                1
-            )
 
             # ========================================================
             # Technician Notification

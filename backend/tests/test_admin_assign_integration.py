@@ -550,7 +550,8 @@ def test_bulk_job_assignment_success(setup_db):
 
     db.refresh(tech)
 
-    assert tech.current_jobs == 3
+    # assignment alone must not increase technician workload.
+    assert tech.current_jobs == 0
 
     for job in jobs:
         db.refresh(job)
@@ -722,7 +723,8 @@ def test_bulk_job_assignment_rejects_workload_overflow(setup_db):
         technician_skill="Plumbing",
         technician_location="0,0",
         technician_status="AVAILABLE",
-        current_jobs=2,
+        # Already at capacity: bulk assignment must be rejected.
+        current_jobs=3,
         max_jobs=3,
     )
     db.add(tech)
@@ -765,12 +767,12 @@ def test_bulk_job_assignment_rejects_workload_overflow(setup_db):
     detail = response.json()["detail"].lower()
 
     assert response.status_code == 400
-    assert "cannot assign" in detail
+    assert "maximum workload reached" in detail
     assert "workload" in detail
 
     db.refresh(tech)
 
-    assert tech.current_jobs == 2
+    assert tech.current_jobs == 3
 
     for job in jobs:
         db.refresh(job)
@@ -836,7 +838,9 @@ def test_bulk_job_assignment_accepts_job_prefix_and_duplicate_ids(setup_db):
 
     assert job.assigned_technician_id == tech.technician_id
     assert job.status == "ASSIGNED"
-    assert tech.current_jobs == 1
+
+    # Assignment alone must not increase technician workload.
+    assert tech.current_jobs == 0
 
 
 def test_bulk_job_assignment_rejects_non_positive_job_id(setup_db):
@@ -1004,7 +1008,7 @@ def test_match_skill_returns_matching_technicians(setup_db):
     assert data[0]["tech_id"] == "skill-tech-001"
 
 
-def test_match_skill_falls_back_when_no_exact_match(setup_db):
+def test_match_skill_returns_no_technician_when_no_skill_match(setup_db):
     db = setup_db
 
     tech = Technician(
@@ -1033,8 +1037,8 @@ def test_match_skill_falls_back_when_no_exact_match(setup_db):
     assert response.status_code == 200
     data = response.json()
 
-    assert len(data) == 1
-    assert data[0]["tech_id"] == "fallback-tech-001"
+    # strict skill matching must not fall back to an unrelated technician.
+    assert data == []
 
 
 def test_match_skill_applies_tenant_filter_for_normal_user(setup_db):
@@ -1703,7 +1707,7 @@ def test_assign_job_handles_sqlalchemy_error(setup_db):
     db.refresh(job)
 
     with patch(
-        "app.workload_utils.update_workload_count",
+        "sqlalchemy.orm.Session.commit",
         side_effect=SQLAlchemyError("forced database error"),
     ):
         response = client.post(
@@ -1754,7 +1758,7 @@ def test_assign_job_handles_unexpected_error(setup_db):
     db.refresh(job)
 
     with patch(
-        "app.workload_utils.update_workload_count",
+        "app.routes.assignment.Session.commit",
         side_effect=RuntimeError("forced unexpected error"),
     ):
         response = client.post(
@@ -1917,7 +1921,7 @@ def test_bulk_job_assignment_handles_sqlalchemy_error(setup_db):
     db.refresh(job)
 
     with patch(
-        "app.workload_utils.update_workload_count",
+        "sqlalchemy.orm.Session.commit",
         side_effect=SQLAlchemyError("forced database error"),
     ):
         response = client.post(
@@ -1968,7 +1972,7 @@ def test_bulk_job_assignment_handles_unexpected_error(setup_db):
     db.refresh(job)
 
     with patch(
-        "app.workload_utils.update_workload_count",
+        "app.routes.assignment.models.InAppNotification",
         side_effect=RuntimeError("forced unexpected error"),
     ):
         response = client.post(
@@ -1987,7 +1991,7 @@ def test_bulk_job_assignment_handles_unexpected_error(setup_db):
     assert response.json()["detail"] == "An unexpected error occurred"
 
 
-def test_match_skill_applies_tenant_filter_for_normal_user_fallback(setup_db):
+def test_match_skill_applies_tenant_filter_for_normal_user(setup_db):
     db = setup_db
 
     _create_normal_user(db)
@@ -2034,7 +2038,7 @@ def test_match_skill_applies_tenant_filter_for_normal_user_fallback(setup_db):
     try:
         response = client.get(
             "/technicians/match-skill",
-            params={"job_type": "HVAC"},
+            params={"job_type": "Electrical"},
             headers={
                 "Authorization": f"Bearer {_normal_user_token()}",
                 "X-Tenant-ID": "tenant-1",
@@ -2047,6 +2051,7 @@ def test_match_skill_applies_tenant_filter_for_normal_user_fallback(setup_db):
 
     data = response.json()
 
+    # only the matching technician from the authenticated tenant is returned.
     assert len(data) == 1
     assert data[0]["tech_id"] == "fallback-own-tech"
 def test_nearest_technician_applies_tenant_filter_for_normal_user(setup_db):

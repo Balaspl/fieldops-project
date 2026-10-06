@@ -391,6 +391,17 @@ export default function CustomerTrackingPage({
       liveJobStatus || ""
     );
 
+  const activeJobs = useMemo(
+    () =>
+      jobs.filter(
+        (job) =>
+          !TERMINAL_STATUSES.has(
+            normalizeJobStatus(job.status)
+          )
+      ),
+    [jobs]
+  );
+
   if (loading) {
     return (
       <div

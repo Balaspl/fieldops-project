@@ -46,6 +46,7 @@ import {
 } from "./services/heartbeatService";
 import { getAllTechnicians } from "./services/technicianService";
 import { getTechnicianNotifications } from "./services/technicianPortalService";
+import { getAdminCustomerSupportRequests } from "./services/customerPortalService";
 import { ToastProvider, useToast } from "./hooks/useToast";
 import LoadingSpinner from "./components/ui/LoadingSpinner";
 import TechnicianLocationTracker from "./components/technician/TechnicianLocationTracker";
@@ -791,6 +792,7 @@ function AppInner() {
         return "Loading Real-Time Job Tracking...";
 
       case "cust_support":
+      case "customer_support":
         return "Loading Customer Support...";
 
       case "cust_invoices":
@@ -827,6 +829,15 @@ function AppInner() {
     selectedJobDetail,
     setSelectedJobDetail,
   ] = useState<any>(null);
+
+  const [selectedSupportRequestId, setSelectedSupportRequestId] =
+    useState<number | null>(null);
+
+  const [openSupportCount, setOpenSupportCount] =
+    useState(0);
+
+  const supportSeenIdsRef =
+    useRef<Set<number>>(new Set());
 
   const [isBellAnimated, setIsBellAnimated] =
     useState(false);
@@ -870,12 +881,14 @@ function AppInner() {
 
   // Real-time technician toast notification pop-up
   const seenNotifIdsRef =
-    useRef<Set<string>>(
+    useRef<Set<string | number>>(
       new Set(),
     );
 
   useEffect(() => {
     if (!isTechnician) return;
+
+    let initialized = false;
 
     const checkNewJobNotifications =
       async () => {
@@ -886,16 +899,24 @@ function AppInner() {
           const list =
             res.data.notifications || [];
 
+          // First fetch after login:
+          // remember existing notifications but DO NOT show them as new.
+          if (!initialized) {
+            list.forEach((n: any) => {
+              seenNotifIdsRef.current.add(n.id);
+            });
+
+            initialized = true;
+            return;
+          }
+
+          // After initialization:
+          // only show notifications that were not already present.
           list.forEach((n: any) => {
             if (
-              !n.isRead &&
-              !seenNotifIdsRef.current.has(
-                n.id,
-              )
+              !seenNotifIdsRef.current.has(n.id)
             ) {
-              seenNotifIdsRef.current.add(
-                n.id,
-              );
+              seenNotifIdsRef.current.add(n.id);
 
               addToast({
                 title:
@@ -914,7 +935,12 @@ function AppInner() {
               });
             }
           });
-        } catch (e) {}
+        } catch (e) {
+          console.error(
+            "Failed to check technician notifications:",
+            e,
+          );
+        }
       };
 
     checkNewJobNotifications();
@@ -929,6 +955,87 @@ function AppInner() {
       clearInterval(interval);
   }, [
     isTechnician,
+    addToast,
+  ]);
+
+  // Poll staff-visible support requests so new customer issues surface
+  // immediately in the staff portal without overloading the notification table.
+  useEffect(() => {
+    if (!isSuperAdmin && !isDispatcher) {
+      setOpenSupportCount(0);
+      supportSeenIdsRef.current.clear();
+      return;
+    }
+
+    let initialized = false;
+
+    const checkCustomerSupportRequests = async () => {
+      try {
+        const response =
+          await getAdminCustomerSupportRequests("OPEN");
+
+        const openRequests =
+          response.data || [];
+
+        setOpenSupportCount(
+          openRequests.length,
+        );
+
+        if (!initialized) {
+          openRequests.forEach((item) => {
+            supportSeenIdsRef.current.add(
+              item.id,
+            );
+          });
+
+          initialized = true;
+          return;
+        }
+
+        openRequests.forEach((item) => {
+          if (
+            supportSeenIdsRef.current.has(
+              item.id,
+            )
+          ) {
+            return;
+          }
+
+          supportSeenIdsRef.current.add(
+            item.id,
+          );
+
+          addToast({
+            title:
+              "New Customer Support Request",
+            message:
+              `${item.customer.name}: ${item.subject}`,
+            type: "warning",
+            autoDismiss: 0,
+            priority: "critical",
+            jobId: `support:${item.id}`,
+          });
+        });
+      } catch (error) {
+        console.error(
+          "Failed to check customer support requests:",
+          error,
+        );
+      }
+    };
+
+    void checkCustomerSupportRequests();
+
+    const interval = setInterval(
+      checkCustomerSupportRequests,
+      10000,
+    );
+
+    return () =>
+      clearInterval(interval);
+  }, [
+    isSuperAdmin,
+    isDispatcher,
     addToast,
   ]);
 
@@ -1367,6 +1474,47 @@ function AppInner() {
 
   const handleToastNavigate =
     (jobId: string | number) => {
+      const navigationTarget =
+        String(jobId);
+
+      if (
+        navigationTarget.startsWith(
+          "support:",
+        )
+      ) {
+        const supportRequestId =
+          Number(
+            navigationTarget.slice(
+              "support:".length,
+            ),
+          );
+
+        if (
+          Number.isFinite(
+            supportRequestId,
+          )
+        ) {
+          setSelectedSupportRequestId(
+            supportRequestId,
+          );
+
+          setActiveTab(
+            "customer_support",
+          );
+
+          setIsNavigating(true);
+          setIsNotificationDrawerOpen(
+            false,
+          );
+
+          window.setTimeout(() => {
+            setIsNavigating(false);
+          }, 400);
+        }
+
+        return;
+      }
+
       const matchingNotif =
         notifications.find(
           (n) =>
@@ -2549,6 +2697,84 @@ function AppInner() {
                   Live Tracking
                 </span>
               </button>
+
+              {(isSuperAdmin ||
+                isDispatcher) && (
+                <button
+                  className="nav-item-style"
+                  style={getItemStyle(
+                    "customer_support",
+                  )}
+                  onClick={() => {
+                    setSelectedSupportRequestId(
+                      null,
+                    );
+
+                    handleTabChange(
+                      "customer_support",
+                    );
+                  }}
+                  title="Customer Support"
+                >
+                  <Headphones
+                    size={18}
+                    style={{
+                      flexShrink: 0,
+                    }}
+                  />
+
+                  <span
+                    className="nav-text"
+                    style={
+                      isMobileLayout ||
+                      sidebarCollapsed
+                        ? {
+                            display:
+                              "none",
+                          }
+                        : {
+                            display:
+                              "flex",
+                            alignItems:
+                              "center",
+                            gap: "8px",
+                          }
+                    }
+                  >
+                    Customer Support
+
+                    {openSupportCount >
+                      0 && (
+                      <span
+                        style={{
+                          minWidth: "20px",
+                          height: "20px",
+                          padding: "0 6px",
+                          borderRadius:
+                            "999px",
+                          background:
+                            "#DC2626",
+                          color:
+                            "#FFFFFF",
+                          fontSize: "10px",
+                          fontWeight: 800,
+                          display:
+                            "inline-flex",
+                          alignItems:
+                            "center",
+                          justifyContent:
+                            "center",
+                        }}
+                      >
+                        {openSupportCount >
+                        99
+                          ? "99+"
+                          : openSupportCount}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              )}
             </nav>
           )}
 
@@ -2907,11 +3133,7 @@ function AppInner() {
             ...(isMobileLayout
               ? styles.pageWrapMobile
               : {}),
-            overflowY:
-              activeTab ===
-              "dashboard"
-                ? "auto"
-                : "hidden",
+            overflowY: "auto",
           }}
         >
           {isTechnician && (
@@ -3124,6 +3346,18 @@ function AppInner() {
                 "cust_support" && (
                 <CustomerSupportPage />
               )}
+
+              {activeTab ===
+                "customer_support" &&
+                (isSuperAdmin ||
+                  isDispatcher) && (
+                <CustomerSupportPage
+                  initialRequestId={
+                    selectedSupportRequestId
+                  }
+                />
+              )}
+
               {activeTab ===
                 "cust_settings" && (
                 <CustomerSettingsPage />

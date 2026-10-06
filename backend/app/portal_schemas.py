@@ -638,6 +638,11 @@ class CustomerSupportRequestCreate(BaseModel):
         max_length=5000,
     )
 
+    related_job_id: Optional[int] = Field(
+        default=None,
+        ge=1,
+    )
+
     @field_validator("subject")
     @classmethod
     def validate_subject(cls, v):
@@ -670,8 +675,67 @@ class CustomerSupportRequestResponse(BaseModel):
     request_number: str
     subject: str
     description: str
+    related_job_id: Optional[int] = None
     status: str
+    resolution_note: Optional[str] = None
+    resolved_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class CustomerSupportRequestUpdate(BaseModel):
+    """Staff update for a customer support request."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: str = Field(
+        ...,
+        min_length=1,
+        max_length=30,
+    )
+
+    resolution_note: Optional[str] = Field(
+        default=None,
+        max_length=5000,
+    )
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v):
+        normalized = v.strip().upper()
+        allowed = {"OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"}
+
+        if normalized not in allowed:
+            raise ValueError(
+                "Status must be OPEN, IN_PROGRESS, RESOLVED, or CLOSED"
+            )
+
+        return normalized
+
+    @field_validator("resolution_note")
+    @classmethod
+    def validate_resolution_note(cls, v):
+        if v is None:
+            return None
+
+        value = v.strip()
+        return value or None
+
+
+class CustomerSupportRequestAdminResponse(BaseModel):
+    """Staff-facing support request with safe customer/job context."""
+
+    id: int
+    request_number: str
+    subject: str
+    description: str
+    status: str
+    related_job_id: Optional[int] = None
+    resolution_note: Optional[str] = None
+    resolved_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+    customer: dict
+    job: Optional[dict] = None

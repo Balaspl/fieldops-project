@@ -1406,7 +1406,10 @@ def test_create_service_request_no_organization_coordinates(
             ),
             Technician: FakeQuery(
                 all_result=[
-                    ("provider-tenant",),
+                    SimpleNamespace(
+                        tenant_id="provider-tenant",
+                        technician_skill="hvac",
+                    ),
                 ]
             ),
             Organization: FakeQuery(
@@ -1481,9 +1484,18 @@ def test_create_service_request_success(monkeypatch):
             ),
             Technician: FakeQuery(
                 all_result=[
-                    ("provider-tenant",),
-                    ("provider-tenant-two",),
-                    (None,),
+                    SimpleNamespace(
+                        tenant_id="provider-tenant",
+                        technician_skill="hvac",
+                    ),
+                    SimpleNamespace(
+                        tenant_id="provider-tenant-two",
+                        technician_skill="HVAC",
+                    ),
+                    SimpleNamespace(
+                        tenant_id=None,
+                        technician_skill="HVAC",
+                    ),
                 ]
             ),
             Organization: FakeQuery(
@@ -1522,7 +1534,7 @@ def test_create_service_request_user_fallback_and_optional_values(
     payload = ServiceRequestCreate(
         title="General service",
         description="General service request description",
-        service_type=None,
+        service_type="General Maintenance",
         priority="MEDIUM",
         preferred_visit_date=None,
         images=[],
@@ -1569,7 +1581,10 @@ def test_create_service_request_user_fallback_and_optional_values(
             ),
             Technician: FakeQuery(
                 all_result=[
-                    ("provider-tenant",)
+                    SimpleNamespace(
+                        tenant_id="provider-tenant",
+                        technician_skill="General Maintenance",
+                    )
                 ]
             ),
             Organization: FakeQuery(
@@ -1635,7 +1650,10 @@ def test_create_service_request_transaction_failure(
             ),
             Technician: FakeQuery(
                 all_result=[
-                    ("provider-tenant",)
+                    SimpleNamespace(
+                        tenant_id="provider-tenant",
+                        technician_skill="hvac",
+                    )
                 ]
             ),
             Organization: FakeQuery(
@@ -2976,18 +2994,15 @@ def test_mark_all_read():
 
 
 def test_get_customer_dashboard():
-    db = FakeDB(
-        {
-            ServiceRequest: FakeQuery(
-                count_results=[
-                    8,
-                    3,
-                    4,
-                    1,
-                ]
-            )
-        }
+    query = FakeQuery(
+        count_results=[
+            8,
+            3,
+            4,
+            1,
+        ]
     )
+    db = FakeDB({ServiceRequest: query})
 
     result = asyncio.run(
         customer_portal.get_customer_dashboard(
@@ -3000,3 +3015,34 @@ def test_get_customer_dashboard():
     assert result.pending_requests == 3
     assert result.active_jobs == 4
     assert result.completed_jobs == 1
+
+    rendered_filters = [
+        str(condition.compile(compile_kwargs={"literal_binds": True}))
+        for condition in query.filters
+    ]
+
+    assert any(
+        "service_requests.customer_user_id" in value
+        for value in rendered_filters
+    )
+    assert any(
+        "service_requests.tenant_id" in value
+        for value in rendered_filters
+    )
+    assert any(
+        "created" in value
+        and "queued" in value
+        and "unassigned" in value
+        for value in rendered_filters
+    )
+    assert any(
+        "assigned" in value
+        and "en_route" in value
+        and "in_progress" in value
+        for value in rendered_filters
+    )
+    assert any(
+        "completed" in value
+        and "closed" in value
+        for value in rendered_filters
+    )

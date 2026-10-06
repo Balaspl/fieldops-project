@@ -884,9 +884,13 @@ export default function CustomerServiceRequestsPage({
         return false;
       }
 
-      if (!locationConfirmed) {
+      if (
+        !locationConfirmed ||
+        siteLatitude === null ||
+        siteLongitude === null
+      ) {
         setError(
-          "Please confirm the service location."
+          "Please confirm the service location on the map."
         );
         return false;
       }
@@ -1351,8 +1355,20 @@ export default function CustomerServiceRequestsPage({
                   <option value="Plumbing">
                     Plumbing
                   </option>
+                  <option value="Network Support">
+                    Network Support
+                  </option>
                   <option value="General Maintenance">
                     General Maintenance
+                  </option>
+                  <option value="Appliance Repair">
+                    Appliance Repair
+                  </option>
+                  <option value="Roofing & Carpentry">
+                    Roofing & Carpentry
+                  </option>
+                  <option value="CCTV & Security">
+                    CCTV & Security
                   </option>
                 </select>
               </div>
@@ -1549,7 +1565,7 @@ export default function CustomerServiceRequestsPage({
                   />
                   {isGettingLocation
                     ? "Locating..."
-                    : "Use my location"}
+                    : "Use My Location"}
                 </button>
               </div>
 
@@ -1686,7 +1702,7 @@ export default function CustomerServiceRequestsPage({
                   }}
                 >
                   {locationConfirmed
-                    ? `Location confirmed${
+                    ? `✓ Location confirmed${
                         selectedLocationName
                           ? `: ${selectedLocationName}`
                           : ""

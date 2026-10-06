@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
-import { User, Save, AlertCircle, CheckCircle } from "lucide-react";
+import { User, Save, AlertCircle, CheckCircle, Navigation } from "lucide-react";
 import {
   getCustomerProfile,
   createCustomerProfile,
   updateCustomerProfile,
+  reverseLocation,
 } from "../../services/customerPortalService";
 import useAuthStore from "../../store/authStore";
 
@@ -64,6 +65,7 @@ export default function CustomerProfilePage() {
   const [isNew, setIsNew] = useState(true);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [locating, setLocating] = useState(false);
 
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -340,6 +342,97 @@ export default function CustomerProfilePage() {
     if (success) {
       setSuccess("");
     }
+  };
+
+  // -----------------------------------------
+  // CURRENT LOCATION
+  // -----------------------------------------
+  const handleUseCurrentLocation = () => {
+    if (saving || locating) {
+      return;
+    }
+
+    if (!navigator.geolocation) {
+      setError(
+        "Current location is not supported by this browser. Please enter your address manually.",
+      );
+      return;
+    }
+
+    setLocating(true);
+    setError("");
+    setSuccess("");
+
+    navigator.geolocation.getCurrentPosition(
+      async ({ coords }) => {
+        try {
+          const response = await reverseLocation(
+            coords.latitude,
+            coords.longitude,
+          );
+
+          const address =
+            response?.data?.verified
+              ? response.data.address ||
+                response.data.formatted_address ||
+                ""
+              : "";
+
+          if (!address) {
+            setError(
+              response?.data?.message ||
+                "Unable to determine an address from your current location. Please enter it manually.",
+            );
+            return;
+          }
+
+          const detectedPincode =
+            response.data.pincode ||
+            address.match(/\b\d{6}\b/)?.[0] ||
+            "";
+
+          setForm((current) => ({
+            ...current,
+            address,
+            city: response.data.city || current.city,
+            state: response.data.state || current.state,
+            pincode: detectedPincode || current.pincode,
+          }));
+        } catch {
+          setError(
+            "Unable to determine your current address. Please check your connection or enter it manually.",
+          );
+        } finally {
+          setLocating(false);
+        }
+      },
+      (positionError) => {
+        setLocating(false);
+
+        if (positionError.code === 1) {
+          setError(
+            "Location permission was denied. Please allow location access or enter your address manually.",
+          );
+          return;
+        }
+
+        if (positionError.code === 2) {
+          setError(
+            "Your current location could not be determined. Please try again or enter your address manually.",
+          );
+          return;
+        }
+
+        setError(
+          "Getting your current location timed out. Please try again or enter your address manually.",
+        );
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0,
+      },
+    );
   };
 
   // -----------------------------------------
@@ -623,18 +716,63 @@ export default function CustomerProfilePage() {
                 "1 / -1",
             }}
           >
-            <label
-              style={labelStyle}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "12px",
+                marginBottom: "4px",
+              }}
             >
-              Address
-              <span
-                style={
-                  requiredStarStyle
-                }
+              <label
+                style={{
+                  ...labelStyle,
+                  marginBottom: 0,
+                }}
               >
-                *
-              </span>
-            </label>
+                Address
+                <span
+                  style={
+                    requiredStarStyle
+                  }
+                >
+                  *
+                </span>
+              </label>
+
+              <button
+                type="button"
+                onClick={handleUseCurrentLocation}
+                disabled={saving || locating}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  border: "none",
+                  borderRadius: "7px",
+                  background: "#EEF7F1",
+                  color: "#2F855A",
+                  padding: "7px 10px",
+                  fontSize: "12px",
+                  fontWeight: 700,
+                  cursor:
+                    saving || locating
+                      ? "not-allowed"
+                      : "pointer",
+                  opacity: saving || locating ? 0.65 : 1,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                <Navigation
+                  size={14}
+                  strokeWidth={2.2}
+                />
+                {locating
+                  ? "Getting Location..."
+                  : "Use Current Location"}
+              </button>
+            </div>
 
             <textarea
               style={{

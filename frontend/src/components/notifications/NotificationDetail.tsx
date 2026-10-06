@@ -270,15 +270,34 @@ export const NotificationDetail: React.FC<NotificationDetailProps> = ({
 
   // Wrap parent callbacks with useActionState lifecycle
   const handleAccept = async (jobId: string | number) => {
-    await execute(() => onAccept(jobId), "Job accepted");
+    await execute(
+      async () => {
+        await onAccept(jobId);
+      },
+      "Job accepted"
+    );
   };
 
   const handleReject = async (jobId: string | number, reason: string) => {
-    await execute(() => onReject(jobId, reason), "Job rejected");
+    await execute(
+      async () => {
+        await onReject(jobId, reason);
+      },
+      "Job rejected"
+    );
   };
 
-  const handleReassign = async (jobId: string | number, colleagueId?: number, reason?: string) => {
-    await execute(() => onReassign(jobId, colleagueId, reason), "Reassignment requested");
+  const handleReassign = async (
+    jobId: string | number,
+    colleagueId?: number,
+    reason?: string
+  ) => {
+    await execute(
+      async () => {
+        await onReassign(jobId, colleagueId, reason);
+      },
+      "Reassignment requested"
+    );
   };
 
   const handleExpire = () => {
@@ -374,7 +393,7 @@ export const NotificationDetail: React.FC<NotificationDetailProps> = ({
               expiresAt={jobData.sla_deadline}
               onExpire={handleExpire}
               onWarning={handleWarning}
-              jobId={jobData.id}
+              jobId={Number(jobData.id)}
               hidden={isActioned}
               condensed={true}
             />
@@ -439,7 +458,7 @@ export const NotificationDetail: React.FC<NotificationDetailProps> = ({
             onAccept={handleAccept}
             onReject={handleReject}
             onReassign={handleReassign}
-            jobId={jobData.id}
+            jobId={Number(jobData.id)}
             disabled={actionState !== "IDLE"}
           />
         </div>
@@ -447,7 +466,7 @@ export const NotificationDetail: React.FC<NotificationDetailProps> = ({
 
       {showHistory && (
         <OverrideHistory
-          jobId={jobData.id}
+          jobId={Number(jobData.id)}
           jobTitle={jobData.title}
           onClose={() => setShowHistory(false)}
         />

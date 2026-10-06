@@ -253,36 +253,49 @@ class CircuitBreaker:
         self,
         tool_id: str,
     ) -> bool:
+        """
+        Check whether the circuit is currently open.
+
+        Redis provides shared state when available, while local state
+        remains authoritative as a fallback when Redis is unavailable
+        or partially degraded.
+        """
+        redis_open = False
+
         if self.redis is not None:
             try:
-                return (
+                redis_open = (
                     self.redis.get(
                         self._open_key(tool_id)
                     )
                     is not None
                 )
             except Exception:
+                # Fall back to local state.
                 pass
 
         with self._lock:
             state = self._states.get(tool_id)
 
             if state is None:
-                return False
+                local_open = False
 
-            if state.opened_at is None:
-                return False
+            elif state.opened_at is None:
+                local_open = False
 
-            elapsed = (
-                self.clock()
-                - state.opened_at
-            )
+            else:
+                elapsed = (
+                    self.clock()
+                    - state.opened_at
+                )
 
-            if elapsed >= self.open_duration_seconds:
-                self._states[tool_id] = _CircuitState()
-                return False
+                if elapsed >= self.open_duration_seconds:
+                    self._states[tool_id] = _CircuitState()
+                    local_open = False
+                else:
+                    local_open = True
 
-            return True
+        return local_open or redis_open
 
     # --------------------------------------------------------
     # Failure
@@ -295,10 +308,34 @@ class CircuitBreaker:
         """
         Record one final tool failure.
 
+        Local state is always updated first so the circuit breaker
+        remains enforceable even when Redis is unavailable or partially
+        operational. Redis is then updated for shared cross-process state.
+
         Returns:
             True  -> circuit is open
             False -> circuit remains closed
         """
+        with self._lock:
+            state = self._states.setdefault(
+                tool_id,
+                _CircuitState(),
+            )
+
+            if state.opened_at is not None:
+                local_open = True
+            else:
+                state.failures += 1
+
+                local_open = (
+                    state.failures
+                    >= self.failure_threshold
+                )
+
+                if local_open:
+                    state.opened_at = self.clock()
+
+        redis_open = False
 
         if self.redis is not None:
             try:
@@ -310,62 +347,35 @@ class CircuitBreaker:
                     self._open_key(tool_id)
                 )
 
+                ttl = max(
+                    1,
+                    int(
+                        self.open_duration_seconds
+                    ),
+                )
+
                 failures = self.redis.incr(
                     failure_key
                 )
 
-                # Keep failure counter alive for the
-                # circuit window.
                 self.redis.expire(
                     failure_key,
-                    max(
-                        1,
-                        int(
-                            self.open_duration_seconds
-                        ),
-                    ),
+                    ttl,
                 )
 
                 if failures >= self.failure_threshold:
                     self.redis.set(
                         open_key,
                         "1",
-                        ex=max(
-                            1,
-                            int(
-                                self.open_duration_seconds
-                            ),
-                        ),
+                        ex=ttl,
                     )
-
-                    return True
-
-                return False
+                    redis_open = True
 
             except Exception:
-                # Redis unavailable.
-                # Fall back to local state.
+                # Local state remains authoritative.
                 pass
 
-        with self._lock:
-            state = self._states.setdefault(
-                tool_id,
-                _CircuitState(),
-            )
-
-            if state.opened_at is not None:
-                return True
-
-            state.failures += 1
-
-            if (
-                state.failures
-                >= self.failure_threshold
-            ):
-                state.opened_at = self.clock()
-                return True
-
-            return False
+        return local_open or redis_open
 
     # --------------------------------------------------------
     # Success
@@ -414,32 +424,39 @@ class CircuitBreaker:
         self,
         tool_id: str,
     ) -> int:
+        redis_count = 0
+
         if self.redis is not None:
             try:
                 value = self.redis.get(
                     self._failure_key(tool_id)
                 )
 
-                if value is None:
-                    return 0
+                if value is not None:
+                    if isinstance(value, bytes):
+                        value = value.decode(
+                            "utf-8"
+                        )
 
-                if isinstance(value, bytes):
-                    value = value.decode(
-                        "utf-8"
-                    )
-
-                return int(value)
+                    redis_count = int(value)
 
             except Exception:
+                # Fall through to local state.
                 pass
 
         with self._lock:
             state = self._states.get(tool_id)
 
-            if state is None:
-                return 0
+            local_count = (
+                state.failures
+                if state is not None
+                else 0
+            )
 
-            return state.failures
+        return max(
+            redis_count,
+            local_count,
+        )
 
 
 # ============================================================
