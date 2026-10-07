@@ -19,7 +19,6 @@ import {
   LoaderCircle,
   Navigation,
 } from "lucide-react";
-import JobExpenseModal from "../../components/jobs/JobExpenseModal";
 import {
   getTechnicianJobs,
   acceptTechnicianJob,
@@ -284,8 +283,7 @@ export default function TechnicianJobsPage() {
   const [completeModal, setCompleteModal] = useState<number | null>(null);
   const [customerSignatureModal, setCustomerSignatureModal] =
     useState<number | null>(null);
-  const [expenseModalJob, setExpenseModalJob] =
-    useState<number | null>(null);
+
   const [completeNotes, setCompleteNotes] = useState("");
   const [actionLoading, setActionLoading] = useState<number | null>(null);
   const startInFlightRef = useRef<Set<number>>(new Set());
@@ -294,8 +292,7 @@ export default function TechnicianJobsPage() {
   const [liveJob, setLiveJob] = useState<any | null>(null);
 
   const [assignedPopupJob, setAssignedPopupJob] = useState<any | null>(null);
-  const [timerSeconds, setTimerSeconds] = useState(7194);
-
+  const [timerSeconds, setTimerSeconds] = useState(5 * 60);
   const loadJobs = async () => {
     setLoading(true);
 
@@ -327,15 +324,43 @@ export default function TechnicianJobsPage() {
     void loadJobs();
   }, []);
 
-  useEffect(() => {
-    if (!assignedPopupJob) return;
 
-    const interval = window.setInterval(() => {
-      setTimerSeconds((prev) => (prev > 0 ? prev - 1 : 0));
-    }, 1000);
+const getRemainingAcceptanceSeconds = (job: any | null) => {
+  if (!job?.assigned_at) {
+    return 5 * 60;
+  }
 
-    return () => window.clearInterval(interval);
-  }, [assignedPopupJob]);
+  const assignedAt = new Date(job.assigned_at).getTime();
+
+  if (Number.isNaN(assignedAt)) {
+    return 5 * 60;
+  }
+
+  const expiresAt = assignedAt + 5 * 60 * 1000;
+
+  return Math.max(
+    0,
+    Math.floor((expiresAt - Date.now()) / 1000)
+  );
+};
+
+useEffect(() => {
+  if (!assignedPopupJob) return;
+
+  const updateTimer = () => {
+    setTimerSeconds(
+      getRemainingAcceptanceSeconds(assignedPopupJob)
+    );
+  };
+
+  // Calculate immediately when the popup opens
+  updateTimer();
+
+  // Then update every second
+  const interval = window.setInterval(updateTimer, 1000);
+
+  return () => window.clearInterval(interval);
+}, [assignedPopupJob]);
 
   const formatTimer = (secs: number) => {
     const mins = Math.floor(secs / 60);
@@ -480,10 +505,14 @@ export default function TechnicianJobsPage() {
   };
 
   const handlePopupAccept = async () => {
-    if (!assignedPopupJob) return;
+  if (!assignedPopupJob) return;
 
-    const jobId = assignedPopupJob.id;
-    setActionLoading(jobId);
+  if (timerSeconds <= 0) {
+    alert("Acceptance window has expired.");
+    return;
+  }
+
+  const jobId = assignedPopupJob.id;
 
     try {
       await acceptTechnicianJob(jobId);
@@ -721,27 +750,7 @@ export default function TechnicianJobsPage() {
       );
     }
 
-    // Expense submission is independent of job status transitions.
-    // Backend remains authoritative for technician, tenant, object,
-    // and monetary validation.
-    btns.push(
-      <button
-        key="expense"
-        type="button"
-        aria-label={`Add expense for job ${job.id}`}
-        disabled={isLoading}
-        style={{
-          ...s.btn("#ECFDF5", "#047857"),
-          border: "1px solid #A7F3D0",
-          opacity: isLoading ? 0.6 : 1,
-          cursor: isLoading ? "not-allowed" : "pointer",
-        }}
-        onClick={() => setExpenseModalJob(job.id)}
-      >
-        <IndianRupee size={14} />
-        Add Expense
-      </button>,
-    );
+    
 
     return btns;
   };
@@ -980,7 +989,9 @@ export default function TechnicianJobsPage() {
                     letterSpacing: "0.05em",
                   }}
                 >
-                  {formatTimer(timerSeconds)}
+                  {timerSeconds <= 0
+                  ? "EXPIRED"
+                  : formatTimer(timerSeconds)}
                 </span>
                 <span
                   style={{
@@ -1109,7 +1120,10 @@ export default function TechnicianJobsPage() {
               <button
                 type="button"
                 onClick={handlePopupAccept}
-                disabled={actionLoading === assignedPopupJob.id}
+                disabled={
+                  actionLoading === assignedPopupJob.id ||
+                  timerSeconds <= 0
+                }
                 style={{
                   flex: 1,
                   height: "46px",
@@ -1249,26 +1263,7 @@ export default function TechnicianJobsPage() {
         </div>
       )}
 
-      {/* Job Expense Submission Modal */}
-      {expenseModalJob !== null && (
-        <JobExpenseModal
-          jobId={expenseModalJob}
-          isOpen={true}
-          onClose={() => setExpenseModalJob(null)}
-          onSuccess={async () => {
-            setExpenseModalJob(null);
-
-            // Reconcile from the authoritative backend state.
-            await loadJobs();
-
-            window.dispatchEvent(
-              new CustomEvent(
-                "technician-dashboard-refresh",
-              ),
-            );
-          }}
-        />
-      )}
+      
 
       {/* Job Closure Form Modal */}
       {completeModal && (

@@ -19,7 +19,7 @@ class TimerService:
     authoritative source for whether an assignment is actually expired.
     """
 
-    ACCEPTANCE_DURATION_SECONDS = 600
+    ACCEPTANCE_DURATION_SECONDS = 5 * 60
     WARNING_BEFORE_SECONDS = 120
 
     TIMER_PREFIX = "job:timer:"

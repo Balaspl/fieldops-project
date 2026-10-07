@@ -20,12 +20,17 @@ class CompletionDocumentStorage:
         self,
         tenant_id: str,
         job_id: int,
-        job_closure_id: int,
+        job_closure_id: int | None,
         category: str,
         original_filename: str,
     ) -> str:
         """
         Generate an opaque, unique storage key.
+
+        Documents uploaded before JobClosure exists are stored under
+        a pre-completion path. Once the document is linked to a
+        JobClosure, its database relationship points to the canonical
+        closure record.
 
         The original filename is retained only as metadata and is
         never used directly as the filesystem path.
@@ -33,6 +38,15 @@ class CompletionDocumentStorage:
         extension = Path(original_filename).suffix.lower()
 
         unique_id = uuid4().hex
+
+        if job_closure_id is None:
+            return (
+                f"{tenant_id}/"
+                f"jobs/{job_id}/"
+                f"precompletion/"
+                f"{category.lower()}/"
+                f"{unique_id}{extension}"
+            )
 
         return (
             f"{tenant_id}/"

@@ -618,18 +618,10 @@ async def accept_job(
     if not job:
         raise HTTPException(status_code=403, detail="Job not found or not assigned to you")
 
-    if str(job.status).upper() != "ASSIGNED":
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Job must be ASSIGNED before acceptance. "
-                f"Current status: {job.status}"
-            ),
-        )
-
     job.status = "ACCEPTED"
 
-    # Workload starts counting only after technician acceptance.
+    # Acceptance is the point at which this job starts counting toward
+    # technician workload.
     from ..workload_utils import update_workload_count
 
     update_workload_count(
@@ -646,10 +638,10 @@ async def accept_job(
     if service_request:
         service_request.status = "ACCEPTED"
 
-        recipient_ids = _get_notification_recipient_ids(
-            current_user.user_id,
-            tech,
-        )
+    recipient_ids = _get_notification_recipient_ids(
+        current_user.user_id,
+        tech,
+    )
 
     # Mark associated assignment notifications as READ so they vanish immediately
     db.query(InAppNotification).filter(
@@ -712,23 +704,12 @@ async def reject_job(
         raise HTTPException(status_code=403, detail="Job not found or not assigned to you")
 
     old_status = job.status
-
-    if str(old_status).upper() != "ASSIGNED":
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Job must be ASSIGNED before rejection. "
-                f"Current status: {old_status}"
-            ),
-        )
-
     job.status = "REJECTED_BY_TECHNICIAN"
     job.rejection_reason = data.reason
     job.rejected_at = datetime.now(timezone.utc)
     job.rejected_by_tech_id = tech.tech_id or str(tech.technician_id)
 
-    # Unassign the technician.
-    # Rejected-before-acceptance jobs never counted toward workload.
+    # Unassign the technician
     job.assigned_technician_id = None
 
     # Create rejection confirmation notification for the technician
@@ -981,11 +962,26 @@ async def complete_job(
     old_status = job.status
     job.status = "COMPLETED"
 
-    # Keep the customer's service request status in sync
-    service_request = db.query(ServiceRequest).filter(
+    # Keep the customer's service request status in sync.
+    # A routed Job may belong to the service organization's tenant while
+    # ServiceRequest belongs to the customer's tenant. Test doubles may not
+    # expose customer_tenant_id, so fall back safely to the job tenant.
+    service_request_query = db.query(ServiceRequest).filter(
         ServiceRequest.linked_job_id == job.id,
-        ServiceRequest.tenant_id == job.tenant_id,
-    ).first()
+    )
+
+    customer_tenant_id = getattr(job, "customer_tenant_id", None)
+
+    if customer_tenant_id:
+        service_request_query = service_request_query.filter(
+            ServiceRequest.tenant_id == customer_tenant_id,
+        )
+    else:
+        service_request_query = service_request_query.filter(
+            ServiceRequest.tenant_id == job.tenant_id,
+        )
+
+    service_request = service_request_query.first()
 
     if service_request:
         service_request.status = "COMPLETED"
@@ -1033,16 +1029,6 @@ async def complete_job(
             completed_at=job.completed_at,
         )
         db.add(closure_record)
-
-        # Decrement workload only when this completion created the
-        # authoritative closure record.
-        from ..workload_utils import update_workload_count
-
-        update_workload_count(
-            db,
-            tech.technician_id,
-            -1,
-        )
 
     audit_log(
         db, action=AuditAction.JOB_COMPLETED,
@@ -1103,12 +1089,15 @@ async def get_notifications(
             n.type,
             n.status,
         )
-    # Create missing notifications only for currently assigned jobs.
+    # Create missing notifications for pending jobs.
     if tech:
         pending_jobs = db.query(Job).filter(
             Job.tenant_id == current_user.tenant_id,
             Job.assigned_technician_id == tech.technician_id,
-            func.lower(Job.status) == "assigned",
+            # func.lower(Job.status).in_(
+            #     ["assigned", "active", "planned", "queued"]
+            # ),
+            
         ).all()
 
         pending_job_ids = [
@@ -1210,40 +1199,40 @@ async def get_notifications(
             for job in job_rows
         }
 
-    hidden_job_statuses = {
-        "EN_ROUTE",
-        "ACCEPTED",
-        "IN_PROGRESS",
-        "PAUSED",
-        "COMPLETED",
-        "CLOSED",
-        "REJECTED_BY_TECHNICIAN",
-        "CANCELLED",
-    }
+    # hidden_job_statuses = {
+    #     "EN_ROUTE",
+    #     "ACCEPTED",
+    #     "IN_PROGRESS",
+    #     "PAUSED",
+    #     "COMPLETED",
+    #     "CLOSED",
+    #     "REJECTED_BY_TECHNICIAN",
+    # }
 
-    filtered_notifications = []
+    # filtered_notifications = []
 
-    for notification in notifications:
-        job_id = (
-            int(notification.job_id)
-            if notification.job_id
-            and str(notification.job_id).isdigit()
-            else None
-        )
+    # for notification in notifications:
+    #     job_id = (
+    #         int(notification.job_id)
+    #         if notification.job_id
+    #         and str(notification.job_id).isdigit()
+    #         else None
+    #     )
 
-        job_status = (
-            job_status_map.get(job_id, "")
-            if job_id is not None
-            else ""
-        )
+    #     job_status = (
+    #         job_status_map.get(job_id, "")
+    #         if job_id is not None
+    #         else ""
+    #     )
 
-        if (
-            notification.type == "JOB_ASSIGNED"
-            and job_status in hidden_job_statuses
-        ):
-            continue
+    #     if (
+    #         notification.type == "JOB_ASSIGNED"
+    #         and job_status in hidden_job_statuses
+    #     ):
+    #         continue
 
-        filtered_notifications.append(notification)
+    #     filtered_notifications.append(notification)
+    filtered_notifications = notifications
 
     unread_count = sum(
         1

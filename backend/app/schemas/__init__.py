@@ -8,6 +8,12 @@ from .completion_document import (
     CompletionDocumentMetadata,
     CompletionDocumentResponse,
 )
+
+from .customer_confirmation import (
+    CustomerConfirmationCreate,
+    CustomerConfirmationDecision,
+    CustomerConfirmationResponse,
+)
 from app.schema_definitions import *
 from app.input_security import (
     validate_plain_text,

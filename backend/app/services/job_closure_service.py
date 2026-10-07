@@ -11,10 +11,15 @@ from ..context import correlation_id_ctx
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from .customer_notification_services import(create_customer_job_status_notification)
+from .customer_notification_services import (
+    create_customer_job_status_notification,
+)
 
-from ..models import Job, Technician, AuditEvent
+from ..models import Job, Technician, AuditEvent, ServiceRequest
 from ..models.job_closure import JobClosure
+from ..repositories.completion_document_repository import (
+    CompletionDocumentRepository,
+)
 from ..schemas import JobClosureCreate, CompletionChecklist
 from .job_status_machine import (
     JobStatus,
@@ -82,6 +87,7 @@ def close_job(
     remain authoritative.
     """
     role_str = (user_role or "").strip().lower()
+
     if role_str != "technician":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -186,8 +192,6 @@ def close_job(
     # service is entered. The existing lifecycle prerequisite requires a work
     # report, and the closure's work_summary is the authoritative report for
     # this completion flow.
-    # Pydantic has already validated the completion payload before this
-    # service is entered.
 
     previous_work_report = job.work_report
 
@@ -207,6 +211,7 @@ def close_job(
         }
 
         job.work_report = closure_data.work_report.summary
+
     else:
         canonical_work_report = {
             "summary": closure_data.work_summary,
@@ -229,17 +234,31 @@ def close_job(
             actor_role="technician",
         )
 
+        service_request = (
+            db.query(ServiceRequest)
+            .filter(
+                ServiceRequest.linked_job_id == job.id,
+                ServiceRequest.customer_user_id == str(job.customer_id),
+            )
+            .with_for_update()
+            .first()
+        )
+
+        if service_request:
+            service_request.status = "COMPLETED"
+
         create_customer_job_status_notification(
-        db=db,
-        job=job,
-        new_status="COMPLETED",
+            db=db,
+            job=job,
+            new_status="COMPLETED",
         )
 
         completed_at = job.completed_at
 
         if completed_at is None:
             raise RuntimeError(
-                "Completion transition did not set the authoritative completion timestamp"
+                "Completion transition did not set the authoritative "
+                "completion timestamp"
             )
 
         subtotal = round(
@@ -253,7 +272,12 @@ def close_job(
             work_summary=closure_data.work_summary,
             work_report=canonical_work_report,
             completion_checklist=(
-                {"items": [item.model_dump() for item in closure_data.checklist.items]}
+                {
+                    "items": [
+                        item.model_dump()
+                        for item in closure_data.checklist.items
+                    ]
+                }
                 if closure_data.checklist is not None
                 else None
             ),
@@ -268,7 +292,59 @@ def close_job(
         db.add(closure_record)
         db.flush()
 
-        # Persist the domain audit record in the same DB transaction.
+        # -----------------------------------------------------------
+        # 4.4.7
+        # Link completion documents that were uploaded before the
+        # JobClosure existed.
+        #
+        # The repository method validates that each document belongs
+        # to the same job and tenant before assigning the closure.
+        # -----------------------------------------------------------
+
+        document_repository = CompletionDocumentRepository(db)
+
+        unlinked_documents = (
+            document_repository.list_unlinked_for_job(
+                job_id=job.id,
+                tenant_id=tenant_id,
+            )
+        )
+
+        for document in unlinked_documents:
+            document_repository.link_to_closure(
+                document,
+                job_id=job.id,
+                tenant_id=tenant_id,
+                job_closure_id=closure_record.id,
+            )
+
+            # Record the relationship change in the same DB transaction.
+            db.add(
+                AuditEvent(
+                    tech_id=str(tech.tech_id),
+                    tenant_id=tenant_id,
+                    event_type="COMPLETION_DOCUMENT_LINKED",
+                    old_status=document.status,
+                    new_status=document.status,
+                    job_id=str(job.id),
+                    actor_id=actor_id,
+                    timestamp=datetime.now(timezone.utc),
+                    correlation_id=(
+                        correlation_id_ctx.get() or None
+                    ),
+                    details={
+                        "completion_document_id": document.id,
+                        "job_closure_id": closure_record.id,
+                        "document_type": document.document_type,
+                        "category": document.category,
+                    },
+                )
+            )
+
+        # -----------------------------------------------------------
+        # Existing completion audit event
+        # -----------------------------------------------------------
+
         audit_event = AuditEvent(
             tech_id=str(tech.tech_id),
             tenant_id=tenant_id,
@@ -280,6 +356,10 @@ def close_job(
             details={
                 "closure_id": closure_record.id,
                 "subtotal": subtotal,
+                "linked_completion_document_ids": [
+                    document.id
+                    for document in unlinked_documents
+                ],
             },
             timestamp=completed_at,
         )
@@ -288,7 +368,14 @@ def close_job(
 
         # Keep the technician available after the final completion is staged.
         tech.technician_status = "AVAILABLE"
-        tech.current_jobs = max(0, (tech.current_jobs or 1) - 1)
+        tech.current_jobs = max(
+            0,
+            (tech.current_jobs or 1) - 1,
+        )
+
+        # -----------------------------------------------------------
+        # Commit closure + linked documents + audit records together.
+        # -----------------------------------------------------------
 
         db.commit()
         db.refresh(closure_record)
@@ -300,8 +387,8 @@ def close_job(
     ) as exc:
         db.rollback()
 
-        # Restore the in-memory prerequisite field before exposing the error to
-        # callers; the rollback already restores the DB state.
+        # Restore the in-memory prerequisite field before exposing
+        # the error to callers; rollback already restores DB state.
         job.work_report = previous_work_report
 
         if isinstance(exc, PermissionDeniedError):
@@ -332,7 +419,10 @@ def close_job(
         db.rollback()
         job.work_report = previous_work_report
 
-        logger.exception("Failed to close job %s", job_id)
+        logger.exception(
+            "Failed to close job %s",
+            job_id,
+        )
 
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -374,11 +464,18 @@ def close_job(
     return closure_record
 
 
-def get_job_closure(db: Session, job_id: int) -> JobClosure:
+def get_job_closure(
+    db: Session,
+    job_id: int,
+) -> JobClosure:
     """
     Fetch closure details for a given job.
     """
-    job = db.query(Job).filter(Job.id == job_id).first()
+    job = (
+        db.query(Job)
+        .filter(Job.id == job_id)
+        .first()
+    )
 
     if not job:
         raise HTTPException(

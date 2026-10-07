@@ -85,4 +85,5 @@ from .password_reset_token import PasswordResetToken
 from .trust_device import TrustedDevice
 from .completion_document import CompletionDocument
 from .customer_signature import CustomerSignature  # noqa: F401
+from .customer_confirmation import CustomerConfirmation  # noqa: F401
 from .job_expense import JobExpense  # noqa: F401

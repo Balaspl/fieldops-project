@@ -93,6 +93,7 @@ class Permission(str, Enum):
     # Completion Documents
     # --------------------------------------------------
 
+    COMPLETION_DOCUMENTS_VIEW = "completion_documents:view"
     COMPLETION_DOCUMENTS_MANAGE = "completion_documents:manage"
 
     # --------------------------------------------------
@@ -260,6 +261,10 @@ ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
         Permission.JOBS_CANCEL,
         Permission.JOBS_STATUS_UPDATE,
 
+        # Completion Documents
+        Permission.COMPLETION_DOCUMENTS_VIEW,
+        Permission.COMPLETION_DOCUMENTS_MANAGE,
+
         # Technicians
         Permission.TECHNICIANS_CREATE,
         Permission.TECHNICIANS_MANAGE,
@@ -327,6 +332,9 @@ ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
         Permission.JOBS_CANCEL,
         Permission.JOBS_STATUS_UPDATE,
 
+        # Completion Documents
+        Permission.COMPLETION_DOCUMENTS_VIEW,
+
         # Technicians
         Permission.TECHNICIANS_CREATE,
         Permission.TECHNICIANS_MANAGE,
@@ -366,7 +374,6 @@ ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
         # Users can be viewed but not arbitrarily created.
         Permission.USERS_VIEW,
         Permission.USERS_CREATE,
-
     },
 
     # ==================================================
@@ -382,7 +389,11 @@ ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
         Permission.DASHBOARD_TECH_VIEW,
         Permission.NOTIFICATIONS_VIEW_OWN,
         Permission.GPS_TRACK_OWN,
+
+        # Completion Documents
+        Permission.COMPLETION_DOCUMENTS_VIEW,
         Permission.COMPLETION_DOCUMENTS_MANAGE,
+
         Permission.CUSTOMER_SIGNATURES_MANAGE,
         Permission.JOB_EXPENSES_MANAGE,
         Permission.REPORTS_VIEW,
@@ -402,6 +413,9 @@ ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
 
         # Dashboard
         Permission.DASHBOARD_CUSTOMER_VIEW,
+
+        # Completion Documents
+        Permission.COMPLETION_DOCUMENTS_VIEW,
 
         # Notifications
         Permission.NOTIFICATIONS_VIEW_OWN,

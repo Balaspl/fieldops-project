@@ -69,7 +69,7 @@ class CompletionDocument(Base):
             "job_closures.id",
             ondelete="CASCADE",
         ),
-        nullable=False,
+        nullable=True,
         index=True,
     )
 
@@ -158,6 +158,25 @@ class CompletionDocument(Base):
     # Timestamp of the most recent completed scan
     scanned_at = Column(
         DateTime(timezone=True),
+        nullable=True,
+    )
+
+    # Audited deletion metadata.
+    # Soft-deleted completion documents retain their database metadata
+    # so evidence cannot disappear silently from the audit trail.
+    deleted_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
+
+    deleted_by = Column(
+        String(50),
+        nullable=True,
+    )
+
+    deletion_reason = Column(
+        Text,
         nullable=True,
     )
 

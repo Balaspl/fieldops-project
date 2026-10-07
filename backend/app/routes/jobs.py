@@ -1045,7 +1045,7 @@ def accept_job(
     - Starting the job is a separate operation.
     """
 
-    ACCEPTANCE_WINDOW_SECONDS = 600
+    ACCEPTANCE_WINDOW_SECONDS = 5 * 60
 
     # ---------------------------------------------------------
     # 1. Get technician
@@ -1845,6 +1845,7 @@ async def assign_job(
         old_status = job.status
 
         job.assigned_technician_id = tech.technician_id
+        job.assigned_at = datetime.now(timezone.utc)
         job.status = "ASSIGNED"
         tech.current_jobs = (tech.current_jobs or 0) + 1
 
@@ -2056,15 +2057,37 @@ async def assign_job(
         )
 
         # Step 9: Start timer and clear cooldown.
-        TimerService.start_timer(
-            redis_client,
-            str(job.id),
-            recipient_tech_id,
+        # Start the Redis timer using the authoritative assignment timestamp.
+        assigned_at = job.assigned_at
+
+        if assigned_at.tzinfo is None:
+            assigned_at = assigned_at.replace(tzinfo=timezone.utc)
+        else:
+            assigned_at = assigned_at.astimezone(timezone.utc)
+
+        expires_at = (
+            assigned_at
+            + timedelta(
+                seconds=TimerService.ACCEPTANCE_DURATION_SECONDS
+            )
         )
-        TimerService.start_timer(
-        redis_client,
-        str(job.id),
-        recipient_tech_id,)
+
+        remaining_seconds = max(
+            0,
+            int(
+                (
+                    expires_at - datetime.now(timezone.utc)
+                ).total_seconds()
+            ),
+        )
+
+        if remaining_seconds > 0:
+            TimerService.start_timer(
+                redis_client,
+                str(job.id),
+                recipient_tech_id,
+                duration_seconds=remaining_seconds,
+            )
 
         logger.info(
             "DEBUG TIMER AFTER START: job=%s exists=%s ttl=%s value=%s",
