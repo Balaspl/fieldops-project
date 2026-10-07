@@ -39,6 +39,7 @@ from app.services.cooldown_service import CooldownService
 from app.services.exclusion_service import ExclusionService
 from app.services.skill import SkillScoringService
 from app.services.sla_service import SLAService
+from app.services.sla_event_producer import SLAEventProducer
 from app.services.workload import WorkloadScoringService
 from app.services.composite import CompositeScoringService
 from app.utils import map_service_type_to_skill, is_skill_matching
@@ -279,6 +280,56 @@ def create_job(
         db.add(new_job)
         db.commit()
         db.refresh(new_job)
+
+        # Publish SLA_CREATED only after the authoritative job commit succeeds.
+        if new_job.sla_deadline is not None and request is not None and background_tasks is not None:
+            kafka_producer = getattr(request.app.state, "kafka_producer", None)
+            if kafka_producer is not None:
+                try:
+                    sla_event_producer = SLAEventProducer(kafka_producer)
+                    event_id = f"sla-created:{new_job.tenant_id}:{new_job.id}"
+                    correlation_id = request.headers.get("X-Correlation-ID")
+
+                    async def publish_sla_created_event():
+                        try:
+                            published = await sla_event_producer.publish(
+                                event_type="SLA_CREATED",
+                                event_id=event_id,
+                                job_id=str(new_job.id),
+                                tenant_id=str(new_job.tenant_id),
+                                correlation_id=correlation_id,
+                                payload={
+                                    "sla_deadline": new_job.sla_deadline.isoformat(),
+                                    "status": "active",
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                },
+                            )
+                            if published:
+                                logger.info(
+                                    "Published SLA_CREATED event: job_id=%s event_id=%s",
+                                    new_job.id,
+                                    event_id,
+                                )
+                            else:
+                                logger.error(
+                                    "Failed to publish SLA_CREATED event: job_id=%s event_id=%s",
+                                    new_job.id,
+                                    event_id,
+                                )
+                        except Exception:
+                            logger.exception(
+                                "Unexpected error while publishing SLA_CREATED event: "
+                                "job_id=%s event_id=%s",
+                                new_job.id,
+                                event_id,
+                            )
+
+                    background_tasks.add_task(publish_sla_created_event)
+                except Exception:
+                    logger.exception(
+                        "Failed to prepare SLA_CREATED event: job_id=%s",
+                        new_job.id,
+                    )
 
         if job.status.upper() == "ESCALATED":
             from app.models import SLAEscalation, AuditEvent
@@ -622,6 +673,8 @@ def update_job(
     job_id: int,
     job: JobCreate,
     current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_EDIT)),
+    background_tasks: BackgroundTasks = None,
+    request: Request = None,
     db: Session = Depends(get_db),
 ):
     existing_job = db.query(Job).filter(
@@ -646,11 +699,66 @@ def update_job(
     existing_job.status = job.status
     existing_job.required_skill = req_skill
     existing_job.tenant_id = current_user.tenant_id
+    sla_deadline_changed = existing_job.sla_deadline != job.sla_deadline
     existing_job.sla_deadline = job.sla_deadline
     existing_job.attempt_count = job.attempt_count or 0
 
     db.commit()
     db.refresh(existing_job)
+
+    # Publish SLA_UPDATED only after the authoritative job commit succeeds.
+    if sla_deadline_changed and request is not None and background_tasks is not None:
+        kafka_producer = getattr(request.app.state, "kafka_producer", None)
+        if kafka_producer is not None:
+            try:
+                sla_event_producer = SLAEventProducer(kafka_producer)
+                event_id = f"sla-updated:{existing_job.tenant_id}:{existing_job.id}:{existing_job.sla_deadline.isoformat() if existing_job.sla_deadline else 'none'}"
+                correlation_id = request.headers.get("X-Correlation-ID")
+
+                async def publish_sla_updated_event():
+                    try:
+                        published = await sla_event_producer.publish(
+                            event_type="SLA_UPDATED",
+                            event_id=event_id,
+                            job_id=str(existing_job.id),
+                            tenant_id=str(existing_job.tenant_id),
+                            correlation_id=correlation_id,
+                            payload={
+                                "sla_deadline": (
+                                    existing_job.sla_deadline.isoformat()
+                                    if existing_job.sla_deadline
+                                    else None
+                                ),
+                                "status": "active" if existing_job.sla_deadline else "disabled",
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            },
+                        )
+                        if published:
+                            logger.info(
+                                "Published SLA_UPDATED event: job_id=%s event_id=%s",
+                                existing_job.id,
+                                event_id,
+                            )
+                        else:
+                            logger.error(
+                                "Failed to publish SLA_UPDATED event: job_id=%s event_id=%s",
+                                existing_job.id,
+                                event_id,
+                            )
+                    except Exception:
+                        logger.exception(
+                            "Unexpected error while publishing SLA_UPDATED event: "
+                            "job_id=%s event_id=%s",
+                            existing_job.id,
+                            event_id,
+                        )
+
+                background_tasks.add_task(publish_sla_updated_event)
+            except Exception:
+                logger.exception(
+                    "Failed to prepare SLA_UPDATED event: job_id=%s",
+                    existing_job.id,
+                )
 
     return existing_job
 
@@ -3490,7 +3598,6 @@ def get_job_sla(
         )
 
     from app.services.sla_service import SLAService
-
     sla = SLAService()
     state = sla.get_sla_state(str(job.id))
 
