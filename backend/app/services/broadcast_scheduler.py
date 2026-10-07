@@ -35,7 +35,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Optional
 
 import msgpack
-
+from sqlalchemy import bindparam, text
 from ..logger import logger
 from ..utils import iso_utc
 
@@ -283,7 +283,9 @@ class BroadcastScheduler:
 
         statuses = ", ".join(f"'{s}'" for s in ACTIVE_JOB_STATUSES)  # constants, not user input
 
-        sql = text(f"""
+
+
+        sql = text("""
             WITH latest AS (
                 SELECT p.technician_id, p.tenant_id, p.job_id,
                        p.latitude, p.longitude, p.accuracy, p.altitude, p.timestamp,
@@ -303,7 +305,7 @@ class BroadcastScheduler:
             FROM technicians t
             JOIN jobs j
               ON j.assigned_technician_id = t.technician_id
-             AND UPPER(j.status) IN ({statuses})
+             AND UPPER(j.status) IN :statuses
              AND CAST(j.tenant_id AS VARCHAR) = CAST(t.tenant_id AS VARCHAR)
             JOIN latest l
               ON l.technician_id = CAST(t.tech_id AS VARCHAR)
@@ -311,12 +313,18 @@ class BroadcastScheduler:
              AND l.job_id = CAST(j.id AS VARCHAR)
              AND l.rn = 1
             WHERE t.tech_id IS NOT NULL
-        """)
-
+        """).bindparams(
+            bindparam("statuses", expanding=True)
+        )
         try:
             return db.execute(
-                sql, {"threshold": threshold, "max_accuracy": SCHEDULER_MAX_ACCURACY_M}
-            ).fetchall()
+            sql,
+            {
+                "threshold": threshold,
+                "max_accuracy": SCHEDULER_MAX_ACCURACY_M,
+                "statuses": [s.upper() for s in ACTIVE_JOB_STATUSES],
+            },
+        ).fetchall()
         except (ProgrammingError, OperationalError) as exc:
             msg = str(exc).lower()
             if "gps_pings" in msg or "does not exist" in msg or "no such table" in msg:

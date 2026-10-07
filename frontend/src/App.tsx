@@ -705,6 +705,10 @@ function AppInner() {
 
   const isTechnician =
     userRole === "technician";
+  const [
+  technicianAvailability,
+  setTechnicianAvailability,
+] = useState("Not Available");
 
   const isCustomer =
     userRole === "customer";
@@ -3139,9 +3143,10 @@ function AppInner() {
           {isTechnician && (
   <>
               <TechnicianAvailabilityLocation
-                technicianId={String(user?.id)}
-                tenantId={String(user?.tenant_id)}
-              />
+            technicianId={String(user?.id)}
+            tenantId={String(user?.tenant_id)}
+            technicianStatus={
+              technicianAvailability}/>
 
               <TechnicianLocationTracker user={user} />
             </>
@@ -3251,6 +3256,7 @@ function AppInner() {
                   onNavigate={
                     handleTabChange
                   }
+                   onAvailabilityChange={setTechnicianAvailability}
                 />
               )}
 

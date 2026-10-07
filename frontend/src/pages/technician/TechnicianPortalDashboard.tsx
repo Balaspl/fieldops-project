@@ -182,8 +182,10 @@ const s = {
 
 export default function TechnicianPortalDashboard({
   onNavigate,
+  onAvailabilityChange,
 }: {
   onNavigate: (tab: string) => void;
+  onAvailabilityChange?: (status: string) => void;
 }) {
   const [stats, setStats] = useState<any>(null);
   const [recentJobs, setRecentJobs] = useState<any[]>([]);
@@ -247,6 +249,8 @@ export default function TechnicianPortalDashboard({
             setTechnicianStatus(
               authoritativeStatus,
             );
+              onAvailabilityChange?.(authoritativeStatus,);
+
             setAttendanceError(null);
             setLastAttendanceSync(new Date());
           } else {
@@ -258,6 +262,7 @@ export default function TechnicianPortalDashboard({
           }
         } else {
           setTechnicianStatus("Not Available");
+          onAvailabilityChange?.("Not Available",);
           setAttendanceError(null);
           setLastAttendanceSync(null);
         }
@@ -316,6 +321,8 @@ export default function TechnicianPortalDashboard({
       setTechnicianStatus(
         authoritativeStatus,
       );
+      onAvailabilityChange?.(
+      authoritativeStatus,);
 
       setStats((previous: any) =>
         previous

@@ -266,6 +266,126 @@ export default function CustomerServiceRequestsPage({
     };
   }, [locationSearch]);
 
+  const reverseGeocodeAddress = async (
+    latitude: number,
+    longitude: number
+  ): Promise<string> => {
+    // First use the application's Ola Maps reverse-geocoding endpoint.
+    try {
+      const response = await api.get(
+        "/organizations/location-reverse",
+        {
+          params: {
+            latitude,
+            longitude,
+          },
+        }
+      );
+
+      const data = response?.data;
+
+      if (typeof data?.address === "string" && data.address.trim()) {
+        return data.address.trim();
+      }
+
+      if (
+        typeof data?.display_name === "string" &&
+        data.display_name.trim()
+      ) {
+        return data.display_name.trim();
+      }
+
+      if (typeof data?.name === "string" && data.name.trim()) {
+        return data.name.trim();
+      }
+
+      // Some reverse-geocoders return address as an object.
+      if (data?.address && typeof data.address === "object") {
+        const addressParts = [
+          data.address.road,
+          data.address.neighbourhood,
+          data.address.suburb,
+          data.address.city ||
+            data.address.town ||
+            data.address.village,
+          data.address.district,
+          data.address.state,
+          data.address.postcode,
+          data.address.country,
+        ].filter(
+          (value): value is string =>
+            typeof value === "string" && value.trim().length > 0
+        );
+
+        if (addressParts.length > 0) {
+          return addressParts.join(", ");
+        }
+      }
+    } catch {
+      // Continue with the public reverse-geocoder.
+    }
+
+    // Fallback: resolve the exact clicked coordinates to the nearest
+    // mapped road/address using OpenStreetMap.
+    try {
+      const params = new URLSearchParams({
+        format: "jsonv2",
+        lat: String(latitude),
+        lon: String(longitude),
+        zoom: "18",
+        addressdetails: "1",
+        "accept-language": "en",
+      });
+
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?${params.toString()}`,
+        {
+          headers: {
+            Accept: "application/json",
+          },
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+
+        if (
+          typeof data?.display_name === "string" &&
+          data.display_name.trim()
+        ) {
+          return data.display_name.trim();
+        }
+
+        const addressParts = [
+          data?.address?.house_number &&
+            data?.address?.road
+            ? `${data.address.house_number} ${data.address.road}`
+            : data?.address?.road,
+          data?.address?.neighbourhood,
+          data?.address?.suburb,
+          data?.address?.city ||
+            data?.address?.town ||
+            data?.address?.village,
+          data?.address?.district,
+          data?.address?.state,
+          data?.address?.postcode,
+          data?.address?.country,
+        ].filter(
+          (value): value is string =>
+            typeof value === "string" && value.trim().length > 0
+        );
+
+        if (addressParts.length > 0) {
+          return addressParts.join(", ");
+        }
+      }
+    } catch {
+      // Both providers failed.
+    }
+
+    return "";
+  };
+
   useEffect(() => {
     if (
       !mapVisible ||
@@ -404,19 +524,12 @@ export default function CustomerServiceRequestsPage({
               longitude,
             });
 
-            setLocationConfirmed(true);
-
-            const coordinatesLabel =
-              `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-
-            setSelectedLocationName(
-              coordinatesLabel
+            // A map click is a manual location selection.
+            // Resolve the exact clicked point to a human-readable address.
+            setLocationConfirmed(false);
+            setLocationSearchError(
+              "Finding the address at the selected point..."
             );
-
-            setForm((current) => ({
-              ...current,
-              location: coordinatesLabel,
-            }));
 
             const requestId =
               ++reverseGeocodeSequence.current;
@@ -424,43 +537,48 @@ export default function CustomerServiceRequestsPage({
             setIsResolvingMapCenter(true);
 
             try {
-              const reverseResponse =
-                await api.get(
-                  "/organizations/location-reverse",
-                  {
-                    params: {
-                      latitude,
-                      longitude,
-                    },
-                  }
-                );
+              const name = await reverseGeocodeAddress(
+                latitude,
+                longitude
+              );
 
+              if (
+                requestId !==
+                reverseGeocodeSequence.current
+              ) {
+                return;
+              }
+
+              if (!name) {
+                setLocationConfirmed(false);
+                setLocationSearchError(
+                  "No address is mapped at this point. Please select a nearby road or address on the map."
+                );
+                return;
+              }
+
+              setSelectedLocationName(name);
+              selectedLocationSearch.current = name;
+
+              setLocationSearch(name);
+
+              setForm((current) => ({
+                ...current,
+                location: name,
+              }));
+
+              setLocationConfirmed(true);
+              setLocationSearchError("");
+            } catch {
               if (
                 requestId ===
                 reverseGeocodeSequence.current
               ) {
-                const name =
-                  reverseResponse?.data
-                    ?.display_name ||
-                  reverseResponse?.data
-                    ?.name ||
-                  "";
-
-                if (name) {
-                  setSelectedLocationName(
-                    name
-                  );
-
-                  setForm((current) => ({
-                    ...current,
-                    location: name,
-                  }));
-                }
+                setLocationConfirmed(false);
+                setLocationSearchError(
+                  "Unable to find the address at the selected point. Please try another point."
+                );
               }
-            } catch {
-              // Reverse geocoding is optional.
-              // The map itself is already loaded, so do not
-              // show a map-load error when address lookup fails.
             } finally {
               if (
                 requestId ===
@@ -495,120 +613,246 @@ export default function CustomerServiceRequestsPage({
     };
   }, [mapVisible, mapTarget]);
 
-  const getCurrentLocation =
-    () => {
-      if (
-        !navigator.geolocation
-      ) {
-        setMapError(true);
+  const MAX_LOCATION_ACCURACY_METERS = 150;
+  const LOCATION_WAIT_TIMEOUT_MS = 30000;
+
+  const getCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      setIsGettingLocation(false);
+      setLocationConfirmed(false);
+      setLocationSearchError(
+        "Your browser does not support location services."
+      );
+      return;
+    }
+
+    setIsGettingLocation(true);
+    setMapError(false);
+    setLocationConfirmed(false);
+    setLocationSearchError(
+      `Waiting for an accurate location (within ${MAX_LOCATION_ACCURACY_METERS} m)...`
+    );
+    setLocationResults([]);
+
+    let watchId: number | null = null;
+    let timeoutId: number | null = null;
+    let finished = false;
+    let bestPosition: GeolocationPosition | null = null;
+
+    const cleanup = () => {
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+      }
+
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+    };
+
+    const failForAccuracy = () => {
+      if (finished) {
         return;
       }
 
-      setIsGettingLocation(true);
-      setMapError(false);
+      finished = true;
+      cleanup();
 
-      navigator.geolocation.getCurrentPosition(
-        async (position) => {
-          const latitude =
-            position.coords.latitude;
+      setIsGettingLocation(false);
+      setIsResolvingMapCenter(false);
+      setLocationConfirmed(false);
 
-          const longitude =
-            position.coords.longitude;
+      const bestAccuracy =
+        bestPosition?.coords.accuracy;
 
-          setSiteLatitude(latitude);
-          setSiteLongitude(longitude);
+      if (typeof bestAccuracy === "number") {
+        setLocationSearchError(
+          `Could not get an accurate location within ${MAX_LOCATION_ACCURACY_METERS} m. Best available accuracy was ±${Math.round(bestAccuracy)} m. Please enable precise location/GPS and try again.`
+        );
+      } else {
+        setLocationSearchError(
+          `Could not get an accurate location within ${MAX_LOCATION_ACCURACY_METERS} m. Please enable precise location/GPS and try again.`
+        );
+      }
+    };
 
-          setMapTarget({
-            latitude,
-            longitude,
-          });
+    const finishWithPosition = async (
+      position: GeolocationPosition
+    ) => {
+      if (finished) {
+        return;
+      }
 
-          setLocationConfirmed(true);
-          setMapVisible(true);
+      const accuracy = position.coords.accuracy;
 
-          setIsGettingLocation(false);
+      if (
+        !Number.isFinite(accuracy) ||
+        accuracy > MAX_LOCATION_ACCURACY_METERS
+      ) {
+        return;
+      }
 
-          const coordinatesLabel =
-            `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+      finished = true;
+      cleanup();
 
-          setSelectedLocationName(
-            coordinatesLabel
+      const latitude = position.coords.latitude;
+      const longitude = position.coords.longitude;
+
+      setSiteLatitude(latitude);
+      setSiteLongitude(longitude);
+      setMapTarget({ latitude, longitude });
+      setMapVisible(true);
+      setIsGettingLocation(false);
+      setIsResolvingMapCenter(true);
+      setLocationSearchError("");
+
+      const requestId =
+        ++reverseGeocodeSequence.current;
+
+      try {
+        const name = await reverseGeocodeAddress(
+          latitude,
+          longitude
+        );
+
+        if (
+          requestId !==
+          reverseGeocodeSequence.current
+        ) {
+          return;
+        }
+
+        if (!name) {
+          setLocationConfirmed(false);
+          setLocationSearchError(
+            `Your location is accurate to ±${Math.round(accuracy)} m, but no nearby address could be determined. Please try again.`
           );
+          return;
+        }
 
-          selectedLocationSearch.current =
-            coordinatesLabel;
+        setSelectedLocationName(name);
+        selectedLocationSearch.current = name;
+        setLocationSearch(name);
 
-          setLocationSearch(
-            coordinatesLabel
+        setForm((current) => ({
+          ...current,
+          location: name,
+        }));
+
+        setLocationConfirmed(true);
+        setLocationSearchError(
+          `Location found within ±${Math.round(accuracy)} m.`
+        );
+      } catch {
+        if (
+          requestId ===
+          reverseGeocodeSequence.current
+        ) {
+          setLocationConfirmed(false);
+          setLocationSearchError(
+            `Your location is accurate to ±${Math.round(accuracy)} m, but the nearby address could not be determined. Please try again.`
           );
+        }
+      } finally {
+        if (
+          requestId ===
+          reverseGeocodeSequence.current
+        ) {
+          setIsResolvingMapCenter(false);
+        }
+      }
+    };
 
-          setForm((current) => ({
-            ...current,
-            location: coordinatesLabel,
-          }));
+    const handlePosition = (
+      position: GeolocationPosition
+    ) => {
+      if (finished) {
+        return;
+      }
 
-          const requestId =
-            ++reverseGeocodeSequence.current;
+      const accuracy = position.coords.accuracy;
 
-          setIsResolvingMapCenter(true);
+      if (
+        !bestPosition ||
+        accuracy < bestPosition.coords.accuracy
+      ) {
+        bestPosition = position;
+      }
 
-          try {
-            const response =
-              await api.get(
-                "/organizations/location-reverse",
-                {
-                  params: {
-                    latitude,
-                    longitude,
-                  },
-                }
-              );
-
-            if (
-              requestId ===
-              reverseGeocodeSequence.current
-            ) {
-              const name =
-                response?.data
-                  ?.display_name ||
-                response?.data?.name ||
-                "";
-
-              if (name) {
-                setSelectedLocationName(
-                  name
-                );
-
-                setForm((current) => ({
-                  ...current,
-                  location: name,
-                }));
-              }
-            }
-          } catch {
-            // Reverse geocoding is optional.
-            // The map itself is already loaded, so do not
-            // show a map-load error when address lookup fails.
-          } finally {
-            if (
-              requestId ===
-              reverseGeocodeSequence.current
-            ) {
-              setIsResolvingMapCenter(false);
-            }
-          }
-        },
-        () => {
-          setIsGettingLocation(false);
-          setMapError(true);
-        },
+      console.log(
+        "[CustomerLocation] Location reading:",
         {
-          enableHighAccuracy: true,
-          maximumAge: 0,
-          timeout: 15000,
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracyMeters: accuracy,
         }
       );
+
+      if (
+        Number.isFinite(accuracy) &&
+        accuracy <= MAX_LOCATION_ACCURACY_METERS
+      ) {
+        setLocationSearchError(
+          `Accurate location found: ±${Math.round(accuracy)} m. Confirming address...`
+        );
+        void finishWithPosition(position);
+        return;
+      }
+
+      setLocationSearchError(
+        `Waiting for better accuracy... Current accuracy ±${Math.round(accuracy)} m (need ≤${MAX_LOCATION_ACCURACY_METERS} m).`
+      );
     };
+
+    const handleError = (
+      error: GeolocationPositionError
+    ) => {
+      if (finished) {
+        return;
+      }
+
+      console.warn(
+        "[CustomerLocation] Geolocation error:",
+        error.code,
+        error.message
+      );
+
+      if (
+        bestPosition &&
+        bestPosition.coords.accuracy <=
+          MAX_LOCATION_ACCURACY_METERS
+      ) {
+        void finishWithPosition(bestPosition);
+        return;
+      }
+
+      if (error.code === error.PERMISSION_DENIED) {
+        finished = true;
+        cleanup();
+        setIsGettingLocation(false);
+        setLocationConfirmed(false);
+        setLocationSearchError(
+          "Location permission was denied. Please allow location access and try again."
+        );
+      }
+    };
+
+    watchId = navigator.geolocation.watchPosition(
+      handlePosition,
+      handleError,
+      {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 10000,
+      }
+    );
+
+    timeoutId = window.setTimeout(
+      failForAccuracy,
+      LOCATION_WAIT_TIMEOUT_MS
+    );
+  };
 
   const selectLocation =
     async (result: any) => {
@@ -1707,7 +1951,7 @@ export default function CustomerServiceRequestsPage({
                           ? `: ${selectedLocationName}`
                           : ""
                       }`
-                    : "Select a location and confirm it on the map."}
+                    : "Select a point on the map to get the address at that location. GPS location requires ≤150 m accuracy."}
                 </span>
 
                 <button
@@ -3003,6 +3247,15 @@ export default function CustomerServiceRequestsPage({
                         setLocationConfirmed(
                           false
                         );
+                        setSelectedLocationName(
+                          ""
+                        );
+                        setSiteLatitude(
+                          null
+                        );
+                        setSiteLongitude(
+                          null
+                        );
                       }}
                       placeholder="Search service location"
                     />
@@ -3045,7 +3298,7 @@ export default function CustomerServiceRequestsPage({
                       />
 
                       {isGettingLocation
-                        ? "Locating..."
+                        ? "Waiting for ≤150 m..."
                         : "Use my location"}
                     </button>
                   </div>
@@ -3181,7 +3434,9 @@ export default function CustomerServiceRequestsPage({
                     >
                       {locationConfirmed
                         ? `Location confirmed${
-                            selectedLocationName
+                            form.location.trim()
+                              ? `: ${form.location.trim()}`
+                              : selectedLocationName
                               ? `: ${selectedLocationName}`
                               : ""
                           }`

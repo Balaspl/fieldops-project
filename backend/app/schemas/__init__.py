@@ -9,16 +9,29 @@ from .completion_document import (
     CompletionDocumentResponse,
 )
 from app.schema_definitions import *
-
+from app.input_security import (
+    validate_plain_text,
+    normalize_identifier,
+)
 class JobCreate(BaseModel):
     customer_name: str
     location: str
     issue_description: str
-    priority: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL", "P1", "P2", "P3", "P4", "P5"] # Merged priorities
+    priority: Literal[
+        "LOW",
+        "MEDIUM",
+        "HIGH",
+        "CRITICAL",
+        "P1",
+        "P2",
+        "P3",
+        "P4",
+        "P5",
+    ]
     service_type: str
     contact_number: str
     preferred_service_date: date
-    required_skill: Optional[str] = None # Made optional to match frontend
+    required_skill: Optional[str] = None
     status: str = "active"
     tenant_id: Optional[str] = None
     sla_deadline: Optional[datetime] = None
@@ -29,22 +42,41 @@ class JobCreate(BaseModel):
         "location",
         "issue_description",
         "service_type",
-        "contact_number"
     )
     @classmethod
-    def not_empty(cls, value, info):
-        if info.field_name == "required_skill" and value is None:
-            return value
-        if not value or not value.strip():
-            raise ValueError("Field cannot be empty")
-        return value
+    def validate_plain_text_fields(cls, value: str) -> str:
+        return validate_plain_text(
+            value,
+            max_length=5000,
+        )
+
+    @field_validator("required_skill")
+    @classmethod
+    def validate_required_skill(
+        cls,
+        value: Optional[str],
+    ) -> Optional[str]:
+        if value is None:
+            return None
+
+        value = value.strip()
+
+        if not value:
+            return None
+
+        return validate_plain_text(
+            value,
+            max_length=200,
+        )
 
     @field_validator("contact_number")
     @classmethod
-    def validate_contact_number(cls, value):
+    def validate_contact_number(cls, value: str) -> str:
+        value = value.strip()
+
         if not value.isdigit() or len(value) != 10:
             raise ValueError("Contact number must be 10 digits")
-        # Relaxed validation or check if it matches original
+
         return value
 
 
@@ -77,12 +109,35 @@ class TechnicianCreate(BaseModel):
     technician_location: str
     technician_status: str
 
-    @field_validator("technician_name", "technician_skill", "technician_location", "technician_status")
+    @field_validator("tech_id")
     @classmethod
-    def field_must_not_be_empty(cls, value):
-        if not value or not value.strip():
+    def validate_tech_id(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+
+        return normalize_identifier(value)
+
+    @field_validator(
+        "technician_name",
+        "technician_skill",
+        "technician_location",
+    )
+    @classmethod
+    def validate_text_fields(cls, value: str) -> str:
+        return validate_plain_text(
+            value,
+            max_length=500,
+        )
+
+    @field_validator("technician_status")
+    @classmethod
+    def validate_status(cls, value: str) -> str:
+        value = value.strip()
+
+        if not value:
             raise ValueError("Field cannot be empty")
-        return value.strip()
+
+        return value
 
 
 class TechnicianAvailabilityUpdate(BaseModel):
@@ -144,6 +199,18 @@ class TechnicianAssignment(BaseModel):
     technician_id: Optional[Union[int, str]] = None
     job_type: Optional[str] = None
 
+    @field_validator("job_type")
+    @classmethod
+    def validate_job_type(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+
+        return validate_plain_text(
+            value,
+            max_length=200,
+            field_name="job_type",
+        )
+
 class BulkTechnicianAssignment(BaseModel):
     job_ids: list[Union[int, str]]
     technician_id: Union[int, str]
@@ -162,8 +229,25 @@ class BulkTechnicianAssignmentResponse(BaseModel):
     total_assigned: int
 
 class BulkJobCancellation(BaseModel):
-    job_ids: list[Union[int, str]]
-    cancellation_reason: str
+    job_ids: list[Union[int, str]] = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+    )
+    cancellation_reason: str = Field(
+        ...,
+        min_length=1,
+        max_length=2000,
+    )
+
+    @field_validator("cancellation_reason")
+    @classmethod
+    def validate_cancellation_reason(cls, value: str) -> str:
+        return validate_plain_text(
+            value,
+            max_length=2000,
+            field_name="cancellation_reason",
+        )
 
 
 class BulkJobCancellationResult(BaseModel):
@@ -200,6 +284,28 @@ class PlannedAssignmentResponse(BaseModel):
 class HeartbeatPayload(BaseModel):
     last_lat: Optional[float] = None
     last_lng: Optional[float] = None
+
+    @field_validator("last_lat")
+    @classmethod
+    def validate_latitude(cls, value: Optional[float]) -> Optional[float]:
+        if value is None:
+            return None
+
+        if not -90 <= value <= 90:
+            raise ValueError("Latitude must be between -90 and 90")
+
+        return value
+
+    @field_validator("last_lng")
+    @classmethod
+    def validate_longitude(cls, value: Optional[float]) -> Optional[float]:
+        if value is None:
+            return None
+
+        if not -180 <= value <= 180:
+            raise ValueError("Longitude must be between -180 and 180")
+
+        return value
 
 
 class AvailabilityResponse(BaseModel):
@@ -256,9 +362,33 @@ class FCMTokenRegistration(BaseModel):
     token: str
     device_type: Literal["android", "ios"]
 
+    @field_validator("token")
+    @classmethod
+    def validate_token(cls, value: str) -> str:
+        value = value.strip()
+
+        if not value:
+            raise ValueError("FCM token cannot be empty")
+
+        if len(value) > 4096:
+            raise ValueError("FCM token is too long")
+
+        return value
+
 class NotificationSendRequest(BaseModel):
     job_id: str
-    tech_ids: list[str]
+    tech_ids: list[str] = Field(..., min_length=1, max_length=100)
+
+    @field_validator("tech_ids")
+    @classmethod
+    def validate_tech_ids(cls, value: list[str]) -> list[str]:
+        return [
+            normalize_identifier(
+                tech_id,
+                field_name="tech_id",
+            )
+            for tech_id in value
+        ]
 
 class NotificationSendResponse(BaseModel):
     sent: int
@@ -267,12 +397,25 @@ class NotificationSendResponse(BaseModel):
 
 class SMSSendRequest(BaseModel):
     job_id: str
-    tech_ids: list[str]
+    tech_ids: list[str] = Field(..., min_length=1, max_length=100)
+
+    @field_validator("tech_ids")
+    @classmethod
+    def validate_tech_ids(cls, value: list[str]) -> list[str]:
+        return [
+            normalize_identifier(
+                tech_id,
+                field_name="tech_id",
+            )
+            for tech_id in value
+        ]
 
 class SMSPreviewRequest(BaseModel):
     # Recipient number and message to validate without sending.
     to_number: str
     body: str
+
+    
 
 
 class SMSSendDirectRequest(BaseModel):
@@ -280,6 +423,8 @@ class SMSSendDirectRequest(BaseModel):
     to_number: str
     body: str
     from_number: str | None = None
+
+    
 
 
 class SMSBulkSendRequest(BaseModel):
@@ -314,30 +459,87 @@ class PaginatedNotificationsResponse(BaseModel):
     total: int
 
 class BatchReadRequest(BaseModel):
-    notification_ids: list[str]
+    notification_ids: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+    )
+
+    @field_validator("notification_ids")
+    @classmethod
+    def validate_notification_ids(
+        cls,
+        value: list[str],
+    ) -> list[str]:
+        return [
+            normalize_identifier(
+                notification_id,
+                field_name="notification_id",
+            )
+            for notification_id in value
+        ]
 
 class TemplateCreate(BaseModel):
-    name: str
-    type: str
-    channel: str
-    locale: Optional[str] = "en"
+    name: str = Field(..., max_length=200)
+    type: str = Field(..., max_length=100)
+    channel: str = Field(..., max_length=50)
+    locale: Optional[str] = Field("en", max_length=20)
     format: Optional[Literal["text", "html"]] = "text"
-    title_template: Optional[str] = None
-    body_template: str
+    title_template: Optional[str] = Field(None, max_length=500)
+    body_template: str = Field(..., max_length=10000)
 
     @field_validator(
-        "format",
-        mode="before",
+        "name",
+        "type",
+        "channel",
+        "locale",
     )
     @classmethod
-    def validate_format(cls, value: Optional[str]) -> Optional[str]:
+    def validate_metadata_fields(
+        cls,
+        value: Optional[str],
+    ) -> Optional[str]:
+        if value is None:
+            return None
+
+        return validate_plain_text(
+            value,
+            max_length=200,
+        )
+
+    @field_validator("title_template", "body_template")
+    @classmethod
+    def validate_template_content(
+        cls,
+        value: Optional[str],
+    ) -> Optional[str]:
+        if value is None:
+            return None
+
+        value = value.strip()
+
+        if not value:
+            raise ValueError("Template content cannot be empty")
+
+        return value
+
+    @field_validator("format", mode="before")
+    @classmethod
+    def validate_format(
+        cls,
+        value: Optional[str],
+    ) -> Optional[str]:
         if value is None:
             return "text"
+
         if not isinstance(value, str):
             raise ValueError("Format must be 'text' or 'html'.")
+
         val = value.strip().lower()
+
         if val not in ("text", "html"):
             raise ValueError("Format must be 'text' or 'html'.")
+
         return val
 
 class TemplateResponse(TemplateCreate):
@@ -353,8 +555,8 @@ class TemplatePreviewRequest(BaseModel):
         extra="forbid",
     )
 
-    title_template: Optional[str] = None
-    body_template: str
+    title_template: Optional[str] = Field(None, max_length=500)
+    body_template: str = Field(..., max_length=10000)
     mock_context: dict
     variables: Optional[
         list[PromptVariableDeclaration]
@@ -362,15 +564,25 @@ class TemplatePreviewRequest(BaseModel):
 
     format: Literal["text", "html"] = "text"
 
-    @field_validator(
-        "format",
-        mode="before",
-    )
+    @field_validator("title_template", "body_template")
     @classmethod
-    def validate_format(
+    def validate_template_content(
         cls,
-        value,
-    ) -> str:
+        value: Optional[str],
+    ) -> Optional[str]:
+        if value is None:
+            return None
+
+        value = value.strip()
+
+        if not value:
+            raise ValueError("Template content cannot be empty")
+
+        return value
+
+    @field_validator("format", mode="before")
+    @classmethod
+    def validate_format(cls, value) -> str:
         if not isinstance(value, str):
             raise ValueError(
                 "Format must be 'text' or 'html'."
@@ -378,10 +590,7 @@ class TemplatePreviewRequest(BaseModel):
 
         normalized = value.strip().lower()
 
-        if normalized not in {
-            "text",
-            "html",
-        }:
+        if normalized not in {"text", "html"}:
             raise ValueError(
                 "Format must be 'text' or 'html'."
             )
@@ -518,7 +727,16 @@ class JobAcceptResponse(BaseModel):
 from pydantic import Field
 
 class JobRejectRequest(BaseModel):
-    reason: str = Field(..., min_length=10)
+    reason: str = Field(..., min_length=10, max_length=2000)
+
+    @field_validator("reason")
+    @classmethod
+    def validate_reason(cls, value: str) -> str:
+        return validate_plain_text(
+            value,
+            max_length=2000,
+            field_name="reason",
+        )
 
 class RejectionDetail(BaseModel):
     reason: str
@@ -545,7 +763,16 @@ class JobRejectResponse(BaseModel):
 
 class JobReassignRequest(BaseModel):
     new_tech_id: str
-    reason: str
+    reason: str = Field(..., min_length=1, max_length=2000)
+
+    @field_validator("reason")
+    @classmethod
+    def validate_reason(cls, value: str) -> str:
+        return validate_plain_text(
+            value,
+            max_length=2000,
+            field_name="reason",
+        )
 
 class PreviousTechnicianDetail(BaseModel):
     tech_id: str
@@ -594,9 +821,26 @@ class AlertAcknowledgeRequest(BaseModel):
 
 class DirectAssignRequest(BaseModel):
     tech_id: str
-    justification: str
+    justification: str = Field(..., min_length=1, max_length=2000)
     skip_skill_check: bool = False
     skip_workload_check: bool = False
+
+    @field_validator("tech_id")
+    @classmethod
+    def validate_tech_id(cls, value: str) -> str:
+        return normalize_identifier(
+            value,
+            field_name="tech_id",
+        )
+
+    @field_validator("justification")
+    @classmethod
+    def validate_justification(cls, value: str) -> str:
+        return validate_plain_text(
+            value,
+            max_length=2000,
+            field_name="justification",
+        )
 
 class AssignmentDetail(BaseModel):
     tech_id: str
@@ -720,23 +964,40 @@ class GPSPingRequest(BaseModel):
     accuracy: Optional[float] = None
     altitude: Optional[float] = None
 
+    @field_validator("technician_id")
+    @classmethod
+    def validate_technician_id(cls, value: str) -> str:
+        return normalize_identifier(
+            value,
+            field_name="technician_id",
+        )
+
+    @field_validator("job_id")
+    @classmethod
+    def validate_job_id(cls, value: str) -> str:
+        return normalize_identifier(
+            value,
+            field_name="job_id",
+        )
+
     @model_validator(mode="before")
     @classmethod
     def validate_coordinates(cls, data):
         import json
+
         if not isinstance(data, dict):
             return data
-            
+
         errors = []
-        
+
         # Check latitude presence/null
         lat_missing = "latitude" not in data
         lat_val = data.get("latitude")
-        
+
         if lat_missing or lat_val is None:
             errors.append(("latitude", "Coordinates are required"))
         else:
-            # Check type (Pydantic naturally allows bool, lists, dicts; we reject them here)
+            # Reject bool and non-numeric values
             if isinstance(lat_val, bool):
                 errors.append(("latitude", "Coordinates must be numeric"))
             elif not isinstance(lat_val, (int, float)):
@@ -751,16 +1012,18 @@ class GPSPingRequest(BaseModel):
             else:
                 # Range check
                 if lat_val < -90.0 or lat_val > 90.0:
-                    errors.append(("latitude", "Latitude must be between -90 and 90"))
+                    errors.append(
+                        ("latitude", "Latitude must be between -90 and 90")
+                    )
 
         # Check longitude presence/null
         lng_missing = "longitude" not in data
         lng_val = data.get("longitude")
-        
+
         if lng_missing or lng_val is None:
             errors.append(("longitude", "Coordinates are required"))
         else:
-            # Check type
+            # Reject bool and non-numeric values
             if isinstance(lng_val, bool):
                 errors.append(("longitude", "Coordinates must be numeric"))
             elif not isinstance(lng_val, (int, float)):
@@ -775,13 +1038,14 @@ class GPSPingRequest(BaseModel):
             else:
                 # Range check
                 if lng_val < -180.0 or lng_val > 180.0:
-                    errors.append(("longitude", "Longitude must be between -180 and 180"))
+                    errors.append(
+                        ("longitude", "Longitude must be between -180 and 180")
+                    )
 
         if errors:
             raise ValueError(json.dumps(errors))
 
         return data
-
 
 
 class GPSPingResponse(BaseModel):
@@ -795,15 +1059,17 @@ class GPSPingResponse(BaseModel):
 
 
 class GPSBatchRequest(BaseModel):
-    pings: list[dict]
+    pings: list[GPSPingRequest]
 
     @field_validator("pings")
     @classmethod
     def check_pings_limit(cls, v):
         if not v:
             raise ValueError("Pings array cannot be empty")
+
         if len(v) > 100:
             raise ValueError("Maximum 100 pings per batch")
+
         return v
 
 
@@ -855,18 +1121,22 @@ class WorkReport(BaseModel):
     @classmethod
     def validate_parts_used(cls, value: list[str]) -> list[str]:
         cleaned_parts: list[str] = []
-
+    
         for part in value:
             if not isinstance(part, str):
                 raise ValueError("Each part must be text")
-
-            cleaned_part = part.strip()
-
+    
+            cleaned_part = validate_plain_text(
+                part,
+                max_length=200,
+                field_name="part",
+            )
+    
             if not cleaned_part:
                 raise ValueError("Parts used cannot contain empty values")
-
+    
             cleaned_parts.append(cleaned_part)
-
+    
         return cleaned_parts
 
 
@@ -880,15 +1150,23 @@ class CompletionChecklistItem(BaseModel):
     status: str
     required: bool = False
 
-    @field_validator("id", "label")
+    @field_validator("id")
     @classmethod
-    def validate_text_fields(cls, value: str) -> str:
-        value = value.strip()
+    def validate_id(cls, value: str) -> str:
+        return normalize_identifier(
+            value,
+            max_length=255,
+            field_name="checklist_item_id",
+        )
 
-        if not value:
-            raise ValueError("Checklist item id and label cannot be empty")
-
-        return value
+    @field_validator("label")
+    @classmethod
+    def validate_label(cls, value: str) -> str:
+        return validate_plain_text(
+            value,
+            max_length=500,
+            field_name="checklist_item_label",
+        )
 
     @field_validator("status")
     @classmethod
