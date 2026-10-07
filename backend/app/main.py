@@ -20,6 +20,10 @@ from app.routes import admin_dlq
 from .routes import (
     jobs,
     technicians,
+    admin_customer_support,
+    technician_portal,
+    customer_portal,
+    customer_confirmation,
     dispatcher,
     assignment,
     planning,
@@ -515,18 +519,13 @@ app.include_router(admin_metrics.router)
 app.include_router(admin_tools.router)
 
 # ──── Portal Routes ────
-from .routes import (
-    technician_portal,
-    customer_portal,
-    admin_customer_support,
-)
+from .routes import technician_portal, customer_portal
 
 app.include_router(technician_portal.router)
 app.include_router(customer_portal.router)
-app.include_router(admin_customer_support.router)
-
+app.include_router(customer_confirmation.router)
 from .services.socket_manager import sio_app
-
+app.include_router(admin_customer_support.router)
 app.mount("/socket.io", sio_app)
 
 # ----------Message Preview--------------------

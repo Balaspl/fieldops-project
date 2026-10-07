@@ -1,3 +1,4 @@
+
 """
 Completion document routes.
 
@@ -10,21 +11,29 @@ Raw binary data is never stored in PostgreSQL.
 import logging
 from datetime import datetime, timezone
 
+from app.schemas.completion_document import (
+    CompletionDocumentDeleteRequest,
+    CompletionDocumentDeleteResponse,
+)
+
 from fastapi import (
     APIRouter,
     Depends,
     File,
     Form,
     HTTPException,
+    Response,
     UploadFile,
     status,
 )
+
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import (
     AuthenticatedUser,
+    get_current_user,
     require_permission,
 )
 from app.auth.rbac import Permission
@@ -34,12 +43,23 @@ from app.models import AuditEvent, CompletionDocument, Job
 from app.models.job_closure import JobClosure
 from app.repositories import CompletionDocumentRepository
 from app.routes.jobs import get_technician_for_current_user
+
 from app.services.completion_document_storage import (
     CompletionDocumentStorage,
 )
+
+from app.services.completion_document_access import (
+    CompletionDocumentAccessService,
+)
+
+from app.services.completion_document_deletion import (
+    CompletionDocumentDeletionService,
+)
+
 from app.services.completion_document_validation import (
     CompletionDocumentValidator,
 )
+
 from app.services.file_scan_service import FileScanService
 
 
@@ -55,7 +75,7 @@ router = APIRouter(
 class CompletionDocumentResponse(BaseModel):
     id: int
     job_id: int
-    job_closure_id: int
+    job_closure_id: int | None
     tenant_id: str
     category: str
     document_type: str
@@ -146,7 +166,12 @@ def upload_completion_photo(
         )
 
     # ---------------------------------------------------------------
-    # Completion record must already exist
+    # JobClosure is optional at upload time.
+    #
+    # A document may be uploaded before the job is completed.
+    # If a closure already exists, the document is linked immediately.
+    # Otherwise, it remains unlinked until close_job() creates the
+    # canonical JobClosure.
     # ---------------------------------------------------------------
 
     closure = (
@@ -157,15 +182,6 @@ def upload_completion_photo(
         )
         .first()
     )
-
-    if not closure:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "Job must have a completion record "
-                "before uploading photos"
-            ),
-        )
 
     # ---------------------------------------------------------------
     # Validate uploaded image
@@ -206,7 +222,11 @@ def upload_completion_photo(
     storage_key = storage.generate_storage_key(
         tenant_id=str(current_user.tenant_id),
         job_id=job.id,
-        job_closure_id=closure.id,
+        job_closure_id=(
+            closure.id
+            if closure is not None
+            else None
+        ),
         category=normalized_category,
         original_filename=safe_filename,
     )
@@ -239,7 +259,11 @@ def upload_completion_photo(
     # ---------------------------------------------------------------
 
     document = CompletionDocument(
-        job_closure_id=closure.id,
+        job_closure_id=(
+            closure.id
+            if closure is not None
+            else None
+        ),
         job_id=job.id,
         tenant_id=str(current_user.tenant_id),
         uploaded_by=str(current_user.user_id),
@@ -296,6 +320,7 @@ def upload_completion_photo(
             # - prevent download through the scan gate
             #
             # Scanner internals are logged server-side only.
+
             scan_failed = True
 
             document.scan_status = "PENDING"
@@ -329,7 +354,11 @@ def upload_completion_photo(
             correlation_id=correlation_id_ctx.get() or None,
             details={
                 "completion_document_id": document.id,
-                "job_closure_id": closure.id,
+                "job_closure_id": (
+                    closure.id
+                    if closure is not None
+                    else None
+                ),
                 "document_type": "PHOTO",
                 "category": normalized_category,
                 "original_filename": safe_filename,
@@ -365,7 +394,11 @@ def upload_completion_photo(
                 ),
                 details={
                     "completion_document_id": document.id,
-                    "job_closure_id": closure.id,
+                    "job_closure_id": (
+                        closure.id
+                        if closure is not None
+                        else None
+                    ),
                     "scan_status": "PENDING",
                 },
             )
@@ -392,7 +425,11 @@ def upload_completion_photo(
                 ),
                 details={
                     "completion_document_id": document.id,
-                    "job_closure_id": closure.id,
+                    "job_closure_id": (
+                        closure.id
+                        if closure is not None
+                        else None
+                    ),
                     "scan_status": document.scan_status,
                     "scanned_at": (
                         document.scanned_at.isoformat()
@@ -440,100 +477,64 @@ def download_completion_photo(
     job_id: int,
     document_id: int,
     current_user: AuthenticatedUser = Depends(
-        require_permission(
-            Permission.COMPLETION_DOCUMENTS_MANAGE
-        )
+        get_current_user
     ),
     db: Session = Depends(get_db),
 ):
-    # ---------------------------------------------------------------
-    # Repository
-    # ---------------------------------------------------------------
+    """
+    Download a completion document only after the centralized
+    role/ownership/tenant/lifecycle authorization succeeds.
 
-    document_repository = CompletionDocumentRepository(db)
-
-    # ---------------------------------------------------------------
-    # Resolve authenticated technician
-    # ---------------------------------------------------------------
-
-    technician = get_technician_for_current_user(
-        db,
-        current_user,
-    )
-
-    if not technician:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Technician not found",
-        )
+    Storage is never accessed before authorization.
+    """
 
     # ---------------------------------------------------------------
-    # Tenant-scoped document lookup
+    # Centralized authorization
+    #
+    # This handles:
+    #   - tenant isolation
+    #   - technician job ownership
+    #   - dispatcher access
+    #   - super-admin access
+    #   - customer own-job access
+    #   - HEAD denial
+    #   - deleted document denial
+    #   - rejected document denial
+    #   - non-CLEAN scan denial
     # ---------------------------------------------------------------
 
-    document = document_repository.get_by_id_for_job(
-        document_id=document_id,
+    access_service = CompletionDocumentAccessService(db)
+
+    job, document, access_result = access_service.authorize(
         job_id=job_id,
-        tenant_id=str(current_user.tenant_id),
+        document_id=document_id,
+        current_user=current_user,
     )
 
-    if not document:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Completion document not found",
-        )
-
     # ---------------------------------------------------------------
-    # Tenant-scoped job lookup
+    # Authorization result
+    #
+    # authorize() returns only after all security checks pass.
+    # Keep the result for audit/logging/debugging consistency.
     # ---------------------------------------------------------------
 
-    job = (
-        db.query(Job)
-        .filter(
-            Job.id == job_id,
-            Job.tenant_id == current_user.tenant_id,
-        )
-        .first()
+    logger.info(
+        "Completion document access authorized",
+        extra={
+            "completion_document_id": access_result.document_id,
+            "job_id": access_result.job_id,
+            "actor_id": str(current_user.user_id),
+            "actor_role": access_result.actor_role,
+            "tenant_id": str(current_user.tenant_id),
+            "allowed": access_result.allowed,
+        },
     )
-
-    if not job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Job not found",
-        )
-
-    # ---------------------------------------------------------------
-    # Technician ownership
-    # ---------------------------------------------------------------
-
-    if job.assigned_technician_id != technician.technician_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This job is not assigned to you",
-        )
-
-    # ---------------------------------------------------------------
-    # Security scan gate
-    #
-    # Only CLEAN documents can be downloaded.
-    #
-    # This blocks:
-    #   PENDING
-    #   REJECTED
-    # ---------------------------------------------------------------
-
-    if (
-        document.scan_status != "CLEAN"
-        or document.status == "REJECTED"
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Completion document is not available for download",
-        )
-    
 
     # ---------------------------------------------------------------
     # Physical storage
+    #
+    # IMPORTANT:
+    # This happens only AFTER centralized authorization.
     # ---------------------------------------------------------------
 
     storage = CompletionDocumentStorage()
@@ -559,143 +560,72 @@ def download_completion_photo(
 
 
 @router.delete(
-    "/{job_id}/completion-documents/{document_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
+    "/{job_id}/documents/{document_id}",
+    response_model=CompletionDocumentDeleteResponse,
+    status_code=status.HTTP_200_OK,
+    name="delete_completion_document",
 )
-def delete_completion_photo(
+def delete_completion_document(
     job_id: int,
     document_id: int,
-    current_user: AuthenticatedUser = Depends(
-        require_permission(
-            Permission.COMPLETION_DOCUMENTS_MANAGE
-        )
-    ),
+    payload: CompletionDocumentDeleteRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    # ---------------------------------------------------------------
-    # Repository
-    # ---------------------------------------------------------------
+    """
+    Delete a completion document under its lifecycle retention policy.
 
-    document_repository = CompletionDocumentRepository(db)
+    Pre-completion uploads may be hard-deleted by the assigned technician.
+    Completion evidence is protected after completion and may only be
+    soft-deleted by an authorized SUPER_ADMIN using an explicit override.
+    """
 
-    # ---------------------------------------------------------------
-    # Resolve authenticated technician
-    # ---------------------------------------------------------------
+    service = CompletionDocumentDeletionService(db)
 
-    technician = get_technician_for_current_user(
-        db,
-        current_user,
-    )
-
-    if not technician:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Technician not found",
-        )
-
-    # ---------------------------------------------------------------
-    # Tenant-scoped document lookup
-    # ---------------------------------------------------------------
-
-    document = document_repository.get_by_id_for_job(
-        document_id=document_id,
+    result = service.delete(
         job_id=job_id,
-        tenant_id=str(current_user.tenant_id),
+        document_id=document_id,
+        current_user=current_user,
+        reason=payload.reason,
+        override=payload.override,
     )
 
-    if not document:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Completion document not found",
-        )
-
-    # ---------------------------------------------------------------
-    # Tenant-scoped job lookup
-    # ---------------------------------------------------------------
-
-    job = (
-        db.query(Job)
-        .filter(
-            Job.id == job_id,
-            Job.tenant_id == current_user.tenant_id,
-        )
-        .first()
+    return CompletionDocumentDeleteResponse(
+        status="DELETED",
+        document_id=result.document_id,
+        deletion_mode=result.deletion_mode,
+        audit_id=result.audit_id,
     )
 
-    if not job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Job not found",
-        )
 
-    # ---------------------------------------------------------------
-    # Technician ownership
-    # ---------------------------------------------------------------
+@router.delete(
+    "/{job_id}/completion-documents/{document_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    name="delete_completion_document_legacy",
+)
+def delete_completion_photo_legacy(
+    job_id: int,
+    document_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Backward-compatible deletion alias.
 
-    if job.assigned_technician_id != technician.technician_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This job is not assigned to you",
-        )
+    The alias uses the same lifecycle/RBAC policy. New callers should use
+    DELETE /jobs/{job_id}/documents/{document_id} so they receive the
+    auditable deletion result JSON.
+    """
 
-    storage = CompletionDocumentStorage()
+    service = CompletionDocumentDeletionService(db)
 
-    storage_key = document.storage_key
+    service.delete(
+        job_id=job_id,
+        document_id=document_id,
+        current_user=current_user,
+        reason="Legacy completion document deletion request",
+        override=False,
+    )
 
-    try:
-        # -----------------------------------------------------------
-        # Delete physical storage object first
-        # -----------------------------------------------------------
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-        storage.delete(storage_key)
-
-        # -----------------------------------------------------------
-        # Create deletion audit event
-        # -----------------------------------------------------------
-
-        audit_event = AuditEvent(
-            tech_id=str(technician.tech_id),
-            tenant_id=str(current_user.tenant_id),
-            event_type="COMPLETION_DOCUMENT_DELETED",
-            old_status=document.status,
-            new_status=None,
-            job_id=str(job.id),
-            actor_id=str(current_user.user_id),
-            timestamp=datetime.now(timezone.utc),
-            correlation_id=correlation_id_ctx.get() or None,
-            details={
-                "completion_document_id": document.id,
-                "job_closure_id": document.job_closure_id,
-                "document_type": document.document_type,
-                "category": document.category,
-                "original_filename": document.original_filename,
-                "content_type": document.content_type,
-                "file_size": document.file_size,
-                "checksum_sha256": document.checksum_sha256,
-                "storage_key": storage_key,
-            },
-        )
-
-        db.add(audit_event)
-
-        # -----------------------------------------------------------
-        # Remove database reference through repository
-        # -----------------------------------------------------------
-
-        document_repository.delete(document)
-
-        # -----------------------------------------------------------
-        # Commit document deletion + audit atomically
-        # -----------------------------------------------------------
-
-        db.commit()
-
-    except Exception as exc:
-        db.rollback()
-
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete completion document",
-        ) from exc
-
-    return None

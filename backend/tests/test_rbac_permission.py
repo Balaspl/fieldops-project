@@ -25,10 +25,13 @@ EXPECTED_PERMISSIONS = {
     },
 
     UserRole.SUPER_ADMIN: {
+        # Users
         Permission.USERS_CREATE,
         Permission.USERS_MANAGE,
         Permission.USERS_VIEW,
         Permission.USERS_DELETE,
+
+        # Jobs
         Permission.JOBS_CREATE,
         Permission.JOBS_VIEW_ALL,
         Permission.JOBS_EDIT,
@@ -37,30 +40,59 @@ EXPECTED_PERMISSIONS = {
         Permission.JOBS_REASSIGN,
         Permission.JOBS_CANCEL,
         Permission.JOBS_STATUS_UPDATE,
+
+        # Completion Documents
+        Permission.COMPLETION_DOCUMENTS_VIEW,
+        Permission.COMPLETION_DOCUMENTS_MANAGE,
+
+        # Technicians
         Permission.TECHNICIANS_CREATE,
         Permission.TECHNICIANS_MANAGE,
         Permission.TECHNICIANS_VIEW_ALL,
+
+        # Planning
         Permission.PLANNING_VIEW,
         Permission.PLANNING_MANAGE,
+
+        # Dispatch
         Permission.DISPATCH_MANAGE,
         Permission.DISPATCH_QUEUE_VIEW,
+
+        # Dashboard
         Permission.DASHBOARD_VIEW,
+
+        # Notifications
         Permission.NOTIFICATIONS_MANAGE,
         Permission.NOTIFICATIONS_SEND,
+
+        # Templates
         Permission.TEMPLATES_MANAGE,
         Permission.TEMPLATES_VIEW,
+
+        # Audit
         Permission.AUDIT_VIEW,
+
+        # Organization settings
         Permission.SETTINGS_MANAGE_ORG,
+
+        # GPS
         Permission.GPS_TRACK,
         Permission.GPS_ADMIN,
+
+        # Customers
         Permission.CUSTOMERS_MANAGE,
+
+        # Reports
         Permission.REPORTS_VIEW,
         Permission.REPORTS_DOWNLOAD,
+
+        # Escalations
         Permission.ESCALATIONS_VIEW,
         Permission.ESCALATIONS_MANAGE,
     },
 
     UserRole.DISPATCHER: {
+        # Jobs
         Permission.JOBS_CREATE,
         Permission.JOBS_VIEW_ALL,
         Permission.JOBS_EDIT,
@@ -68,22 +100,47 @@ EXPECTED_PERMISSIONS = {
         Permission.JOBS_REASSIGN,
         Permission.JOBS_CANCEL,
         Permission.JOBS_STATUS_UPDATE,
+
+        # Completion Documents
+        Permission.COMPLETION_DOCUMENTS_VIEW,
+
+        # Technicians
         Permission.TECHNICIANS_CREATE,
         Permission.TECHNICIANS_MANAGE,
         Permission.TECHNICIANS_VIEW_ALL,
+
+        # Planning
         Permission.PLANNING_VIEW,
         Permission.PLANNING_MANAGE,
+
+        # Dispatch
         Permission.DISPATCH_MANAGE,
         Permission.DISPATCH_QUEUE_VIEW,
+
+        # Dashboard
         Permission.DASHBOARD_VIEW,
+
+        # Notifications
         Permission.NOTIFICATIONS_MANAGE,
         Permission.NOTIFICATIONS_SEND,
+
+        # Templates
         Permission.TEMPLATES_VIEW,
+
+        # GPS
         Permission.GPS_TRACK,
+
+        # Customers
         Permission.CUSTOMERS_MANAGE,
+
+        # Reports
         Permission.REPORTS_VIEW,
+
+        # Escalations
         Permission.ESCALATIONS_VIEW,
         Permission.ESCALATIONS_MANAGE,
+
+        # Users
         Permission.USERS_VIEW,
         Permission.USERS_CREATE,
     },
@@ -97,23 +154,40 @@ EXPECTED_PERMISSIONS = {
         Permission.DASHBOARD_TECH_VIEW,
         Permission.NOTIFICATIONS_VIEW_OWN,
         Permission.GPS_TRACK_OWN,
+
+        # Completion Documents
+        Permission.COMPLETION_DOCUMENTS_VIEW,
         Permission.COMPLETION_DOCUMENTS_MANAGE,
+
         Permission.CUSTOMER_SIGNATURES_MANAGE,
         Permission.JOB_EXPENSES_MANAGE,
         Permission.REPORTS_VIEW,
     },
 
     UserRole.CUSTOMER: {
+        # Own jobs
         Permission.JOBS_VIEW_OWN,
+
+        # Service requests
         Permission.CUSTOMERS_CREATE_REQUEST,
         Permission.CUSTOMERS_VIEW_OWN,
+
+        # Dashboard
         Permission.DASHBOARD_CUSTOMER_VIEW,
+
+        # Notifications
         Permission.NOTIFICATIONS_VIEW_OWN,
+
+        # GPS
         Permission.GPS_TRACK_OWN,
+
+        # Completion Documents
+        Permission.COMPLETION_DOCUMENTS_VIEW,
+
+        # Reports
         Permission.REPORTS_DOWNLOAD,
     },
 }
-
 
 # ============================================================
 # 1. Permission matrix matches ROLE_PERMISSIONS

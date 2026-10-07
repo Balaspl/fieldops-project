@@ -196,12 +196,38 @@ class CompletionDocumentRepository:
     # Delete
     # -----------------------------------------------------------------
 
+    # -----------------------------------------------------------------
+    # Delete
+    # -----------------------------------------------------------------
+
+    def mark_soft_deleted(
+        self,
+        document: CompletionDocument,
+        *,
+        deleted_at,
+        deleted_by: str,
+        deletion_reason: str,
+    ) -> CompletionDocument:
+        """
+        Record an auditable soft deletion without removing the document
+        database record or its storage evidence.
+        """
+
+        document.deleted_at = deleted_at
+        document.deleted_by = str(deleted_by)
+        document.deletion_reason = deletion_reason
+
+        self.db.flush()
+
+        return document
+
+
     def delete(
         self,
         document: CompletionDocument,
     ) -> None:
         """
-        Mark a completion document for deletion.
+        Hard-delete a completion document database record.
         """
 
         self.db.delete(document)

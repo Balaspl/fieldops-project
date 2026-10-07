@@ -489,7 +489,7 @@ def test_accept_423_expired_window(setup_db):
     # More than 10 minutes old.
     expired_assignment_time = (
         datetime.now(timezone.utc)
-        - timedelta(minutes=11)
+        - timedelta(minutes=6)
     )
 
     job = create_assigned_job(

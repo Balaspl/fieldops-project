@@ -1128,7 +1128,7 @@ def test_missing_storage_file_returns_404(
     finally:
         db.close()
 
-def test_assigned_technician_can_delete_completion_photo(
+def test_assigned_technician_cannot_delete_completed_completion_photo(
     tmp_path,
     monkeypatch,
 ):
@@ -1148,6 +1148,10 @@ def test_assigned_technician_can_delete_completion_photo(
     db = TestingSessionLocal()
 
     try:
+        # -----------------------------------------------------------
+        # Create the assigned technician and job
+        # -----------------------------------------------------------
+
         _, job = _create_tech_and_job(
             db,
             tech_id="delete-tech",
@@ -1160,7 +1164,15 @@ def test_assigned_technician_can_delete_completion_photo(
             role=UserRole.TECHNICIAN,
         )
 
+        # -----------------------------------------------------------
+        # Complete the job
+        # -----------------------------------------------------------
+
         _complete_job(job.id)
+
+        # -----------------------------------------------------------
+        # Upload completion document
+        # -----------------------------------------------------------
 
         upload_response = client.post(
             f"/jobs/{job.id}/completion-documents/photos",
@@ -1181,23 +1193,48 @@ def test_assigned_technician_can_delete_completion_photo(
 
         stored_file = tmp_path / storage_key
 
+        # Verify the physical file exists before deletion attempt.
         assert stored_file.is_file()
+
+        # -----------------------------------------------------------
+        # Technician attempts to delete completed evidence
+        # -----------------------------------------------------------
 
         delete_response = client.delete(
             f"/jobs/{job.id}/completion-documents/{document_id}"
         )
 
-        assert delete_response.status_code == 204
+        assert delete_response.status_code == 403
+        assert delete_response.json()["detail"] == (
+            "Completion evidence cannot be deleted after completion"
+        )
 
-        assert not stored_file.exists()
+        # -----------------------------------------------------------
+        # Protected evidence must remain in storage
+        # -----------------------------------------------------------
+
+        assert stored_file.exists()
+
+        # -----------------------------------------------------------
+        # Protected evidence must remain in database
+        # -----------------------------------------------------------
 
         document = (
             db.query(CompletionDocument)
-            .filter(CompletionDocument.id == document_id)
+            .filter(
+                CompletionDocument.id == document_id
+            )
             .first()
         )
 
-        assert document is None
+        assert document is not None
+        assert document.id == document_id
+
+        # No soft-deletion metadata should be created because
+        # the technician is not authorized to delete it.
+        assert document.deleted_at is None
+        assert document.deleted_by is None
+        assert document.deletion_reason is None
 
     finally:
         db.close()

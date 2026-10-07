@@ -116,3 +116,22 @@ class CompletionDocumentMetadata(BaseModel):
     model_config = ConfigDict(
         from_attributes=True,
     )
+
+class CompletionDocumentDeleteRequest(BaseModel):
+    """Reason and optional override for deleting a completion document."""
+
+    reason: str = Field(
+        min_length=3,
+        max_length=1000,
+    )
+
+    override: bool = False
+
+
+class CompletionDocumentDeleteResponse(BaseModel):
+    """Result of a completion-document deletion request."""
+
+    status: Literal["DELETED"] = "DELETED"
+    document_id: int
+    deletion_mode: Literal["SOFT", "HARD"]
+    audit_id: int

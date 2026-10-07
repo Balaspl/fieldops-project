@@ -212,7 +212,6 @@ def test_list_for_job_returns_only_matching_tenant_and_job(db):
 @pytest.mark.parametrize(
     "field_name",
     [
-        "job_closure_id",
         "job_id",
         "tenant_id",
         "uploaded_by",
