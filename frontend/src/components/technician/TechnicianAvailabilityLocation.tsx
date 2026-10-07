@@ -6,45 +6,146 @@ import {
 interface TechnicianAvailabilityLocationProps {
   technicianId: string;
   tenantId: string;
+
+  /**
+   * Existing technician availability/status from the dashboard.
+   *
+   * GPS starts only when this is "Available".
+   */
+  technicianStatus?: string | null;
+
+  /**
+   * Optional master switch.
+   */
   enabled?: boolean;
 }
 
-/**
- * Keeps the technician's latest device location available
- * before a job is assigned.
- *
- * This is separate from TechnicianLocationTracker:
- * - This component: pre-assignment location for Planning Agent
- * - TechnicianLocationTracker: job/live tracking after START
- */
+type LocationStatus =
+  | "idle"
+  | "starting"
+  | "active"
+  | "denied"
+  | "error";
+
+const LOCATION_SEND_INTERVAL_MS = 30_000;
+
+const normalizeStatus = (
+  status?: string | null,
+): string => {
+  return (status || "")
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, " ");
+};
+
+const isAvailableStatus = (
+  status?: string | null,
+): boolean => {
+  return normalizeStatus(status) === "available";
+};
+
 const TechnicianAvailabilityLocation = ({
   technicianId,
   tenantId,
+  technicianStatus,
   enabled = true,
 }: TechnicianAvailabilityLocationProps) => {
-  const [locationStatus, setLocationStatus] = useState<
-    "starting" | "active" | "denied" | "error"
-  >("starting");
+  const [locationStatus, setLocationStatus] =
+    useState<LocationStatus>("idle");
 
-  const watchIdRef = useRef<number | null>(null);
-  const lastSentAtRef = useRef<number>(0);
-  const sendingRef = useRef(false);
-  const mountedRef = useRef(true);
+  const watchIdRef =
+    useRef<number | null>(null);
+
+  const lastSentAtRef =
+    useRef<number>(0);
+
+  const sendingRef =
+    useRef(false);
+
+  const mountedRef =
+    useRef(true);
+
+  /*
+   * Keep the latest values available to
+   * asynchronous GPS callbacks.
+   */
+  const technicianIdRef =
+    useRef(technicianId);
+
+  const tenantIdRef =
+    useRef(tenantId);
+
+  const availableRef =
+    useRef(
+      isAvailableStatus(
+        technicianStatus,
+      ),
+    );
+
+  useEffect(() => {
+    technicianIdRef.current =
+      technicianId;
+  }, [technicianId]);
+
+  useEffect(() => {
+    tenantIdRef.current =
+      tenantId;
+  }, [tenantId]);
+
+  useEffect(() => {
+    availableRef.current =
+      isAvailableStatus(
+        technicianStatus,
+      );
+  }, [technicianStatus]);
 
   useEffect(() => {
     mountedRef.current = true;
 
-    if (!enabled) {
-      setLocationStatus("starting");
-      return;
+    const shouldTrackLocation =
+      enabled &&
+      Boolean(technicianId) &&
+      Boolean(tenantId) &&
+      isAvailableStatus(
+        technicianStatus,
+      );
+
+    /*
+     * If technician is NOT Available,
+     * immediately stop any existing watcher.
+     */
+    if (!shouldTrackLocation) {
+      availableRef.current = false;
+
+      if (
+        watchIdRef.current !== null
+      ) {
+        navigator.geolocation.clearWatch(
+          watchIdRef.current,
+        );
+
+        watchIdRef.current = null;
+
+        console.log(
+          "[TechnicianAvailabilityLocation] GPS watcher stopped - technician is not Available",
+        );
+      }
+
+      sendingRef.current = false;
+
+      if (mountedRef.current) {
+        setLocationStatus("idle");
+      }
+
+      return () => {
+        mountedRef.current = false;
+      };
     }
 
-    if (!technicianId || !tenantId) {
-      console.warn(
-        "[TechnicianAvailabilityLocation] Missing technicianId or tenantId",
-      );
-      return;
-    }
+    /*
+     * From this point the technician is Available.
+     */
+    availableRef.current = true;
 
     if (!navigator.geolocation) {
       console.error(
@@ -52,25 +153,46 @@ const TechnicianAvailabilityLocation = ({
       );
 
       setLocationStatus("error");
-      return;
+
+      return () => {
+        mountedRef.current = false;
+      };
     }
+
+    /*
+     * Avoid creating duplicate GPS watchers.
+     */
+    if (watchIdRef.current !== null) {
+      return () => {
+        mountedRef.current = false;
+      };
+    }
+
+    setLocationStatus("starting");
 
     const sendLocation = async (
       position: GeolocationPosition,
     ) => {
-      if (!mountedRef.current) {
+      if (
+        !mountedRef.current ||
+        !availableRef.current
+      ) {
         return;
       }
 
       /*
-       * Do not send every browser GPS event.
+       * Don't send every browser GPS event.
        *
-       * Redis location has a 120-second TTL on the backend,
-       * so send a fresh location every 30 seconds.
+       * Backend location data has a TTL, so
+       * refresh it every 30 seconds.
        */
       const now = Date.now();
 
-      if (now - lastSentAtRef.current < 30_000) {
+      if (
+        now -
+          lastSentAtRef.current <
+        LOCATION_SEND_INTERVAL_MS
+      ) {
         return;
       }
 
@@ -86,7 +208,8 @@ const TechnicianAvailabilityLocation = ({
       } = position.coords;
 
       /*
-       * Ignore very inaccurate GPS readings.
+       * Don't store extremely inaccurate
+       * location readings.
        */
       if (
         accuracy != null &&
@@ -100,13 +223,27 @@ const TechnicianAvailabilityLocation = ({
         return;
       }
 
+      const currentTechnicianId =
+        technicianIdRef.current;
+
+      const currentTenantId =
+        tenantIdRef.current;
+
+      if (
+        !currentTechnicianId ||
+        !currentTenantId
+      ) {
+        return;
+      }
+
       sendingRef.current = true;
 
       try {
         console.log(
-          "[TechnicianAvailabilityLocation] Sending location:",
+          "[TechnicianAvailabilityLocation] Sending available technician location:",
           {
-            technicianId,
+            technicianId:
+              currentTechnicianId,
             latitude,
             longitude,
             accuracy,
@@ -114,7 +251,7 @@ const TechnicianAvailabilityLocation = ({
         );
 
         await sendTechnicianAvailabilityLocation(
-          tenantId,
+          currentTenantId,
           {
             latitude,
             longitude,
@@ -156,7 +293,10 @@ const TechnicianAvailabilityLocation = ({
     const handlePosition = (
       position: GeolocationPosition,
     ) => {
-      if (!mountedRef.current) {
+      if (
+        !mountedRef.current ||
+        !availableRef.current
+      ) {
         return;
       }
 
@@ -172,11 +312,14 @@ const TechnicianAvailabilityLocation = ({
         },
       );
 
-      /*
-       * We have successfully obtained GPS.
-       */
       setLocationStatus("active");
 
+      /*
+       * This works even when there is NO job.
+       *
+       * It uses:
+       * POST /api/v1/gps/availability
+       */
       void sendLocation(position);
     };
 
@@ -209,10 +352,12 @@ const TechnicianAvailabilityLocation = ({
     };
 
     /*
-     * START GPS immediately when the technician page mounts.
+     * START GPS ONLY WHEN:
      *
-     * This does NOT depend on START button.
-     * This does NOT require a job.
+     * enabled === true
+     * AND technician has a valid ID
+     * AND tenant has a valid ID
+     * AND technicianStatus === "Available"
      */
     watchIdRef.current =
       navigator.geolocation.watchPosition(
@@ -226,12 +371,9 @@ const TechnicianAvailabilityLocation = ({
       );
 
     console.log(
-      "[TechnicianAvailabilityLocation] GPS watcher started",
+      "[TechnicianAvailabilityLocation] GPS watcher started - technician is Available",
     );
 
-    /*
-     * Cleanup when technician leaves the page.
-     */
     return () => {
       mountedRef.current = false;
 
@@ -243,22 +385,23 @@ const TechnicianAvailabilityLocation = ({
         );
 
         watchIdRef.current = null;
+
+        console.log(
+          "[TechnicianAvailabilityLocation] GPS watcher stopped",
+        );
       }
 
-      console.log(
-        "[TechnicianAvailabilityLocation] GPS watcher stopped",
-      );
+      sendingRef.current = false;
     };
   }, [
     technicianId,
     tenantId,
+    technicianStatus,
     enabled,
   ]);
 
   /*
-   * This component does not need to render anything visible.
-   *
-   * GPS runs in the background while the technician page is open.
+   * No visible UI required.
    */
   return null;
 };

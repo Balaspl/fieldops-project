@@ -20,7 +20,7 @@ from .services.task_queue_worker import consume_task_queue
 from app.services.sms.twilio_service import TwilioSMSService
 from celery import shared_task
 from .services.email.sendgrid_email import SendGridEmailService
-
+import re
 
 @celery_app.task(name="app.tasks.aggregate_prompt_analytics_task")
 def aggregate_prompt_analytics_task():
@@ -99,6 +99,9 @@ def archive_old_sentiment_audits(
 
         raise
 
+GPS_PARTITION_NAME_RE = re.compile(
+    r"^gps_pings_\d{4}_(0[1-9]|1[0-2])$"
+)
 
 def drop_empty_partitions(db: Session):
     """
@@ -109,22 +112,57 @@ def drop_empty_partitions(db: Session):
     is_postgres = bind_engine.url.drivername.startswith("postgresql")
     if not is_postgres:
         return
-        
+
     sql_find_partitions = """
         SELECT inhrelid::regclass::text AS partition_name
         FROM pg_inherits
         WHERE inhparent = 'gps_pings'::regclass;
     """
+
     try:
         partitions = db.execute(text(sql_find_partitions)).all()
+
         for row in partitions:
             partition_name = row[0]
-            sql_count = f"SELECT COUNT(*) FROM {partition_name}"
-            count = db.execute(text(sql_count)).scalar()
+
+            # GPS partitions must follow the internally generated
+            # gps_pings_YYYY_MM naming convention.
+            if not GPS_PARTITION_NAME_RE.fullmatch(partition_name):
+                logger.warning(
+                    "Skipping unexpected GPS partition name: %r",
+                    partition_name,
+                )
+                continue
+
+            # SQL parameters cannot bind table identifiers.
+            # The identifier is therefore allow-listed first and
+            # then safely quoted by SQLAlchemy.
+            identifier_preparer = (
+                db.get_bind().dialect.identifier_preparer
+            )
+            quoted_partition = identifier_preparer.quote(
+                partition_name
+            )
+
+            sql_count = text(
+                f"SELECT COUNT(*) FROM {quoted_partition}"
+            )
+            count = db.execute(sql_count).scalar()
+
             if count == 0:
-                logger.info(f"Dropping empty GPS partition: {partition_name}")
-                db.execute(text(f"DROP TABLE IF EXISTS {partition_name} CASCADE"))
+                logger.info(
+                    "Dropping empty GPS partition: %s",
+                    partition_name,
+                )
+                db.execute(
+                    text(
+                        f"DROP TABLE IF EXISTS "
+                        f"{quoted_partition} CASCADE"
+                    )
+                )
+
         db.commit()
+
     except Exception as e:
         logger.error(f"Error dropping empty partitions: {e}")
         db.rollback()

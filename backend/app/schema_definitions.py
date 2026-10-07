@@ -4,7 +4,10 @@ import re
 from pydantic import BaseModel, field_validator, ConfigDict, Field
 from .services.ai.FieldOpsAI.schemas.prompt_variable import PromptVariableDeclaration
 from decimal import Decimal
-
+from app.input_security import (
+    validate_plain_text,
+    normalize_identifier,
+)
 
 class JobCreate(BaseModel):
     customer_name: str
@@ -253,7 +256,18 @@ class FCMTokenRegistration(BaseModel):
 
 class NotificationSendRequest(BaseModel):
     job_id: str
-    tech_ids: list[str]
+    tech_ids: list[str] = Field(..., min_length=1, max_length=100)
+
+    @field_validator("tech_ids")
+    @classmethod
+    def validate_tech_ids(cls, value: list[str]) -> list[str]:
+        return [
+            normalize_identifier(
+                tech_id,
+                field_name="tech_id",
+            )
+            for tech_id in value
+        ]
 
 class NotificationSendResponse(BaseModel):
     sent: int
@@ -262,7 +276,18 @@ class NotificationSendResponse(BaseModel):
 
 class SMSSendRequest(BaseModel):
     job_id: str
-    tech_ids: list[str]
+    tech_ids: list[str] = Field(..., min_length=1, max_length=100)
+
+    @field_validator("tech_ids")
+    @classmethod
+    def validate_tech_ids(cls, value: list[str]) -> list[str]:
+        return [
+            normalize_identifier(
+                tech_id,
+                field_name="tech_id",
+            )
+            for tech_id in value
+        ]
 
 class SMSPreviewRequest(BaseModel):
     # Recipient number and message to validate without sending.
