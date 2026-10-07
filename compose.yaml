@@ -318,6 +318,14 @@ services:
           --operation WRITE \
           --operation DESCRIBE \
           --topic "fieldops.audit.events"
+        # Allow the producer to publish SLA events.
+        /opt/kafka/bin/kafka-acls.sh \
+          --bootstrap-server kafka:9092 \
+          --add \
+          --allow-principal "User:$$KAFKA_PRODUCER_USERNAME" \
+          --operation WRITE \
+          --operation DESCRIBE \
+          --topic "fieldops.sla.events"
 
 volumes:
   kafka_data:

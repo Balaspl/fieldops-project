@@ -794,6 +794,70 @@ class GPSLocationEventMessage(EventMessage):
 
         return self
 
+# ==========================================================
+# SLA Event Message
+# ==========================================================
+
+
+class SLAEventMessage(EventMessage):
+    """
+    Dedicated SLA lifecycle event.
+
+    Publishes SLA creation, update, near-breach and breach events.
+    """
+
+    topic: str = Field(
+        default="fieldops.sla.events",
+        min_length=1,
+        max_length=100,
+        description="Kafka topic for SLA events.",
+    )
+
+    message_type: MessageType = Field(
+        default=MessageType.EVENT,
+        frozen=True,
+    )
+
+    @model_validator(mode="after")
+    def validate_sla_event(self) -> "SLAEventMessage":
+        """
+        Enforce the SLA event contract.
+        """
+        if self.topic != "fieldops.sla.events":
+            raise ValueError(
+                "SLA events must use topic 'fieldops.sla.events'."
+            )
+
+        allowed_event_types = {
+            "SLA_CREATED",
+            "SLA_UPDATED",
+            "SLA_NEAR_BREACH",
+            "SLA_BREACHED",
+        }
+
+        event_type = self.payload.get("event_type")
+
+        if event_type not in allowed_event_types:
+            raise ValueError(
+                "SLA events must have a valid SLA event_type."
+            )
+
+        required_fields = {
+            "event_id",
+            "job_id",
+            "tenant_id",
+            "schema_version",
+        }
+
+        missing_fields = required_fields - self.payload.keys()
+
+        if missing_fields:
+            raise ValueError(
+                f"SLA events require fields: "
+                f"{', '.join(sorted(missing_fields))}."
+            )
+
+        return self
 
 # ==========================================================
 # Response Message
