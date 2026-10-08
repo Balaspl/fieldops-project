@@ -603,126 +603,108 @@ async def create_service_request(
     )
 
     # ──────────────────────────────────────────────
-    # Determine required technician skill
+    # Automated Intake & Planning Agent Workflow (LangGraph)
     # ──────────────────────────────────────────────
-
-    raw_service_type = (data.service_type or "").strip()
-
-    if not raw_service_type:
-        raise HTTPException(
-            status_code=400,
-            detail="Service type is required.",
-        )
-
-    req_skill = map_service_type_to_skill(raw_service_type)
-
-    if req_skill == "Other":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported service type '{raw_service_type}'.",
-        )
-
-    # ──────────────────────────────────────────────
-    # Customer location
-    # ──────────────────────────────────────────────
-
-    if not data.location or not data.location.strip():
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Customer location is required "
-                "for organization assignment."
-            ),
-        )
-
-    customer_address = data.location.strip()
-
-# Use exact GPS coordinates from customer current location.
-    if is_valid_coordinate(data.site_latitude, data.site_longitude):
-        customer_latitude = data.site_latitude
-        customer_longitude = data.site_longitude
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail="Customer GPS location is required.",
-        )
-    # ──────────────────────────────────────────────
-    # Find all organizations having required skill
-    # ──────────────────────────────────────────────
-
-    technicians = (
-        db.query(Technician)
-        .filter(
-            Technician.tenant_id.isnot(None),
-            Technician.technician_skill.isnot(None),
-        )
-        .all()
+    from ..services.ai.FieldOpsAI.graph import intake_graph, planning_graph
+    from ..services.ai.FieldOpsAI.graph.workflow import (
+        log_intake_io,
+        log_planning_io,
+        log_planning_top_3,
     )
 
-    capable_tenant_ids = {
-        technician.tenant_id
-        for technician in technicians
-        if technician.tenant_id
-        and is_skill_matching(
-            technician.technician_skill,
-            req_skill,
-            raw_service_type,
-        )
+    workflow_input = {
+        "service": data.service_type,
+        "service_type": data.service_type,
+        "title": data.title,
+        "description": data.description,
+        "location": data.location,
+        "site_latitude": data.site_latitude,
+        "site_longitude": data.site_longitude,
+        "priority": data.priority or "MEDIUM",
+        "contact_number": data.contact_number,
+        "customer_name": cust_name,
+        "preferred_visit_date": str(data.preferred_visit_date) if data.preferred_visit_date else None,
     }
 
-    if not capable_tenant_ids:
+    # Step 1: Run Intake Agent
+    intake_res = intake_graph.invoke({"raw_request": workflow_input})
+
+    if not intake_res.get("valid", False):
+        error_type = intake_res.get("error_type", "unclear")
+        msg = intake_res.get("message", "Validation failed.")
+        field = intake_res.get("field", "service")
+        intake_out = {
+            "valid": False,
+            "error_type": error_type,
+            "field": field,
+            "message": msg,
+            "detected_value": intake_res.get("detected_value"),
+            "expected_value": intake_res.get("expected_value"),
+        }
+        log_intake_io(workflow_input, intake_out)
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"No organization is available "
-                f"with the required skill "
-                f"'{req_skill}'."
-            ),
+            detail=intake_out,
         )
 
-    # ──────────────────────────────────────────────
-    # Get organizations with valid coordinates
-    # ──────────────────────────────────────────────
+    job_req = intake_res.get("job_requirement") or {}
 
-    organizations = (
-        db.query(Organization)
-        .filter(
-            Organization.id.in_(
-                capable_tenant_ids
-            ),
-            Organization.site_latitude.isnot(None),
-            Organization.site_longitude.isnot(None),
+    # Step 2: Determine next real Job ID from DB
+    from sqlalchemy import func, text
+    max_id = db.query(func.max(Job.id)).scalar()
+    real_job_id = int(max_id or 100) + 1
+    job_req["job_id"] = real_job_id
+    workflow_input["job_id"] = real_job_id
+
+    log_intake_io(workflow_input, {"valid": True, "job_requirement": job_req})
+
+    # Step 3: Run Planning Agent with exact real job_id
+    planning_input = {
+        "job_requirement": job_req,
+        "db": db,
+        "job_id": real_job_id,
+    }
+    planning_state = planning_graph.invoke(planning_input)
+    planning_res = planning_state.get("planning_response") or {}
+    top_3 = planning_res.get("top_3") or []
+    total_eligible = planning_res.get("total_eligible_technicians", len(top_3))
+
+    log_planning_io(job_req, planning_res)
+    log_planning_top_3(top_3, job_id=real_job_id, total_eligible_technicians=total_eligible)
+
+    req_skill = job_req.get("required_skill") or map_service_type_to_skill(data.service_type)
+    customer_address = job_req.get("location") or data.location
+    customer_latitude = data.site_latitude
+    customer_longitude = data.site_longitude
+
+    if top_3:
+        selected_tenant_id = top_3[0]["organization_id"]
+    else:
+        # Fallback to nearest capable organization if no technicians with workload < 5
+        organizations = (
+            db.query(Organization)
+            .filter(
+                Organization.site_latitude.isnot(None),
+                Organization.site_longitude.isnot(None),
+                Organization.deleted_at.is_(None),
+            )
+            .all()
         )
-        .all()
-    )
-
-    if not organizations:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"No organization is available "
-                f"with the required skill "
-                f"'{req_skill}' and a valid location."
+        if not organizations:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No organization is available with the required skill '{req_skill}' and a valid location.",
+            )
+        nearest_organization = min(
+            organizations,
+            key=lambda organization: haversine_km(
+                customer_latitude,
+                customer_longitude,
+                organization.site_latitude,
+                organization.site_longitude,
             ),
         )
-
-    # ──────────────────────────────────────────────
-    # Compare customer against ALL organizations
-    # ──────────────────────────────────────────────
-
-    nearest_organization = min(
-        organizations,
-        key=lambda organization: haversine_km(
-            customer_latitude,
-            customer_longitude,
-            organization.site_latitude,
-            organization.site_longitude,
-        ),
-    )
-
-    selected_tenant_id = (
-        nearest_organization.id
-    )
+        selected_tenant_id = nearest_organization.id
 
     # ──────────────────────────────────────────────
     # Create Job
@@ -740,6 +722,7 @@ async def create_service_request(
     # ──────────────────────────────────────────────
 
     new_job = Job(
+        id=real_job_id,
         tenant_id=selected_tenant_id,
         customer_tenant_id=current_user.tenant_id,
         customer_name=cust_name,
@@ -770,6 +753,10 @@ async def create_service_request(
     try:
         db.add(new_job)
         db.flush()
+        try:
+            db.execute(text("SELECT setval('jobs_id_seq', (SELECT COALESCE(MAX(id), 1) FROM jobs))"))
+        except Exception:
+            pass
 
     # ──────────────────────────────────────────────
     # Create Service Request
@@ -838,6 +825,9 @@ async def create_service_request(
         "site_latitude": new_job.site_latitude,
         "site_longitude": new_job.site_longitude,
     }
+    service_request["total_eligible_technicians"] = planning_res.get("total_eligible_technicians", 0)
+    service_request["top_3"] = top_3
+    service_request["top_3_technicians"] = top_3
     return service_request
 
 

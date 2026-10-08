@@ -5,7 +5,7 @@ Pydantic models for request/response validation on portal-specific endpoints.
 """
 
 from datetime import date, datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, field_validator, ConfigDict, model_validator
 
 
@@ -381,6 +381,9 @@ class CreatedServiceRequestJobResponse(BaseModel):
 
 class ServiceRequestCreatedResponse(ServiceRequestResponse):
     created_job: CreatedServiceRequestJobResponse
+    total_eligible_technicians: Optional[int] = None
+    top_3: Optional[List[Dict[str, Any]]] = None
+    top_3_technicians: Optional[List[Dict[str, Any]]] = None
 
 
 ServiceRequestResponse.model_rebuild()

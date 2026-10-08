@@ -1260,12 +1260,15 @@ export default function CustomerServiceRequestsPage({
           const detail =
             e?.response?.data?.detail;
 
-          setError(
-            typeof detail ===
-              "string"
-              ? detail
-              : "Failed to save service request."
-          );
+          if (typeof detail === "string") {
+            setError(detail);
+          } else if (detail?.message) {
+            setError(detail.message);
+          } else if (Array.isArray(detail) && detail[0]?.msg) {
+            setError(detail[0].msg);
+          } else {
+            setError("Failed to save service request.");
+          }
         }
       } finally {
         setSaving(false);
