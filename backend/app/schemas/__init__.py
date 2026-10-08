@@ -113,6 +113,8 @@ class TechnicianCreate(BaseModel):
     technician_name: str
     technician_skill: str
     technician_location: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     technician_status: str
 
     @field_validator("tech_id")

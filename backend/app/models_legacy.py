@@ -26,6 +26,8 @@ class Technician(Base):
     technician_skill = Column(String(100), nullable=False)
     certifications_data = Column(JSON, nullable=True)
     technician_location = Column(String(150), nullable=False)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
     technician_status = Column(String(30), default="AVAILABLE")
     current_jobs = Column(Integer, default=0)
     max_jobs = Column(Integer, default=5)

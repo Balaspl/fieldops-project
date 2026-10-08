@@ -428,3 +428,50 @@ def reassign_declined_job(
         "new_technician": new_tech.technician_name,
         "status": "ASSIGNED",
     }
+
+
+class AutomatedWorkflowExecutionRequest(schemas.BaseModel):
+    service: Optional[str] = None
+    service_type: Optional[str] = None
+    title: str
+    description: str
+    location: str
+    priority: Optional[str] = "MEDIUM"
+    site_latitude: Optional[float] = None
+    site_longitude: Optional[float] = None
+    contact_number: Optional[str] = None
+    customer_name: Optional[str] = None
+    preferred_visit_date: Optional[str] = None
+    job_id: Optional[str | int] = None
+
+
+@router.post("/planning/workflow/auto-plan")
+def execute_intake_and_planning_workflow(
+    data: AutomatedWorkflowExecutionRequest,
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.PLANNING_VIEW)
+    ),
+    db: Session = Depends(get_db),
+):
+    """
+    Execute the automated Intake Agent and Planning Agent LangGraph workflow.
+    Validates customer request, enforces workload < 5, ranks technicians
+    organization-by-organization, and returns total eligible count + top 3 technicians.
+    """
+    from app.services.ai.FieldOpsAI.graph import execute_fieldops_workflow
+
+    res = execute_fieldops_workflow(data.model_dump(), db=db, job_id=data.job_id)
+    if not res.get("valid", False):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "valid": False,
+                "error_type": res.get("error_type", "unclear"),
+                "field": res.get("field", "service"),
+                "message": res.get("message", "Validation failed."),
+                "detected_value": res.get("detected_value"),
+                "expected_value": res.get("expected_value"),
+            },
+        )
+    return res
+
