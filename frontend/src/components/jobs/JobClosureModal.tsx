@@ -26,11 +26,29 @@ const compressImage = (
     const reader = new FileReader();
 
     reader.onload = (event) => {
+      const source = event.target?.result;
+
+      // Never continue with an invalid or non-data-URL source.
+      if (typeof source !== "string" || !source.startsWith("data:image/")) {
+        resolve("");
+        return;
+      }
+
       const img = new Image();
 
       img.onload = () => {
         let width = img.width;
         let height = img.height;
+
+        if (
+          !Number.isFinite(width) ||
+          !Number.isFinite(height) ||
+          width <= 0 ||
+          height <= 0
+        ) {
+          resolve("");
+          return;
+        }
 
         if (width > maxWidth) {
           height = Math.round((height * maxWidth) / width);
@@ -43,25 +61,44 @@ const compressImage = (
 
         const ctx = canvas.getContext("2d");
 
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, width, height);
-          resolve(canvas.toDataURL("image/jpeg", quality));
+        if (!ctx) {
+          // Do NOT return the original user-controlled data URL.
+          resolve("");
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+
+        // Always return a browser-generated JPEG data URL.
+        const compressed = canvas.toDataURL("image/jpeg", quality);
+
+        if (
+          typeof compressed === "string" &&
+          compressed.startsWith("data:image/jpeg;base64,")
+        ) {
+          resolve(compressed);
         } else {
-          resolve((event.target?.result as string) || "");
+          resolve("");
         }
       };
 
       img.onerror = () => resolve("");
-      img.src = (event.target?.result as string) || "";
+
+      img.src = source;
     };
 
     reader.onerror = () => resolve("");
+
     reader.onprogress = (event) => {
       if (event.lengthComputable && event.total > 0) {
-        onProgress?.(Math.round((event.loaded / event.total) * 100));
+        onProgress?.(
+          Math.round((event.loaded / event.total) * 100),
+        );
       }
     };
+
     reader.onloadend = () => onProgress?.(100);
+
     reader.readAsDataURL(file);
   });
 };

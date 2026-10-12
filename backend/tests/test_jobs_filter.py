@@ -9571,7 +9571,7 @@ def test_cov_create_job_kafka_publish_results(monkeypatch, publish_result):
         )
 
         assert result.customer_name == "Coverage Customer"
-        assert len(background_tasks.tasks) == 1
+        assert len(background_tasks.tasks) == 2
 
         task = background_tasks.tasks[0]
         asyncio.run(task.func(*task.args, **task.kwargs))
@@ -9628,10 +9628,12 @@ def test_cov_create_job_kafka_publish_exception():
         db.close()
 
 
+
 def test_cov_create_job_kafka_prepare_exception():
+    import pytest
+    from fastapi import BackgroundTasks, HTTPException
     from app.routes.jobs import create_job
     from app.schemas import JobCreate
-    from fastapi import BackgroundTasks
 
     class Producer:
         async def publish(self, event):
@@ -9658,17 +9660,21 @@ def test_cov_create_job_kafka_prepare_exception():
             attempt_count=0,
         )
 
-        result = create_job(
-            job=data,
-            request=_cov_request(Producer()),
-            background_tasks=BrokenTasks(),
-            user_tenant=(None, "tenant-1"),
-            db=db,
-        )
+        with pytest.raises(HTTPException) as exc_info:
+            create_job(
+                job=data,
+                request=_cov_request(Producer()),
+                background_tasks=BrokenTasks(),
+                user_tenant=(None, "tenant-1"),
+                db=db,
+            )
 
-        assert result.customer_name == "Coverage Prepare Error"
+        assert exc_info.value.status_code == 500
+        assert "background task registration failed" in exc_info.value.detail
+
     finally:
         db.close()
+
 
 
 def test_cov_get_jobs_sla_deadline_fallback_branches():

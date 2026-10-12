@@ -684,12 +684,16 @@ def test_tenant_validator_invalid_and_customer_paths():
     assert owned.allowed is True
 
 
+
 def test_tenant_validator_technician_and_cross_tenant_paths():
-    validator = TenantValidator(_FakeDB())
+    validator = TenantValidator(
+        _FakeDB(_FakeQuery(first_value=None))
+    )
     invalid_tech = validator.validate_channel_sync(
         "tenant:other:job:1", "tenant-1", "technician", "tech-1"
     )
     assert invalid_tech.code == "RESOURCE_ACCESS_DENIED"
+
 
     missing_tech = TenantValidator(
         _FakeDB(_FakeQuery(first_value=None))

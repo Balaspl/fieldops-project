@@ -1,6 +1,6 @@
 {
-  "total": 277,
-  "passed": 277,
+  "total": 291,
+  "passed": 291,
   "failed": 0,
   "skipped": 0,
   "tests": [
@@ -894,6 +894,62 @@
     },
     {
       "nodeid": "tests/agents/test_config.py::test_override_isolation",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_agent.py::test_dispatcher_reject_timeout_accept",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_agent.py::test_dispatcher_all_candidates_rejected",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_dispatcher_reject_timeout_reject_then_replans_and_accepts",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_dispatcher_accepts_second_candidate_without_replanning",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_dispatcher_three_timeouts_trigger_replanning",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_replanning_excludes_all_attempted_technicians",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_accepted_candidate_stops_before_rank_three",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_fresh_planning_batch_preserves_attempt_history",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_replanning_returns_fresh_top_three",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_replanning_limits_batch_to_top_three",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_no_candidates_from_replanning_is_handled",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_timeout_and_reject_are_both_excluded_from_replanning",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_multiple_planning_batches_until_acceptance",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_invalid_event_is_rejected",
       "outcome": "passed"
     },
     {

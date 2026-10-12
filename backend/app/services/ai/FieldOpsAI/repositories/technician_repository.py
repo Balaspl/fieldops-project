@@ -50,22 +50,29 @@ class TechnicianRepository:
     # ---------------------------------------------------------
 
     def get_available(
-        self,
-        tenant_id: str,
-    ) -> List[Technician]:
+    self,
+    tenant_id: str | None = None,
+) -> List[Technician]:
         """
-        Retrieve all available technicians
-        for the specified tenant.
+        Retrieve all available technicians.
+    
+        If tenant_id is provided, restrict results to that tenant.
+        If tenant_id is None, return available technicians
+        across all tenants.
+    
+        This method only performs database access.
         """
-
-        return (
-            self.db.query(Technician)
-            .filter(
-                Technician.tenant_id == tenant_id,
-                Technician.technician_status == "AVAILABLE",
-            )
-            .all()
+    
+        query = self.db.query(Technician).filter(
+            Technician.technician_status == "AVAILABLE",
         )
+    
+        if tenant_id is not None:
+            query = query.filter(
+                Technician.tenant_id == tenant_id,
+            )
+    
+        return query.all()
 
     # ---------------------------------------------------------
 
@@ -147,19 +154,19 @@ class TechnicianRepository:
 
     # ...existing code...
 
-def to_ai_dict(self, technician: Technician) -> dict:
-    """
-    Convert a Technician model into the format
-    expected by the AI Planning Agent.
-    """
-    return {
-        "technician_id": technician.technician_id,
-        "technician_name": technician.technician_name,
-        "skills": technician.technician_skill,
-        "location": technician.technician_location,
-        "status": technician.technician_status,
-        "current_jobs": technician.current_jobs,
-    }
+    def to_ai_dict(self, technician: Technician) -> dict:
+        """
+        Convert a Technician model into the format
+        expected by the AI Planning Agent.
+        """
+        return {
+            "technician_id": technician.technician_id,
+            "technician_name": technician.technician_name,
+            "skills": technician.technician_skill,
+            "location": technician.technician_location,
+            "status": technician.technician_status,
+            "current_jobs": technician.current_jobs,
+        }
 
 from uuid import uuid4
 

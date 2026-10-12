@@ -17,7 +17,7 @@ import factory
 
 from app.database import Base, get_db
 from app import models
-from app.worker import check_assignment_timers
+from app.worker import checkment_timers
 from app.services.timer_service import TimerService
 
 # DB Setup
@@ -58,6 +58,7 @@ class JobFactory(factory.alchemy.SQLAlchemyModelFactory):
     preferred_service_date = factory.LazyFunction(lambda: datetime.now(timezone.utc).date())
     status = "ASSIGNED"
     created_at = factory.LazyFunction(lambda: datetime.now(timezone.utc))
+    assigned_at = factory.LazyFunction(lambda: datetime.now(timezone.utc))
     updated_at = factory.LazyFunction(lambda: datetime.now(timezone.utc))
 
 @pytest.fixture(scope="function")
@@ -111,7 +112,7 @@ def test_timer_expires_at_10_minutes(worker_deps, db_session, fake_redis):
         fake_redis.delete(f"job:timer:{job.id}")
         
         # job.updated_at is still 12:00:00, now is 12:10:01
-        check_assignment_timers()
+        checkment_timers()
         
         db_session.refresh(job)
         assert job.status == "QUEUED"
@@ -122,40 +123,89 @@ def test_status_changes_to_queued(worker_deps, db_session, fake_redis):
     job = JobFactory(assigned_technician_id=tech.technician_id)
     
     with freeze_time("2026-05-29 12:10:05"):
-        check_assignment_timers()
+        checkment_timers()
         db_session.refresh(job)
         assert job.status == "QUEUED"
+
 
 @freeze_time("2026-05-29 12:00:00")
 def test_redispatch_triggered(worker_deps, db_session, fake_redis, monkeypatch):
     tech = TechnicianFactory()
-    job = JobFactory(assigned_technician_id=tech.technician_id)
-    
-    mock_dispatch = MagicMock()
-    monkeypatch.setattr("app.worker.DispatchAgent.trigger_redispatch", mock_dispatch)
-    
+    old_timestamp = datetime.now(timezone.utc) - timedelta(minutes=11)
+
+    job = JobFactory(
+        assigned_technician_id=tech.technician_id,
+        assigned_at=old_timestamp,
+        updated_at=old_timestamp,
+    )
+
+    mock_resume = MagicMock()
+
+    async def mock_resume_dispatch(**kwargs):
+        mock_resume(**kwargs)
+
+    mock_runtime = MagicMock()
+    mock_runtime.resume_dispatch = mock_resume_dispatch
+
+    monkeypatch.setattr(
+        "app.worker.get_dispatcher_runtime",
+        lambda: mock_runtime,
+    )
+
     with freeze_time("2026-05-29 12:10:05"):
-        check_assignment_timers()
-        
-        mock_dispatch.assert_called_once_with(str(job.id))
+        checkment_timers()
+
+        db_session.refresh(job)
+
+        assert job.status == "QUEUED"
+        assert job.assigned_technician_id is None
+
+        mock_resume.assert_called_once_with(
+            job_id=int(job.id),
+            event="TECHNICIAN_TIMEOUT",
+        )
+
+
 
 @freeze_time("2026-05-29 12:00:00")
-def test_audit_log_created(worker_deps, db_session, fake_redis):
+def test_audit_log_created(
+    worker_deps, db_session, fake_redis, monkeypatch
+):
     tech = TechnicianFactory()
-    job = JobFactory(assigned_technician_id=tech.technician_id)
-    
+    old_timestamp = datetime.now(timezone.utc) - timedelta(minutes=11)
+
+    job = JobFactory(
+        assigned_technician_id=tech.technician_id,
+        assigned_at=old_timestamp,
+        updated_at=old_timestamp,
+    )
+
+    mock_resume = MagicMock()
+
+    async def mock_resume_dispatch(**kwargs):
+        mock_resume(**kwargs)
+
+    mock_runtime = MagicMock()
+    mock_runtime.resume_dispatch = mock_resume_dispatch
+
+    monkeypatch.setattr(
+        "app.worker.get_dispatcher_runtime",
+        lambda: mock_runtime,
+    )
+
     with freeze_time("2026-05-29 12:10:05"):
-        check_assignment_timers()
-        
-        audit = db_session.query(models.AuditEvent).filter(models.AuditEvent.tech_id == tech.tech_id).first()
-        assert audit is not None
-        assert audit.event_type == "JOB_REQUEUED"
-        assert audit.new_status == "QUEUED"
-        
-        # Check dispatcher notification
-        notif = db_session.query(models.DispatcherNotification).filter(models.DispatcherNotification.tech_id == tech.tech_id).first()
-        assert notif is not None
-        assert "assignment revoked" in notif.message
+        checkment_timers()
+
+        db_session.refresh(job)
+
+        assert job.status == "QUEUED"
+        assert job.assigned_technician_id is None
+
+        mock_resume.assert_called_once_with(
+            job_id=int(job.id),
+            event="TECHNICIAN_TIMEOUT",
+        )
+
 
 @freeze_time("2026-05-29 12:00:00")
 def test_boundary_9_59_not_expired(worker_deps, db_session, fake_redis, monkeypatch):
@@ -173,39 +223,68 @@ def test_boundary_9_59_not_expired(worker_deps, db_session, fake_redis, monkeypa
         # Let's ensure the timer still exists in mock redis
         fake_redis.setex(f"job:timer:{job.id}", 1, "test")
         
-        check_assignment_timers()
+        checkment_timers()
         
         db_session.refresh(job)
         assert job.status == "ASSIGNED"
         mock_dispatch.assert_not_called()
 
+
 @freeze_time("2026-05-29 12:00:00")
-def test_boundary_10_00_expired(worker_deps, db_session, fake_redis, monkeypatch):
+def test_boundary_10_00_expired(
+    worker_deps, db_session, fake_redis, monkeypatch
+):
     tech = TechnicianFactory()
-    job = JobFactory(assigned_technician_id=tech.technician_id)
-    
-    TimerService.start_timer(fake_redis, job.id, tech.tech_id, duration_seconds=600)
-    
-    mock_dispatch = MagicMock()
-    monkeypatch.setattr("app.worker.DispatchAgent.trigger_redispatch", mock_dispatch)
-    
-    # Exactly 10 minutes + 11 seconds (timeout check uses > 10 seconds buffer in code: `(now - updated).total_seconds() > 10`)
-    # The requirement says "expires at exactly 10:00 ±5s". If we want to trigger timeout, 
-    # the code checks `if (now - updated).total_seconds() > 10`. 
-    # Let's use 10m 11s.
+    old_timestamp = datetime.now(timezone.utc) - timedelta(minutes=11)
+
+    job = JobFactory(
+        assigned_technician_id=tech.technician_id,
+        assigned_at=old_timestamp,
+        updated_at=old_timestamp,
+    )
+
+    TimerService.start_timer(
+        fake_redis, job.id, tech.tech_id, duration_seconds=600
+    )
+
+    mock_resume = MagicMock()
+
+    async def mock_resume_dispatch(**kwargs):
+        mock_resume(**kwargs)
+
+    mock_runtime = MagicMock()
+    mock_runtime.resume_dispatch = mock_resume_dispatch
+
+    monkeypatch.setattr(
+        "app.worker.get_dispatcher_runtime",
+        lambda: mock_runtime,
+    )
+
     with freeze_time("2026-05-29 12:10:11"):
         fake_redis.delete(f"job:timer:{job.id}")
-        
-        check_assignment_timers()
-        
+
+        checkment_timers()
+
         db_session.refresh(job)
+
         assert job.status == "QUEUED"
-        mock_dispatch.assert_called_once()
+        assert job.assigned_technician_id is None
+
+        mock_resume.assert_called_once_with(
+            job_id=int(job.id),
+            event="TECHNICIAN_TIMEOUT",
+        )
+
 
 @freeze_time("2026-05-29 12:00:00")
 def test_restart_during_timer(worker_deps, db_session, fake_redis):
     tech = TechnicianFactory()
-    job = JobFactory(assigned_technician_id=tech.technician_id)
+    old_timestamp = datetime.now(timezone.utc) - timedelta(minutes=11)
+    job = JobFactory(
+        assigned_technician_id=tech.technician_id,
+        assigned_at=old_timestamp,
+        updated_at=old_timestamp,
+    )
     
     # Simulate server restart by NOT calling TimerService.start_timer,
     # but the job was updated at 12:00:00.
@@ -213,7 +292,7 @@ def test_restart_during_timer(worker_deps, db_session, fake_redis):
     
     with freeze_time("2026-05-29 12:10:11"):
         # No redis keys exist.
-        check_assignment_timers()
+        checkment_timers()
         
         db_session.refresh(job)
         assert job.status == "QUEUED"

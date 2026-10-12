@@ -1167,23 +1167,10 @@ async def gps_ping(
                 detail="Job not found",
             )
 
-        if (
-            job.tenant_id
-            and job.tenant_id != x_tenant_id
-        ):
-            _log_rejected_throttled(
-                redis_client,
-                db,
-                payload.technician_id,
-                payload.job_id,
-                x_tenant_id,
-                "Access denied for job",
-            )
-
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied",
-            )
+        # Cross-tenant dispatch is supported: the technician belongs to the
+        # provider tenant, while the job may belong to the customer/job tenant.
+        # Authorization is enforced below by requiring an active job assigned
+        # to this authenticated technician.
 
         job_status_upper = _job_status_upper(
             job
@@ -1393,10 +1380,10 @@ async def gps_ping(
         # ── 8. Persist the GPS history record first. ─────────────────────────
         # Live Redis publication is deliberately delayed until after commit so
         # a rolled-back transaction can never produce a ghost map update.
-        tenant_id = (
-            tech.tenant_id
-            or x_tenant_id
-        )
+        # GPS history belongs to the technician/provider tenant, while live
+        # updates must be routed through the job tenant for customer tracking.
+        storage_tenant_id = str(tech.tenant_id or x_tenant_id)
+        tracking_tenant_id = str(job.tenant_id or x_tenant_id)
 
         ping_id = str(
             uuid.uuid4()
@@ -1411,7 +1398,7 @@ async def gps_ping(
             timestamp=payload.timestamp,
             accuracy=payload.accuracy,
             altitude=payload.altitude,
-            tenant_id=tenant_id,
+            tenant_id=storage_tenant_id,
             ip_address=client_host,
             user_agent=user_agent,
             correlation_id=correlation_id,
@@ -1458,7 +1445,7 @@ async def gps_ping(
             ping_id=ping_id,
             technician_id=payload.technician_id,
             job_id=payload.job_id,
-            tenant_id=tenant_id,
+            tenant_id=tracking_tenant_id,
             latitude=payload.latitude,
             longitude=payload.longitude,
             accuracy=payload.accuracy,
@@ -1482,7 +1469,7 @@ async def gps_ping(
                 None,
             ),
             job_id=payload.job_id,
-            tenant_id=tenant_id,
+            tenant_id=tracking_tenant_id,
             latitude=payload.latitude,
             longitude=payload.longitude,
             accuracy=payload.accuracy,
@@ -1532,7 +1519,8 @@ async def gps_ping(
                     "timestamp"
                 ],
                 "correlation_id": correlation_id,
-                "tenant_id": tenant_id,
+                "tenant_id": tracking_tenant_id,
+                "storage_tenant_id": storage_tenant_id,
             },
         )
 
@@ -1938,14 +1926,12 @@ async def gps_batch(
             if str(j).isdigit()
         ]
 
+        # Cross-tenant dispatch is supported. Resolve jobs by ID, then
+        # authorize each ping by active status and technician assignment.
         job_records = (
             db.query(models.Job)
             .filter(
-                models.Job.id.in_(
-                    numeric_job_ids
-                ),
-                models.Job.tenant_id
-                == x_tenant_id,
+                models.Job.id.in_(numeric_job_ids),
             )
             .all()
         )
@@ -2057,29 +2043,9 @@ async def gps_batch(
 
                 continue
 
-            if (
-                job.tenant_id
-                and job.tenant_id
-                != x_tenant_id
-            ):
-                log_rejected_ping(
-                    db,
-                    payload.technician_id,
-                    payload.job_id,
-                    x_tenant_id,
-                    "Access denied for job",
-                )
-
-                errors.append(
-                    {
-                        "index": i,
-                        "reason": (
-                            "Access denied for job"
-                        ),
-                    }
-                )
-
-                continue
+            # The job may belong to the customer tenant while the assigned
+            # technician belongs to the provider tenant. Assignment and active
+            # status checks below remain mandatory.
 
             if (
                 _job_status_upper(job)
@@ -2258,12 +2224,18 @@ async def gps_batch(
             # Every committed GPSPing gets its own GPS-location event.
             # Redis remains the live-tracking fan-out path.
             for d in insert_dicts:
+                event_job = job_map.get(str(d["job_id"]))
+                tracking_tenant_id = str(
+                    event_job.tenant_id
+                    if event_job and event_job.tenant_id
+                    else d["tenant_id"]
+                )
                 await _publish_gps_location_event(
                     request,
                     ping_id=str(d["id"]),
                     technician_id=str(d["technician_id"]),
                     job_id=str(d["job_id"]),
-                    tenant_id=str(d["tenant_id"]),
+                    tenant_id=tracking_tenant_id,
                     latitude=d["latitude"],
                     longitude=d["longitude"],
                     accuracy=d["accuracy"],
@@ -2335,6 +2307,11 @@ async def gps_batch(
                         )
                     )
 
+                    tracking_tenant_id = str(
+                        job.tenant_id
+                        if job and job.tenant_id
+                        else d["tenant_id"]
+                    )
                     update_payload = _build_update(
                         technician_id=(
                             d[
@@ -2347,7 +2324,7 @@ async def gps_batch(
                             None,
                         ),
                         job_id=d["job_id"],
-                        tenant_id=d["tenant_id"],
+                        tenant_id=tracking_tenant_id,
                         latitude=d["latitude"],
                         longitude=d["longitude"],
                         accuracy=d["accuracy"],

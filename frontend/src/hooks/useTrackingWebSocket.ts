@@ -663,6 +663,7 @@ export const useTrackingWebSocket = (
                 JSON.parse(
                   event.data,
                 );
+                dbg('frame', data);
 
               // --------------------------------------------------------------
               // HEARTBEAT / CONTROL FRAMES
@@ -852,11 +853,10 @@ export const useTrackingWebSocket = (
                   data.job_status ||
                   'Available';
 
-                const jobIdStr =
-                  data.job_id
-                    ? String(
-                        data.job_id,
-                      )
+                const jobIdStr = data.job_id
+                  ? String(data.job_id)
+                  : jobId
+                    ? String(jobId)
                     : null;
 
                 // ------------------------------------------------------------

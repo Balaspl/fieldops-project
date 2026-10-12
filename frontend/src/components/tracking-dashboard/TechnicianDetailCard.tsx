@@ -5,7 +5,7 @@ import { getTechnicianETA } from '../../services/etaService';
 import JobStatusBadge from '../ui/JobStatusBadge';
 import { ETACountdown } from './ETACountdown';
 import { useRoutePlaybackStore } from '../../store/routePlaybackStore';
-
+import { getSafeImageUrl } from '../../utils/safeImageurl';
 interface TechnicianDetailCardProps {
   tech: TechGpsData;
   onClose: () => void;
@@ -209,15 +209,17 @@ const CardContent: React.FC<{
 
   const displayEta = etaText || tech.eta || (loadingEta ? 'Calculating...' : 'No active route');
   const displayMins = etaMins !== null ? etaMins : tech.eta_duration_minutes;
+  const safePhotoUrl = getSafeImageUrl(tech.photoUrl);
+
 
   return (
     <div className="flex flex-col h-full bg-slate-50/50">
       {/* Header */}
       <div className="flex items-start justify-between p-5 border-b border-slate-100 bg-white">
         <div className="flex items-center gap-3">
-          {tech.photoUrl ? (
-            <img
-              src={tech.photoUrl}
+          {safePhotoUrl ? (
+          <img
+            src={safePhotoUrl}
               alt={tech.name}
               className="w-14 h-14 rounded-2xl object-cover border-2 border-slate-200 shadow-sm"
             />

@@ -669,6 +669,7 @@ const localCss = `
 
 function AppInner() {
   const { user, accessToken, logout } = useAuthStore();
+  console.log("AUTH USER:", user);
   const { addToast } = useToast();
   useEffect(() => {
   const handleSSOCallback = async () => {
@@ -1131,93 +1132,121 @@ function AppInner() {
     activeTechId,
     isNotificationDrawerOpen,
   ]);
-
-  // Fetch notifications and initialize socket listeners
+  // Technician heartbeat
+  // Heartbeat must use the logged-in technician's user ID.
+  // For Tech Bala:
+  // user.id === Technician.tech_id
   useEffect(() => {
-    if (!activeTechId) return;
+    if (!isTechnician || !user?.id) {
+      return;
+    }
 
-    startHeartbeatLoop(
-      String(activeTechId),
-      30000,
+    const technicianId = String(user.id);
+
+    console.log(
+      "STARTING HEARTBEAT FOR:",
+      technicianId,
     );
 
-    const socketHandlers = {
-      onConnect: () => {
-        console.log(
-          "Connected to notification server.",
-        );
-      },
-
-      onDisconnect: () => {
-        console.log(
-          "Disconnected from notification server.",
-        );
-      },
-
-      onNewNotification: (
-        notif: NotificationItem,
-      ) => {
-        setNotifications(
-          (prev) => [
-            notif,
-            ...prev,
-          ],
-        );
-
-        setUnreadCount(
-          (prev) => prev + 1,
-        );
-
-        addToast(
-          createToastFromNotification(
-            notif as any,
-          ),
-        );
-
-        setIsBellAnimated(true);
-
-        setTimeout(
-          () =>
-            setIsBellAnimated(
-              false,
-            ),
-          1000,
-        );
-      },
-
-      onUnreadCount: (
-        count: number,
-      ) => {
-        setUnreadCount(
-          count,
-        );
-      },
-    };
-
-    const socket =
-      connectNotificationSocket(
-        activeTechId,
-        socketHandlers,
-      );
-
-    const unsubscribeDispatch =
-      subscribeToDispatchEvents(
-        socket,
-        addToast,
-      );
+    startHeartbeatLoop(
+      technicianId,
+      450000,
+    );
 
     return () => {
-      stopHeartbeatLoop();
-      unsubscribeDispatch();
-      disconnectNotificationSocket(
-        socket,
+      console.log(
+        "STOPPING HEARTBEAT FOR:",
+        technicianId,
       );
+
+      stopHeartbeatLoop();
     };
   }, [
-    activeTechId,
-    addToast,
+    isTechnician,
+    user?.id,
   ]);
 
+  // Fetch notifications and initialize socket listeners
+  // Fetch notifications and initialize socket listeners
+useEffect(() => {
+  if (!activeTechId) return;
+
+  const socketHandlers = {
+    onConnect: () => {
+      console.log(
+        "Connected to notification server.",
+      );
+    },
+
+    onDisconnect: () => {
+      console.log(
+        "Disconnected from notification server.",
+      );
+    },
+
+    onNewNotification: (
+      notif: NotificationItem,
+    ) => {
+      setNotifications(
+        (prev) => [
+          notif,
+          ...prev,
+        ],
+      );
+
+      setUnreadCount(
+        (prev) => prev + 1,
+      );
+
+      addToast(
+        createToastFromNotification(
+          notif as any,
+        ),
+      );
+
+      setIsBellAnimated(true);
+
+      setTimeout(
+        () =>
+          setIsBellAnimated(
+            false,
+          ),
+        1000,
+      );
+    },
+
+    onUnreadCount: (
+      count: number,
+    ) => {
+      setUnreadCount(
+        count,
+      );
+    },
+  };
+
+  const socket =
+    connectNotificationSocket(
+      activeTechId,
+      socketHandlers,
+    );
+
+  const unsubscribeDispatch =
+    subscribeToDispatchEvents(
+      socket,
+      addToast,
+    );
+
+  return () => {
+    unsubscribeDispatch();
+
+    disconnectNotificationSocket(
+      socket,
+    );
+  };
+}, [
+  activeTechId,
+  addToast,
+]);
   // NotificationDetail Actions
   const handleAcceptJob =
     async (

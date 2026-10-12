@@ -136,34 +136,37 @@ class TimerService:
                 job_id,
             )
             return False
-
     @classmethod
     def cancel_timer(
         cls,
         redis_client,
         job_id: str,
     ) -> bool:
-        """
-        Cancel all timer-related Redis keys.
-        """
+        """Cancel all timer-related Redis keys."""
 
         if redis_client is None:
             return False
 
+        keys = (
+            cls._timer_key(job_id),
+            cls._warning_key(job_id),
+            cls._warned_key(job_id),
+        )
+
         try:
-            deleted = redis_client.delete(
-                cls._timer_key(job_id),
-                cls._warning_key(job_id),
-                cls._warned_key(job_id),
+            deleted_count = 0
+
+            for key in keys:
+                result = redis_client.delete(key)
+                deleted_count += int(result or 0)
+
+            logger.info(
+                "TimerService: Cancelled timer keys for job=%s deleted=%s",
+                job_id,
+                deleted_count,
             )
 
-            if deleted:
-                logger.info(
-                    "TimerService: Cancelled timer for job %s",
-                    job_id,
-                )
-
-            return bool(deleted)
+            return deleted_count > 0
 
         except Exception:
             logger.exception(

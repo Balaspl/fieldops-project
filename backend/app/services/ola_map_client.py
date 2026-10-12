@@ -410,9 +410,7 @@ class OlaMapsClient:
             "traffic_metadata": "true",
             "route_preference": "fastest",
         }
-    
-        logger.info("[OLA ROUTE] requesting route")
-        logger.info("[OLA ROUTE] params=%s", params)
+
     
         data, _ = await self._request(
             "/routing/v1/directions",
@@ -421,16 +419,7 @@ class OlaMapsClient:
         )
     
         # IMPORTANT DEBUG
-        logger.info(
-            "[OLA ROUTE] response status=%s routes=%s",
-            data.get("status"),
-            len(data.get("routes") or []),
-        )
-    
-        logger.info(
-            "[OLA ROUTE] response keys=%s",
-            list(data.keys()),
-        )
+
     
         if data.get("status") not in ("OK", "SUCCESS"):
             logger.error("[OLA ROUTE] unexpected response: %s", data)

@@ -152,10 +152,12 @@ export const useTrackingStore = create<TrackingState>((set) => ({
     geofenceRadii: { ...state.geofenceRadii, [jobId]: radius }
   })),
 
-  updateNotifiedState: (jobId, techId, state) => set((state) => ({
-    notifiedStates: { ...state.notifiedStates, [`${jobId}_${techId}`]: state }
-  })),
-
+  updateNotifiedState: (jobId, techId, notifiedState) => set((state) => ({
+  notifiedStates: {
+    ...state.notifiedStates,
+    [`${jobId}_${techId}`]: notifiedState,
+  },
+})),
   clearTechnicians: () => set({ technicians: {}, notifiedStates: {} }),
 
   setJobs: (jobs) => set((state) => {
