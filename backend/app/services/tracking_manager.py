@@ -465,17 +465,16 @@ class TenantValidator:
 
         if role == "technician":
 
-            if (
-                channel_tenant_id
-                != str(jwt_tenant_id)
-                or len(parts) != 4
-            ):
+            # Channels must be exactly:
+            # tenant:{tenant_id}:technician:{technician_id}
+            # tenant:{job_owner_tenant_id}:job:{job_id}
+            if len(parts) != 4:
                 return ValidationResult(
                     False,
                     "RESOURCE_ACCESS_DENIED",
                     (
                         "Technicians may only access "
-                        "their own tracking resources"
+                        "their own tracking resources or assigned jobs"
                     ),
                 )
 
@@ -490,6 +489,9 @@ class TenantValidator:
                 else -1
             )
 
+            # Resolve the authenticated technician only inside their own
+            # provider tenant. Do not use the job tenant for this lookup:
+            # dispatch can assign a provider technician to another tenant's job.
             technician = (
                 self.db.query(
                     Technician
@@ -516,36 +518,33 @@ class TenantValidator:
                     False,
                     "RESOURCE_ACCESS_DENIED",
                     (
-                        "Technicians may only access "
-                        "their own tracking resources"
+                        "Authenticated technician record "
+                        "was not found in the token tenant"
                     ),
                 )
 
             if parts[2] == "technician":
+                # A technician may subscribe only to their own stream,
+                # and that stream must use their provider tenant.
+                allowed = (
+                    channel_tenant_id == str(jwt_tenant_id)
+                    and parts[3] in {
+                        str(technician.tech_id),
+                        str(technician.technician_id),
+                    }
+                )
 
-                allowed = parts[3] in {
-                    str(
-                        technician.tech_id
-                    ),
-                    str(
-                        technician.technician_id
-                    ),
-                }
-
-            elif (
-                parts[2] == "job"
-                and parts[3].isdigit()
-            ):
-
+            elif parts[2] == "job" and parts[3].isdigit():
+                # A job stream is keyed by the job owner's tenant. Permit
+                # cross-tenant access only when this exact job is assigned
+                # to the authenticated technician.
                 allowed = (
                     self.db.query(
                         Job.id
                     )
                     .filter(
-                        Job.id
-                        == int(parts[3]),
-                        Job.tenant_id
-                        == jwt_tenant_id,
+                        Job.id == int(parts[3]),
+                        Job.tenant_id == channel_tenant_id,
                         Job.assigned_technician_id
                         == technician.technician_id,
                     )
@@ -562,7 +561,7 @@ class TenantValidator:
                     "RESOURCE_ACCESS_DENIED",
                     (
                         "Technicians may only access "
-                        "their own tracking resources"
+                        "their own tracking resources or assigned jobs"
                     ),
                 )
 

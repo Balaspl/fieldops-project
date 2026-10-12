@@ -2,7 +2,7 @@ import asyncio
 from datetime import date
 
 import pytest
-from fastapi import Request, Response
+from fastapi import BackgroundTasks, Request, Response
 from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -131,8 +131,9 @@ def test_service_request_creation_commits_one_canonical_provider_job(
         customer_portal.create_service_request(
             _payload(),
             _request(),
-            _customer(),
-            db_session,
+            BackgroundTasks(),
+            current_user=_customer(),
+            db=db_session,
         )
     )
 
@@ -172,8 +173,9 @@ def test_customer_job_is_visible_to_provider_dispatch_and_stays_unassigned(
         customer_portal.create_service_request(
             _payload(),
             _request(),
-            _customer(),
-            db_session,
+            BackgroundTasks(),
+            current_user=_customer(),
+            db=db_session,
         )
     )
 
@@ -188,9 +190,7 @@ def test_customer_job_is_visible_to_provider_dispatch_and_stays_unassigned(
             session_id="test-session",
         )
 
-    # ---------------------------------------------------------
     # Provider dispatcher
-    # ---------------------------------------------------------
     provider = dispatcher("provider-tenant")
 
     provider_jobs = get_jobs(
@@ -209,22 +209,18 @@ def test_customer_job_is_visible_to_provider_dispatch_and_stays_unassigned(
         db=db_session,
     )
 
-    # ---------------------------------------------------------
-    # Provider pending jobs
-    # ---------------------------------------------------------
     pending_jobs = get_pending_jobs(
-    response=Response(),
-    search=None,
-    active_filter=None,
-    page=None,
-    limit=None,
-    user_tenant=(provider, provider.tenant_id),
-    current_user=provider,
-    db=db_session)
+        response=Response(),
+        search=None,
+        active_filter=None,
+        page=None,
+        limit=None,
+        user_tenant=(provider, provider.tenant_id),
+        current_user=provider,
+        db=db_session,
+    )
 
-    # ---------------------------------------------------------
     # Different tenant
-    # ---------------------------------------------------------
     other_tenant = dispatcher("other-tenant")
 
     other_tenant_jobs = get_jobs(
@@ -243,17 +239,9 @@ def test_customer_job_is_visible_to_provider_dispatch_and_stays_unassigned(
         db=db_session,
     )
 
-    # ---------------------------------------------------------
-    # Assertions
-    # ---------------------------------------------------------
     assert any(job.id == job_id for job in provider_jobs)
-
     assert any(job.id == job_id for job in pending_jobs)
-
-    assert all(
-        job.id != job_id
-        for job in other_tenant_jobs
-    )
+    assert all(job.id != job_id for job in other_tenant_jobs)
 
     job = (
         db_session.query(Job)
@@ -286,8 +274,9 @@ def test_service_request_creation_rolls_back_job_and_request_if_audit_fails(
             customer_portal.create_service_request(
                 _payload(),
                 _request(),
-                _customer(),
-                db_session,
+                BackgroundTasks(),
+                current_user=_customer(),
+                db=db_session,
             )
         )
 

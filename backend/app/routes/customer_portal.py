@@ -21,7 +21,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from math import radians, sin, cos, asin, sqrt
 from typing import Optional
-
+from fastapi import BackgroundTasks
 from ..database import get_db
 from ..auth.dependencies import (
     get_current_user,
@@ -45,6 +45,9 @@ from ..models import (
     
 )
 from ..models.customer_profile import CustomerProfileModel
+from app.services.ai.FieldOpsAI.agents.dispatcher_agent.dispatcher_runtime import (
+    start_automatic_dispatch,
+)
 from ..models.technician_profile import TechnicianProfile
 from ..models.user import User
 from ..portal_schemas import (
@@ -528,6 +531,7 @@ async def list_service_requests(
 async def create_service_request(
     data: ServiceRequestCreate,
     request: Request,
+    background_tasks: BackgroundTasks,
     current_user: AuthenticatedUser = Depends(
         require_permission(Permission.CUSTOMERS_CREATE_REQUEST)
     ),
@@ -808,6 +812,26 @@ async def create_service_request(
         db.commit()
         db.refresh(sr)
         db.refresh(new_job)
+        logger.info(
+        "🔥 CUSTOMER SERVICE REQUEST COMMITTED | job_id=%s | status=%s",
+        new_job.id,
+        new_job.status,)
+
+        if (
+            (new_job.status or "").upper() in {"CREATED", "QUEUED", "ACTIVE"}
+            and new_job.assigned_technician_id is None
+        ):
+            background_tasks.add_task(
+                start_automatic_dispatch,
+                new_job.id,
+                top_3,
+            )
+
+        logger.info(
+            "🚀 Automatic Dispatcher queued from customer portal | job_id=%s",
+            new_job.id,
+        )
+
     except Exception:
         db.rollback()
         raise
@@ -1518,43 +1542,48 @@ async def track_customer_jobs(
     # Build response
     # ──────────────────────────────────────────────
 
+    
     technician_ids = {
         job.assigned_technician_id
         for job in jobs
         if job.assigned_technician_id is not None
     }
-    job_tenant_ids = {job.tenant_id for job in jobs if job.tenant_id}
+
+    # Technician IDs are resolved independently of the job tenant.
+    # Automatic dispatch supports cross-organization assignments.
     technicians = (
         db.query(Technician)
-        .filter(
-            Technician.technician_id.in_(technician_ids),
-            Technician.tenant_id.in_(job_tenant_ids),
-        )
+        .filter(Technician.technician_id.in_(technician_ids))
         .all()
-        if technician_ids and job_tenant_ids
+        if technician_ids
         else []
     )
-    technicians_by_key = {
-        (tech.tenant_id, tech.technician_id): tech
+
+    technicians_by_id = {
+        tech.technician_id: tech
         for tech in technicians
     }
+
+    
     technician_user_ids = {
         tech.tech_id for tech in technicians if tech.tech_id
     }
+    
     technician_profiles = (
         db.query(TechnicianProfile)
         .filter(
             TechnicianProfile.user_id.in_(technician_user_ids),
-            TechnicianProfile.tenant_id.in_(job_tenant_ids),
         )
         .all()
-        if technician_user_ids and job_tenant_ids
+        if technician_user_ids
         else []
     )
+    
     profiles_by_key = {
         (profile.tenant_id, profile.user_id): profile
         for profile in technician_profiles
     }
+
 
     results = []
 
@@ -1569,10 +1598,7 @@ async def track_customer_jobs(
         eta_payload = {}
 
         if job.assigned_technician_id:
-            tech = technicians_by_key.get(
-                (job.tenant_id, job.assigned_technician_id)
-            )
-
+            tech = technicians_by_id.get(job.assigned_technician_id)
             if tech:
                 tech_name = tech.technician_name
                 tech_phone = tech.phone_number
@@ -1584,9 +1610,7 @@ async def track_customer_jobs(
                 )
 
                 if tech.tech_id:
-                    tp = profiles_by_key.get(
-                        (job.tenant_id, tech.tech_id)
-                    )
+                    tp = profiles_by_key.get((tech.tenant_id, tech.tech_id))
 
                     if tp:
                         tech_photo = tp.profile_photo
@@ -1716,8 +1740,6 @@ async def get_customer_job_detail(
         tech = db.query(Technician).filter(
             Technician.technician_id
             == job.assigned_technician_id,
-            Technician.tenant_id
-            == job.tenant_id,
         ).first()
 
         if tech:
@@ -1731,12 +1753,9 @@ async def get_customer_job_detail(
             )
 
             if tech.tech_id:
-                tp = db.query(
-                    TechnicianProfile
-                ).filter(
-                    TechnicianProfile.user_id
-                    == tech.tech_id,
-                    TechnicianProfile.tenant_id == job.tenant_id,
+                tp = db.query(TechnicianProfile).filter(
+                TechnicianProfile.user_id == tech.tech_id,
+                TechnicianProfile.tenant_id == tech.tenant_id,
                 ).first()
 
                 if tp:

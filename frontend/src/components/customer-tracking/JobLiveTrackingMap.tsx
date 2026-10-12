@@ -1414,11 +1414,13 @@ export default function JobLiveTrackingMap({
           }
         };
 
-      void initializeMap();
+      const startTimer = window.setTimeout(() => {
+        if (!cancelled) void initializeMap();
+        }, 0);
 
       return () => {
-        cancelled =
-          true;
+        cancelled = true;
+        window.clearTimeout(startTimer);
 
         if (
           markerAnimationRef.current !==
@@ -1489,6 +1491,19 @@ export default function JobLiveTrackingMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [jobId, mode],
   );
+  // ---------------------------------------------------------------------------
+// Keep the map sized to its container
+// ---------------------------------------------------------------------------
+
+useEffect(() => {
+  if (!mapReady || !containerRef.current) return;
+
+  const ro = new ResizeObserver(() => mapRef.current?.resize());
+  ro.observe(containerRef.current);
+  requestAnimationFrame(() => mapRef.current?.resize());
+
+  return () => ro.disconnect();
+}, [mapReady]);
 
   // ---------------------------------------------------------------------------
   // Customer marker
@@ -1818,80 +1833,50 @@ export default function JobLiveTrackingMap({
   // Fit technician + customer once
   // ---------------------------------------------------------------------------
 
-  useEffect(
-    () => {
-      if (
-        hasFittedRef.current ||
-        !mapReady ||
-        !mapRef.current ||
-        !origin ||
-        !destination
-      ) {
-        return;
-      }
+    useEffect(() => {
+    if (
+      hasFittedRef.current ||
+      !mapReady ||
+      !mapRef.current ||
+      !origin ||
+      !destination
+    ) {
+      return;
+    }
+
+    const raf = requestAnimationFrame(() => {
+      const map = mapRef.current;
+      if (!map) return;
 
       try {
-        const minLng =
-          Math.min(
-            origin.lng,
-            destination.lng,
-          );
-
-        const minLat =
-          Math.min(
-            origin.lat,
-            destination.lat,
-          );
-
-        const maxLng =
-          Math.max(
-            origin.lng,
-            destination.lng,
-          );
-
-        const maxLat =
-          Math.max(
-            origin.lat,
-            destination.lat,
-          );
-
-        mapRef.current.fitBounds(
+        map.resize();
+        map.fitBounds(
           [
             [
-              minLng,
-              minLat,
+              Math.min(origin.lng, destination.lng),
+              Math.min(origin.lat, destination.lat),
             ],
             [
-              maxLng,
-              maxLat,
+              Math.max(origin.lng, destination.lng),
+              Math.max(origin.lat, destination.lat),
             ],
           ],
-          {
-            padding: 90,
-            maxZoom: 16,
-            duration: 600,
-          },
+          { padding: 90, maxZoom: 16, duration: 600 },
         );
-
-        hasFittedRef.current =
-          true;
-      } catch (
-        error
-      ) {
-        console.warn(
-          "[LIVE MAP] fitBounds failed:",
-          error,
-        );
+        hasFittedRef.current = true;
+      } catch (error) {
+        console.warn("[LIVE MAP] fitBounds failed:", error);
       }
-    },
-    [
-      mapReady,
-      origin?.lat,
-      origin?.lng,
-      destination?.lat,
-      destination?.lng,
-    ],
-  );
+    });
+
+    return () => cancelAnimationFrame(raf);
+  }, [
+    mapReady,
+    origin?.lat,
+    origin?.lng,
+    destination?.lat,
+    destination?.lng,
+  ]);
 
   // ---------------------------------------------------------------------------
   // Route calculation
@@ -2086,7 +2071,7 @@ export default function JobLiveTrackingMap({
               !currentMap.isStyleLoaded()
             ) {
               currentMap.once?.(
-                "load",
+                "idle",
                 () => {
                   if (
                     !cancelled

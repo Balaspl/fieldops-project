@@ -85,35 +85,51 @@ class ReDispatchTriggerService:
 
         # 3. Check Timeout
         if "timeout" in rules["triggers"]:
-            if not timer_exists:
-                # Redis timer is missing.
-                # Treat the assignment as timed out when the job
-                # has remained assigned beyond the timeout buffer.
-                if job.updated_at:
-                    if job.updated_at.tzinfo is None:
-                        updated = job.updated_at.replace(tzinfo=timezone.utc)
-                    else:
-                        updated = job.updated_at.astimezone(timezone.utc)
-
-                    if (now - updated).total_seconds() > 10:
-                        return {
-                            "type": "trigger",
-                            "reason": "timeout",
-                            "urgency": "high",
-                        }
-                else:
-                    return {
-                        "type": "trigger",
-                        "reason": "timeout",
-                        "urgency": "high",
-                    }
-
-            else:
-                # Timer exists, check pre-alert.
+            if timer_exists:
                 if 0 < timer_ttl <= rules["pre_alert_seconds"]:
                     return {
                         "type": "pre_alert",
                         "reason": "imminent_timeout",
                     }
 
-        return None
+                return None
+
+            # Redis timer is missing.
+            # Use the actual assignment time as the fallback timeout source.
+            assigned_at = getattr(job, "assigned_at", None)
+
+            if assigned_at is None:
+                logger.warning(
+                    "No assigned_at timestamp for assigned job=%s; "
+                    "cannot determine acceptance timeout.",
+                    job.id,
+                )
+                return None
+
+            if assigned_at.tzinfo is None:
+                assigned_at = assigned_at.replace(tzinfo=timezone.utc)
+            else:
+                assigned_at = assigned_at.astimezone(timezone.utc)
+
+            # Technician has 5 minutes to accept/reject.
+            acceptance_timeout_seconds = 5 * 60
+
+            elapsed_seconds = (now - assigned_at).total_seconds()
+
+            logger.debug(
+                "Acceptance timeout check | job=%s | elapsed=%.1fs | "
+                "timeout=%ss | timer_exists=%s",
+                job.id,
+                elapsed_seconds,
+                acceptance_timeout_seconds,
+                timer_exists,
+            )
+
+            if elapsed_seconds >= acceptance_timeout_seconds:
+                return {
+                    "type": "trigger",
+                    "reason": "timeout",
+                    "urgency": "high",
+                }
+
+            return None

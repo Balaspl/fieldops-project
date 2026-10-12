@@ -26,7 +26,6 @@ import {
   startTechnicianJob,
   onSiteTechnicianJob,
 } from "../../services/technicianPortalService";
-
 import { JobClosureModal } from "../../components/jobs/JobClosureModal";
 import CustomerSignatureModal from "../../components/jobs/CustomerSignatureModal";
 import JobLiveTrackingMap from "../../components/customer-tracking/JobLiveTrackingMap";
@@ -292,7 +291,38 @@ export default function TechnicianJobsPage() {
   const [liveJob, setLiveJob] = useState<any | null>(null);
 
   const [assignedPopupJob, setAssignedPopupJob] = useState<any | null>(null);
+  const assignedPopupJobIdRef = useRef<number | null>(null);
   const [timerSeconds, setTimerSeconds] = useState(5 * 60);
+  const checkForAssignedJob = async () => {
+  try {
+    const response = await getTechnicianJobs();
+
+    const jobs = response.data;
+
+    const assignedJob = jobs.find((job: any) => {
+      const status = String(job.status || "").toUpperCase();
+
+      return status === "ASSIGNED";
+    });
+
+    if (!assignedJob) {
+      return;
+    }
+
+    // Already showing this job
+    if (assignedPopupJobIdRef.current === assignedJob.id) {
+      return;
+    }
+
+    // New assignment
+    assignedPopupJobIdRef.current = assignedJob.id;
+    setAssignedPopupJob(assignedJob);
+  } catch (error) {
+    console.error("Failed to check assigned job:", error);
+  }
+};
+
+
   const loadJobs = async () => {
     setLoading(true);
 
@@ -320,10 +350,17 @@ export default function TechnicianJobsPage() {
     }
   };
 
-  useEffect(() => {
-    void loadJobs();
-  }, []);
+ useEffect(() => {
+  void loadJobs();
 
+  const interval = window.setInterval(() => {
+    void checkForAssignedJob();
+  }, 3000);
+
+  return () => {
+    window.clearInterval(interval);
+  };
+}, []);
 
 const getRemainingAcceptanceSeconds = (job: any | null) => {
   if (!job?.assigned_at) {

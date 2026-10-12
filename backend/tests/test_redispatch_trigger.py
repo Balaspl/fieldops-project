@@ -296,7 +296,7 @@ def test_timeout_triggers_redispatch(setup_db):
     # Make updated_at sufficiently old so it is definitely
     # past the timeout threshold.
     # --------------------------------------------------------
-
+    old_timestamp = datetime.now(timezone.utc) - timedelta(minutes=11)
     job = Job(
         tenant_id="tenant-1",
         customer_name="Alice",
@@ -308,7 +308,8 @@ def test_timeout_triggers_redispatch(setup_db):
         preferred_service_date=datetime.now().date(),
         status="ASSIGNED",
         assigned_technician_id=tech.technician_id,
-        updated_at=datetime.now(timezone.utc) - timedelta(seconds=60),
+        assigned_at=old_timestamp,
+        updated_at=old_timestamp,
     )
 
     db.add(job)

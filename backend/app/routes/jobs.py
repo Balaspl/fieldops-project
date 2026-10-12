@@ -18,6 +18,9 @@ from app.models import (
     JobPaymentStatus,
     CustomerFeedback,
 )
+from app.services.ai.FieldOpsAI.agents.dispatcher_agent.dispatcher_runtime import (
+    get_dispatcher_runtime,
+)
 from app.schemas import (
     JobCreate, JobResponse, PlanResponse, RankedTechnician, DisqualifiedTechnician, ScoringWeights,
     JobClosureCreate, JobClosureResponse
@@ -215,7 +218,43 @@ def get_jobs_stats(
         }
     except Exception as error:
         raise HTTPException(status_code=500,detail=f"Failed to fetch dashboard stats: {str(error)}")
+async def start_automatic_dispatch(
+    job_id: int,
+    initial_candidates: list[dict] | None = None,
+) -> None:
+    """
+    Start Dispatcher automatically after a job has been
+    successfully committed to the database.
 
+    initial_candidates contains the Top-3 already produced
+    by the Planning Agent during job creation.
+    """
+
+    try:
+        logger.info(
+            "🚀 AUTOMATIC DISPATCH START | job_id=%s | initial_candidates=%s",
+            job_id,
+            initial_candidates,
+        )
+
+        runtime = get_dispatcher_runtime()
+
+        result = await runtime.start_dispatch(
+            job_id,
+            initial_candidates=initial_candidates,
+        )
+
+        logger.info(
+            "🚀 AUTOMATIC DISPATCH FINISHED | job_id=%s | result=%s",
+            job_id,
+            result,
+        )
+
+    except Exception:
+        logger.exception(
+            "❌ AUTOMATIC DISPATCH FAILED | job_id=%s",
+            job_id,
+        )
 
 @router.get("/service-types", response_model=list[str])
 def get_service_types(
@@ -280,7 +319,29 @@ def create_job(
         db.add(new_job)
         db.commit()
         db.refresh(new_job)
+        # Start automatic Dispatcher only after the job
+# has been successfully committed.
+        logger.warning(
+        "🔥 AUTO DISPATCH CHECK | job_id=%s | status=%s | assigned_technician_id=%s | background_tasks=%s",
+        new_job.id,
+        new_job.status,
+        new_job.assigned_technician_id,
+        background_tasks,
+    )
+        if (
+            background_tasks is not None
+            and (new_job.status or "").upper() in {"CREATED", "QUEUED", "ACTIVE"}
+            and new_job.assigned_technician_id is None
+        ):
+            background_tasks.add_task(
+                start_automatic_dispatch,
+                new_job.id,
+            )
 
+            logger.info(
+                "🚀 Automatic Dispatcher queued | job_id=%s",
+                new_job.id,
+            )
         # Publish SLA_CREATED only after the authoritative job commit succeeds.
         if new_job.sla_deadline is not None and request is not None and background_tasks is not None:
             kafka_producer = getattr(request.app.state, "kafka_producer", None)

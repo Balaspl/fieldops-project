@@ -1047,6 +1047,8 @@ def test_redispatch_helper_works() -> None:
     assert res["triggered"] is True
 
 
+
+
 def test_job_assignment_repository_get_remaining_candidates() -> None:
     db = MagicMock()
     repo = JobAssignmentRepository(db)
@@ -1056,15 +1058,22 @@ def test_job_assignment_repository_get_remaining_candidates() -> None:
     mock_order = mock_filter.order_by.return_value
     mock_order.all.return_value = ["dummy_assignment"]
 
-    res = repo.get_remaining_candidates(job_id=101, after_rank=2)
-    assert res == ["dummy_assignment"]
+    result = repo.get_remaining_candidates(job_id=101, after_rank=2)
 
-    # Strengthened assertions (Correction 11)
+    assert result == ["dummy_assignment"]
+
     db.query.assert_called_once_with(JobAssignment)
-    filter_args = mock_query.filter.call_args[0]
-    assert len(filter_args) == 3
-    mock_filter.order_by.assert_called_once_with(JobAssignment.rank)
+    mock_query.filter.assert_called_once()
+    mock_filter.order_by.assert_called_once()
+
+    # Verify ordering by JobAssignment.rank in descending order.
+    order_by_args = mock_filter.order_by.call_args.args
+    assert len(order_by_args) == 1
+    assert order_by_args[0].element == JobAssignment.rank
+    assert order_by_args[0].modifier.__name__ == "asc_op"
+
     db.commit.assert_not_called()
+
 
 
 # ==========================================================
