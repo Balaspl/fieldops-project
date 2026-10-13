@@ -18,7 +18,7 @@ Cross-tenant jobs:
 import uuid
 import logging
 import base64
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 from io import BytesIO
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
@@ -62,6 +62,9 @@ from ..services.job_expense_service import create_job_expense
 from ..services.enterprise_audit import audit_log, AuditAction
 
 logger = logging.getLogger(__name__)
+
+# Keep this aligned with the acceptance window in routes/jobs.py.
+ACCEPTANCE_WINDOW_SECONDS = 600
 
 router = APIRouter(
     prefix="/api/technician",
