@@ -114,9 +114,30 @@ def get_jobs_stats(
         elif time_range == "month":
             start_date = datetime.now(timezone.utc) - timedelta(days=30)
 
-        # Base query for jobs with tenant isolation
-        query = db.query(Job)
-        query = query.filter(Job.tenant_id == tenant_id)
+        # Tenant visibility:
+        # 1. Jobs assigned to technicians belonging to this tenant.
+        # 2. Jobs owned by this tenant only while unassigned or terminal.
+        # An active job assigned to another tenant must not leak to its owner
+        # tenant's dashboard after cross-tenant dispatch.
+        technician_ids = db.query(Technician.technician_id).filter(
+            Technician.tenant_id == tenant_id
+        )
+        terminal_statuses = ("COMPLETED", "CLOSED", "CANCELLED", "CANCELED")
+        normalized_job_status = func.upper(
+            func.replace(func.replace(Job.status, " ", ""), "_", "")
+        )
+        query = db.query(Job).filter(
+            or_(
+                Job.assigned_technician_id.in_(technician_ids),
+                (
+                    (Job.tenant_id == tenant_id)
+                    & (
+                        Job.assigned_technician_id.is_(None)
+                        | normalized_job_status.in_(terminal_statuses)
+                    )
+                ),
+            )
+        )
         if start_date:
             query = query.filter(Job.created_at >= start_date)
 
@@ -510,16 +531,37 @@ def get_jobs(
     try:
         sla_service = SLAService()
         query = db.query(Job)
-        can_view_all_jobs = has_permission(current_user.role, Permission.JOBS_VIEW_ALL)
+        can_view_all_jobs = has_permission(
+            current_user.role,
+            Permission.JOBS_VIEW_ALL,
+        )
+
         if can_view_all_jobs:
+            # Assigned jobs are visible to the assigned technician's tenant.
+            # The job-owning tenant sees it only while unassigned or terminal.
+            technician_ids = db.query(Technician.technician_id).filter(
+                Technician.tenant_id == tenant_id
+            )
+            normalized_job_status = func.upper(
+                func.replace(func.replace(Job.status, " ", ""), "_", "")
+            )
+            terminal_statuses = ("COMPLETED", "CLOSED", "CANCELLED", "CANCELED")
             query = query.filter(
                 or_(
-                    Job.tenant_id == tenant_id,
-                    Job.customer_tenant_id == tenant_id,
+                    Job.assigned_technician_id.in_(technician_ids),
+                    (
+                        (Job.tenant_id == tenant_id)
+                        & (
+                            Job.assigned_technician_id.is_(None)
+                            | normalized_job_status.in_(terminal_statuses)
+                        )
+                    ),
                 )
             )
         else:
+            # Non-admin job viewers must be restricted to their own assignment.
             query = query.filter(Job.tenant_id == tenant_id)
+
 
         # Technicians may use this endpoint for their own assigned jobs only.
         # Never trust the optional technician_id query parameter as authorization.
@@ -2211,85 +2253,88 @@ def get_job_by_id(
 @router.get("/{job_id}/redispatch-history")
 def get_redispatch_history(
     job_id: int,
-    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_VIEW_ALL)),
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.JOBS_VIEW_ALL)
+    ),
     db: Session = Depends(get_db),
 ):
-    from app.models import DispatcherAlert, Technician
-    from datetime import timedelta
-    
-    job = db.query(Job).filter(
-    Job.id == job_id,
-    Job.tenant_id == current_user.tenant_id,
-    ).first()
+    """
+    Return persisted redispatch attempts for a job.
+
+    The currently assigned technician's tenant may view the complete attempt
+    history, including rejections recorded while the job was offered to
+    technicians in other tenants. The previous/owner tenant cannot view an
+    active cross-tenant assignment merely because it originally owned the job.
+    """
+    from app.models import RedispatchAttempt
+
+    job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-        
-    alerts = db.query(DispatcherAlert).filter(DispatcherAlert.job_id == job_id).order_by(DispatcherAlert.created_at.asc()).all()
-    
-    attempts = []
-    attempt_num = 1
-    seen_techs = set()
-    
-    for alert in alerts:
-        excluded = alert.excluded_technicians or []
-        for tech in excluded:
-            tech_name = tech.get("name", "Unknown Technician")
-            reason = tech.get("reason", "No reason provided")
-            
-            event_type = "rejection"
-            if "timeout" in reason.lower() or "no response" in reason.lower():
-                event_type = "timeout"
-            elif "offline" in reason.lower():
-                event_type = "offline"
-                
-            if tech_name not in seen_techs:
-                seen_techs.add(tech_name)
-                attempts.append({
-                    "id": len(attempts) + 1,
-                    "job_id": job_id,
-                    "attempt_number": attempt_num,
-                    "technician_name": tech_name,
-                    "event_type": event_type,
-                    "reason": reason,
-                    "queue_position": max(1, 4 - attempt_num),
-                    "next_dispatch_eta": (alert.created_at + timedelta(minutes=5)).isoformat(),
-                    "created_at": alert.created_at.isoformat()
-                })
-                attempt_num += 1
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found",
+        )
 
-    target_attempts = job.attempt_count or 0
-    if len(attempts) < target_attempts:
-        reasons = [
-            ("rejection", "Location too far or outside service zone"),
-            ("timeout", "Acceptance window expired (no response)"),
-            ("offline", "Technician went offline during assignment"),
-            ("rejection", "Required certifications missing"),
-            ("timeout", "Acceptance window expired (no response)")
-        ]
-        
-        while len(attempts) < target_attempts:
-            idx = len(attempts) % len(reasons)
-            evt, default_reason = reasons[idx]
-            
-            tech_names = ["Vijay Sethupathi", "Anjali Desai", "Vijay Iyer", "Suresh Nair", "Amit Patel"]
-            tech_name = tech_names[len(attempts) % len(tech_names)]
-            
-            created_at = (job.updated_at or job.created_at) - timedelta(minutes=10 * (target_attempts - len(attempts)))
-            
-            attempts.append({
-                "id": len(attempts) + 1,
-                "job_id": job_id,
-                "attempt_number": len(attempts) + 1,
-                "technician_name": tech_name,
-                "event_type": evt,
-                "reason": default_reason,
-                "queue_position": max(1, 5 - len(attempts)),
-                "next_dispatch_eta": (created_at + timedelta(minutes=5)).isoformat(),
-                "created_at": created_at.isoformat()
-            })
+    assigned_technician = None
+    if job.assigned_technician_id is not None:
+        assigned_technician = (
+            db.query(Technician)
+            .filter(
+                Technician.technician_id == job.assigned_technician_id,
+            )
+            .first()
+        )
 
-    attempts.sort(key=lambda x: x["attempt_number"], reverse=True)
-    return attempts
+    # Active assigned job: only the assigned technician's organization may
+    # access this history. For unassigned/terminal jobs, keep access scoped to
+    # the job's owning tenant.
+    if assigned_technician is not None:
+        if str(assigned_technician.tenant_id) != str(current_user.tenant_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Job not found",
+            )
+    elif str(job.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found",
+        )
+
+    records = (
+        db.query(RedispatchAttempt)
+        .filter(RedispatchAttempt.job_id == job_id)
+        .order_by(
+            RedispatchAttempt.attempt_number.asc(),
+            RedispatchAttempt.created_at.asc(),
+            RedispatchAttempt.id.asc(),
+        )
+        .all()
+    )
+
+    return [
+        {
+            "id": record.id,
+            "job_id": record.job_id,
+            "attempt_number": record.attempt_number,
+            "technician_id": record.technician_id,
+            "technician_name": record.technician_name or "Unknown Technician",
+            "event_type": record.event_type,
+            "reason": record.reason,
+            "queue_position": record.queue_position,
+            "next_dispatch_eta": (
+                record.next_dispatch_eta.isoformat()
+                if record.next_dispatch_eta
+                else None
+            ),
+            "created_at": (
+                record.created_at.isoformat()
+                if record.created_at
+                else None
+            ),
+        }
+        for record in records
+    ]
+
 
 @router.get("/{job_id}/override-history")
 def get_override_history(
@@ -2324,6 +2369,67 @@ def get_override_history(
         for o in overrides
     ]
 
+def _get_job_visible_to_tenant(
+    db: Session,
+    job_id: int,
+    tenant_id: str,
+) -> Job:
+    """
+    Resolve a job only if the tenant is allowed to view it.
+
+    Active assignments are visible to the assigned technician's tenant.
+    The owning tenant can see unassigned jobs and terminal jobs, but cannot
+    see an active assignment belonging to another tenant.
+    """
+    job = db.query(Job).filter(Job.id == job_id).first()
+
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found",
+        )
+
+    normalized_status = (
+        (job.status or "")
+        .strip()
+        .upper()
+        .replace(" ", "")
+        .replace("_", "")
+    )
+    terminal_statuses = {
+        "COMPLETED",
+        "CLOSED",
+        "CANCELLED",
+        "CANCELED",
+    }
+
+    if str(job.tenant_id) == str(tenant_id):
+        if (
+            job.assigned_technician_id is None
+            or normalized_status in terminal_statuses
+        ):
+            return job
+
+    if job.assigned_technician_id is not None:
+        assigned_technician = (
+            db.query(Technician)
+            .filter(
+                Technician.technician_id == job.assigned_technician_id,
+            )
+            .first()
+        )
+        if (
+            assigned_technician is not None
+            and str(assigned_technician.tenant_id) == str(tenant_id)
+        ):
+            return job
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Job not found",
+    )
+
+
 api_v1_router = APIRouter(prefix="/api/v1")
 
 @api_v1_router.get("/jobs/{job_id}/history")
@@ -2335,12 +2441,11 @@ def get_job_status_history(
     from app.models import AuditEvent, Technician
     from datetime import datetime, timezone
     
-    job = db.query(Job).filter(
-    Job.id == job_id,
-    Job.tenant_id == current_user.tenant_id,
-).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = _get_job_visible_to_tenant(
+        db=db,
+        job_id=job_id,
+        tenant_id=current_user.tenant_id,
+    )
         
     # Fetch transition audit events
     events = db.query(AuditEvent).filter(
@@ -2419,20 +2524,11 @@ def get_job_timeline(
     Tenant isolation and job-level authorization are enforced here.
     """
 
-    job = (
-        db.query(Job)
-        .filter(
-            Job.id == job_id,
-            Job.tenant_id == current_user.tenant_id,
-        )
-        .first()
+    job = _get_job_visible_to_tenant(
+        db=db,
+        job_id=job_id,
+        tenant_id=current_user.tenant_id,
     )
-
-    if not job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Job not found",
-        )
 
     normalized_category = (
         category.strip().upper()
@@ -2538,20 +2634,11 @@ def get_job_audit_history(
     job lookup.
     """
 
-    job = (
-        db.query(Job)
-        .filter(
-            Job.id == job_id,
-            Job.tenant_id == current_user.tenant_id,
-        )
-        .first()
+    job = _get_job_visible_to_tenant(
+        db=db,
+        job_id=job_id,
+        tenant_id=current_user.tenant_id,
     )
-
-    if not job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Job not found",
-        )
 
     normalized_event_type = (
         event_type.strip().upper()
