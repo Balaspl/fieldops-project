@@ -1372,6 +1372,11 @@ class RedispatchAttempt(Base):
         server_default=func.now(),
         nullable=True,
     )
+    technician_tenant_id = Column(
+    String(50),
+    ForeignKey("organizations.id", ondelete="RESTRICT"),
+    nullable=True,
+    index=True,)
 
     __table_args__ = (
         Index(
