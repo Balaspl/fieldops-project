@@ -87,3 +87,4 @@ from .completion_document import CompletionDocument
 from .customer_signature import CustomerSignature  # noqa: F401
 from .customer_confirmation import CustomerConfirmation  # noqa: F401
 from .job_expense import JobExpense  # noqa: F401
+from ..models_legacy import RedispatchAttempt  # noqa: F401

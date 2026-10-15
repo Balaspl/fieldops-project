@@ -716,6 +716,46 @@ def process_job_status_transition_task(job_id, from_status, to_status, actor_id,
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
+        async def route_notifications_with_lifecycle():
+            from .services.kafka.producer import KafkaProducer
+
+            kafka_producer = None
+
+            try:
+                kafka_producer = KafkaProducer()
+                await kafka_producer.start()
+            except Exception:
+                logger.exception(
+                    "Kafka lifecycle publisher unavailable. "
+                    "Continuing notification delivery without lifecycle events."
+                )
+                kafka_producer = None
+
+            try:
+                if kafka_producer is None:
+                    router = NotificationRouter()
+                else:
+                    async def publish_lifecycle(**kwargs):
+                        return await _publish_notification_lifecycle_event(
+                            **kwargs,
+                            kafka_producer=kafka_producer,
+                        )
+
+                    router = NotificationRouter(
+                        lifecycle_event_publisher=publish_lifecycle,
+                    )
+
+                await router.route(event)
+
+            finally:
+                if kafka_producer is not None:
+                    try:
+                        await kafka_producer.stop()
+                    except Exception:
+                        logger.exception(
+                            "Kafka lifecycle publisher shutdown failed."
+                        )
+
         try:
             if loop.is_running():
                 asyncio.ensure_future(
@@ -725,9 +765,7 @@ def process_job_status_transition_task(job_id, from_status, to_status, actor_id,
                 )
 
                 asyncio.ensure_future(
-                    NotificationRouter().route(
-                        event
-                    )
+                    route_notifications_with_lifecycle()
                 )
 
             else:
@@ -738,9 +776,7 @@ def process_job_status_transition_task(job_id, from_status, to_status, actor_id,
                 )
 
                 loop.run_until_complete(
-                    NotificationRouter().route(
-                        event
-                    )
+                    route_notifications_with_lifecycle()
                 )
 
         except Exception:
@@ -809,6 +845,116 @@ def send_dispatcher_digest():
         logger.error(f"Failed to run send_dispatcher_digest task: {e}")
 
 
+async def _publish_sla_lifecycle_event(
+    *,
+    event_type: str,
+    event_id: str,
+    job_id: str,
+    tenant_id: str,
+    correlation_id: Optional[str] = None,
+    payload: Optional[dict] = None,
+) -> bool:
+    """Publish an SLA lifecycle event using a worker-local Kafka producer."""
+    from .services.kafka.producer import KafkaProducer
+    from .services.sla_event_producer import SLAEventProducer
+
+    kafka_producer = KafkaProducer()
+    await kafka_producer.start()
+
+    try:
+        producer = SLAEventProducer(kafka_producer)
+        return await producer.publish(
+            event_type=event_type,
+            event_id=event_id,
+            job_id=job_id,
+            tenant_id=tenant_id,
+            correlation_id=correlation_id,
+            payload=payload,
+        )
+    finally:
+        await kafka_producer.stop()
+
+
+async def _publish_notification_lifecycle_event(
+    *,
+    event_type: str,
+    event_id: str,
+    job_id: str,
+    tenant_id: str,
+    correlation_id: Optional[str] = None,
+    payload: Optional[dict] = None,
+    kafka_producer=None,
+) -> bool:
+    """Publish a notification lifecycle event."""
+    from .services.kafka.producer import KafkaProducer
+    from .services.notification_event_producer import NotificationEventProducer
+
+    owns_producer = kafka_producer is None
+
+    if owns_producer:
+        kafka_producer = KafkaProducer()
+        await kafka_producer.start()
+
+    try:
+        producer = NotificationEventProducer(kafka_producer)
+        return await producer.publish(
+            event_type=event_type,
+            event_id=event_id,
+            job_id=job_id,
+            tenant_id=tenant_id,
+            correlation_id=correlation_id,
+            payload=payload,
+        )
+    finally:
+        if owns_producer:
+            await kafka_producer.stop()
+
+
+def _publish_sla_event_once(
+    *,
+    redis,
+    event_type: str,
+    event_id: str,
+    job_id: str,
+    tenant_id: str,
+    correlation_id: Optional[str] = None,
+    payload: Optional[dict] = None,
+) -> bool:
+    """Publish an SLA event once using a stable Redis idempotency marker."""
+    import asyncio
+
+    marker_key = f"sla:event_published:{event_id}"
+
+    if redis and redis.get(marker_key):
+        return True
+
+    try:
+        published = asyncio.run(
+            _publish_sla_lifecycle_event(
+                event_type=event_type,
+                event_id=event_id,
+                job_id=job_id,
+                tenant_id=tenant_id,
+                correlation_id=correlation_id,
+                payload=payload,
+            )
+        )
+
+        if published and redis:
+            redis.set(marker_key, "1", ex=86400 * 7)
+
+        return bool(published)
+    except Exception:
+        logger.exception(
+            "Failed to publish SLA lifecycle event: "
+            "event_type=%s job_id=%s event_id=%s",
+            event_type,
+            job_id,
+            event_id,
+        )
+        return False
+
+
 @celery_app.task
 def broadcast_sla_countdown():
     from .database import SessionLocal
@@ -817,6 +963,7 @@ def broadcast_sla_countdown():
     from .services.socket_manager import ws_manager
     import asyncio
 
+    redis_client = get_redis_client()
     db = SessionLocal()
     try:
         jobs = db.query(Job).filter(Job.status.in_(["ASSIGNED", "EN_ROUTE", "ON_SITE"])).all()
@@ -825,6 +972,54 @@ def broadcast_sla_countdown():
         for job in jobs:
             state = sla.get_sla_state(str(job.id))
             if state:
+                # Publish near-breach and breach events only after the
+                # authoritative SLA state has been calculated.
+                tenant_id = str(job.tenant_id or "tenant-1")
+                job_id_str = str(job.id)
+
+                if state.get("is_breached"):
+                    breach_event_id = (
+                        f"sla-breached:{tenant_id}:{job_id_str}"
+                    )
+                    _publish_sla_event_once(
+                        redis=redis_client,
+                        event_type="SLA_BREACHED",
+                        event_id=breach_event_id,
+                        job_id=job_id_str,
+                        tenant_id=tenant_id,
+                        payload={
+                            "sla_deadline": state.get("sla_deadline"),
+                            "remaining_seconds": state.get(
+                                "remaining_seconds"
+                            ),
+                            "status": state.get("status"),
+                            "timestamp": datetime.now(
+                                timezone.utc
+                            ).isoformat(),
+                        },
+                    )
+                elif state.get("is_critical"):
+                    near_breach_event_id = (
+                        f"sla-near-breach:{tenant_id}:{job_id_str}"
+                    )
+                    _publish_sla_event_once(
+                        redis=redis_client,
+                        event_type="SLA_NEAR_BREACH",
+                        event_id=near_breach_event_id,
+                        job_id=job_id_str,
+                        tenant_id=tenant_id,
+                        payload={
+                            "sla_deadline": state.get("sla_deadline"),
+                            "remaining_seconds": state.get(
+                                "remaining_seconds"
+                            ),
+                            "status": state.get("status"),
+                            "timestamp": datetime.now(
+                                timezone.utc
+                            ).isoformat(),
+                        },
+                    )
+
                 try:
                     loop = asyncio.get_event_loop()
                 except RuntimeError:

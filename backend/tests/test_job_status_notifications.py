@@ -3396,3 +3396,58 @@ async def test_send_sms_generation_none_and_over_limit_return_false(setup_db):
     assert await router._send_sms(
         _make_event(), "customer", {}, "job_update"
     ) is False
+
+@pytest.mark.anyio
+async def test_job_status_transition_schedules_notifications_on_running_loop():
+    from types import SimpleNamespace
+
+    job = SimpleNamespace(
+        id=900,
+        tenant_id="tenant-900",
+        assigned_technician_id=None,
+        customer_name="Test Customer",
+        location="Chennai",
+        customer_id="customer-900",
+        contact_number="9000000000",
+        customer_email="test@example.com",
+        sla_deadline=None,
+    )
+
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = job
+
+    publisher = MagicMock()
+    publisher.publish = AsyncMock()
+
+    router = MagicMock()
+    router.route = AsyncMock()
+
+    kafka = MagicMock()
+    kafka.start = AsyncMock()
+    kafka.stop = AsyncMock()
+
+    with (
+        patch("app.tasks.SessionLocal", return_value=db),
+        patch("app.services.notification_services.EventPublisher", return_value=publisher),
+        patch("app.services.notification_services.NotificationRouter", return_value=router),
+        patch("app.services.sla_service.SLAService"),
+        patch("app.services.kafka.producer.KafkaProducer", return_value=kafka),
+    ):
+        process_job_status_transition_task(
+            job_id="900",
+            from_status="ASSIGNED",
+            to_status="EN_ROUTE",
+            actor_id="test-user",
+            actor_role="dispatcher",
+            reason="Regression test",
+        )
+
+        # Allow scheduled coroutines to execute on the running event loop.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    publisher.publish.assert_awaited_once()
+    router.route.assert_awaited_once()
+    kafka.start.assert_awaited_once()
+    kafka.stop.assert_awaited_once()
+    db.close.assert_called_once()

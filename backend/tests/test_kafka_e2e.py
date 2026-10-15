@@ -463,3 +463,75 @@ async def test_job_cancelled_event_e2e():
 
         await consumer.stop()
         await producer.stop()
+
+@pytest.mark.asyncio
+async def test_notification_lifecycle_event_e2e():
+    from app.services.notification_event_producer import (
+        NotificationEventProducer,
+    )
+
+    topic = "fieldops.notification.events"
+    consumer = KafkaConsumerManager(
+        topic=topic,
+        group_id="fieldops-notifications",
+        bootstrap_servers="localhost:29092",
+    )
+    kafka_producer = KafkaProducer()
+
+    received = asyncio.Event()
+    messages = []
+    run_id = uuid.uuid4().hex
+    event_id = f"notification-e2e-{run_id}"
+
+    async def handler(message):
+        payload = message.get("payload", {})
+        if payload.get("event_id") == event_id:
+            messages.append(message)
+            received.set()
+
+    consumer_task = None
+
+    try:
+        await kafka_producer.start()
+        await consumer.start()
+
+        consumer_task = asyncio.create_task(
+            consumer.consume(handler)
+        )
+
+        notification_producer = NotificationEventProducer(
+            kafka_producer
+        )
+
+        result = await notification_producer.publish(
+            event_type="NOTIFICATION_SENT",
+            event_id=event_id,
+            job_id=f"E2E-JOB-{run_id}",
+            tenant_id="tenant-1",
+            correlation_id=run_id,
+            payload={"channel": "email"},
+        )
+
+        assert result is True
+
+        await asyncio.wait_for(received.wait(), timeout=10)
+
+        assert len(messages) == 1
+        assert messages[0]["topic"] == topic
+        assert messages[0]["payload"]["event_type"] == (
+            "NOTIFICATION_SENT"
+        )
+        assert messages[0]["payload"]["tenant_id"] == "tenant-1"
+        assert messages[0]["payload"]["schema_version"] == 1
+        assert messages[0]["correlation_id"] == run_id
+
+    finally:
+        if consumer_task is not None:
+            consumer_task.cancel()
+            try:
+                await consumer_task
+            except asyncio.CancelledError:
+                pass
+
+        await consumer.stop()
+        await kafka_producer.stop()   

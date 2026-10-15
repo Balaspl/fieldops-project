@@ -27,12 +27,12 @@ class SLAEventProducer:
         payload: Optional[Dict[str, Any]] = None,
     ) -> bool:
         event_payload = {
+            **(payload or {}),
             "event_type": event_type,
             "event_id": event_id,
             "job_id": job_id,
             "tenant_id": tenant_id,
             "schema_version": self.SCHEMA_VERSION,
-            **(payload or {}),
         }
 
         event = SLAEventMessage(

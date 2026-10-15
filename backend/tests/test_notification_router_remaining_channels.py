@@ -666,3 +666,189 @@ async def test_email_accepts_valid_subjects(valid_subject) -> None:
 
     assert delivered is True
     email_service.send_email.assert_called_once()
+
+@pytest.mark.anyio
+async def test_route_publishes_notification_lifecycle_events(
+    monkeypatch,
+) -> None:
+    lifecycle_events = []
+    mock_redis = MagicMock()
+    mock_redis.get.return_value = None
+    mock_redis.set.return_value = True
+
+    async def publish_lifecycle(**kwargs):
+        lifecycle_events.append(kwargs)
+        return True
+
+    router = NotificationRouter(
+        fcm_service=MagicMock(),
+        sms_service=MagicMock(),
+        email_service=FakeEmailService(),
+        ws_manager=MagicMock(),
+        redis_client=mock_redis,
+        communication_integration=FakeCommunicationIntegration(),
+        lifecycle_event_publisher=publish_lifecycle,
+    )
+
+    async def fake_send_push(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(
+        router,
+        "_send_push",
+        fake_send_push,
+    )
+
+    await router.route(
+        build_event(status="ASSIGNED"),
+    )
+
+    push_events = [
+        item
+        for item in lifecycle_events
+        if item["payload"]["channel"] == "push"
+    ]
+
+    assert len(push_events) == 2
+    assert [
+        item["event_type"]
+        for item in push_events
+    ] == [
+        "NOTIFICATION_QUEUED",
+        "NOTIFICATION_SENT",
+    ]
+
+    assert all(
+        item["job_id"] == "101"
+        for item in push_events
+    )
+
+    assert all(
+        item["tenant_id"] == "tenant-123"
+        for item in push_events
+    )
+
+
+@pytest.mark.anyio
+async def test_duplicate_notification_lifecycle_event_is_not_published(
+) -> None:
+    lifecycle_events = []
+    mock_redis = MagicMock()
+    mock_redis.get.return_value = "1"
+
+    async def publish_lifecycle(**kwargs):
+        lifecycle_events.append(kwargs)
+        return True
+
+    router = NotificationRouter(
+        fcm_service=MagicMock(),
+        sms_service=MagicMock(),
+        email_service=FakeEmailService(),
+        ws_manager=MagicMock(),
+        redis_client=mock_redis,
+        communication_integration=FakeCommunicationIntegration(),
+        lifecycle_event_publisher=publish_lifecycle,
+    )
+
+    await router._publish_notification_lifecycle(
+        event=build_event(status="ASSIGNED"),
+        event_type="NOTIFICATION_QUEUED",
+        event_id="notification:tenant-123:101:technician:push:job_assigned:queued",
+        recipient_type="technician",
+        channel="push",
+        notification_type="job_assigned",
+    )
+
+    assert lifecycle_events == []
+
+@pytest.mark.anyio
+async def test_notification_failed_lifecycle_event_is_published():
+    lifecycle_events = []
+    mock_redis = MagicMock()
+    mock_redis.get.return_value = None
+    mock_redis.set.return_value = True
+
+    async def publish_lifecycle(**kwargs):
+        lifecycle_events.append(kwargs)
+        return True
+
+    router = NotificationRouter(
+        fcm_service=MagicMock(),
+        sms_service=MagicMock(),
+        email_service=FakeEmailService(),
+        ws_manager=MagicMock(),
+        redis_client=mock_redis,
+        communication_integration=FakeCommunicationIntegration(),
+        lifecycle_event_publisher=publish_lifecycle,
+    )
+
+    async def fake_send_push(*args, **kwargs):
+        return False
+
+    router._send_push = fake_send_push
+
+    await router.route(build_event(status="ASSIGNED"))
+
+    failed_events = [
+        event for event in lifecycle_events
+        if event["event_type"] == "NOTIFICATION_FAILED"
+        and event["payload"]["channel"] == "push"
+    ]
+
+    assert failed_events
+    assert failed_events[0]["job_id"] == "101"
+    assert failed_events[0]["tenant_id"] == "tenant-123"
+
+@pytest.mark.anyio
+async def test_notification_retried_lifecycle_event_is_published():
+    lifecycle_events = []
+    mock_redis = MagicMock()
+    mock_redis.get.return_value = None
+    mock_redis.set.return_value = True
+
+    async def publish_lifecycle(**kwargs):
+        lifecycle_events.append(kwargs)
+        return True
+
+    router = NotificationRouter(
+        fcm_service=MagicMock(),
+        sms_service=MagicMock(),
+        email_service=FakeEmailService(),
+        ws_manager=MagicMock(),
+        redis_client=mock_redis,
+        communication_integration=FakeCommunicationIntegration(),
+        lifecycle_event_publisher=publish_lifecycle,
+    )
+
+    async def fake_send_sms(
+        db,
+        job_id,
+        job_title,
+        location,
+        priority,
+        tech_ids,
+        correlation_id,
+        **kwargs,
+    ):
+        await kwargs["on_retry"](attempt=2, delivery_id=123)
+        return {"sent": 1, "failed": 0}
+
+    router.sms = fake_send_sms
+
+    delivered = await router._send_sms(
+        event=build_event(status="ASSIGNED"),
+        recipient_type="technician",
+        payload={},
+        notification_type="job_assigned",
+    )
+
+    retry_events = [
+        event for event in lifecycle_events
+        if event["event_type"] == "NOTIFICATION_RETRIED"
+    ]
+
+    assert delivered is True
+    assert len(retry_events) == 1
+    assert retry_events[0]["payload"]["attempt"] == 2
+    assert retry_events[0]["job_id"] == "101"
+    assert retry_events[0]["tenant_id"] == "tenant-123"
