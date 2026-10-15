@@ -1,4 +1,4 @@
-﻿"""
+"""
 agent_messages.py
 
 Standard message contracts for communication between AI agents.
@@ -927,6 +927,85 @@ class NotificationEventMessage(EventMessage):
         if self.payload.get("tenant_id") != self.sender.tenant_id:
             raise ValueError(
                 "Notification event tenant_id must match sender tenant_id."
+            )
+
+        return self
+
+
+# ==========================================================
+# Invoice Event Message
+# ==========================================================
+
+
+class InvoiceEventMessage(EventMessage):
+    """
+    Dedicated invoice lifecycle event.
+
+    Publishes invoice creation, update, payment, and cancellation events.
+    """
+
+    topic: str = Field(
+        default="fieldops.events",
+        min_length=1,
+        max_length=100,
+        description="Kafka topic for invoice lifecycle events.",
+    )
+
+    message_type: MessageType = Field(
+        default=MessageType.EVENT,
+        frozen=True,
+    )
+
+    @model_validator(mode="after")
+    def validate_invoice_event(self) -> "InvoiceEventMessage":
+        """
+        Enforce the invoice event contract.
+        """
+        allowed_topics = {
+            "fieldops.events",
+            "fieldops.billing.events",
+        }
+        if self.topic not in allowed_topics:
+            raise ValueError(
+                f"Invoice events must use one of {sorted(allowed_topics)}, got '{self.topic}'."
+            )
+
+        allowed_event_types = {
+            "invoice",
+            "INVOICE",
+            "INVOICE_GENERATED",
+            "INVOICE_CREATED",
+            "INVOICE_UPDATED",
+            "INVOICE_PAID",
+            "INVOICE_VOIDED",
+            "INVOICE_CANCELLED",
+        }
+
+        event_type = self.payload.get("event_type")
+
+        if not event_type or str(event_type).upper() not in {et.upper() for et in allowed_event_types}:
+            raise ValueError(
+                "Invoice events must have a valid invoice event_type."
+            )
+
+        required_fields = {
+            "event_id",
+            "job_id",
+            "tenant_id",
+            "schema_version",
+        }
+
+        missing_fields = required_fields - self.payload.keys()
+
+        if missing_fields:
+            raise ValueError(
+                f"Invoice events require fields: "
+                f"{', '.join(sorted(missing_fields))}."
+            )
+
+        if self.payload.get("tenant_id") != self.sender.tenant_id:
+            raise ValueError(
+                "Invoice event tenant_id must match sender tenant_id."
             )
 
         return self

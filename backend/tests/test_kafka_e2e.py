@@ -4,7 +4,10 @@ import os
 import uuid
 
 import pytest
-from aiokafka.errors import TopicAuthorizationFailedError
+from aiokafka.errors import (
+    GroupAuthorizationFailedError,
+    TopicAuthorizationFailedError,
+)
 from dotenv import load_dotenv
 
 from app.services.kafka.consumer import KafkaConsumerManager
@@ -534,4 +537,88 @@ async def test_notification_lifecycle_event_e2e():
                 pass
 
         await consumer.stop()
-        await kafka_producer.stop()   
+        await kafka_producer.stop()
+
+
+@pytest.mark.asyncio
+async def test_invoice_lifecycle_event_e2e():
+    from app.services.invoice_event_producer import (
+        InvoiceEventProducer,
+    )
+
+    topic = "fieldops.events"
+    group_id = f"fieldops-job-completed-e2e-{uuid.uuid4()}"
+    consumer = KafkaConsumerManager(
+        topic=topic,
+        group_id=group_id,
+        bootstrap_servers="localhost:29092",
+    )
+    kafka_producer = KafkaProducer()
+
+    received = asyncio.Event()
+    messages = []
+    run_id = uuid.uuid4().hex
+    event_id = f"invoice-e2e-{run_id}"
+
+    async def handler(message):
+        payload = message.get("payload", {})
+        if payload.get("event_id") == event_id:
+            messages.append(message)
+            received.set()
+
+    consumer_task = None
+
+    try:
+        await kafka_producer.start()
+
+        try:
+            await consumer.start()
+        except (TopicAuthorizationFailedError, GroupAuthorizationFailedError):
+            pytest.skip(
+                "Kafka broker does not grant the generic consumer identity "
+                "read access to fieldops.events."
+            )
+
+        consumer_task = asyncio.create_task(
+            consumer.consume(handler)
+        )
+
+        invoice_producer = InvoiceEventProducer(
+            kafka_producer,
+            topic=topic,
+        )
+
+        result = await invoice_producer.publish(
+            event_type="invoice",
+            event_id=event_id,
+            job_id=f"E2E-JOB-{run_id}",
+            tenant_id="tenant-1",
+            correlation_id=run_id,
+            invoice_id=f"INV-{run_id}",
+            payload={"subtotal": 500.0},
+        )
+
+        assert result["status"] == "PUBLISHED"
+        assert result["topic"] == topic
+        assert result["schema_version"] == 1
+
+        await asyncio.wait_for(received.wait(), timeout=10)
+
+        assert len(messages) == 1
+        assert messages[0]["topic"] == topic
+        assert messages[0]["payload"]["event_type"] == "invoice"
+        assert messages[0]["payload"]["tenant_id"] == "tenant-1"
+        assert messages[0]["payload"]["invoice_id"] == f"INV-{run_id}"
+        assert messages[0]["payload"]["schema_version"] == 1
+        assert messages[0]["correlation_id"] == run_id
+
+    finally:
+        if consumer_task is not None:
+            consumer_task.cancel()
+            try:
+                await consumer_task
+            except asyncio.CancelledError:
+                pass
+
+        await consumer.stop()
+        await kafka_producer.stop()

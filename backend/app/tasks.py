@@ -910,6 +910,132 @@ async def _publish_notification_lifecycle_event(
             await kafka_producer.stop()
 
 
+async def _publish_invoice_lifecycle_event(
+    *,
+    event_type: str,
+    event_id: str,
+    job_id: str,
+    tenant_id: str,
+    invoice_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    payload: Optional[dict] = None,
+    kafka_producer=None,
+    topic: Optional[str] = None,
+) -> dict:
+    """Publish an invoice lifecycle event."""
+    from .services.kafka.producer import KafkaProducer
+    from .services.invoice_event_producer import InvoiceEventProducer
+
+    owns_producer = kafka_producer is None
+
+    if owns_producer:
+        kafka_producer = KafkaProducer()
+        await kafka_producer.start()
+
+    try:
+        producer = InvoiceEventProducer(kafka_producer, topic=topic)
+        return await producer.publish(
+            event_type=event_type,
+            event_id=event_id,
+            job_id=job_id,
+            tenant_id=tenant_id,
+            invoice_id=invoice_id,
+            correlation_id=correlation_id,
+            payload=payload,
+        )
+    finally:
+        if owns_producer:
+            await kafka_producer.stop()
+
+
+def _publish_invoice_event_once(
+    *,
+    redis,
+    event_type: str,
+    event_id: str,
+    job_id: str,
+    tenant_id: str,
+    invoice_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    payload: Optional[dict] = None,
+    topic: Optional[str] = None,
+) -> dict:
+    """Publish an invoice event once using a stable Redis idempotency marker."""
+    import asyncio
+
+    marker_key = f"invoice:event_published:{event_id}"
+
+    if redis and redis.get(marker_key):
+        return {
+            "status": "PUBLISHED",
+            "event_type": event_type,
+            "event_id": event_id,
+            "topic": topic or "fieldops.events",
+            "schema_version": 1,
+            "idempotent_duplicate": True,
+        }
+
+    try:
+        result = asyncio.run(
+            _publish_invoice_lifecycle_event(
+                event_type=event_type,
+                event_id=event_id,
+                job_id=job_id,
+                tenant_id=tenant_id,
+                invoice_id=invoice_id,
+                correlation_id=correlation_id,
+                payload=payload,
+                topic=topic,
+            )
+        )
+
+        if result and result.get("status") == "PUBLISHED" and redis:
+            redis.set(marker_key, "1", ex=86400 * 7)
+
+        return result
+    except Exception:
+        logger.exception(
+            "Failed to publish invoice lifecycle event: "
+            "event_type=%s job_id=%s event_id=%s",
+            event_type,
+            job_id,
+            event_id,
+        )
+        return {
+            "status": "FAILED",
+            "event_type": event_type,
+            "event_id": event_id,
+            "topic": topic or "fieldops.events",
+            "schema_version": 1,
+        }
+
+
+@celery_app.task
+def publish_invoice_event_task(
+    event_type: str,
+    event_id: str,
+    job_id: str,
+    tenant_id: str,
+    invoice_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    payload: Optional[dict] = None,
+    topic: Optional[str] = None,
+):
+    """Celery background task to publish invoice lifecycle event."""
+    redis_client = get_redis_client()
+    return _publish_invoice_event_once(
+        redis=redis_client,
+        event_type=event_type,
+        event_id=event_id,
+        job_id=job_id,
+        tenant_id=tenant_id,
+        invoice_id=invoice_id,
+        correlation_id=correlation_id,
+        payload=payload,
+        topic=topic,
+    )
+
+
 def _publish_sla_event_once(
     *,
     redis,

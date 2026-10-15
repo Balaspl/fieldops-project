@@ -461,6 +461,65 @@ def close_job(
             job.id,
         )
 
+    # Publish canonical invoice event after authoritative closure commitment.
+    # Kafka/broker failure must not turn an already committed closure into a failure.
+    try:
+        from ..redis_client import get_redis_client
+        from ..tasks import _publish_invoice_event_once
+        from .event_publisher import publish_invoice_event
+
+        invoice_event_id = f"evt_invoice_{closure_record.id}_{job.id}"
+        correlation_id = correlation_id_ctx.get() or None
+
+        # Coordinate with Redis for real-time downstream subscribers
+        publish_invoice_event(
+            redis_client=get_redis_client(),
+            event_type="INVOICE_GENERATED",
+            job_id=str(job.id),
+            tenant_id=tenant_id,
+            invoice_id=str(closure_record.id),
+            correlation_id=correlation_id,
+            event_id=invoice_event_id,
+            payload={
+                "subtotal": closure_record.subtotal,
+                "labour_cost": closure_record.labour_cost,
+                "material_cost": closure_record.material_cost,
+                "completed_at": (
+                    closure_record.completed_at.isoformat()
+                    if closure_record.completed_at
+                    else None
+                ),
+            },
+        )
+
+        # Publish to Kafka via invoice event producer
+        _publish_invoice_event_once(
+            redis=get_redis_client(),
+            event_type="INVOICE_GENERATED",
+            event_id=invoice_event_id,
+            job_id=str(job.id),
+            tenant_id=tenant_id,
+            invoice_id=str(closure_record.id),
+            correlation_id=correlation_id,
+            payload={
+                "invoice_id": str(closure_record.id),
+                "subtotal": closure_record.subtotal,
+                "labour_cost": closure_record.labour_cost,
+                "material_cost": closure_record.material_cost,
+                "completed_at": (
+                    closure_record.completed_at.isoformat()
+                    if closure_record.completed_at
+                    else None
+                ),
+            },
+        )
+    except Exception:
+        logger.exception(
+            "Failed to publish INVOICE_GENERATED event for job %s closure %s",
+            job.id,
+            closure_record.id,
+        )
+
     return closure_record
 
 
