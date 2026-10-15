@@ -604,6 +604,104 @@ def test_61_63_retry_time_changes_sms(monkeypatch):
     assert result["blocked_reasons"].get("DISABLED", 0) == 1
 
 
+def test_sms_retry_callback_fires_before_next_attempt(monkeypatch):
+    import app.services.twilio_sms as sms_module
+    from app.services.twilio_sms import send_job_assignment_sms
+
+    mock_tech = MagicMock()
+    mock_tech.tech_id = "tech-1"
+    mock_tech.sms_opt_out = False
+    mock_tech.phone_number = "+15555555555"
+
+    mock_query = MagicMock()
+    mock_filter = MagicMock()
+    mock_filter.all.return_value = [mock_tech]
+    mock_query.filter.return_value = mock_filter
+
+    mock_db = MagicMock()
+    mock_db.query.return_value = mock_query
+
+    mock_policy_svc = MagicMock()
+    mock_policy_svc.evaluate.return_value = (
+        CommunicationDeliveryEligibilityDecision(
+            allowed=True,
+            channel="SMS",
+            category=CommunicationMessageCategory.STANDARD,
+            recipient_type="TECHNICIAN",
+            global_allowed=True,
+            global_state=CommunicationChannelState.ENABLED,
+            global_reason_code="G",
+            global_revision=1,
+            preference_applied=False,
+            preference_allowed=None,
+            preference_reason_code=None,
+            preference_source=None,
+            preference_revision=None,
+            final_reason_code="ALLOWED",
+        )
+    )
+
+    class FakePolicyService:
+        def __new__(cls, *args, **kwargs):
+            return mock_policy_svc
+
+    from twilio.base.exceptions import TwilioRestException
+
+    fake_dispatch = MagicMock(
+        side_effect=[
+            TwilioRestException(
+                500,
+                "uri",
+                "Internal Server Error",
+            ),
+            "SMmock_retry_success",
+        ]
+    )
+
+    retry_callback = AsyncMock()
+
+    monkeypatch.setattr(
+        sms_module,
+        "dispatch_twilio_message",
+        fake_dispatch,
+    )
+    monkeypatch.setattr(
+        sms_module,
+        "CommunicationDeliveryPolicyService",
+        FakePolicyService,
+    )
+    monkeypatch.setattr(
+        sms_module,
+        "check_rate_limit",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        asyncio,
+        "sleep",
+        AsyncMock(),
+    )
+
+    async def run():
+        return await send_job_assignment_sms(
+            db=mock_db,
+            job_id="1",
+            job_title="Repair",
+            location="123 Main",
+            priority="HIGH",
+            tech_ids=["tech-1"],
+            on_retry=retry_callback,
+        )
+
+    result = asyncio.run(run())
+
+    retry_callback.assert_awaited_once_with(
+        attempt=2,
+        delivery_id=mock_db.add.call_args.args[0].id,
+    )
+    fake_dispatch.assert_called()
+    assert result["sent"] == 1
+
+
 def test_email_single_attempt_behavior(monkeypatch):
     """
     Email delivery in notification_services.py currently has no retry loop.

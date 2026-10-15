@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Optional
 import asyncio
 import json
+import uuid
 import logging
 
 from html import escape
@@ -77,6 +78,7 @@ class JobStatusEvent:
     notification_channels: list[str]
 
     event_type: str = "job_status_changed"
+    correlation_id: Optional[str] = None
 
 
 # ======================================================
@@ -578,6 +580,7 @@ class NotificationRouter:
         ws_manager=None,
         redis_client=None,
         communication_integration=None,
+        lifecycle_event_publisher=None,
     ) -> None:
 
         if fcm_service is None:
@@ -628,6 +631,10 @@ class NotificationRouter:
             else CommunicationIntegration(
                 redis_client=self.redis
             )
+        )
+
+        self.lifecycle_event_publisher = (
+            lifecycle_event_publisher
         )
 
     # ==================================================
@@ -692,6 +699,7 @@ class NotificationRouter:
     async def route(
         self,
         event: JobStatusEvent,
+        lifecycle_event_publisher=None,
     ) -> None:
 
         from app.services.ai.FieldOpsAI.schemas.prompt_template import (
@@ -777,7 +785,25 @@ class NotificationRouter:
 
                 if channel == "push":
 
-                    await self._send_push(
+                    lifecycle_base = (
+                        f"notification:"
+                        f"{event.tenant_id}:"
+                        f"{event.job_id}:"
+                        f"{recipient_type}:"
+                        f"{channel}:"
+                        f"{notification_type}"
+                    )
+
+                    await self._publish_notification_lifecycle(
+                        event=event,
+                        event_type="NOTIFICATION_QUEUED",
+                        event_id=f"{lifecycle_base}:queued",
+                        recipient_type=recipient_type,
+                        channel=channel,
+                        notification_type=notification_type,
+                    )
+
+                    delivered = await self._send_push(
                         event,
                         recipient_type,
                         payload,
@@ -788,14 +814,48 @@ class NotificationRouter:
                         notification_type,
                     )
 
+                    lifecycle_status = (
+                        "NOTIFICATION_SENT"
+                        if delivered
+                        else "NOTIFICATION_FAILED"
+                    )
+
+                    await self._publish_notification_lifecycle(
+                        event=event,
+                        event_type=lifecycle_status,
+                        event_id=f"{lifecycle_base}:"
+                        f"{'sent' if delivered else 'failed'}",
+                        recipient_type=recipient_type,
+                        channel=channel,
+                        notification_type=notification_type,
+                    )
+
                 # ------------------------------------------
                 # SMS
                 # ------------------------------------------
 
                 elif channel == "sms":
 
+                    lifecycle_base = (
+                        f"notification:"
+                        f"{event.tenant_id}:"
+                        f"{event.job_id}:"
+                        f"{recipient_type}:"
+                        f"{channel}:"
+                        f"{notification_type}"
+                    )
+
+                    await self._publish_notification_lifecycle(
+                        event=event,
+                        event_type="NOTIFICATION_QUEUED",
+                        event_id=f"{lifecycle_base}:queued",
+                        recipient_type=recipient_type,
+                        channel=channel,
+                        notification_type=notification_type,
+                    )
+
                     try:
-                        await self._send_sms(
+                        delivered = await self._send_sms(
                             event,
                             recipient_type,
                             payload,
@@ -811,6 +871,24 @@ class NotificationRouter:
                             "job_id=%s",
                             event.job_id,
                         )
+                        delivered = None
+
+                    if delivered is not None:
+                        lifecycle_status = (
+                            "NOTIFICATION_SENT"
+                            if delivered
+                            else "NOTIFICATION_FAILED"
+                        )
+
+                        await self._publish_notification_lifecycle(
+                            event=event,
+                            event_type=lifecycle_status,
+                            event_id=f"{lifecycle_base}:"
+                            f"{'sent' if delivered else 'failed'}",
+                            recipient_type=recipient_type,
+                            channel=channel,
+                            notification_type=notification_type,
+                        )
 
                 # ------------------------------------------
                 # Email
@@ -818,8 +896,26 @@ class NotificationRouter:
 
                 elif channel == "email":
 
+                    lifecycle_base = (
+                        f"notification:"
+                        f"{event.tenant_id}:"
+                        f"{event.job_id}:"
+                        f"{recipient_type}:"
+                        f"{channel}:"
+                        f"{notification_type}"
+                    )
+
+                    await self._publish_notification_lifecycle(
+                        event=event,
+                        event_type="NOTIFICATION_QUEUED",
+                        event_id=f"{lifecycle_base}:queued",
+                        recipient_type=recipient_type,
+                        channel=channel,
+                        notification_type=notification_type,
+                    )
+
                     try:
-                        await self._send_email(
+                        delivered = await self._send_email(
                             event,
                             recipient_type,
                             payload,
@@ -836,6 +932,24 @@ class NotificationRouter:
                             "job_id=%s",
                             event.job_id,
                         )
+                        delivered = None
+
+                    if delivered is not None:
+                        lifecycle_status = (
+                            "NOTIFICATION_SENT"
+                            if delivered
+                            else "NOTIFICATION_FAILED"
+                        )
+
+                        await self._publish_notification_lifecycle(
+                            event=event,
+                            event_type=lifecycle_status,
+                            event_id=f"{lifecycle_base}:"
+                            f"{'sent' if delivered else 'failed'}",
+                            recipient_type=recipient_type,
+                            channel=channel,
+                            notification_type=notification_type,
+                        )
 
                 # ------------------------------------------
                 # In-App
@@ -843,7 +957,25 @@ class NotificationRouter:
 
                 elif channel == "in_app":
 
-                    await self._send_in_app(
+                    lifecycle_base = (
+                        f"notification:"
+                        f"{event.tenant_id}:"
+                        f"{event.job_id}:"
+                        f"{recipient_type}:"
+                        f"{channel}:"
+                        f"{notification_type}"
+                    )
+
+                    await self._publish_notification_lifecycle(
+                        event=event,
+                        event_type="NOTIFICATION_QUEUED",
+                        event_id=f"{lifecycle_base}:queued",
+                        recipient_type=recipient_type,
+                        channel=channel,
+                        notification_type=notification_type,
+                    )
+
+                    delivered = await self._send_in_app(
                         event,
                         recipient_type,
                         payload,
@@ -853,6 +985,180 @@ class NotificationRouter:
                         ),
                         notification_type,
                     )
+
+                    lifecycle_status = (
+                        "NOTIFICATION_SENT"
+                        if delivered
+                        else "NOTIFICATION_FAILED"
+                    )
+
+                    await self._publish_notification_lifecycle(
+                        event=event,
+                        event_type=lifecycle_status,
+                        event_id=f"{lifecycle_base}:"
+                        f"{'sent' if delivered else 'failed'}",
+                        recipient_type=recipient_type,
+                        channel=channel,
+                        notification_type=notification_type,
+                    )
+    async def _publish_notification_lifecycle(
+        self,
+        *,
+        event: JobStatusEvent,
+        event_type: str,
+        event_id: str,
+        recipient_type: str,
+        channel: str,
+        notification_type: str,
+        attempt: int | None = None,
+    ) -> None:
+        """Publish a notification lifecycle event with Redis deduplication.
+
+        Redis is a best-effort idempotency aid; Kafka remains the event
+        transport. Stable event IDs allow consumers to deduplicate events.
+        """
+        publisher = self.lifecycle_event_publisher
+
+        if publisher is None:
+            return
+
+        marker_key = (
+            "notification:lifecycle:published:"
+            f"{event.tenant_id}:{event_id}"
+        )
+        claim_key = f"{marker_key}:claim"
+        claim_token = str(uuid.uuid4())
+
+        # Claim a short-lived lock atomically to prevent concurrent publishers
+        # from publishing the same event at the same time.
+        claim_acquired = False
+        redis_available = self.redis is not None
+
+        if redis_available:
+            try:
+                if self.redis.get(marker_key):
+                    logger.info(
+                        "Skipping duplicate notification lifecycle event. "
+                        "event_type=%s event_id=%s job_id=%s",
+                        event_type,
+                        event_id,
+                        event.job_id,
+                    )
+                    return
+
+                claim_acquired = bool(
+                    self.redis.set(
+                        claim_key,
+                        claim_token,
+                        nx=True,
+                        ex=60,
+                    )
+                )
+
+                if not claim_acquired:
+                    logger.info(
+                        "Skipping notification lifecycle event with an "
+                        "active publish claim. event_id=%s job_id=%s",
+                        event_id,
+                        event.job_id,
+                    )
+                    return
+
+            except Exception:
+                # Redis failure must not block notification delivery.
+                logger.warning(
+                    "Notification lifecycle idempotency claim failed. "
+                    "Continuing without Redis deduplication. event_id=%s",
+                    event_id,
+                )
+                redis_available = False
+                claim_acquired = False
+
+        payload = {
+            "recipient_type": recipient_type,
+            "channel": channel,
+            "notification_type": notification_type,
+        }
+
+        if attempt is not None:
+            payload["attempt"] = attempt
+
+        published = False
+
+        try:
+            published = bool(
+                await publisher(
+                    event_type=event_type,
+                    event_id=event_id,
+                    job_id=str(event.job_id),
+                    tenant_id=str(event.tenant_id),
+                    correlation_id=getattr(
+                        event,
+                        "correlation_id",
+                        None,
+                    ),
+                    payload=payload,
+                )
+            )
+
+            if not published:
+                logger.warning(
+                    "Notification lifecycle publisher returned failure. "
+                    "event_type=%s event_id=%s job_id=%s",
+                    event_type,
+                    event_id,
+                    event.job_id,
+                )
+                return
+
+            if redis_available:
+                try:
+                    self.redis.set(
+                        marker_key,
+                        "1",
+                        ex=7 * 24 * 60 * 60,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Notification lifecycle idempotency marker "
+                        "could not be stored. event_id=%s job_id=%s",
+                        event_id,
+                        event.job_id,
+                    )
+
+        except Exception:
+            logger.exception(
+                "Notification lifecycle event publish failed. "
+                "event_type=%s event_id=%s job_id=%s",
+                event_type,
+                event_id,
+                event.job_id,
+            )
+
+        finally:
+            # Release the claim after the publish attempt so a failed publish
+            # can be retried. This uses Redis delete; the claim has a TTL as
+            # a fallback if Redis is unavailable.
+                if claim_acquired:
+                    try:
+                        self.redis.eval(
+                            """
+                            if redis.call('GET', KEYS[1]) == ARGV[1] then
+                                return redis.call('DEL', KEYS[1])
+                            end
+                            return 0
+                            """,
+                            1,
+                            claim_key,
+                            claim_token,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Notification lifecycle claim could not be released. "
+                            "event_id=%s job_id=%s",
+                            event_id,
+                            event.job_id,
+                        )
     # ==================================================
     # Channel Preference Check
     # ==================================================
@@ -1461,6 +1767,24 @@ class NotificationRouter:
 
             db = SessionLocal()
 
+            async def publish_sms_retry(*, attempt, delivery_id):
+                await self._publish_notification_lifecycle(
+                    event=event,
+                    event_type="NOTIFICATION_RETRIED",
+                    event_id=(
+                        f"notification:"
+                        f"{event.tenant_id}:"
+                        f"{event.job_id}:"
+                        f"technician:sms:"
+                        f"{notification_type}:"
+                        f"retry:{attempt}"
+                    ),
+                    recipient_type=recipient_type,
+                    channel="sms",
+                    notification_type=notification_type,
+                    attempt=attempt,
+                )
+
             try:
                 delivery_result = await self.sms(
                     db,
@@ -1472,6 +1796,7 @@ class NotificationRouter:
                     correlation_id_ctx.get(),
                     effective_message=message_body,
                     category=category,
+                    on_retry=publish_sms_retry,
                 )
 
                 if isinstance(delivery_result, dict):

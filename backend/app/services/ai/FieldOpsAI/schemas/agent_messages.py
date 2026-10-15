@@ -1,4 +1,4 @@
-"""
+﻿"""
 agent_messages.py
 
 Standard message contracts for communication between AI agents.
@@ -646,7 +646,7 @@ class CommandMessage(BaseMessage):
     Example
     -------
     Planning Agent
-            ↓
+            â†“
     Dispatch Agent
 
     "Assign technician TECH-101"
@@ -677,7 +677,7 @@ class QueryMessage(BaseMessage):
     Example
     -------
     Monitoring Agent
-            ↓
+            â†“
     Planning Agent
 
     "Who is the nearest technician?"
@@ -710,7 +710,7 @@ class EventMessage(BaseMessage):
     Example
     -------
     Dispatch Agent
-            ↓
+            â†“
     Monitoring Agent
 
     Technician accepted job.
@@ -860,6 +860,78 @@ class SLAEventMessage(EventMessage):
         return self
 
 # ==========================================================
+# Notification Event Message
+# ==========================================================
+
+
+class NotificationEventMessage(EventMessage):
+    """
+    Dedicated notification lifecycle event.
+
+    Publishes notification queued, sent, failed and retried events.
+    """
+
+    topic: str = Field(
+        default="fieldops.notification.events",
+        min_length=1,
+        max_length=100,
+        description="Kafka topic for notification lifecycle events.",
+    )
+
+    message_type: MessageType = Field(
+        default=MessageType.EVENT,
+        frozen=True,
+    )
+
+    @model_validator(mode="after")
+    def validate_notification_event(self) -> "NotificationEventMessage":
+        """
+        Enforce the notification event contract.
+        """
+        if self.topic != "fieldops.notification.events":
+            raise ValueError(
+                "Notification events must use topic "
+                "'fieldops.notification.events'."
+            )
+
+        allowed_event_types = {
+            "NOTIFICATION_QUEUED",
+            "NOTIFICATION_SENT",
+            "NOTIFICATION_FAILED",
+            "NOTIFICATION_RETRIED",
+        }
+
+        event_type = self.payload.get("event_type")
+
+        if event_type not in allowed_event_types:
+            raise ValueError(
+                "Notification events must have a valid notification "
+                "event_type."
+            )
+
+        required_fields = {
+            "event_id",
+            "job_id",
+            "tenant_id",
+            "schema_version",
+        }
+
+        missing_fields = required_fields - self.payload.keys()
+
+        if missing_fields:
+            raise ValueError(
+                f"Notification events require fields: "
+                f"{', '.join(sorted(missing_fields))}."
+            )
+
+        if self.payload.get("tenant_id") != self.sender.tenant_id:
+            raise ValueError(
+                "Notification event tenant_id must match sender tenant_id."
+            )
+
+        return self
+
+# ==========================================================
 # Response Message
 # ==========================================================
 
@@ -969,7 +1041,7 @@ class DeliveryFailure(BaseModel):
     Record of a single failed handler delivery.
 
     Does not include payload, metadata, exception traces,
-    or raw exception messages — only safe operational data.
+    or raw exception messages â€” only safe operational data.
     """
 
     model_config = ConfigDict(

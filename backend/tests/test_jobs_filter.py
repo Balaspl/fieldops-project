@@ -5767,6 +5767,8 @@ def test_get_job_status_history_actor_id():
     class FakeJob:
         id = 101
         tenant_id = "tenant-1"
+        status = "ACTIVE"
+        assigned_technician_id = None
         created_at = datetime.now(timezone.utc)
 
     event = FakeEvent()
@@ -6932,6 +6934,8 @@ def test_get_job_status_history_edge_branches():
     class FakeJob:
         id = 101
         tenant_id = "tenant-1"
+        status = "ACTIVE"
+        assigned_technician_id = None
         created_at = datetime.now(timezone.utc)
 
     base_time = datetime.now(timezone.utc)
@@ -7604,6 +7608,8 @@ def test_get_job_status_history_event_without_created_at():
     class FakeJob:
         id = 101
         tenant_id = "tenant-1"
+        status = "ACTIVE"
+        assigned_technician_id = None
         created_at = datetime.now(timezone.utc)
 
     class FakeEvent:
@@ -8016,6 +8022,9 @@ def test_get_jobs_stats_other_count_clamped_to_zero():
             self.count_index += 1
             return value
 
+        def __iter__(self):
+            return iter([])
+
     query = FakeQuery()
 
     class FakeDB:
@@ -8103,6 +8112,9 @@ def test_get_job_status_history_technician_not_found():
 
     class FakeJob:
         id = 101
+        tenant_id = "tenant-1"
+        status = "ACTIVE"
+        assigned_technician_id = None
 
     class FakeQuery:
         def __init__(self, result):
@@ -9497,13 +9509,28 @@ class _CovQuery:
     def count(self):
         return self.count_value if self.count_value is not None else len(self.all_values)
 
+    def __iter__(self):
+        return iter(self.all_values)
+
 
 class _CovDB:
     def __init__(self, mapping=None):
         self.mapping = mapping or {}
 
     def query(self, model):
-        key = model.__name__
+        # SQLAlchemy queries may receive either a mapped model class (Job) or
+        # an instrumented column (Technician.technician_id). Resolve both to
+        # a stable key so the lightweight test DB can handle either form.
+        key = getattr(model, "__name__", None)
+        if key is None:
+            mapped_class = getattr(model, "class_", None)
+            key = getattr(mapped_class, "__name__", None)
+        if key is None:
+            key = getattr(getattr(model, "property", None), "class_", None)
+            key = getattr(key, "__name__", None)
+        if key is None:
+            key = str(model).split(".", 1)[0]
+
         value = self.mapping.get(key)
         values = self.mapping.get(f"{key}[]")
         return _CovQuery(
@@ -10198,7 +10225,12 @@ def test_cov_timeline_invalid_category():
     from fastapi import HTTPException
     from types import SimpleNamespace
 
-    job = SimpleNamespace(id=901, tenant_id="tenant-1")
+    job = SimpleNamespace(
+        id=901,
+        tenant_id="tenant-1",
+        status="ACTIVE",
+        assigned_technician_id=None,
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         get_job_timeline(
@@ -10217,7 +10249,12 @@ def test_cov_timeline_success_with_filter_and_page(monkeypatch):
     from app.routes.jobs import get_job_timeline
     from types import SimpleNamespace
 
-    job = SimpleNamespace(id=901, tenant_id="tenant-1")
+    job = SimpleNamespace(
+        id=901,
+        tenant_id="tenant-1",
+        status="ACTIVE",
+        assigned_technician_id=None,
+    )
     events = [
         {"event_category": "STATUS", "id": 1},
         {"event_category": "CREATION", "id": 2},
@@ -10266,7 +10303,12 @@ def test_cov_audit_history_invalid_source():
     from fastapi import HTTPException
     from types import SimpleNamespace
 
-    job = SimpleNamespace(id=902, tenant_id="tenant-1")
+    job = SimpleNamespace(
+        id=902,
+        tenant_id="tenant-1",
+        status="ACTIVE",
+        assigned_technician_id=None,
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         get_job_audit_history(
@@ -10286,7 +10328,12 @@ def test_cov_audit_history_success_filters_and_whitelists(monkeypatch):
     from app.routes.jobs import get_job_audit_history
     from types import SimpleNamespace
 
-    job = SimpleNamespace(id=902, tenant_id="tenant-1")
+    job = SimpleNamespace(
+        id=902,
+        tenant_id="tenant-1",
+        status="ACTIVE",
+        assigned_technician_id=None,
+    )
     events = [
         {
             "id": 1,

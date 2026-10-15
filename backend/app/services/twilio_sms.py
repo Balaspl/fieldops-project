@@ -113,6 +113,7 @@ async def send_job_assignment_sms(
     max_retries: int = 3,
     effective_message: str | None = None,
     category: CommunicationMessageCategory = CommunicationMessageCategory.STANDARD,
+    on_retry=None,
 ) -> dict:
     correlation_id = correlation_id or str(uuid.uuid4())
     log_extra = {"correlation_id": correlation_id, "job_id": job_id}
@@ -260,9 +261,19 @@ async def send_job_assignment_sms(
                     delivery.error_message = f"Provider error: HTTP {e.status}"
                     break
                 # Otherwise backoff and retry
+                if on_retry is not None and attempt < max_retries - 1:
+                    await on_retry(
+                        attempt=attempt + 2,
+                        delivery_id=delivery.id,
+                    )
                 await asyncio.sleep(2 ** attempt)
             except Exception:
                 logger.error("Unexpected error sending SMS", extra={**log_extra, "delivery_id": delivery.id, "attempt": attempt, "operation": "send_sms"})
+                if on_retry is not None and attempt < max_retries - 1:
+                    await on_retry(
+                        attempt=attempt + 2,
+                        delivery_id=delivery.id,
+                    )
                 await asyncio.sleep(2 ** attempt)
 
         if success:
