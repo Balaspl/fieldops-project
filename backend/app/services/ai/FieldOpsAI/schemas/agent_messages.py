@@ -1168,6 +1168,118 @@ class AuditEventMessage(EventMessage):
 
         return self
 
+
+# ==========================================================
+# Dispatch Event Message
+# ==========================================================
+
+
+class DispatchEventMessage(EventMessage):
+    """
+    Dedicated dispatch lifecycle event.
+
+    Dispatches jobs, updates dispatch status, and coordinates with downstream
+    real-time tracking and dispatch engines.
+    """
+
+    topic: str = Field(
+        default="fieldops.job.events",
+        min_length=1,
+        max_length=100,
+        description="Kafka topic for dispatch lifecycle events.",
+    )
+
+    message_type: MessageType = Field(
+        default=MessageType.EVENT,
+        frozen=True,
+    )
+
+    @model_validator(mode="after")
+    def validate_dispatch_event(self) -> "DispatchEventMessage":
+        """
+        Enforce the dispatch event contract.
+        """
+        allowed_topics = {
+            "fieldops.events",
+            "fieldops.job.events",
+        }
+        if self.topic not in allowed_topics:
+            raise ValueError(
+                f"Dispatch events must use one of {sorted(allowed_topics)}, got '{self.topic}'."
+            )
+
+        allowed_event_types = {
+            "job-assigned",
+            "job_assigned",
+            "job-completed",
+            "job_completed",
+            "job-cancelled",
+            "job_cancelled",
+            "job-created",
+            "job_created",
+            "job-status",
+            "job_status",
+            "job-status-transition",
+            "status_transition",
+            "status-transition",
+            "dispatch",
+            "re-dispatch",
+            "redispatch",
+            "re_dispatch",
+            "technician_timeout",
+            "technician-timeout",
+            "timeout",
+        }
+
+        raw_event_type = self.payload.get("event_type") or self.payload.get("event")
+
+        if not raw_event_type:
+            raise ValueError(
+                "Dispatch events must have a valid dispatch event_type."
+            )
+
+        normalized_event_type = (
+            str(raw_event_type).lower().replace("_", "-")
+        )
+
+        normalized_allowed = {
+            et.lower().replace("_", "-") for et in allowed_event_types
+        }
+
+        if normalized_event_type not in normalized_allowed:
+            raise ValueError(
+                f"Dispatch events must have a valid dispatch event_type, got '{raw_event_type}'."
+            )
+
+        required_fields = {
+            "event_id",
+            "job_id",
+            "tenant_id",
+            "schema_version",
+        }
+
+        missing_fields = required_fields - self.payload.keys()
+
+        if missing_fields:
+            raise ValueError(
+                f"Dispatch events require fields: "
+                f"{', '.join(sorted(missing_fields))}."
+            )
+
+        if self.sender and getattr(self.sender, "tenant_id", None):
+            sender_tenant = self.sender.tenant_id
+            if sender_tenant and sender_tenant not in ("system", "*"):
+                if self.payload.get("tenant_id") != sender_tenant:
+                    raise ValueError(
+                        "Dispatch event tenant_id must match sender tenant_id."
+                    )
+
+        return self
+
+
+JobEventMessage = DispatchEventMessage
+
+
 # ==========================================================
 # Response Message
 # ==========================================================
