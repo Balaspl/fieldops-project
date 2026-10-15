@@ -1010,6 +1010,86 @@ class InvoiceEventMessage(EventMessage):
 
         return self
 
+
+# ==========================================================
+# Payment Event Message
+# ==========================================================
+
+
+class PaymentEventMessage(EventMessage):
+    """
+    Dedicated payment lifecycle event.
+
+    Publishes payment initiation, success, failure, pending, and refund events.
+    """
+
+    topic: str = Field(
+        default="fieldops.events",
+        min_length=1,
+        max_length=100,
+        description="Kafka topic for payment lifecycle events.",
+    )
+
+    message_type: MessageType = Field(
+        default=MessageType.EVENT,
+        frozen=True,
+    )
+
+    @model_validator(mode="after")
+    def validate_payment_event(self) -> "PaymentEventMessage":
+        """
+        Enforce the payment event contract.
+        """
+        allowed_topics = {
+            "fieldops.events",
+            "fieldops.payment.events",
+        }
+        if self.topic not in allowed_topics:
+            raise ValueError(
+                f"Payment events must use one of {sorted(allowed_topics)}, got '{self.topic}'."
+            )
+
+        allowed_event_types = {
+            "payment",
+            "PAYMENT",
+            "PAYMENT_INITIATED",
+            "PAYMENT_SUCCESS",
+            "PAYMENT_SUCCESSFUL",
+            "PAYMENT_FAILED",
+            "PAYMENT_PENDING",
+            "PAYMENT_REFUNDED",
+            "PAYMENT_REFUND",
+        }
+
+        event_type = self.payload.get("event_type")
+
+        if not event_type or str(event_type).upper() not in {et.upper() for et in allowed_event_types}:
+            raise ValueError(
+                "Payment events must have a valid payment event_type."
+            )
+
+        required_fields = {
+            "event_id",
+            "job_id",
+            "tenant_id",
+            "schema_version",
+        }
+
+        missing_fields = required_fields - self.payload.keys()
+
+        if missing_fields:
+            raise ValueError(
+                f"Payment events require fields: "
+                f"{', '.join(sorted(missing_fields))}."
+            )
+
+        if self.payload.get("tenant_id") != self.sender.tenant_id:
+            raise ValueError(
+                "Payment event tenant_id must match sender tenant_id."
+            )
+
+        return self
+
 # ==========================================================
 # Response Message
 # ==========================================================

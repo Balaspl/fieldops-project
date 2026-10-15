@@ -157,3 +157,67 @@ def publish_invoice_event(
             "Failed to publish invoice event to Redis: %s",
             e,
         )
+
+
+def publish_payment_event(
+    redis_client,
+    event_type: str,
+    job_id: str,
+    tenant_id: str,
+    payment_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    event_id: Optional[str] = None,
+    payload: Optional[dict] = None,
+):
+    """
+    Publish a canonical payment event after successful database persistence.
+    Coordinates downstream real-time consumers while preserving Redis compatibility.
+    """
+    if not redis_client:
+        logger.warning(
+            "Redis client unavailable; skipping payment event publish."
+        )
+        return
+
+    timestamp = (
+        datetime.now(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+    event_id = event_id or f"{event_type}:{tenant_id}:{job_id}"
+
+    data = {
+        "event": event_type,
+        "event_type": event_type.lower(),
+        "event_id": event_id,
+        "job_id": str(job_id),
+        "tenant_id": str(tenant_id),
+        "timestamp": timestamp,
+        "schema_version": 1,
+    }
+
+    if payment_id is not None:
+        data["payment_id"] = str(payment_id)
+
+    if correlation_id:
+        data["correlation_id"] = correlation_id
+
+    if payload:
+        data["payload"] = payload
+
+    try:
+        redis_client.publish(
+            "payment_events",
+            json.dumps(data),
+        )
+        logger.info(
+            "Published %s for job %s to payment_events channel.",
+            event_type,
+            job_id,
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to publish payment event to Redis: %s",
+            e,
+        )
