@@ -1090,6 +1090,84 @@ class PaymentEventMessage(EventMessage):
 
         return self
 
+
+# ==========================================================
+# Audit Event Message
+# ==========================================================
+
+
+class AuditEventMessage(EventMessage):
+    """
+    Dedicated audit lifecycle event.
+
+    Publishes approved audit events to Kafka for centralized analytics and monitoring.
+    """
+
+    topic: str = Field(
+        default="fieldops.events",
+        min_length=1,
+        max_length=100,
+        description="Kafka topic for audit lifecycle events.",
+    )
+
+    message_type: MessageType = Field(
+        default=MessageType.EVENT,
+        frozen=True,
+    )
+
+    @model_validator(mode="after")
+    def validate_audit_event(self) -> "AuditEventMessage":
+        """
+        Enforce the audit event contract.
+        """
+        allowed_topics = {
+            "fieldops.events",
+            "fieldops.audit.events",
+        }
+        if self.topic not in allowed_topics:
+            raise ValueError(
+                f"Audit events must use one of {sorted(allowed_topics)}, got '{self.topic}'."
+            )
+
+        allowed_event_types = {
+            "audit",
+            "AUDIT",
+            "AUDIT_EVENT",
+            "AUDIT_LOGGED",
+            "MANUAL_OVERRIDE",
+            "STATUS_TRANSITION",
+            "SECURITY_EVENT",
+            "ACCESS_REVOKED",
+        }
+
+        event_type = self.payload.get("event_type")
+
+        if not event_type or str(event_type).upper() not in {et.upper() for et in allowed_event_types}:
+            raise ValueError(
+                "Audit events must have a valid audit event_type."
+            )
+
+        required_fields = {
+            "event_id",
+            "tenant_id",
+            "schema_version",
+        }
+
+        missing_fields = required_fields - self.payload.keys()
+
+        if missing_fields:
+            raise ValueError(
+                f"Audit events require fields: "
+                f"{', '.join(sorted(missing_fields))}."
+            )
+
+        if self.payload.get("tenant_id") != self.sender.tenant_id:
+            raise ValueError(
+                "Audit event tenant_id must match sender tenant_id."
+            )
+
+        return self
+
 # ==========================================================
 # Response Message
 # ==========================================================
