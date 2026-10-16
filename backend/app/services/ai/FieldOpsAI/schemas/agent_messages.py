@@ -847,9 +847,13 @@ class SLAEventMessage(EventMessage):
         """
         Enforce the SLA event contract.
         """
-        if self.topic != "fieldops.sla.events":
+        allowed_topics = {
+            "fieldops.events",
+            "fieldops.sla.events",
+        }
+        if self.topic not in allowed_topics:
             raise ValueError(
-                "SLA events must use topic 'fieldops.sla.events'."
+                f"SLA events must use one of {sorted(allowed_topics)}, got '{self.topic}'."
             )
 
         allowed_event_types = {
@@ -857,13 +861,24 @@ class SLAEventMessage(EventMessage):
             "SLA_UPDATED",
             "SLA_NEAR_BREACH",
             "SLA_BREACHED",
+            "SLA_PAUSED",
+            "SLA_RESUMED",
+            "SLA_CLEARED",
+            "SLA_ESCALATED",
+            "SLA_MILESTONE",
+            "SLA",
         }
 
-        event_type = self.payload.get("event_type")
-
-        if event_type not in allowed_event_types:
+        raw_event_type = self.payload.get("event_type") or self.payload.get("event")
+        if not raw_event_type:
             raise ValueError(
                 "SLA events must have a valid SLA event_type."
+            )
+
+        norm_event_type = str(raw_event_type).upper().replace("-", "_")
+        if norm_event_type not in allowed_event_types:
+            raise ValueError(
+                f"SLA events must have a valid SLA event_type, got '{raw_event_type}'."
             )
 
         required_fields = {
@@ -880,6 +895,14 @@ class SLAEventMessage(EventMessage):
                 f"SLA events require fields: "
                 f"{', '.join(sorted(missing_fields))}."
             )
+
+        if self.sender and getattr(self.sender, "tenant_id", None):
+            sender_tenant = self.sender.tenant_id
+            if sender_tenant and sender_tenant not in ("system", "*"):
+                if self.payload.get("tenant_id") and self.payload.get("tenant_id") != sender_tenant:
+                    raise ValueError(
+                        "SLA event tenant_id must match sender tenant_id."
+                    )
 
         return self
 

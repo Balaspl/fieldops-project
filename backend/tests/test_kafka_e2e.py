@@ -1096,3 +1096,102 @@ async def test_notification_consumer_lifecycle_e2e():
 
         await consumer_manager.stop()
         await kafka_producer.stop()
+
+
+@pytest.mark.asyncio
+async def test_sla_monitoring_consumer_lifecycle_e2e():
+    from app.services.sla_monitoring_consumer import SLAMonitoringConsumer
+
+    topic = "fieldops.sla.events"
+    group_id = f"fieldops-sla-e2e-{uuid.uuid4()}"
+
+    consumer_manager = KafkaConsumerManager(
+        topic=topic,
+        group_id=group_id,
+        bootstrap_servers="localhost:29092",
+    )
+    kafka_producer = KafkaProducer()
+
+    processed_event = asyncio.Event()
+    results = []
+    run_id = uuid.uuid4().hex
+    job_id = f"E2E-SLA-JOB-{run_id}"
+    event_id = f"evt_sla_e2e_{run_id}"
+
+    consumer = SLAMonitoringConsumer(
+        topic=topic,
+        group_id=group_id,
+        consumer_manager=consumer_manager,
+    )
+
+    async def handler(message):
+        payload = message.get("payload", {})
+        if payload.get("event_id") == event_id:
+            receipt = await consumer.handle_message(message, attempt=1)
+            results.append(receipt)
+            processed_event.set()
+
+    consumer_task = None
+
+    try:
+        try:
+            await kafka_producer.start()
+            await consumer_manager.start()
+        except KafkaConnectionError:
+            pytest.skip(
+                "Kafka broker at localhost:29092 is not reachable. "
+                "Start Docker / Kafka container to run live broker E2E test."
+            )
+        except (TopicAuthorizationFailedError, GroupAuthorizationFailedError):
+            pytest.skip(
+                "Kafka broker does not grant the sla identity "
+                "read access to fieldops.sla.events."
+            )
+
+        consumer_task = asyncio.create_task(
+            consumer_manager.consume(handler)
+        )
+
+        message = MessageEnvelope(
+            sender=AgentAddress(
+                agent_type="monitoring",
+                agent_id="sla-e2e-producer",
+                tenant_id="tenant-e2e",
+            ),
+            recipient=None,
+            message_type=MessageType.EVENT,
+            payload={
+                "event_type": "SLA_CREATED",
+                "event_id": event_id,
+                "job_id": job_id,
+                "tenant_id": "tenant-e2e",
+                "deadline": "2026-10-16T18:00:00Z",
+                "sla_state": "active",
+                "schema_version": 1,
+            },
+            correlation_id=run_id,
+            topic=topic,
+        )
+
+        published = await kafka_producer.publish(message)
+        assert published is True
+
+        await asyncio.wait_for(processed_event.wait(), timeout=10)
+
+        assert len(results) == 1
+        receipt = results[0]
+        assert receipt["status"] == "PROCESSED"
+        assert receipt["consumer"] == "SLA_monitoring"
+        assert receipt["event_id"] == event_id
+        assert receipt["attempt"] == 1
+
+    finally:
+        if consumer_task is not None:
+            consumer_task.cancel()
+            try:
+                await consumer_task
+            except asyncio.CancelledError:
+                pass
+
+        await consumer_manager.stop()
+        await kafka_producer.stop()
