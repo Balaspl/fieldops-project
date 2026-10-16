@@ -346,3 +346,67 @@ def publish_gps_event(
             e,
         )
 
+
+def publish_notification_event(
+    redis_client,
+    event_type: str,
+    job_id: str,
+    tenant_id: str,
+    channel: Optional[str] = None,
+    recipient_type: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    event_id: Optional[str] = None,
+    payload: Optional[dict] = None,
+):
+    """
+    Publish a canonical notification event to Redis channel.
+    Coordinates downstream real-time consumers while preserving Redis compatibility.
+    """
+    if not redis_client:
+        logger.warning(
+            "Redis client unavailable; skipping notification event publish."
+        )
+        return
+
+    timestamp = (
+        datetime.now(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+    event_id = event_id or f"{event_type}:{tenant_id}:{job_id}"
+
+    data = {
+        "event": event_type,
+        "event_type": event_type.lower(),
+        "event_id": event_id,
+        "job_id": str(job_id),
+        "tenant_id": str(tenant_id),
+        "timestamp": timestamp,
+        "schema_version": 1,
+    }
+
+    if channel is not None:
+        data["channel"] = str(channel)
+    if recipient_type is not None:
+        data["recipient_type"] = str(recipient_type)
+    if correlation_id:
+        data["correlation_id"] = correlation_id
+    if payload:
+        data["payload"] = payload
+
+    try:
+        redis_client.publish(
+            "notification_events",
+            json.dumps(data),
+        )
+        logger.info(
+            "Published %s for job %s to notification_events channel.",
+            event_type,
+            job_id,
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to publish notification event to Redis: %s",
+            e,
+        )

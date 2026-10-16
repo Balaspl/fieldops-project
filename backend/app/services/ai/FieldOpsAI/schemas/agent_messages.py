@@ -912,10 +912,13 @@ class NotificationEventMessage(EventMessage):
         """
         Enforce the notification event contract.
         """
-        if self.topic != "fieldops.notification.events":
+        allowed_topics = {
+            "fieldops.events",
+            "fieldops.notification.events",
+        }
+        if self.topic not in allowed_topics:
             raise ValueError(
-                "Notification events must use topic "
-                "'fieldops.notification.events'."
+                f"Notification events must use one of {sorted(allowed_topics)}, got '{self.topic}'."
             )
 
         allowed_event_types = {
@@ -923,14 +926,21 @@ class NotificationEventMessage(EventMessage):
             "NOTIFICATION_SENT",
             "NOTIFICATION_FAILED",
             "NOTIFICATION_RETRIED",
+            "NOTIFICATION",
+            "NOTIFICATION_REQUEST",
+            "JOB_STATUS_CHANGED",
         }
 
-        event_type = self.payload.get("event_type")
-
-        if event_type not in allowed_event_types:
+        raw_event_type = self.payload.get("event_type") or self.payload.get("event")
+        if not raw_event_type:
             raise ValueError(
-                "Notification events must have a valid notification "
-                "event_type."
+                "Notification events must have a valid notification event_type."
+            )
+
+        norm_event_type = str(raw_event_type).upper().replace("-", "_")
+        if norm_event_type not in allowed_event_types:
+            raise ValueError(
+                f"Notification events must have a valid notification event_type, got '{raw_event_type}'."
             )
 
         required_fields = {
@@ -948,10 +958,13 @@ class NotificationEventMessage(EventMessage):
                 f"{', '.join(sorted(missing_fields))}."
             )
 
-        if self.payload.get("tenant_id") != self.sender.tenant_id:
-            raise ValueError(
-                "Notification event tenant_id must match sender tenant_id."
-            )
+        if self.sender and getattr(self.sender, "tenant_id", None):
+            sender_tenant = self.sender.tenant_id
+            if sender_tenant and sender_tenant not in ("system", "*"):
+                if self.payload.get("tenant_id") and self.payload.get("tenant_id") != sender_tenant:
+                    raise ValueError(
+                        "Notification event tenant_id must match sender tenant_id."
+                    )
 
         return self
 

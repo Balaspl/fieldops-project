@@ -995,3 +995,104 @@ async def test_gps_tracking_consumer_lifecycle_e2e():
 
         await consumer_manager.stop()
         await kafka_producer.stop()
+
+
+@pytest.mark.asyncio
+async def test_notification_consumer_lifecycle_e2e():
+    from app.services.notification_consumer import NotificationConsumer
+
+    topic = "fieldops.notification.events"
+    group_id = f"fieldops-notifications-e2e-{uuid.uuid4()}"
+
+    consumer_manager = KafkaConsumerManager(
+        topic=topic,
+        group_id=group_id,
+        bootstrap_servers="localhost:29092",
+    )
+    kafka_producer = KafkaProducer()
+
+    processed_event = asyncio.Event()
+    results = []
+    run_id = uuid.uuid4().hex
+    job_id = f"E2E-NOTIF-JOB-{run_id}"
+    event_id = f"evt_notif_e2e_{run_id}"
+
+    consumer = NotificationConsumer(
+        topic=topic,
+        group_id=group_id,
+        consumer_manager=consumer_manager,
+    )
+
+    async def handler(message):
+        payload = message.get("payload", {})
+        if payload.get("event_id") == event_id:
+            receipt = await consumer.handle_message(message, attempt=1)
+            results.append(receipt)
+            processed_event.set()
+
+    consumer_task = None
+
+    try:
+        try:
+            await kafka_producer.start()
+            await consumer_manager.start()
+        except KafkaConnectionError:
+            pytest.skip(
+                "Kafka broker at localhost:29092 is not reachable. "
+                "Start Docker / Kafka container to run live broker E2E test."
+            )
+        except (TopicAuthorizationFailedError, GroupAuthorizationFailedError):
+            pytest.skip(
+                "Kafka broker does not grant the notifications identity "
+                "read access to fieldops.notification.events."
+            )
+
+        consumer_task = asyncio.create_task(
+            consumer_manager.consume(handler)
+        )
+
+        message = MessageEnvelope(
+            sender=AgentAddress(
+                agent_type="monitoring",
+                agent_id="notification-e2e-producer",
+                tenant_id="tenant-e2e",
+            ),
+            recipient=None,
+            message_type=MessageType.EVENT,
+            payload={
+                "event_type": "notification",
+                "event_id": event_id,
+                "job_id": job_id,
+                "tenant_id": "tenant-e2e",
+                "channel": "email",
+                "recipient": "customer@example.com",
+                "subject": "E2E Notification Test",
+                "message": "Notification E2E payload",
+                "schema_version": 1,
+            },
+            correlation_id=run_id,
+            topic=topic,
+        )
+
+        published = await kafka_producer.publish(message)
+        assert published is True
+
+        await asyncio.wait_for(processed_event.wait(), timeout=10)
+
+        assert len(results) == 1
+        receipt = results[0]
+        assert receipt["status"] == "PROCESSED"
+        assert receipt["consumer"] == "notification"
+        assert receipt["event_id"] == event_id
+        assert receipt["attempt"] == 1
+
+    finally:
+        if consumer_task is not None:
+            consumer_task.cancel()
+            try:
+                await consumer_task
+            except asyncio.CancelledError:
+                pass
+
+        await consumer_manager.stop()
+        await kafka_producer.stop()
