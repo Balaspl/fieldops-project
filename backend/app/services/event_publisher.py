@@ -159,6 +159,9 @@ def publish_invoice_event(
         )
 
 
+publish_billing_event = publish_invoice_event
+
+
 def publish_payment_event(
     redis_client,
     event_type: str,

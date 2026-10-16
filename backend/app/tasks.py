@@ -1506,6 +1506,59 @@ def process_sla_monitoring_event_task(
     )
 
 
+def _process_billing_event_once(
+    *,
+    redis,
+    event_payload: dict,
+    attempt: int = 1,
+) -> dict:
+    """Process a billing event once using a stable Redis idempotency marker."""
+    import asyncio
+    from .services.billing_consumer import BillingConsumer
+
+    event_id = event_payload.get("event_id") if isinstance(event_payload, dict) else None
+    if not event_id:
+        return {
+            "status": "FAILED",
+            "consumer": "billing",
+            "event_id": "unknown",
+            "attempt": attempt,
+            "error": "Missing event_id in event_payload",
+        }
+
+    marker_key = f"billing:event_processed:{event_id}"
+    if redis and redis.get(marker_key):
+        logger.info(
+            "Billing event %s already processed; skipping duplicate.",
+            event_id,
+        )
+        return {
+            "status": "PROCESSED",
+            "consumer": "billing",
+            "event_id": event_id,
+            "attempt": attempt,
+            "idempotent_duplicate": True,
+        }
+
+    consumer = BillingConsumer(redis_client=redis)
+    result = asyncio.run(consumer.process_event(event_payload, attempt=attempt))
+    return dict(result)
+
+
+@celery_app.task
+def process_billing_event_task(
+    event_payload: dict,
+    attempt: int = 1,
+):
+    """Celery background task to process consumed billing event."""
+    redis_client = get_redis_client()
+    return _process_billing_event_once(
+        redis=redis_client,
+        event_payload=event_payload,
+        attempt=attempt,
+    )
+
+
 def _publish_sla_event_once(
     *,
     redis,

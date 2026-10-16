@@ -1033,15 +1033,19 @@ class InvoiceEventMessage(EventMessage):
         allowed_event_types = {
             "invoice",
             "INVOICE",
+            "billing",
+            "BILLING",
             "INVOICE_GENERATED",
             "INVOICE_CREATED",
             "INVOICE_UPDATED",
             "INVOICE_PAID",
             "INVOICE_VOIDED",
             "INVOICE_CANCELLED",
+            "INVOICE_SYNCED",
+            "BILLING_SYNCED",
         }
 
-        event_type = self.payload.get("event_type")
+        event_type = self.payload.get("event_type") or self.payload.get("event")
 
         if not event_type or str(event_type).upper() not in {et.upper() for et in allowed_event_types}:
             raise ValueError(
@@ -1063,10 +1067,13 @@ class InvoiceEventMessage(EventMessage):
                 f"{', '.join(sorted(missing_fields))}."
             )
 
-        if self.payload.get("tenant_id") != self.sender.tenant_id:
-            raise ValueError(
-                "Invoice event tenant_id must match sender tenant_id."
-            )
+        if self.sender and getattr(self.sender, "tenant_id", None):
+            sender_tenant = self.sender.tenant_id
+            if sender_tenant and sender_tenant not in ("system", "*"):
+                if self.payload.get("tenant_id") and self.payload.get("tenant_id") != sender_tenant:
+                    raise ValueError(
+                        "Invoice event tenant_id must match sender tenant_id."
+                    )
 
         return self
 
