@@ -762,14 +762,30 @@ class GPSLocationEventMessage(EventMessage):
         """
         Enforce the GPS event contract and coordinate bounds.
         """
-        if self.topic != "fieldops.gps.events":
+        allowed_topics = {
+            "fieldops.events",
+            "fieldops.gps.events",
+        }
+        if self.topic not in allowed_topics:
             raise ValueError(
-                "GPS location events must use topic 'fieldops.gps.events'."
+                f"GPS location events must use one of {sorted(allowed_topics)}, got '{self.topic}'."
             )
 
-        if self.payload.get("event_type") != "GPS-location":
+        allowed_event_types = {
+            "gps-location",
+            "location",
+        }
+
+        raw_event_type = self.payload.get("event_type") or self.payload.get("event")
+        if not raw_event_type:
             raise ValueError(
                 "GPS location events must have event_type 'GPS-location'."
+            )
+
+        norm_event_type = str(raw_event_type).lower().replace("_", "-")
+        if norm_event_type not in allowed_event_types:
+            raise ValueError(
+                f"GPS location events must have event_type 'GPS-location', got '{raw_event_type}'."
             )
 
         if "latitude" not in self.payload or "longitude" not in self.payload:
@@ -791,6 +807,14 @@ class GPSLocationEventMessage(EventMessage):
 
         if not -180 <= longitude <= 180:
             raise ValueError("GPS longitude must be between -180 and 180.")
+
+        if self.sender and getattr(self.sender, "tenant_id", None):
+            sender_tenant = self.sender.tenant_id
+            if sender_tenant and sender_tenant not in ("system", "*"):
+                if self.payload.get("tenant_id") and self.payload.get("tenant_id") != sender_tenant:
+                    raise ValueError(
+                        "GPS location event tenant_id must match sender tenant_id."
+                    )
 
         return self
 

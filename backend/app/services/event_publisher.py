@@ -287,3 +287,62 @@ def publish_audit_event(
             "Failed to publish audit event to Redis: %s",
             e,
         )
+
+
+def publish_gps_event(
+    redis_client,
+    event_type: str,
+    technician_id: str,
+    job_id: str,
+    latitude: float,
+    longitude: float,
+    tenant_id: str,
+    timestamp: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    event_id: Optional[str] = None,
+    accuracy: Optional[float] = None,
+    altitude: Optional[float] = None,
+):
+    """
+    Publish a GPS location event to Redis channel for real-time tracking coordination.
+    """
+    if not redis_client:
+        logger.warning("Redis client unavailable; skipping GPS event publish.")
+        return
+
+    data = {
+        "event_type": event_type,
+        "event_id": event_id or f"gps:{tenant_id}:{technician_id}:{job_id}",
+        "technician_id": str(technician_id),
+        "job_id": str(job_id),
+        "latitude": float(latitude),
+        "longitude": float(longitude),
+        "tenant_id": str(tenant_id),
+        "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
+        "schema_version": 1,
+    }
+
+    if accuracy is not None:
+        data["accuracy"] = float(accuracy)
+    if altitude is not None:
+        data["altitude"] = float(altitude)
+    if correlation_id:
+        data["correlation_id"] = correlation_id
+
+    try:
+        redis_client.publish(
+            "gps:updates",
+            json.dumps(data),
+        )
+        logger.info(
+            "Published %s for technician %s job %s to gps:updates channel.",
+            event_type,
+            technician_id,
+            job_id,
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to publish GPS event to Redis: %s",
+            e,
+        )
+
