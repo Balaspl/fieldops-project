@@ -1,4 +1,4 @@
-﻿"""
+"""
 agent_messages.py
 
 Standard message contracts for communication between AI agents.
@@ -930,6 +930,355 @@ class NotificationEventMessage(EventMessage):
             )
 
         return self
+
+
+# ==========================================================
+# Invoice Event Message
+# ==========================================================
+
+
+class InvoiceEventMessage(EventMessage):
+    """
+    Dedicated invoice lifecycle event.
+
+    Publishes invoice creation, update, payment, and cancellation events.
+    """
+
+    topic: str = Field(
+        default="fieldops.events",
+        min_length=1,
+        max_length=100,
+        description="Kafka topic for invoice lifecycle events.",
+    )
+
+    message_type: MessageType = Field(
+        default=MessageType.EVENT,
+        frozen=True,
+    )
+
+    @model_validator(mode="after")
+    def validate_invoice_event(self) -> "InvoiceEventMessage":
+        """
+        Enforce the invoice event contract.
+        """
+        allowed_topics = {
+            "fieldops.events",
+            "fieldops.billing.events",
+        }
+        if self.topic not in allowed_topics:
+            raise ValueError(
+                f"Invoice events must use one of {sorted(allowed_topics)}, got '{self.topic}'."
+            )
+
+        allowed_event_types = {
+            "invoice",
+            "INVOICE",
+            "INVOICE_GENERATED",
+            "INVOICE_CREATED",
+            "INVOICE_UPDATED",
+            "INVOICE_PAID",
+            "INVOICE_VOIDED",
+            "INVOICE_CANCELLED",
+        }
+
+        event_type = self.payload.get("event_type")
+
+        if not event_type or str(event_type).upper() not in {et.upper() for et in allowed_event_types}:
+            raise ValueError(
+                "Invoice events must have a valid invoice event_type."
+            )
+
+        required_fields = {
+            "event_id",
+            "job_id",
+            "tenant_id",
+            "schema_version",
+        }
+
+        missing_fields = required_fields - self.payload.keys()
+
+        if missing_fields:
+            raise ValueError(
+                f"Invoice events require fields: "
+                f"{', '.join(sorted(missing_fields))}."
+            )
+
+        if self.payload.get("tenant_id") != self.sender.tenant_id:
+            raise ValueError(
+                "Invoice event tenant_id must match sender tenant_id."
+            )
+
+        return self
+
+
+# ==========================================================
+# Payment Event Message
+# ==========================================================
+
+
+class PaymentEventMessage(EventMessage):
+    """
+    Dedicated payment lifecycle event.
+
+    Publishes payment initiation, success, failure, pending, and refund events.
+    """
+
+    topic: str = Field(
+        default="fieldops.events",
+        min_length=1,
+        max_length=100,
+        description="Kafka topic for payment lifecycle events.",
+    )
+
+    message_type: MessageType = Field(
+        default=MessageType.EVENT,
+        frozen=True,
+    )
+
+    @model_validator(mode="after")
+    def validate_payment_event(self) -> "PaymentEventMessage":
+        """
+        Enforce the payment event contract.
+        """
+        allowed_topics = {
+            "fieldops.events",
+            "fieldops.payment.events",
+        }
+        if self.topic not in allowed_topics:
+            raise ValueError(
+                f"Payment events must use one of {sorted(allowed_topics)}, got '{self.topic}'."
+            )
+
+        allowed_event_types = {
+            "payment",
+            "PAYMENT",
+            "PAYMENT_INITIATED",
+            "PAYMENT_SUCCESS",
+            "PAYMENT_SUCCESSFUL",
+            "PAYMENT_FAILED",
+            "PAYMENT_PENDING",
+            "PAYMENT_REFUNDED",
+            "PAYMENT_REFUND",
+        }
+
+        event_type = self.payload.get("event_type")
+
+        if not event_type or str(event_type).upper() not in {et.upper() for et in allowed_event_types}:
+            raise ValueError(
+                "Payment events must have a valid payment event_type."
+            )
+
+        required_fields = {
+            "event_id",
+            "job_id",
+            "tenant_id",
+            "schema_version",
+        }
+
+        missing_fields = required_fields - self.payload.keys()
+
+        if missing_fields:
+            raise ValueError(
+                f"Payment events require fields: "
+                f"{', '.join(sorted(missing_fields))}."
+            )
+
+        if self.payload.get("tenant_id") != self.sender.tenant_id:
+            raise ValueError(
+                "Payment event tenant_id must match sender tenant_id."
+            )
+
+        return self
+
+
+# ==========================================================
+# Audit Event Message
+# ==========================================================
+
+
+class AuditEventMessage(EventMessage):
+    """
+    Dedicated audit lifecycle event.
+
+    Publishes approved audit events to Kafka for centralized analytics and monitoring.
+    """
+
+    topic: str = Field(
+        default="fieldops.events",
+        min_length=1,
+        max_length=100,
+        description="Kafka topic for audit lifecycle events.",
+    )
+
+    message_type: MessageType = Field(
+        default=MessageType.EVENT,
+        frozen=True,
+    )
+
+    @model_validator(mode="after")
+    def validate_audit_event(self) -> "AuditEventMessage":
+        """
+        Enforce the audit event contract.
+        """
+        allowed_topics = {
+            "fieldops.events",
+            "fieldops.audit.events",
+        }
+        if self.topic not in allowed_topics:
+            raise ValueError(
+                f"Audit events must use one of {sorted(allowed_topics)}, got '{self.topic}'."
+            )
+
+        allowed_event_types = {
+            "audit",
+            "AUDIT",
+            "AUDIT_EVENT",
+            "AUDIT_LOGGED",
+            "MANUAL_OVERRIDE",
+            "STATUS_TRANSITION",
+            "SECURITY_EVENT",
+            "ACCESS_REVOKED",
+        }
+
+        event_type = self.payload.get("event_type")
+
+        if not event_type or str(event_type).upper() not in {et.upper() for et in allowed_event_types}:
+            raise ValueError(
+                "Audit events must have a valid audit event_type."
+            )
+
+        required_fields = {
+            "event_id",
+            "tenant_id",
+            "schema_version",
+        }
+
+        missing_fields = required_fields - self.payload.keys()
+
+        if missing_fields:
+            raise ValueError(
+                f"Audit events require fields: "
+                f"{', '.join(sorted(missing_fields))}."
+            )
+
+        if self.payload.get("tenant_id") != self.sender.tenant_id:
+            raise ValueError(
+                "Audit event tenant_id must match sender tenant_id."
+            )
+
+        return self
+
+
+# ==========================================================
+# Dispatch Event Message
+# ==========================================================
+
+
+class DispatchEventMessage(EventMessage):
+    """
+    Dedicated dispatch lifecycle event.
+
+    Dispatches jobs, updates dispatch status, and coordinates with downstream
+    real-time tracking and dispatch engines.
+    """
+
+    topic: str = Field(
+        default="fieldops.job.events",
+        min_length=1,
+        max_length=100,
+        description="Kafka topic for dispatch lifecycle events.",
+    )
+
+    message_type: MessageType = Field(
+        default=MessageType.EVENT,
+        frozen=True,
+    )
+
+    @model_validator(mode="after")
+    def validate_dispatch_event(self) -> "DispatchEventMessage":
+        """
+        Enforce the dispatch event contract.
+        """
+        allowed_topics = {
+            "fieldops.events",
+            "fieldops.job.events",
+        }
+        if self.topic not in allowed_topics:
+            raise ValueError(
+                f"Dispatch events must use one of {sorted(allowed_topics)}, got '{self.topic}'."
+            )
+
+        allowed_event_types = {
+            "job-assigned",
+            "job_assigned",
+            "job-completed",
+            "job_completed",
+            "job-cancelled",
+            "job_cancelled",
+            "job-created",
+            "job_created",
+            "job-status",
+            "job_status",
+            "job-status-transition",
+            "status_transition",
+            "status-transition",
+            "dispatch",
+            "re-dispatch",
+            "redispatch",
+            "re_dispatch",
+            "technician_timeout",
+            "technician-timeout",
+            "timeout",
+        }
+
+        raw_event_type = self.payload.get("event_type") or self.payload.get("event")
+
+        if not raw_event_type:
+            raise ValueError(
+                "Dispatch events must have a valid dispatch event_type."
+            )
+
+        normalized_event_type = (
+            str(raw_event_type).lower().replace("_", "-")
+        )
+
+        normalized_allowed = {
+            et.lower().replace("_", "-") for et in allowed_event_types
+        }
+
+        if normalized_event_type not in normalized_allowed:
+            raise ValueError(
+                f"Dispatch events must have a valid dispatch event_type, got '{raw_event_type}'."
+            )
+
+        required_fields = {
+            "event_id",
+            "job_id",
+            "tenant_id",
+            "schema_version",
+        }
+
+        missing_fields = required_fields - self.payload.keys()
+
+        if missing_fields:
+            raise ValueError(
+                f"Dispatch events require fields: "
+                f"{', '.join(sorted(missing_fields))}."
+            )
+
+        if self.sender and getattr(self.sender, "tenant_id", None):
+            sender_tenant = self.sender.tenant_id
+            if sender_tenant and sender_tenant not in ("system", "*"):
+                if self.payload.get("tenant_id") != sender_tenant:
+                    raise ValueError(
+                        "Dispatch event tenant_id must match sender tenant_id."
+                    )
+
+        return self
+
+
+JobEventMessage = DispatchEventMessage
+
 
 # ==========================================================
 # Response Message
