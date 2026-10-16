@@ -1126,11 +1126,19 @@ class PaymentEventMessage(EventMessage):
             "PAYMENT_PENDING",
             "PAYMENT_REFUNDED",
             "PAYMENT_REFUND",
+            "PAYMENT_COMPLETED",
+            "PAYMENT_CANCELLED",
         }
 
         event_type = self.payload.get("event_type")
+        norm_type = (
+            str(event_type).upper().replace("-", "_")
+            if event_type
+            else None
+        )
+        allowed_normalized = {et.upper().replace("-", "_") for et in allowed_event_types}
 
-        if not event_type or str(event_type).upper() not in {et.upper() for et in allowed_event_types}:
+        if not norm_type or norm_type not in allowed_normalized:
             raise ValueError(
                 "Payment events must have a valid payment event_type."
             )
@@ -1150,7 +1158,14 @@ class PaymentEventMessage(EventMessage):
                 f"{', '.join(sorted(missing_fields))}."
             )
 
-        if self.payload.get("tenant_id") != self.sender.tenant_id:
+        sender_tenant = getattr(self.sender, "tenant_id", None)
+        payload_tenant = self.payload.get("tenant_id")
+        if (
+            sender_tenant
+            and sender_tenant not in {"*", "system", "platform"}
+            and payload_tenant
+            and sender_tenant != payload_tenant
+        ):
             raise ValueError(
                 "Payment event tenant_id must match sender tenant_id."
             )

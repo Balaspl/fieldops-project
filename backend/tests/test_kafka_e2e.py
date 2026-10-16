@@ -1295,3 +1295,104 @@ async def test_billing_consumer_lifecycle_e2e():
 
         await consumer_manager.stop()
         await kafka_producer.stop()
+
+
+@pytest.mark.asyncio
+async def test_payment_consumer_lifecycle_e2e():
+    from app.services.payment_consumer import PaymentConsumer
+
+    topic = "fieldops.payment.events"
+    group_id = f"fieldops-payment-e2e-{uuid.uuid4()}"
+
+    consumer_manager = KafkaConsumerManager(
+        topic=topic,
+        group_id=group_id,
+        bootstrap_servers="localhost:29092",
+    )
+    kafka_producer = KafkaProducer()
+
+    processed_event = asyncio.Event()
+    results = []
+    run_id = uuid.uuid4().hex
+    job_id = f"E2E-PAYMENT-JOB-{run_id}"
+    event_id = f"evt_payment_e2e_{run_id}"
+
+    consumer = PaymentConsumer(
+        topic=topic,
+        group_id=group_id,
+        consumer_manager=consumer_manager,
+    )
+
+    async def handler(message):
+        payload = message.get("payload", {})
+        if payload.get("event_id") == event_id:
+            receipt = await consumer.handle_message(message, attempt=1)
+            results.append(receipt)
+            processed_event.set()
+
+    consumer_task = None
+
+    try:
+        try:
+            await kafka_producer.start()
+            await consumer_manager.start()
+        except KafkaConnectionError:
+            pytest.skip(
+                "Kafka broker at localhost:29092 is not reachable. "
+                "Start Docker / Kafka container to run live broker E2E test."
+            )
+        except (TopicAuthorizationFailedError, GroupAuthorizationFailedError):
+            pytest.skip(
+                "Kafka broker does not grant the payment identity "
+                "read access to fieldops.payment.events."
+            )
+
+        consumer_task = asyncio.create_task(
+            consumer_manager.consume(handler)
+        )
+
+        message = MessageEnvelope(
+            sender=AgentAddress(
+                agent_type="closure",
+                agent_id="payment-e2e-producer",
+                tenant_id="tenant-e2e",
+            ),
+            recipient=None,
+            message_type=MessageType.EVENT,
+            payload={
+                "event_type": "payment",
+                "event_id": event_id,
+                "job_id": job_id,
+                "tenant_id": "tenant-e2e",
+                "payment_id": f"PAY-E2E-{run_id}",
+                "amount": 249.99,
+                "currency": "USD",
+                "payment_status": "SUCCESSFUL",
+                "schema_version": 1,
+            },
+            correlation_id=run_id,
+            topic=topic,
+        )
+
+        published = await kafka_producer.publish(message)
+        assert published is True
+
+        await asyncio.wait_for(processed_event.wait(), timeout=10)
+
+        assert len(results) == 1
+        receipt = results[0]
+        assert receipt["status"] == "PROCESSED"
+        assert receipt["consumer"] == "payment"
+        assert receipt["event_id"] == event_id
+        assert receipt["attempt"] == 1
+
+    finally:
+        if consumer_task is not None:
+            consumer_task.cancel()
+            try:
+                await consumer_task
+            except asyncio.CancelledError:
+                pass
+
+        await consumer_manager.stop()
+        await kafka_producer.stop()
