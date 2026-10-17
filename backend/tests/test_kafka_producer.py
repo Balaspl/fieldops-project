@@ -278,6 +278,7 @@ async def test_publish_uses_job_id_as_partition_key(monkeypatch, topic):
         "fieldops.billing.events",
         "fieldops.payment.events",
         "fieldops.audit.events",
+        "fieldops.analytics.events",
     ],
 )
 async def test_publish_uses_tenant_id_as_partition_key(monkeypatch, topic):

@@ -17,6 +17,7 @@ DEFAULT_CONSUMER_GROUPS = {
     "fieldops.billing.events": "fieldops-billing",
     "fieldops.payment.events": "fieldops-payment",
     "fieldops.audit.events": "fieldops-audit",
+    "fieldops.analytics.events": "fieldops-analytics",
 }
 CONSUMER_CREDENTIALS = {
     "fieldops.job.events": (
@@ -46,6 +47,10 @@ CONSUMER_CREDENTIALS = {
     "fieldops.audit.events": (
         "KAFKA_AUDIT_USERNAME",
         "KAFKA_AUDIT_PASSWORD",
+    ),
+    "fieldops.analytics.events": (
+        "KAFKA_ANALYTICS_USERNAME",
+        "KAFKA_ANALYTICS_PASSWORD",
     ),
 }
 
@@ -133,6 +138,7 @@ class KafkaConsumerManager:
             "fieldops.billing.events": "KAFKA_BILLING_CONSUMER_GROUP",
             "fieldops.payment.events": "KAFKA_PAYMENT_CONSUMER_GROUP",
             "fieldops.audit.events": "KAFKA_AUDIT_CONSUMER_GROUP",
+            "fieldops.analytics.events": "KAFKA_ANALYTICS_CONSUMER_GROUP",
         }
 
         return topic_group_names.get(

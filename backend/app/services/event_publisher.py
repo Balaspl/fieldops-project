@@ -159,6 +159,9 @@ def publish_invoice_event(
         )
 
 
+publish_billing_event = publish_invoice_event
+
+
 def publish_payment_event(
     redis_client,
     event_type: str,
@@ -285,5 +288,248 @@ def publish_audit_event(
     except Exception as e:
         logger.error(
             "Failed to publish audit event to Redis: %s",
+            e,
+        )
+
+
+def publish_gps_event(
+    redis_client,
+    event_type: str,
+    technician_id: str,
+    job_id: str,
+    latitude: float,
+    longitude: float,
+    tenant_id: str,
+    timestamp: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    event_id: Optional[str] = None,
+    accuracy: Optional[float] = None,
+    altitude: Optional[float] = None,
+):
+    """
+    Publish a GPS location event to Redis channel for real-time tracking coordination.
+    """
+    if not redis_client:
+        logger.warning("Redis client unavailable; skipping GPS event publish.")
+        return
+
+    data = {
+        "event_type": event_type,
+        "event_id": event_id or f"gps:{tenant_id}:{technician_id}:{job_id}",
+        "technician_id": str(technician_id),
+        "job_id": str(job_id),
+        "latitude": float(latitude),
+        "longitude": float(longitude),
+        "tenant_id": str(tenant_id),
+        "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
+        "schema_version": 1,
+    }
+
+    if accuracy is not None:
+        data["accuracy"] = float(accuracy)
+    if altitude is not None:
+        data["altitude"] = float(altitude)
+    if correlation_id:
+        data["correlation_id"] = correlation_id
+
+    try:
+        redis_client.publish(
+            "gps:updates",
+            json.dumps(data),
+        )
+        logger.info(
+            "Published %s for technician %s job %s to gps:updates channel.",
+            event_type,
+            technician_id,
+            job_id,
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to publish GPS event to Redis: %s",
+            e,
+        )
+
+
+def publish_notification_event(
+    redis_client,
+    event_type: str,
+    job_id: str,
+    tenant_id: str,
+    channel: Optional[str] = None,
+    recipient_type: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    event_id: Optional[str] = None,
+    payload: Optional[dict] = None,
+):
+    """
+    Publish a canonical notification event to Redis channel.
+    Coordinates downstream real-time consumers while preserving Redis compatibility.
+    """
+    if not redis_client:
+        logger.warning(
+            "Redis client unavailable; skipping notification event publish."
+        )
+        return
+
+    timestamp = (
+        datetime.now(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+    event_id = event_id or f"{event_type}:{tenant_id}:{job_id}"
+
+    data = {
+        "event": event_type,
+        "event_type": event_type.lower(),
+        "event_id": event_id,
+        "job_id": str(job_id),
+        "tenant_id": str(tenant_id),
+        "timestamp": timestamp,
+        "schema_version": 1,
+    }
+
+    if channel is not None:
+        data["channel"] = str(channel)
+    if recipient_type is not None:
+        data["recipient_type"] = str(recipient_type)
+    if correlation_id:
+        data["correlation_id"] = correlation_id
+    if payload:
+        data["payload"] = payload
+
+    try:
+        redis_client.publish(
+            "notification_events",
+            json.dumps(data),
+        )
+        logger.info(
+            "Published %s for job %s to notification_events channel.",
+            event_type,
+            job_id,
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to publish notification event to Redis: %s",
+            e,
+        )
+
+
+def publish_sla_event(
+    redis_client,
+    event_type: str,
+    job_id: str,
+    tenant_id: str,
+    correlation_id: Optional[str] = None,
+    event_id: Optional[str] = None,
+    payload: Optional[dict] = None,
+):
+    """
+    Publish a canonical SLA event to Redis channel.
+    Coordinates downstream real-time consumers while preserving Redis compatibility.
+    """
+    if not redis_client:
+        logger.warning(
+            "Redis client unavailable; skipping SLA event publish."
+        )
+        return
+
+    timestamp = (
+        datetime.now(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+    event_id = event_id or f"{event_type}:{tenant_id}:{job_id}"
+
+    data = {
+        "event": event_type,
+        "event_type": event_type.lower(),
+        "event_id": event_id,
+        "job_id": str(job_id),
+        "tenant_id": str(tenant_id),
+        "timestamp": timestamp,
+        "schema_version": 1,
+    }
+
+    if correlation_id:
+        data["correlation_id"] = correlation_id
+    if payload:
+        data["payload"] = payload
+
+    try:
+        redis_client.publish(
+            "sla_events",
+            json.dumps(data),
+        )
+        logger.info(
+            "Published %s for job %s to sla_events channel.",
+            event_type,
+            job_id,
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to publish SLA event to Redis: %s",
+            e,
+        )
+
+
+def publish_analytics_event(
+    redis_client,
+    event_type: str,
+    tenant_id: str,
+    job_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    event_id: Optional[str] = None,
+    payload: Optional[dict] = None,
+):
+    """
+    Publish a canonical analytics/metrics event.
+    Coordinates downstream real-time consumers while preserving Redis compatibility.
+    """
+    if not redis_client:
+        logger.warning(
+            "Redis client unavailable; skipping analytics event publish."
+        )
+        return
+
+    timestamp = (
+        datetime.now(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+    event_id = event_id or f"{event_type}:{tenant_id}:{job_id or 'global'}"
+
+    data = {
+        "event": event_type,
+        "event_type": event_type.lower(),
+        "event_id": event_id,
+        "tenant_id": str(tenant_id),
+        "timestamp": timestamp,
+        "schema_version": 1,
+    }
+
+    if job_id is not None:
+        data["job_id"] = str(job_id)
+
+    if correlation_id:
+        data["correlation_id"] = correlation_id
+
+    if payload:
+        data["payload"] = payload
+
+    try:
+        redis_client.publish(
+            "analytics_events",
+            json.dumps(data),
+        )
+        logger.info(
+            "Published %s to analytics_events channel.",
+            event_type,
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to publish analytics event to Redis: %s",
             e,
         )

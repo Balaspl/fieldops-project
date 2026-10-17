@@ -41,6 +41,7 @@ class KafkaProducer:
             "fieldops.billing.events",
             "fieldops.payment.events",
             "fieldops.audit.events",
+            "fieldops.analytics.events",
         }
 
         if topic in job_ordered_topics:

@@ -762,14 +762,30 @@ class GPSLocationEventMessage(EventMessage):
         """
         Enforce the GPS event contract and coordinate bounds.
         """
-        if self.topic != "fieldops.gps.events":
+        allowed_topics = {
+            "fieldops.events",
+            "fieldops.gps.events",
+        }
+        if self.topic not in allowed_topics:
             raise ValueError(
-                "GPS location events must use topic 'fieldops.gps.events'."
+                f"GPS location events must use one of {sorted(allowed_topics)}, got '{self.topic}'."
             )
 
-        if self.payload.get("event_type") != "GPS-location":
+        allowed_event_types = {
+            "gps-location",
+            "location",
+        }
+
+        raw_event_type = self.payload.get("event_type") or self.payload.get("event")
+        if not raw_event_type:
             raise ValueError(
                 "GPS location events must have event_type 'GPS-location'."
+            )
+
+        norm_event_type = str(raw_event_type).lower().replace("_", "-")
+        if norm_event_type not in allowed_event_types:
+            raise ValueError(
+                f"GPS location events must have event_type 'GPS-location', got '{raw_event_type}'."
             )
 
         if "latitude" not in self.payload or "longitude" not in self.payload:
@@ -791,6 +807,14 @@ class GPSLocationEventMessage(EventMessage):
 
         if not -180 <= longitude <= 180:
             raise ValueError("GPS longitude must be between -180 and 180.")
+
+        if self.sender and getattr(self.sender, "tenant_id", None):
+            sender_tenant = self.sender.tenant_id
+            if sender_tenant and sender_tenant not in ("system", "*"):
+                if self.payload.get("tenant_id") and self.payload.get("tenant_id") != sender_tenant:
+                    raise ValueError(
+                        "GPS location event tenant_id must match sender tenant_id."
+                    )
 
         return self
 
@@ -823,9 +847,13 @@ class SLAEventMessage(EventMessage):
         """
         Enforce the SLA event contract.
         """
-        if self.topic != "fieldops.sla.events":
+        allowed_topics = {
+            "fieldops.events",
+            "fieldops.sla.events",
+        }
+        if self.topic not in allowed_topics:
             raise ValueError(
-                "SLA events must use topic 'fieldops.sla.events'."
+                f"SLA events must use one of {sorted(allowed_topics)}, got '{self.topic}'."
             )
 
         allowed_event_types = {
@@ -833,13 +861,24 @@ class SLAEventMessage(EventMessage):
             "SLA_UPDATED",
             "SLA_NEAR_BREACH",
             "SLA_BREACHED",
+            "SLA_PAUSED",
+            "SLA_RESUMED",
+            "SLA_CLEARED",
+            "SLA_ESCALATED",
+            "SLA_MILESTONE",
+            "SLA",
         }
 
-        event_type = self.payload.get("event_type")
-
-        if event_type not in allowed_event_types:
+        raw_event_type = self.payload.get("event_type") or self.payload.get("event")
+        if not raw_event_type:
             raise ValueError(
                 "SLA events must have a valid SLA event_type."
+            )
+
+        norm_event_type = str(raw_event_type).upper().replace("-", "_")
+        if norm_event_type not in allowed_event_types:
+            raise ValueError(
+                f"SLA events must have a valid SLA event_type, got '{raw_event_type}'."
             )
 
         required_fields = {
@@ -856,6 +895,14 @@ class SLAEventMessage(EventMessage):
                 f"SLA events require fields: "
                 f"{', '.join(sorted(missing_fields))}."
             )
+
+        if self.sender and getattr(self.sender, "tenant_id", None):
+            sender_tenant = self.sender.tenant_id
+            if sender_tenant and sender_tenant not in ("system", "*"):
+                if self.payload.get("tenant_id") and self.payload.get("tenant_id") != sender_tenant:
+                    raise ValueError(
+                        "SLA event tenant_id must match sender tenant_id."
+                    )
 
         return self
 
@@ -888,10 +935,13 @@ class NotificationEventMessage(EventMessage):
         """
         Enforce the notification event contract.
         """
-        if self.topic != "fieldops.notification.events":
+        allowed_topics = {
+            "fieldops.events",
+            "fieldops.notification.events",
+        }
+        if self.topic not in allowed_topics:
             raise ValueError(
-                "Notification events must use topic "
-                "'fieldops.notification.events'."
+                f"Notification events must use one of {sorted(allowed_topics)}, got '{self.topic}'."
             )
 
         allowed_event_types = {
@@ -899,14 +949,21 @@ class NotificationEventMessage(EventMessage):
             "NOTIFICATION_SENT",
             "NOTIFICATION_FAILED",
             "NOTIFICATION_RETRIED",
+            "NOTIFICATION",
+            "NOTIFICATION_REQUEST",
+            "JOB_STATUS_CHANGED",
         }
 
-        event_type = self.payload.get("event_type")
-
-        if event_type not in allowed_event_types:
+        raw_event_type = self.payload.get("event_type") or self.payload.get("event")
+        if not raw_event_type:
             raise ValueError(
-                "Notification events must have a valid notification "
-                "event_type."
+                "Notification events must have a valid notification event_type."
+            )
+
+        norm_event_type = str(raw_event_type).upper().replace("-", "_")
+        if norm_event_type not in allowed_event_types:
+            raise ValueError(
+                f"Notification events must have a valid notification event_type, got '{raw_event_type}'."
             )
 
         required_fields = {
@@ -924,10 +981,13 @@ class NotificationEventMessage(EventMessage):
                 f"{', '.join(sorted(missing_fields))}."
             )
 
-        if self.payload.get("tenant_id") != self.sender.tenant_id:
-            raise ValueError(
-                "Notification event tenant_id must match sender tenant_id."
-            )
+        if self.sender and getattr(self.sender, "tenant_id", None):
+            sender_tenant = self.sender.tenant_id
+            if sender_tenant and sender_tenant not in ("system", "*"):
+                if self.payload.get("tenant_id") and self.payload.get("tenant_id") != sender_tenant:
+                    raise ValueError(
+                        "Notification event tenant_id must match sender tenant_id."
+                    )
 
         return self
 
@@ -973,15 +1033,19 @@ class InvoiceEventMessage(EventMessage):
         allowed_event_types = {
             "invoice",
             "INVOICE",
+            "billing",
+            "BILLING",
             "INVOICE_GENERATED",
             "INVOICE_CREATED",
             "INVOICE_UPDATED",
             "INVOICE_PAID",
             "INVOICE_VOIDED",
             "INVOICE_CANCELLED",
+            "INVOICE_SYNCED",
+            "BILLING_SYNCED",
         }
 
-        event_type = self.payload.get("event_type")
+        event_type = self.payload.get("event_type") or self.payload.get("event")
 
         if not event_type or str(event_type).upper() not in {et.upper() for et in allowed_event_types}:
             raise ValueError(
@@ -1003,10 +1067,13 @@ class InvoiceEventMessage(EventMessage):
                 f"{', '.join(sorted(missing_fields))}."
             )
 
-        if self.payload.get("tenant_id") != self.sender.tenant_id:
-            raise ValueError(
-                "Invoice event tenant_id must match sender tenant_id."
-            )
+        if self.sender and getattr(self.sender, "tenant_id", None):
+            sender_tenant = self.sender.tenant_id
+            if sender_tenant and sender_tenant not in ("system", "*"):
+                if self.payload.get("tenant_id") and self.payload.get("tenant_id") != sender_tenant:
+                    raise ValueError(
+                        "Invoice event tenant_id must match sender tenant_id."
+                    )
 
         return self
 
@@ -1059,11 +1126,19 @@ class PaymentEventMessage(EventMessage):
             "PAYMENT_PENDING",
             "PAYMENT_REFUNDED",
             "PAYMENT_REFUND",
+            "PAYMENT_COMPLETED",
+            "PAYMENT_CANCELLED",
         }
 
         event_type = self.payload.get("event_type")
+        norm_type = (
+            str(event_type).upper().replace("-", "_")
+            if event_type
+            else None
+        )
+        allowed_normalized = {et.upper().replace("-", "_") for et in allowed_event_types}
 
-        if not event_type or str(event_type).upper() not in {et.upper() for et in allowed_event_types}:
+        if not norm_type or norm_type not in allowed_normalized:
             raise ValueError(
                 "Payment events must have a valid payment event_type."
             )
@@ -1083,7 +1158,14 @@ class PaymentEventMessage(EventMessage):
                 f"{', '.join(sorted(missing_fields))}."
             )
 
-        if self.payload.get("tenant_id") != self.sender.tenant_id:
+        sender_tenant = getattr(self.sender, "tenant_id", None)
+        payload_tenant = self.payload.get("tenant_id")
+        if (
+            sender_tenant
+            and sender_tenant not in {"*", "system", "platform"}
+            and payload_tenant
+            and sender_tenant != payload_tenant
+        ):
             raise ValueError(
                 "Payment event tenant_id must match sender tenant_id."
             )
@@ -1141,8 +1223,14 @@ class AuditEventMessage(EventMessage):
         }
 
         event_type = self.payload.get("event_type")
+        norm_type = (
+            str(event_type).upper().replace("-", "_")
+            if event_type
+            else None
+        )
+        allowed_normalized = {et.upper().replace("-", "_") for et in allowed_event_types}
 
-        if not event_type or str(event_type).upper() not in {et.upper() for et in allowed_event_types}:
+        if not norm_type or norm_type not in allowed_normalized:
             raise ValueError(
                 "Audit events must have a valid audit event_type."
             )
@@ -1161,7 +1249,14 @@ class AuditEventMessage(EventMessage):
                 f"{', '.join(sorted(missing_fields))}."
             )
 
-        if self.payload.get("tenant_id") != self.sender.tenant_id:
+        sender_tenant = getattr(self.sender, "tenant_id", None)
+        payload_tenant = self.payload.get("tenant_id")
+        if (
+            sender_tenant
+            and sender_tenant not in {"*", "system", "platform"}
+            and payload_tenant
+            and sender_tenant != payload_tenant
+        ):
             raise ValueError(
                 "Audit event tenant_id must match sender tenant_id."
             )
@@ -1170,8 +1265,129 @@ class AuditEventMessage(EventMessage):
 
 
 # ==========================================================
+# Analytics Event Message
+# ==========================================================
+
+
+class AnalyticsEventMessage(EventMessage):
+    """
+    Dedicated analytics and metrics event.
+
+    Publishes business and operational events to Kafka for decoupled analytics,
+    KPI monitoring, and reporting pipelines.
+    """
+
+    topic: str = Field(
+        default="fieldops.events",
+        min_length=1,
+        max_length=100,
+        description="Kafka topic for analytics and business metric events.",
+    )
+
+    message_type: MessageType = Field(
+        default=MessageType.EVENT,
+        frozen=True,
+    )
+
+    @model_validator(mode="after")
+    def validate_analytics_event(self) -> "AnalyticsEventMessage":
+        """
+        Enforce the analytics event contract.
+        """
+        allowed_topics = {
+            "fieldops.events",
+            "fieldops.analytics.events",
+            "fieldops.job.events",
+            "fieldops.gps.events",
+            "fieldops.notification.events",
+            "fieldops.sla.events",
+            "fieldops.billing.events",
+            "fieldops.payment.events",
+            "fieldops.audit.events",
+        }
+        if self.topic not in allowed_topics:
+            raise ValueError(
+                f"Analytics events must use one of {sorted(allowed_topics)}, got '{self.topic}'."
+            )
+
+        allowed_event_types = {
+            "analytics",
+            "ANALYTICS",
+            "metrics",
+            "METRICS",
+            "kpi_update",
+            "KPI_UPDATE",
+            "business_metric",
+            "BUSINESS_METRIC",
+            "job_metrics",
+            "JOB_METRICS",
+            "sla_metrics",
+            "SLA_METRICS",
+            "operational_telemetry",
+            "OPERATIONAL_TELEMETRY",
+            "performance_metric",
+            "PERFORMANCE_METRIC",
+            "job_created",
+            "job_completed",
+            "job_assigned",
+            "status_transition",
+            "payment_completed",
+            "invoice_generated",
+            "audit_logged",
+        }
+
+        event_type = self.payload.get("event_type")
+        norm_type = (
+            str(event_type).upper().replace("-", "_")
+            if event_type
+            else None
+        )
+        allowed_normalized = {et.upper().replace("-", "_") for et in allowed_event_types}
+
+        if not norm_type or norm_type not in allowed_normalized:
+            raise ValueError(
+                "Analytics events must have a valid analytics event_type."
+            )
+
+        required_fields = {
+            "event_id",
+            "tenant_id",
+            "schema_version",
+        }
+
+        missing_fields = required_fields - self.payload.keys()
+
+        if missing_fields:
+            raise ValueError(
+                f"Analytics events require fields: "
+                f"{', '.join(sorted(missing_fields))}."
+            )
+
+        schema_version = self.payload.get("schema_version")
+        if not isinstance(schema_version, int) or schema_version < 1:
+            raise ValueError(
+                f"Analytics event schema_version must be a positive integer, got {schema_version}."
+            )
+
+        sender_tenant = getattr(self.sender, "tenant_id", None)
+        payload_tenant = self.payload.get("tenant_id")
+        if (
+            sender_tenant
+            and sender_tenant not in {"*", "system", "platform"}
+            and payload_tenant
+            and sender_tenant != payload_tenant
+        ):
+            raise ValueError(
+                "Analytics event tenant_id must match sender tenant_id."
+            )
+
+        return self
+
+
+# ==========================================================
 # Dispatch Event Message
 # ==========================================================
+
 
 
 class DispatchEventMessage(EventMessage):
