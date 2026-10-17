@@ -172,6 +172,7 @@ async def test_consumer_context_manager(monkeypatch):
         ("fieldops.billing.events", "fieldops-billing"),
         ("fieldops.payment.events", "fieldops-payment"),
         ("fieldops.audit.events", "fieldops-audit"),
+        ("fieldops.analytics.events", "fieldops-analytics"),
     ],
 )
 @pytest.mark.asyncio

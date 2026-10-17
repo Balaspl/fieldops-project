@@ -1665,6 +1665,60 @@ def process_audit_event_task(
     )
 
 
+def _process_analytics_event_once(
+    *,
+    redis,
+    event_payload: dict,
+    attempt: int = 1,
+) -> dict:
+    """Process an analytics event once using a stable Redis idempotency marker."""
+    import asyncio
+    from .services.analytics_consumer import AnalyticsConsumer
+
+    event_id = event_payload.get("event_id") if isinstance(event_payload, dict) else None
+    if not event_id:
+        return {
+            "status": "FAILED",
+            "consumer": "analytics",
+            "event_id": "unknown",
+            "attempt": attempt,
+            "error": "Missing event_id in analytics event payload",
+        }
+
+    marker_key = f"analytics:event_processed:{event_id}"
+    if redis and redis.get(marker_key):
+        logger.info(
+            "Analytics event %s already processed; skipping duplicate.",
+            event_id,
+        )
+        return {
+            "status": "PROCESSED",
+            "consumer": "analytics",
+            "event_id": event_id,
+            "attempt": attempt,
+            "idempotent_duplicate": True,
+        }
+
+    consumer = AnalyticsConsumer(redis_client=redis)
+    result = asyncio.run(consumer.process_event(event_payload, attempt=attempt))
+    return dict(result)
+
+
+@celery_app.task
+def process_analytics_event_task(
+    event_payload: dict,
+    attempt: int = 1,
+):
+    """Celery background task to process consumed analytics event."""
+    redis_client = get_redis_client()
+    return _process_analytics_event_once(
+        redis=redis_client,
+        event_payload=event_payload,
+        attempt=attempt,
+    )
+
+
+
 
 
 def _publish_sla_event_once(

@@ -472,3 +472,64 @@ def publish_sla_event(
             "Failed to publish SLA event to Redis: %s",
             e,
         )
+
+
+def publish_analytics_event(
+    redis_client,
+    event_type: str,
+    tenant_id: str,
+    job_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    event_id: Optional[str] = None,
+    payload: Optional[dict] = None,
+):
+    """
+    Publish a canonical analytics/metrics event.
+    Coordinates downstream real-time consumers while preserving Redis compatibility.
+    """
+    if not redis_client:
+        logger.warning(
+            "Redis client unavailable; skipping analytics event publish."
+        )
+        return
+
+    timestamp = (
+        datetime.now(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+    event_id = event_id or f"{event_type}:{tenant_id}:{job_id or 'global'}"
+
+    data = {
+        "event": event_type,
+        "event_type": event_type.lower(),
+        "event_id": event_id,
+        "tenant_id": str(tenant_id),
+        "timestamp": timestamp,
+        "schema_version": 1,
+    }
+
+    if job_id is not None:
+        data["job_id"] = str(job_id)
+
+    if correlation_id:
+        data["correlation_id"] = correlation_id
+
+    if payload:
+        data["payload"] = payload
+
+    try:
+        redis_client.publish(
+            "analytics_events",
+            json.dumps(data),
+        )
+        logger.info(
+            "Published %s to analytics_events channel.",
+            event_type,
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to publish analytics event to Redis: %s",
+            e,
+        )

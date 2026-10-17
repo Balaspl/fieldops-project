@@ -1265,8 +1265,129 @@ class AuditEventMessage(EventMessage):
 
 
 # ==========================================================
+# Analytics Event Message
+# ==========================================================
+
+
+class AnalyticsEventMessage(EventMessage):
+    """
+    Dedicated analytics and metrics event.
+
+    Publishes business and operational events to Kafka for decoupled analytics,
+    KPI monitoring, and reporting pipelines.
+    """
+
+    topic: str = Field(
+        default="fieldops.events",
+        min_length=1,
+        max_length=100,
+        description="Kafka topic for analytics and business metric events.",
+    )
+
+    message_type: MessageType = Field(
+        default=MessageType.EVENT,
+        frozen=True,
+    )
+
+    @model_validator(mode="after")
+    def validate_analytics_event(self) -> "AnalyticsEventMessage":
+        """
+        Enforce the analytics event contract.
+        """
+        allowed_topics = {
+            "fieldops.events",
+            "fieldops.analytics.events",
+            "fieldops.job.events",
+            "fieldops.gps.events",
+            "fieldops.notification.events",
+            "fieldops.sla.events",
+            "fieldops.billing.events",
+            "fieldops.payment.events",
+            "fieldops.audit.events",
+        }
+        if self.topic not in allowed_topics:
+            raise ValueError(
+                f"Analytics events must use one of {sorted(allowed_topics)}, got '{self.topic}'."
+            )
+
+        allowed_event_types = {
+            "analytics",
+            "ANALYTICS",
+            "metrics",
+            "METRICS",
+            "kpi_update",
+            "KPI_UPDATE",
+            "business_metric",
+            "BUSINESS_METRIC",
+            "job_metrics",
+            "JOB_METRICS",
+            "sla_metrics",
+            "SLA_METRICS",
+            "operational_telemetry",
+            "OPERATIONAL_TELEMETRY",
+            "performance_metric",
+            "PERFORMANCE_METRIC",
+            "job_created",
+            "job_completed",
+            "job_assigned",
+            "status_transition",
+            "payment_completed",
+            "invoice_generated",
+            "audit_logged",
+        }
+
+        event_type = self.payload.get("event_type")
+        norm_type = (
+            str(event_type).upper().replace("-", "_")
+            if event_type
+            else None
+        )
+        allowed_normalized = {et.upper().replace("-", "_") for et in allowed_event_types}
+
+        if not norm_type or norm_type not in allowed_normalized:
+            raise ValueError(
+                "Analytics events must have a valid analytics event_type."
+            )
+
+        required_fields = {
+            "event_id",
+            "tenant_id",
+            "schema_version",
+        }
+
+        missing_fields = required_fields - self.payload.keys()
+
+        if missing_fields:
+            raise ValueError(
+                f"Analytics events require fields: "
+                f"{', '.join(sorted(missing_fields))}."
+            )
+
+        schema_version = self.payload.get("schema_version")
+        if not isinstance(schema_version, int) or schema_version < 1:
+            raise ValueError(
+                f"Analytics event schema_version must be a positive integer, got {schema_version}."
+            )
+
+        sender_tenant = getattr(self.sender, "tenant_id", None)
+        payload_tenant = self.payload.get("tenant_id")
+        if (
+            sender_tenant
+            and sender_tenant not in {"*", "system", "platform"}
+            and payload_tenant
+            and sender_tenant != payload_tenant
+        ):
+            raise ValueError(
+                "Analytics event tenant_id must match sender tenant_id."
+            )
+
+        return self
+
+
+# ==========================================================
 # Dispatch Event Message
 # ==========================================================
+
 
 
 class DispatchEventMessage(EventMessage):
