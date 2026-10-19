@@ -770,6 +770,7 @@ def test_ai_orchestrator_injected_dependencies():
     assert orchestrator.provider_health_monitor is health_monitor
     assert orchestrator.failover_executor is failover_executor
     assert orchestrator.provider_client_factory is provider_factory
+    assert orchestrator.communication_in_app_temperature == 0.7
 
 
 def test_ai_orchestrator_injected_client_with_provider():
@@ -981,6 +982,53 @@ def test_ai_orchestrator_execute_success():
     )
 
     assert response == "AI RESPONSE"
+
+
+def test_ai_orchestrator_uses_communication_in_app_temperature():
+    from app.services.ai.FieldOpsAI.providers.groq_client import GroqClient
+    from app.services.ai.FieldOpsAI.runtime.orchestrator import (
+        GenerationResult,
+        UsageStats,
+    )
+
+    orchestrator, _, _, _, failover = make_ai_orchestrator()
+    client = MagicMock(spec=GroqClient)
+    orchestrator.pii_sanitizer.sanitize.return_value.sanitized_data[
+        "channel"
+    ] = "IN_APP"
+    client.generate_result.return_value = GenerationResult(
+        text="validated notification copy",
+        provider_name="test-provider",
+        model_name="test-model",
+        usage=UsageStats(
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            request_count=1,
+            latency_ms=1.0,
+            cost_usd=0.0,
+        ),
+    )
+    orchestrator.provider_client_factory = lambda _: client
+
+    def run_attempt(attempt_runner):
+        provider = MagicMock()
+        provider.model_name.return_value = "test-model"
+        return MagicMock(
+            generation_result=attempt_runner("test-provider", provider)
+        )
+
+    failover.execute.side_effect = run_attempt
+    orchestrator.execute(
+        AITask.COMMUNICATION,
+        {
+            "tenant_id": "customer-tenant",
+            "job_id": "job-1",
+            "channel": "IN_APP",
+        },
+    )
+
+    assert client.generate_result.call_args.kwargs["temperature"] == 0.7
     
 def test_ai_orchestrator_execute_cache_hit():
     orchestrator, budget, cache, circuit, failover = make_ai_orchestrator()

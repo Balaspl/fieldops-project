@@ -23,6 +23,8 @@ from app.models import (
     Organization,
     ServiceRequest,
     Technician,
+    InAppNotification,
+    User,
 )
 from app.models.technician_profile import TechnicianProfile
 from app.models_legacy import GPSPing
@@ -74,6 +76,8 @@ def customer_db():
             GPSPing.__table__,
             Technician.__table__,
             TechnicianProfile.__table__,
+            User.__table__,
+            InAppNotification.__table__,
         ],
     )
     session = sessionmaker(bind=engine)()
@@ -84,6 +88,21 @@ def customer_db():
                 id=tenant_id,
                 name=tenant_id,
                 slug=tenant_id,
+            )
+        )
+    session.flush()
+
+    for tenant_id in ("provider-tenant", "other-tenant"):
+        session.add(
+            User(
+                id=f"dispatcher-{tenant_id}",
+                email=f"dispatcher-{tenant_id}@example.test",
+                password_hash="test-hash",
+                first_name="Test",
+                last_name="Dispatcher",
+                role=UserRole.DISPATCHER.value,
+                tenant_id=tenant_id,
+                is_active=True,
             )
         )
     session.flush()
@@ -1216,7 +1235,17 @@ def test_customer_feedback_returns_empty_state_for_completed_own_job(
 
 def test_customer_can_submit_feedback_for_completed_own_job(
     customer_db,
+    monkeypatch,
 ):
+    broadcasts = []
+
+    async def capture_broadcast(room, payload):
+        broadcasts.append((room, payload))
+
+    from app.services.socket_manager import ws_manager
+
+    monkeypatch.setattr(ws_manager, "broadcast", capture_broadcast)
+
     job = customer_db.query(Job).filter(Job.id == 101).one()
     job.status = "COMPLETED"
     customer_db.commit()
@@ -1256,6 +1285,19 @@ def test_customer_can_submit_feedback_for_completed_own_job(
     assert stored.comment == (
         "Excellent service and quick resolution."
     )
+
+    admin_notifications = (
+        customer_db.query(InAppNotification)
+        .filter(InAppNotification.type == "customer_feedback")
+        .all()
+    )
+    assert len(admin_notifications) == 1
+    assert admin_notifications[0].tenant_id == "provider-tenant"
+    assert admin_notifications[0].recipient_id == "dispatcher-provider-tenant"
+    assert "5/5" in admin_notifications[0].body
+    assert len(broadcasts) == 1
+    assert broadcasts[0][0] == "tenant:provider-tenant:dispatchers"
+    assert broadcasts[0][1]["type"] == "new_notification"
 
 
 def test_customer_feedback_rejects_incomplete_job(

@@ -10,7 +10,7 @@ from app.auth.dependencies import (
     AuthenticatedUser,
     require_permission,
 )
-from app.auth.rbac import UserRole,Permission
+from app.auth.rbac import UserRole, Permission, has_permission
 
 from ..database import get_db
 from ..models import Technician, InAppNotification
@@ -22,6 +22,56 @@ from ..schemas import (
 router = APIRouter(
     tags=["In-App Notifications"]
 )
+
+
+@router.get(
+    "/admin/notifications",
+    response_model=PaginatedNotificationsResponse,
+)
+async def get_admin_notifications(
+    status: Optional[str] = None,
+    type: Optional[str] = None,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List only dispatch notifications addressed to this tenant user."""
+    if not has_permission(current_user.role, Permission.JOBS_VIEW_ALL):
+        raise HTTPException(status_code=403, detail="Dispatcher access required")
+
+    query = db.query(InAppNotification).filter(
+        InAppNotification.tenant_id == current_user.tenant_id,
+        InAppNotification.recipient_role.in_(["dispatcher", "org_admin"]),
+        InAppNotification.recipient_id == str(current_user.user_id),
+        InAppNotification.status != "DISMISSED",
+        (InAppNotification.expires_at.is_(None))
+        | (InAppNotification.expires_at > datetime.now(timezone.utc)),
+    )
+    if status:
+        query = query.filter(InAppNotification.status == status.upper())
+    if type:
+        query = query.filter(InAppNotification.type == type)
+
+    total = query.count()
+    notifications = query.order_by(
+        desc(InAppNotification.created_at)
+    ).offset(offset).limit(limit).all()
+    unread_count = db.query(InAppNotification).filter(
+        InAppNotification.tenant_id == current_user.tenant_id,
+        InAppNotification.recipient_role.in_(["dispatcher", "org_admin"]),
+        InAppNotification.recipient_id == str(current_user.user_id),
+        InAppNotification.status == "UNREAD",
+        (InAppNotification.expires_at.is_(None))
+        | (InAppNotification.expires_at > datetime.now(timezone.utc)),
+    ).count()
+    return {
+        "notifications": notifications,
+        "unread_count": unread_count,
+        "total": total,
+    }
+
+
 def get_current_user_notification_ids(
     db: Session,
     current_user: AuthenticatedUser,
@@ -62,9 +112,6 @@ def notification_query_for_user(
 
     query = db.query(InAppNotification)
 
-    if current_user.is_super_admin:
-        return query
-
     query = query.filter(
         InAppNotification.tenant_id == current_user.tenant_id
     )
@@ -78,6 +125,17 @@ def notification_query_for_user(
         query = query.filter(
             InAppNotification.tech_id.in_(recipient_ids)
         )
+    elif current_user.role == UserRole.CUSTOMER:
+        query = query.filter(
+            InAppNotification.customer_user_id == str(current_user.user_id)
+        )
+    elif has_permission(current_user.role, Permission.JOBS_VIEW_ALL):
+        query = query.filter(
+            InAppNotification.recipient_role.in_(["dispatcher", "org_admin"]),
+            InAppNotification.recipient_id == str(current_user.user_id),
+        )
+    else:
+        query = query.filter(False)
 
     return query
 

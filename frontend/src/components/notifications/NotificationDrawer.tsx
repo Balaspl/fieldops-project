@@ -189,8 +189,10 @@ const iconColors: Record<string, { bg: string; color: string }> = {
 const localCss = `
   .close-btn-style:hover { background-color: #f1f5f9 !important; color: #0f172a !important; }
   .notif-item-style:hover { border-color: #cbd5e1 !important; background-color: #f8fafc !important; transform: translateY(-1px); }
-  .notif-item-unread-style { background-color: #f0fdf4 !important; border-color: #bbf7d0 !important; }
-  .notif-item-unread-style:hover { background-color: #f0fdf4 !important; border-color: #86efac !important; }
+  .notif-item-unread-style { background-color: #fef2f2 !important; border-color: #fca5a5 !important; }
+  .notif-item-unread-style:hover { background-color: #fee2e2 !important; border-color: #ef4444 !important; }
+  .notif-item-read-style { background-color: #f0fdf4 !important; border-color: #86efac !important; }
+  .notif-item-read-style:hover { background-color: #dcfce7 !important; border-color: #22c55e !important; }
   
   .btn-sec-style {
     height: 30px;
@@ -336,7 +338,7 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({
                 <div style={{ paddingBottom: "20px" }}>
                   {notifications.map((notification) => {
                     const isUnread = !notification.isRead;
-                    const itemClass = `notif-item-style ${isUnread ? "notif-item-unread-style" : ""}`;
+                    const itemClass = `notif-item-style ${isUnread ? "notif-item-unread-style" : "notif-item-read-style"}`;
                     const typeColor = iconColors[notification.type] || iconColors.SYSTEM;
                     
                     return (

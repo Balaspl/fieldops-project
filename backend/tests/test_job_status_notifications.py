@@ -33,9 +33,15 @@ import app.redis_client
 app.redis_client.get_redis_client = lambda: fake_redis
 
 from app.database import Base
-from app.models import Job, Technician, AuditEvent
+from app.models import Job, Technician, AuditEvent, User, InAppNotification
 from app.services.notification_services import JobStatusEvent, EventPublisher, NotificationRouter
 from app.tasks import process_job_status_transition_task, send_dispatcher_digest
+
+
+@pytest.fixture(autouse=True)
+def configured_email_sender(monkeypatch):
+    monkeypatch.setenv("SMTP_FROM_EMAIL", "notifications@example.test")
+    monkeypatch.setenv("SMTP_FROM_NAME", "FieldOps Tests")
 
 
 class FakeCommunicationIntegration:
@@ -163,6 +169,20 @@ def setup_db(
     Base.metadata.drop_all(bind=engine)
 
     Base.metadata.create_all(bind=engine)
+    db = TestingSessionLocal()
+    for tenant_id in ("tenant-123", "tenant-900"):
+        db.add(User(
+            id=f"dispatcher-{tenant_id}",
+            email=f"dispatcher-{tenant_id}@example.test",
+            password_hash="test-hash",
+            first_name="Test",
+            last_name="Dispatcher",
+            role="dispatcher",
+            tenant_id=tenant_id,
+            is_active=True,
+        ))
+    db.commit()
+    db.close()
     fake_redis.flushall()
     monkeypatch.setattr(notification_module,"SessionLocal",TestingSessionLocal,)
 
@@ -473,7 +493,7 @@ async def test_notification_router_completed_does_not_send_sms(
 
 
 @pytest.mark.anyio
-async def test_dispatcher_digest_batching_and_celery_task(setup_db):
+async def test_dispatcher_notifications_persist_and_broadcast_immediately(setup_db):
     db = TestingSessionLocal()
     
     event1 = JobStatusEvent(
@@ -541,22 +561,13 @@ async def test_dispatcher_digest_batching_and_celery_task(setup_db):
     await router.route(event1)
     await router.route(event2)
     
-    # Verify dispatcher messages are queued in Redis list
-    redis_key = "dispatcher_digest:tenant-123"
-    queued_count = fake_redis.llen(redis_key)
-    assert queued_count == 2
-    
-    # Run dispatcher digest celery task
-    with patch("app.services.socket_manager.ws_manager", mock_ws):
-        send_dispatcher_digest()
-        
-    # Verify queue cleared and broadcast called
-    assert fake_redis.llen(redis_key) == 0
-    mock_ws.broadcast.assert_called_once()
-    args, kwargs = mock_ws.broadcast.call_args
-    assert args[0] == "tenant:tenant-123:dispatchers"
-    assert args[1]["type"] == "digest"
-    assert len(args[1]["notifications"]) == 2
+    assert db.query(InAppNotification).filter_by(
+        tenant_id="tenant-123", recipient_id="dispatcher-tenant-123"
+    ).count() == 2
+    assert mock_ws.broadcast.call_count == 2
+    for args, _ in mock_ws.broadcast.call_args_list:
+        assert args[0] == "tenant:tenant-123:dispatchers"
+        assert args[1]["type"] == "new_notification"
     db.close()
 
 @pytest.mark.anyio
@@ -2589,90 +2600,6 @@ def _communication_result(channel="SMS", text="FieldOps update", title="FieldOps
 
 
 @pytest.mark.anyio
-async def test_sendgrid_simulation_mode_returns_true(monkeypatch):
-    monkeypatch.delenv("SENDGRID_API_KEY", raising=False)
-    service = notification_module.SendGridService(api_key="SG.mock_key")
-    assert await service.send_email("alice@example.com", "Subject", "<p>Body</p>") is True
-
-
-@pytest.mark.anyio
-async def test_sendgrid_non_success_status_returns_false(monkeypatch):
-    class Response:
-        status_code = 400
-
-    class FakeClient:
-        def __init__(self, key):
-            self.key = key
-
-        def send(self, message):
-            return Response()
-
-    class FakeMail:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-
-    fake_sendgrid = SimpleNamespace(SendGridAPIClient=FakeClient)
-    fake_helpers = SimpleNamespace(Mail=FakeMail)
-    monkeypatch.setitem(__import__("sys").modules, "sendgrid", fake_sendgrid)
-    monkeypatch.setitem(__import__("sys").modules, "sendgrid.helpers", SimpleNamespace(mail=fake_helpers))
-    monkeypatch.setitem(__import__("sys").modules, "sendgrid.helpers.mail", fake_helpers)
-    monkeypatch.setenv("SENDGRID_API_KEY", "SG.real-key")
-
-    service = notification_module.SendGridService(api_key="SG.real-key")
-    assert await service.send_email("alice@example.com", "Subject", "Body") is False
-
-
-@pytest.mark.anyio
-async def test_sendgrid_success_status_returns_true(monkeypatch):
-    class Response:
-        status_code = 202
-
-    class FakeClient:
-        def __init__(self, key):
-            self.key = key
-
-        def send(self, message):
-            return Response()
-
-    class FakeMail:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-
-    fake_sendgrid = SimpleNamespace(SendGridAPIClient=FakeClient)
-    fake_helpers = SimpleNamespace(Mail=FakeMail)
-    monkeypatch.setitem(__import__("sys").modules, "sendgrid", fake_sendgrid)
-    monkeypatch.setitem(__import__("sys").modules, "sendgrid.helpers", SimpleNamespace(mail=fake_helpers))
-    monkeypatch.setitem(__import__("sys").modules, "sendgrid.helpers.mail", fake_helpers)
-    monkeypatch.setenv("SENDGRID_API_KEY", "SG.real-key")
-
-    service = notification_module.SendGridService(api_key="SG.real-key")
-    assert await service.send_email("alice@example.com", "Subject", "Body") is True
-
-
-@pytest.mark.anyio
-async def test_sendgrid_exception_returns_false(monkeypatch):
-    class FakeClient:
-        def __init__(self, key):
-            pass
-
-        def send(self, message):
-            raise RuntimeError("provider down")
-
-    class FakeMail:
-        def __init__(self, **kwargs):
-            pass
-
-    fake_helpers = SimpleNamespace(Mail=FakeMail)
-    monkeypatch.setitem(__import__("sys").modules, "sendgrid", SimpleNamespace(SendGridAPIClient=FakeClient))
-    monkeypatch.setitem(__import__("sys").modules, "sendgrid.helpers", SimpleNamespace(mail=fake_helpers))
-    monkeypatch.setitem(__import__("sys").modules, "sendgrid.helpers.mail", fake_helpers)
-    monkeypatch.setenv("SENDGRID_API_KEY", "SG.real-key")
-
-    service = notification_module.SendGridService(api_key="SG.real-key")
-    assert await service.send_email("alice@example.com", "Subject", "Body") is False
-
-
-@pytest.mark.anyio
 async def test_event_publisher_without_redis_still_writes_audit(monkeypatch, setup_db):
     publisher = EventPublisher(redis_client=None)
     publisher.redis = None
@@ -3019,36 +2946,85 @@ async def test_send_email_generation_failure_returns_false(setup_db):
 
 @pytest.mark.anyio
 async def test_send_in_app_rejects_non_dispatcher_and_generation_failure(setup_db):
+    ws = MagicMock()
+    ws.broadcast = AsyncMock()
     router = NotificationRouter(
         fcm_service=MagicMock(), sms_service=MagicMock(), email_service=MagicMock(),
-        ws_manager=MagicMock(), redis_client=fake_redis, communication_integration=FakeCommunicationIntegration(),
+        ws_manager=ws, redis_client=fake_redis, communication_integration=FakeCommunicationIntegration(),
     )
     assert await router._send_in_app(_make_event(), "customer", {}, False, "job_update") is False
     communication = MagicMock()
     communication.generate = AsyncMock(return_value=None)
     router.communication = communication
-    assert await router._send_in_app(_make_event(), "dispatcher", {}, False, "job_update") is False
+    assert await router._send_in_app(_make_event(), "dispatcher", {}, False, "job_update") is True
+    db = TestingSessionLocal()
+    notification = db.query(InAppNotification).filter_by(recipient_id="dispatcher-tenant-900").one()
+    assert notification.title == "Technician en route"
+    assert notification.body.startswith(
+        "The technician is travelling to the customer's location."
+    )
+    assert "Technician: John Tech." in notification.body
+    db.close()
+
+
+@pytest.mark.anyio
+async def test_technician_rejection_creates_dispatcher_notification(setup_db):
+    ws = MagicMock()
+    ws.broadcast = AsyncMock()
+    communication = MagicMock()
+    communication.generate = AsyncMock(return_value=None)
+    router = NotificationRouter(
+        fcm_service=MagicMock(), sms_service=MagicMock(), email_service=MagicMock(),
+        ws_manager=ws, redis_client=fake_redis,
+        communication_integration=communication,
+    )
+
+    await router.route(
+        _make_event(
+            job_id="903",
+            to_status="REJECTED_BY_TECHNICIAN",
+            reason="Technician is unavailable",
+            event_version=4,
+        )
+    )
+
+    db = TestingSessionLocal()
+    notification = db.query(InAppNotification).filter_by(
+        tenant_id="tenant-900",
+        recipient_id="dispatcher-tenant-900",
+        group_key="job_903:REJECTED_BY_TECHNICIAN:4",
+    ).one()
+    assert notification.title == "Technician rejected Job #903"
+    assert "assign another technician" in notification.body
+    assert "Technician is unavailable" in notification.body
+    ws.broadcast.assert_awaited_once()
+    assert ws.broadcast.await_args.args[0] == "tenant:tenant-900:dispatchers"
+    db.close()
 
 
 @pytest.mark.anyio
 async def test_send_in_app_batch_without_redis_returns_false(setup_db):
+    ws = MagicMock()
+    ws.broadcast = AsyncMock()
     router = NotificationRouter(
         fcm_service=MagicMock(), sms_service=MagicMock(), email_service=MagicMock(),
-        ws_manager=MagicMock(), redis_client=None, communication_integration=FakeCommunicationIntegration(),
+        ws_manager=ws, redis_client=None, communication_integration=FakeCommunicationIntegration(),
     )
     router.redis = None
-    assert await router._send_in_app(_make_event(), "dispatcher", {}, True, "job_update") is False
+    assert await router._send_in_app(_make_event(), "dispatcher", {}, True, "job_update") is True
 
 
 @pytest.mark.anyio
 async def test_send_in_app_batch_redis_failure_returns_false(setup_db):
     redis = MagicMock()
     redis.lpush.side_effect = RuntimeError("redis failure")
+    ws = MagicMock()
+    ws.broadcast = AsyncMock()
     router = NotificationRouter(
         fcm_service=MagicMock(), sms_service=MagicMock(), email_service=MagicMock(),
-        ws_manager=MagicMock(), redis_client=redis, communication_integration=FakeCommunicationIntegration(),
+        ws_manager=ws, redis_client=redis, communication_integration=FakeCommunicationIntegration(),
     )
-    assert await router._send_in_app(_make_event(), "dispatcher", {}, True, "job_update") is False
+    assert await router._send_in_app(_make_event(), "dispatcher", {}, True, "job_update") is True
 
 
 @pytest.mark.anyio
@@ -3064,7 +3040,8 @@ async def test_send_in_app_immediate_broadcast_success_and_failure(setup_db):
 
     ws.broadcast.reset_mock()
     ws.broadcast.side_effect = RuntimeError("socket down")
-    assert await router._send_in_app(_make_event(), "dispatcher", {}, False, "job_update") is False
+    duplicate_event = _make_event(job_id="901")
+    assert await router._send_in_app(duplicate_event, "dispatcher", {}, False, "job_update") is False
 
 
 def test_record_attempted_channel_does_not_duplicate():

@@ -11,6 +11,8 @@ import {
 
 import { getCustomerJobs } from "../../services/customerPortalService";
 import JobLiveTrackingMap from "../../components/customer-tracking/JobLiveTrackingMap";
+import AnimatedJobProgress from "../../components/customer-tracking/AnimatedJobProgress";
+import { useTrackingStore } from "../../store/trackingStore";
 
 type CustomerJob = {
   id: string | number;
@@ -26,6 +28,8 @@ type CustomerJob = {
   site_longitude?: number | string | null;
 
   created_at?: string | null;
+  on_site_at?: string | null;
+  work_started_at?: string | null;
   completed_at?: string | null;
 
   assigned_technician_id?: number | null;
@@ -176,44 +180,6 @@ function hasValidCoordinates(
   );
 }
 
-function formatEtaTime(value: unknown): string | null {
-  if (!value) {
-    return null;
-  }
-
-  const timestamp = new Date(String(value));
-  if (Number.isNaN(timestamp.getTime())) {
-    return null;
-  }
-
-  return timestamp.toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function formatEtaDuration(value: unknown): string | null {
-  const minutes = toFiniteNumber(value);
-  if (minutes === null || minutes < 0) {
-    return null;
-  }
-
-  const rounded = Math.round(minutes);
-  if (rounded < 1) {
-    return "Arriving now";
-  }
-
-  if (rounded >= 60) {
-    const hours = Math.floor(rounded / 60);
-    const remainder = rounded % 60;
-    return remainder > 0
-      ? `${hours}h ${remainder}m`
-      : `${hours}h`;
-  }
-
-  return `${rounded} min`;
-}
-
 interface CustomerTrackingPageProps {
   token: string;
 }
@@ -230,6 +196,9 @@ export default function CustomerTrackingPage({
 
   const [liveJob, setLiveJob] =
     useState<CustomerJob | null>(null);
+  const setJobTrackingSnapshot = useTrackingStore(
+    (state) => state.setJobTrackingSnapshot,
+  );
 
   /**
    * Load customer jobs.
@@ -254,6 +223,14 @@ export default function CustomerTrackingPage({
         const nextJobs = Array.isArray(response?.data)
           ? response.data
           : [];
+
+        nextJobs.forEach((job) => {
+          setJobTrackingSnapshot(String(job.id), {
+            status: job.status ? normalizeJobStatus(job.status) : undefined,
+            eta: job.estimated_arrival ?? null,
+            duration_minutes: toFiniteNumber(job.eta_duration_minutes),
+          });
+        });
 
         const activeJobsExist =
           nextJobs.some(
@@ -681,6 +658,21 @@ export default function CustomerTrackingPage({
                   </span>
                 </div>
 
+                <AnimatedJobProgress
+                  jobId={job.id}
+                  status={job.status}
+                  estimatedArrival={job.estimated_arrival}
+                  etaDurationMinutes={job.eta_duration_minutes}
+                  etaDistanceKm={job.eta_distance_km}
+                  etaTrafficDelayMinutes={job.eta_traffic_delay_minutes}
+                  etaStatus={job.eta_status}
+                  etaUpdatedAt={job.eta_updated_at}
+                  etaMessage={job.eta_message}
+                  arrivedAt={job.on_site_at}
+                  workStartedAt={job.work_started_at}
+                  completedAt={job.completed_at}
+                />
+
                 {/* LOCATION */}
                 <div
                   style={{
@@ -1050,188 +1042,6 @@ export default function CustomerTrackingPage({
                       </div>
                     )}
                 </div>
-
-                {/* ETA */}
-                {job.assigned_technician_id != null && (
-                  <div
-                    data-testid={`eta-card-${job.id}`}
-                    style={{
-                      marginTop: "12px",
-                      padding: "14px",
-                      borderRadius: "10px",
-                      background:
-                        job.eta_status === "calculated"
-                          ? "#F0FDF4"
-                          : job.eta_status === "estimated"
-                            ? "#FFFBEB"
-                            : "#F8FAFC",
-                      border:
-                        job.eta_status === "calculated"
-                          ? "1px solid #BBF7D0"
-                          : job.eta_status === "estimated"
-                            ? "1px solid #FDE68A"
-                            : "1px solid #E2E8F0",
-                    }}
-                  >
-                    {job.estimated_arrival ? (
-                      <>
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "space-between",
-                            gap: "10px",
-                            flexWrap: "wrap",
-                          }}
-                        >
-                          <div>
-                            <div
-                              style={{
-                                fontSize: "11px",
-                                fontWeight: 700,
-                                color: "#64748B",
-                                textTransform: "uppercase",
-                                letterSpacing: "0.5px",
-                              }}
-                            >
-                              Estimated Arrival
-                            </div>
-
-                            <div
-                              style={{
-                                fontSize: "20px",
-                                fontWeight: 800,
-                                color:
-                                  job.eta_status === "calculated"
-                                    ? "#166534"
-                                    : "#92400E",
-                                marginTop: "4px",
-                              }}
-                            >
-                              {formatEtaTime(job.estimated_arrival) ||
-                                "ETA unavailable"}
-                            </div>
-                          </div>
-
-                          <span
-                            style={{
-                              fontSize: "11px",
-                              fontWeight: 700,
-                              padding: "5px 9px",
-                              borderRadius: "999px",
-                              background:
-                                job.eta_status === "calculated"
-                                  ? "#DCFCE7"
-                                  : "#FEF3C7",
-                              color:
-                                job.eta_status === "calculated"
-                                  ? "#166534"
-                                  : "#92400E",
-                            }}
-                          >
-                            {job.eta_status === "calculated"
-                              ? "LIVE ETA"
-                              : job.eta_status === "estimated"
-                                ? "ESTIMATED"
-                                : "ETA"}
-                          </span>
-                        </div>
-
-                        {formatEtaDuration(job.eta_duration_minutes) && (
-                          <div
-                            style={{
-                              marginTop: "6px",
-                              fontSize: "12px",
-                              color: "#475569",
-                              fontWeight: 600,
-                            }}
-                          >
-                            Approximate travel time: {formatEtaDuration(job.eta_duration_minutes)}
-                          </div>
-                        )}
-
-                        {job.eta_distance_km != null && (
-                          <div
-                            style={{
-                              marginTop: "4px",
-                              fontSize: "12px",
-                              color: "#64748B",
-                            }}
-                          >
-                            Route distance: {Number(job.eta_distance_km).toFixed(1)} km
-                          </div>
-                        )}
-
-                        {job.eta_traffic_delay_minutes != null &&
-                          Number(job.eta_traffic_delay_minutes) > 0 && (
-                            <div
-                              style={{
-                                marginTop: "4px",
-                                fontSize: "12px",
-                                color: "#92400E",
-                              }}
-                            >
-                              Traffic delay: +{Math.round(Number(job.eta_traffic_delay_minutes))} min
-                            </div>
-                          )}
-
-                        {job.eta_message && (
-                          <div
-                            style={{
-                              marginTop: "7px",
-                              fontSize: "12px",
-                              color: "#64748B",
-                              lineHeight: 1.45,
-                            }}
-                          >
-                            {job.eta_message}
-                          </div>
-                        )}
-
-                        {job.eta_updated_at && (
-                          <div
-                            style={{
-                              marginTop: "7px",
-                              fontSize: "11px",
-                              color: "#94A3B8",
-                            }}
-                          >
-                            Updated {new Date(job.eta_updated_at).toLocaleTimeString([], {
-                              hour: "numeric",
-                              minute: "2-digit",
-                              second: "2-digit",
-                            })}
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <div>
-                        <div
-                          style={{
-                            fontSize: "12px",
-                            fontWeight: 700,
-                            color: "#64748B",
-                            textTransform: "uppercase",
-                            letterSpacing: "0.5px",
-                          }}
-                        >
-                          Estimated Arrival
-                        </div>
-
-                        <div
-                          style={{
-                            marginTop: "5px",
-                            fontSize: "13px",
-                            color: "#64748B",
-                          }}
-                        >
-                          {job.eta_message ||
-                            "ETA is currently unavailable. The latest route data could not be provided."}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
 
                 {/* TERMINAL STATUS */}
                 {isTerminal && (

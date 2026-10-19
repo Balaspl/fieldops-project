@@ -464,8 +464,8 @@ def test_53_54_execution_time_policy(monkeypatch):
     mock_twilio = MagicMock(return_value="SM_task_test")
     monkeypatch.setattr(twilio_module, "dispatch_twilio_message", mock_twilio)
     
-    mock_sendgrid = AsyncMock(return_value=True)
-    monkeypatch.setattr(ns_module.SendGridService, "send_email", mock_sendgrid)
+    mock_smtp = AsyncMock(return_value=True)
+    monkeypatch.setattr(ns_module.SMTPEmailService, "send_email", mock_smtp)
     
     # Mock policy outcomes during task execution
     import app.services.ai.FieldOpsAI.services.communication_delivery_policy_service as policy_mod
@@ -492,10 +492,10 @@ def test_53_54_execution_time_policy(monkeypatch):
     mock_db.close.assert_called()
 
     mock_twilio.reset_mock()
-    mock_sendgrid.reset_mock()
-    # --- Scenario 2: EMAIL was DISABLED at enqueue, becomes ENABLED before task execution ---
+    mock_smtp.reset_mock()
+    # --- Scenario 2: SMS was DISABLED at enqueue, becomes ENABLED before task execution ---
     dec_allowed = CommunicationDeliveryEligibilityDecision(
-        allowed=True, channel="EMAIL", category=CommunicationMessageCategory.STANDARD, recipient_type="CUSTOMER",
+        allowed=True, channel="SMS", category=CommunicationMessageCategory.STANDARD, recipient_type="CUSTOMER",
         global_allowed=True, global_state=CommunicationChannelState.ENABLED, global_reason_code="G", global_revision=1,
         preference_applied=True, preference_allowed=True, preference_reason_code="P", preference_source="P", preference_revision=1,
         final_reason_code="ALLOWED"
@@ -509,16 +509,16 @@ def test_53_54_execution_time_policy(monkeypatch):
     )
     
     process_job_status_transition_task(
-        job_id=1, from_status="ON_SITE", to_status="COMPLETED",
+        job_id=1, from_status="CREATED", to_status="EN_ROUTE",
         actor_id="actor-1", actor_role="dispatcher", reason=None
     )
     
-    # Email provider called exactly once because it evaluated to ALLOWED
-    mock_sendgrid.assert_called_once()
-    mock_twilio.assert_not_called()
+    # The SMS provider is called because execution-time policy now allows it.
+    mock_twilio.assert_called_once()
+    mock_smtp.assert_not_called()
 
     policy_evaluate_mock.assert_any_call(
-        channel="EMAIL",
+        channel="SMS",
         category=CommunicationMessageCategory.STANDARD,
         recipient_type="CUSTOMER",
         tenant_id="tenant-1",

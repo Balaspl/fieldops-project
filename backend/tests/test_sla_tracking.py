@@ -31,9 +31,27 @@ def setup_db():
     Base.metadata.create_all(bind=engine)
     fake_redis.flushall()
     
-    def run_sync(job_id, old_status, new_status, actor_id, actor_role, reason=None, correlation_id=None):
+    def run_sync(
+        job_id,
+        old_status,
+        new_status,
+        actor_id,
+        actor_role,
+        reason=None,
+        correlation_id=None,
+        event_version=None,
+        technician_id=None,
+    ):
         process_job_status_transition_task(
-            job_id, old_status, new_status, actor_id, actor_role, reason, correlation_id
+            job_id,
+            old_status,
+            new_status,
+            actor_id,
+            actor_role,
+            reason,
+            correlation_id,
+            event_version,
+            technician_id,
         )
 
     async def fake_route(*args, **kwargs):

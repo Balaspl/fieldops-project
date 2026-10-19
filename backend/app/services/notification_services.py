@@ -5,6 +5,7 @@ import asyncio
 import json
 import uuid
 import logging
+import uuid
 
 from html import escape
 from urllib.parse import quote
@@ -12,7 +13,7 @@ from urllib.parse import quote
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
-from ..models import AuditEvent, Technician
+from ..models import AuditEvent, Technician, User, InAppNotification
 from ..redis_client import get_redis_client
 from ..context import correlation_id_ctx
 
@@ -79,100 +80,28 @@ class JobStatusEvent:
 
     event_type: str = "job_status_changed"
     correlation_id: Optional[str] = None
+    event_version: Optional[int] = None
+    email_managed_by_communication_graph: bool = False
 
 
 # ======================================================
-# SendGrid Service
+# SMTP Service
 # ======================================================
 
-class SendGridService:
-    """
-    Send customer email through SendGrid.
+class SMTPEmailService:
+    """Send customer email through the configured SMTP relay."""
 
-    Recipient addresses and message bodies are deliberately
-    not written to application logs.
-    """
+    def __init__(self) -> None:
+        from .email.smtp_email import SMTPEmailService as DeliveryService
+        self._delivery_service = DeliveryService()
 
-    def __init__(
-        self,
-        api_key: str | None = None,
-    ) -> None:
-        import os
-
-        self.api_key = (
-            api_key
-            or os.getenv(
-                "SENDGRID_API_KEY",
-                "SG.mock_key",
-            )
+    async def send_email(self, to_email: str, subject: str, html_content: str) -> bool:
+        result = await self._delivery_service.send_email(
+            to_email=to_email,
+            subject=subject,
+            html_body=html_content,
         )
-
-    async def send_email(
-        self,
-        to_email: str,
-        subject: str,
-        html_content: str,
-    ) -> bool:
-        """
-        Send one email or simulate delivery in local mode.
-        """
-
-        import os
-
-        if (
-            not self.api_key
-            or "mock" in self.api_key.lower()
-            or not os.getenv("SENDGRID_API_KEY")
-        ):
-            logger.info(
-                "SendGrid email delivery simulated."
-            )
-            return True
-
-        try:
-            from sendgrid import SendGridAPIClient
-            from sendgrid.helpers.mail import Mail
-
-            message = Mail(
-                from_email=os.getenv(
-                    "SENDGRID_FROM_EMAIL",
-                    "no-reply@fieldops.io",
-                ),
-                to_emails=to_email,
-                subject=subject,
-                html_content=html_content,
-            )
-
-            sendgrid = SendGridAPIClient(
-                self.api_key
-            )
-
-            loop = asyncio.get_running_loop()
-
-            response = await loop.run_in_executor(
-                None,
-                sendgrid.send,
-                message,
-            )
-
-            logger.info(
-                "SendGrid accepted email delivery. "
-                "status_code=%s",
-                response.status_code,
-            )
-
-            return response.status_code in {
-                200,
-                201,
-                202,
-            }
-
-        except Exception:
-            logger.error(
-                "SendGrid email delivery failed."
-            )
-            return False
-
+        return result.success
 
 # ======================================================
 # Event Publisher
@@ -357,6 +286,14 @@ class NotificationRouter:
             },
         },
 
+        "ACCEPTED": {
+            "dispatcher": {
+                "channels": ["in_app"],
+                "template": "dispatcher_job_accepted",
+                "priority": "normal",
+            },
+        },
+
         "EN_ROUTE": {
             "technician": {
                 "channels": [
@@ -419,6 +356,22 @@ class NotificationRouter:
                 ),
                 "priority": "normal",
                 "batch": True,
+            },
+        },
+
+        "IN_PROGRESS": {
+            "dispatcher": {
+                "channels": ["in_app"],
+                "template": "dispatcher_work_started",
+                "priority": "normal",
+            },
+        },
+
+        "REJECTED_BY_TECHNICIAN": {
+            "dispatcher": {
+                "channels": ["in_app"],
+                "template": "dispatcher_technician_rejected",
+                "priority": "high",
             },
         },
 
@@ -614,7 +567,7 @@ class NotificationRouter:
         self.email = (
             email_service
             if email_service is not None
-            else SendGridService()
+            else SMTPEmailService()
         )
 
         self.ws = ws_manager
@@ -762,6 +715,15 @@ class NotificationRouter:
                 "channels",
                 [],
             ):
+
+                # Production lifecycle email is sent by the versioned graph;
+                # direct NotificationRouter callers retain legacy behavior.
+                if (
+                    channel == "email"
+                    and recipient_type == "customer"
+                    and event.email_managed_by_communication_graph
+                ):
+                    continue
 
                 # ------------------------------------------
                 # Preference-level channel filtering
@@ -2138,113 +2100,133 @@ class NotificationRouter:
         if recipient_type != "dispatcher":
             return False
 
-        communication = (
-            await self._generate_safe_communication(
+        communication = await self._generate_safe_communication(
                 event=event,
                 recipient_type="dispatcher",
                 channel="in_app",
                 notification_type=notification_type,
             )
+
+        output = (
+            communication.decision.output
+            if communication is not None
+            else None
         )
+        fallback = {
+            "ACCEPTED": ("Technician accepted", "The assigned technician accepted the service request."),
+            "EN_ROUTE": ("Technician en route", "The technician is travelling to the customer's location."),
+            "ON_SITE": ("Technician arrived", "The technician arrived at the service location."),
+            "IN_PROGRESS": ("Work started", "Service work has started."),
+            "REJECTED_BY_TECHNICIAN": (
+                "Technician rejected the job",
+                "The assigned technician rejected the service request. Dispatch needs to assign another technician.",
+            ),
+            "COMPLETED": ("Job completed", "The technician finished the service work."),
+            "CANCELLED": ("Job cancelled", "The service request was cancelled."),
+            "ASSIGNED": ("Technician assigned", "A technician was assigned to the service request."),
+        }
+        fallback_title, fallback_body = fallback.get(
+            str(event.to_status).upper(),
+            ("Dispatch update", f"Service request status changed to {event.to_status.lower().replace('_', ' ')}."),
+        )
+        if str(event.to_status).upper() == "REJECTED_BY_TECHNICIAN":
+            fallback_title = f"Technician rejected Job #{event.job_id}"
+            if event.reason:
+                fallback_body += f" Reason: {event.reason}"
 
-        if communication is None:
-            return False
-
-        output = communication.decision.output
+        notification_body = (
+            output.body
+            if output and output.body
+            else fallback_body
+        )
+        technician_name = (event.technician_name or "").strip()
+        if (
+            technician_name
+            and technician_name.casefold()
+            not in notification_body.casefold()
+        ):
+            notification_body = (
+                f"{notification_body} Technician: {technician_name}."
+            )
 
         safe_payload = {
             **payload,
             "notification_type": (
                 notification_type
             ),
-            "title": (
-                output.title
-                or "FieldOps Update"
-            ),
-            "message": output.body,
+            "title": (output.title if output and output.title else fallback_title),
+            "message": notification_body,
             "channel": "IN_APP",
         }
-
-        # ------------------------------------------------
-        # Batch / Redis
-        # ------------------------------------------------
-
-        if batch:
-
-            if not self.redis:
-
-                logger.error(
-                    "Dispatcher digest queue is unavailable. "
-                    "tenant_id=%s",
-                    event.tenant_id,
+        event_key = (
+            f"job_{event.job_id}:{str(event.to_status).upper()}:{event.event_version}"
+            if event.event_version
+            else f"job_{event.job_id}:{str(event.from_status).upper()}:{str(event.to_status).upper()}"
+        )
+        db = SessionLocal()
+        created = []
+        try:
+            recipients = db.query(User).filter(
+                User.tenant_id == event.tenant_id,
+                User.is_active.is_(True),
+                User.role.in_(["dispatcher", "super_admin"]),
+            ).all()
+            for recipient in recipients:
+                existing = db.query(InAppNotification).filter(
+                    InAppNotification.tenant_id == event.tenant_id,
+                    InAppNotification.recipient_role == "dispatcher",
+                    InAppNotification.recipient_id == str(recipient.id),
+                    InAppNotification.group_key == event_key,
+                ).first()
+                if existing:
+                    continue
+                notification = InAppNotification(
+                    id=str(uuid.uuid4()),
+                    tenant_id=event.tenant_id,
+                    recipient_id=str(recipient.id),
+                    recipient_role="dispatcher",
+                    group_key=event_key,
+                    job_id=str(event.job_id),
+                    type=notification_type or "dispatch_update",
+                    title=safe_payload["title"],
+                    body=safe_payload["message"],
+                    status="UNREAD",
+                    priority=str(safe_payload.get("priority", "NORMAL")).upper(),
+                    event_version=event.event_version or 0,
+                    notification_metadata={"job_id": str(event.job_id), "status": str(event.to_status).upper()},
                 )
-
-                return False
-
-            try:
-
-                self.redis.lpush(
-                    (
-                        "dispatcher_digest:"
-                        f"{event.tenant_id}"
-                    ),
-                    json.dumps(
-                        safe_payload
-                    ),
-                )
-
-                logger.info(
-                    "Safe dispatcher notification queued "
-                    "for digest. tenant_id=%s",
-                    event.tenant_id,
-                )
-
-                return True
-
-            except Exception:
-
-                logger.error(
-                    "Dispatcher digest queueing failed. "
-                    "tenant_id=%s",
-                    event.tenant_id,
-                )
-
-                return False
-
-        # ------------------------------------------------
-        # Immediate WebSocket
-        # ------------------------------------------------
+                db.add(notification)
+                created.append(notification)
+            db.commit()
+            for notification in created:
+                db.refresh(notification)
+        except Exception:
+            db.rollback()
+            logger.exception("Dispatcher notification persistence failed. tenant_id=%s", event.tenant_id)
+            return False
+        finally:
+            db.close()
 
         try:
-
-            await self.ws.broadcast(
-                (
-                    "tenant:"
-                    f"{event.tenant_id}:"
-                    "dispatchers"
-                ),
-                {
-                    "type": "notification",
-                    "payload": safe_payload,
-                },
-            )
-
-            logger.info(
-                "Safe dispatcher notification broadcast. "
-                "tenant_id=%s",
-                event.tenant_id,
-            )
-
+            for notification in created:
+                await self.ws.broadcast(
+                    f"tenant:{event.tenant_id}:dispatchers",
+                    {"type": "new_notification", "payload": {
+                        "id": notification.id,
+                        "tenant_id": notification.tenant_id,
+                        "job_id": notification.job_id,
+                        "type": notification.type,
+                        "title": notification.title,
+                        "body": notification.body,
+                        "status": notification.status,
+                        "created_at": notification.created_at.isoformat() if notification.created_at else None,
+                        "event_version": notification.event_version,
+                        "group_key": notification.group_key,
+                    }},
+                )
             return True
-
         except Exception:
-
-            logger.error(
-                "Dispatcher notification broadcast failed. "
-                "tenant_id=%s",
-                event.tenant_id,
-            )
-
+            logger.exception("Dispatcher notification broadcast failed. tenant_id=%s", event.tenant_id)
             return False
 
     # ==================================================
@@ -2308,7 +2290,7 @@ async def route_escalation(
                 "Failed to send escalation dashboard notification"
             )
 
-    # Email will be connected using SendGridService.
+    # Email delivery uses the configured SMTP relay.
     if manager_email:
         try:
             results["email"] = bool(

@@ -540,7 +540,7 @@ def fake_rendered_result(
 
 
 RENDER_TEMPLATE_PATCH_TARGET = (
-    "app.services.ai.FieldOpsAI.agents.communication_agent."
+    "app.services.ai.FieldOpsAI.agents.communication_agent_impl."
     "render_managed_template"
 )
 

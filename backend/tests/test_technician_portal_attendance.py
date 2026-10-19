@@ -436,6 +436,9 @@ class DB:
         if self.commit_error:
             raise RuntimeError("forced commit failure")
 
+    def flush(self):
+        pass
+
     def rollback(self):
         self.rollback_count += 1
 
@@ -519,6 +522,7 @@ def job(*, status="ASSIGNED", job_id=1):
         rejected_by_tech_id=None,
         on_site_at=None,
         on_site_by=None,
+        work_started_at=None,
         completed_at=None,
         completed_by=None,
         work_report=None,
@@ -561,11 +565,6 @@ def nfy(*, job_id="1", status="UNREAD", nid="n1", created=True):
 @pytest.fixture
 def patch_tp(monkeypatch):
     monkeypatch.setattr(tp, "audit_log", lambda *a, **k: None)
-    monkeypatch.setattr(
-        tp,
-        "create_customer_job_status_notification",
-        lambda *a, **k: None,
-    )
 
 
 def test_json_safe_all_types():
@@ -840,6 +839,8 @@ def test_on_site_job_paths(patch_tp):
     sr = SimpleNamespace(linked_job_id=1, status="EN_ROUTE")
     result = asyncio.run(tp.on_site_job(job_id=1, request=req("POST", "/on-site"), current_user=u(), db=DB(Q(first=tech()), Q(first=j), Q(first=sr))))
     assert result["status"] == "IN_PROGRESS"
+    assert j.on_site_at is not None
+    assert j.work_started_at is None
     assert sr.status == "IN_PROGRESS"
     assert j.on_site_by == "tech-user-1"
 
@@ -862,15 +863,27 @@ def test_resume_job_paths(patch_tp):
         asyncio.run(tp.resume_job(job_id=1, request=req("POST", "/resume"), current_user=u(), db=DB(Q(first=tech()), Q(first=None))))
 
 
-def test_complete_job_paths(patch_tp):
+def test_complete_job_paths(patch_tp, monkeypatch):
+    from app.services.email import transactional_outbox
+
+    persisted_invoice_emails = []
+    monkeypatch.setattr(
+        transactional_outbox,
+        "persist_invoice_email",
+        lambda db, completed_job, closure: persisted_invoice_emails.append(
+            (db, completed_job, closure)
+        ),
+    )
     t = tech(current_jobs=2)
     j = job(status="IN_PROGRESS")
     sr = SimpleNamespace(linked_job_id=1, tenant_id="tenant-1", status="IN_PROGRESS")
-    result = asyncio.run(tp.complete_job(job_id=1, data=TechnicianJobCompleteRequest(completion_notes="Completed repair", photos=["after.jpg"], signature="signature"), request=req("POST", "/complete"), current_user=u(), db=DB(Q(first=t), Q(first=j), Q(first=sr))))
+    db = DB(Q(first=t), Q(first=j), Q(first=sr))
+    result = asyncio.run(tp.complete_job(job_id=1, data=TechnicianJobCompleteRequest(completion_notes="Completed repair", photos=["after.jpg"], signature="signature"), request=req("POST", "/complete"), current_user=u(), db=db))
     assert result["status"] == "COMPLETED"
     assert j.work_report == "Completed repair"
     assert sr.status == "COMPLETED"
     assert t.current_jobs == 2
+    assert persisted_invoice_emails == [(db, j, db.added[0])]
     with pytest.raises(HTTPException):
         asyncio.run(tp.complete_job(job_id=1, data=TechnicianJobCompleteRequest(), request=req("POST", "/complete"), current_user=u(), db=DB(Q(first=None))))
     with pytest.raises(HTTPException):

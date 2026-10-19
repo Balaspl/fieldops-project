@@ -80,6 +80,43 @@ def require_any_job_permission(*permissions: Permission):
     return dependency
 
 
+def _dispatch_communication_event(job_id: int, event_value: str, event_version: int) -> None:
+    """Queue a post-commit communication event, with a local fallback."""
+    from app.tasks import send_job_event_task
+
+    try:
+        send_job_event_task.delay(
+            int(job_id), event_value, event_version=int(event_version)
+        )
+        logger.info(
+            "Communication event queued",
+            extra={"job_id": str(job_id), "event_type": event_value,
+                   "event_version": event_version},
+        )
+    except Exception:
+        logger.exception(
+            "Could not queue communication event; running local fallback",
+            extra={
+                "job_id": str(job_id),
+                "event_type": event_value,
+                "event_version": event_version,
+            },
+        )
+        try:
+            send_job_event_task(
+                int(job_id), event_value, event_version=int(event_version)
+            )
+        except Exception:
+            logger.exception(
+                "Communication event fallback failed",
+                extra={
+                    "job_id": str(job_id),
+                    "event_type": event_value,
+                    "event_version": event_version,
+                },
+            )
+
+
 def get_technician_for_current_user(
     db: Session,
     current_user: AuthenticatedUser,
@@ -329,18 +366,35 @@ def create_job(
             priority=job.priority,
             service_type=job.service_type,
             contact_number=job.contact_number,
+            customer_email=job.customer_email,
             preferred_service_date=job.preferred_service_date,
             status=job.status,
             required_skill=req_skill,
             tenant_id=effective_tenant,
             customer_tenant_id=effective_tenant,
             sla_deadline=job.sla_deadline,
-            attempt_count=job.attempt_count or 0
+            attempt_count=job.attempt_count or 0,
+            notification_event_version=1,
         )
 
         db.add(new_job)
+        db.flush()
+        if new_job.customer_id or new_job.customer_email:
+            from app.services.email.transactional_outbox import persist_booking_email
+            persist_booking_email(db, new_job)
         db.commit()
         db.refresh(new_job)
+        # The booking notification uses a persisted event version and runs
+        # only after the job transaction has committed.
+        if background_tasks is not None:
+            from app.services.ai.FieldOpsAI.agents.communication_agent.events import JobEvent
+
+            background_tasks.add_task(
+                _dispatch_communication_event,
+                int(new_job.id),
+                JobEvent.JOB_CREATED.value,
+                1,
+            )
         # Start automatic Dispatcher only after the job
 # has been successfully committed.
         logger.warning(
@@ -1656,6 +1710,7 @@ def reject_job(
 def reassign_job(
     job_id: int,
     req: JobReassignRequest,
+    background_tasks: BackgroundTasks = None,
     current_user: AuthenticatedUser = Depends(
         require_any_job_permission(
             Permission.JOBS_REASSIGN,
@@ -1790,6 +1845,15 @@ def reassign_job(
     db.add(notification)
 
     try:
+        from sqlalchemy import update
+        assignment_event_version = db.execute(
+            update(Job)
+            .where(Job.id == job.id, Job.tenant_id == current_user.tenant_id)
+            .values(
+                notification_event_version=Job.notification_event_version + 1
+            )
+            .returning(Job.notification_event_version)
+        ).scalar_one()
         db.commit()
     except Exception:
         db.rollback()
@@ -1800,6 +1864,16 @@ def reassign_job(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to reassign job",
+        )
+
+    if background_tasks is not None:
+        from app.services.ai.FieldOpsAI.agents.communication_agent.events import JobEvent
+
+        background_tasks.add_task(
+            _dispatch_communication_event,
+            int(job.id),
+            JobEvent.TECHNICIAN_ASSIGNED.value,
+            int(assignment_event_version),
         )
 
     redis_client.set(
@@ -3080,9 +3154,12 @@ def _get_job_invoice_record(db: Session, job_id: int, current_user: Authenticate
             detail="Invoice data is not available for this job",
         )
 
-    subtotal = round(float(closure.subtotal or 0), 2)
-    gst = round(subtotal * 0.05, 2)
-    total = round(subtotal + gst, 2)
+    from ..services.invoice_service import invoice_totals
+
+    totals = invoice_totals(closure.subtotal)
+    subtotal = totals["subtotal"]
+    gst = totals["gst_amount"]
+    total = totals["total_amount"]
 
     return {
         "id": closure.id,
@@ -3094,7 +3171,7 @@ def _get_job_invoice_record(db: Session, job_id: int, current_user: Authenticate
         "labour_cost": float(closure.labour_cost or 0),
         "material_cost": float(closure.material_cost or 0),
         "subtotal": subtotal,
-        "gst_rate": 5,
+        "gst_rate": totals["gst_rate"],
         "gst_amount": gst,
         "total_amount": total,
         "completed_at": closure.completed_at.isoformat() if closure.completed_at else None,
@@ -3130,11 +3207,9 @@ def download_job_invoice_pdf(
     db: Session = Depends(get_db),
 ):
     """Generate the authorized PDF invoice/billing preview for one job."""
-    from io import BytesIO
     from fastapi.responses import StreamingResponse
-    from reportlab.lib.pagesizes import A4
-    from reportlab.pdfgen import canvas
     from app.models import JobClosure
+    from app.models.customer_signature import CustomerSignature
 
     # REPORTS_DOWNLOAD is intentionally kept as the download authority. The
     # job/closure lookup below still enforces tenant and object scope.
@@ -3169,81 +3244,20 @@ def download_job_invoice_pdf(
             detail="Invoice data is not available for this job",
         )
 
-    subtotal = round(float(closure.subtotal or 0), 2)
-    gst = round(subtotal * 0.05, 2)
-    total = round(subtotal + gst, 2)
-
-    buffer = BytesIO()
-    pdf = canvas.Canvas(buffer, pagesize=A4)
-    width, height = A4
-    pdf.setTitle(f"Invoice - Job #{job.id}")
-
-    pdf.setFont("Helvetica-Bold", 18)
-    pdf.drawString(50, height - 55, "FieldOps - Invoice")
-    pdf.setFont("Helvetica", 10)
-    pdf.drawString(50, height - 75, f"Billing Report #{closure.id}  |  Job #{job.id}")
-
-    y = height - 115
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(50, y, "Job Details")
-    y -= 22
-    pdf.setFont("Helvetica", 10)
-
-    details = [
-        ("Customer", job.customer_name or "N/A"),
-        ("Service", job.service_type or "N/A"),
-        ("Location", getattr(job, "location", None) or getattr(job, "site_address", None) or "N/A"),
-        ("Completed", str(closure.completed_at or "N/A")),
-    ]
-
-    for label, value in details:
-        pdf.drawString(50, y, f"{label}: {value}")
-        y -= 18
-
-    y -= 8
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(50, y, "Work Summary")
-    y -= 20
-    pdf.setFont("Helvetica", 10)
-
-    words = (closure.work_summary or "").replace("\n", " ").split()
-    line = ""
-    for word in words:
-        test = f"{line} {word}".strip()
-        if len(test) > 90:
-            pdf.drawString(50, y, line)
-            y -= 15
-            line = word
-        else:
-            line = test
-
-    if line:
-        pdf.drawString(50, y, line)
-        y -= 25
-
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(50, y, "Cost Details")
-    y -= 22
-    pdf.setFont("Helvetica", 10)
-
-    cost_details = [
-        ("Labour", f"{float(closure.labour_cost or 0):.2f}"),
-        ("Material", f"{float(closure.material_cost or 0):.2f}"),
-        ("Subtotal", f"{subtotal:.2f}"),
-        ("GST (5%)", f"{gst:.2f}"),
-        ("Total", f"{total:.2f}"),
-    ]
-
-    for label, value in cost_details:
-        pdf.drawString(50, y, f"{label}: {value}")
-        y -= 18
-
-    pdf.showPage()
-    pdf.save()
-    buffer.seek(0)
+    signature = (
+        db.query(CustomerSignature)
+        .filter(
+            CustomerSignature.job_id == job.id,
+            CustomerSignature.job_closure_id == closure.id,
+            CustomerSignature.tenant_id == current_user.tenant_id,
+        )
+        .first()
+    )
+    from ..services.invoice_service import render_invoice_pdf
+    pdf_bytes = render_invoice_pdf(job, closure, signature)
 
     return StreamingResponse(
-        buffer,
+        iter([pdf_bytes]),
         media_type="application/pdf",
         headers={
             "Content-Disposition": (
@@ -4185,6 +4199,36 @@ def close_job_endpoint(
         tenant_id=str(current_user.tenant_id),
         user_role=current_user.role.value,
     )
+
+    # Invoice-ready is a separate committed event. Allocate its version after
+    # the closure row has been persisted so repeated completion cannot resend it.
+    try:
+        from sqlalchemy import update
+        from app.services.ai.FieldOpsAI.agents.communication_agent.events import JobEvent
+
+        invoice_version = db.execute(
+            update(Job)
+            .where(Job.id == job.id, Job.tenant_id == current_user.tenant_id)
+            .values(
+                notification_event_version=Job.notification_event_version + 1
+            )
+            .returning(Job.notification_event_version)
+        ).scalar_one()
+        db.commit()
+        if background_tasks is not None:
+            background_tasks.add_task(
+                _dispatch_communication_event,
+                int(job.id),
+                JobEvent.INVOICE_READY.value,
+                int(invoice_version),
+            )
+    except Exception:
+        # Completion and its persisted closure have already committed.
+        db.rollback()
+        logger.exception(
+            "Invoice notification scheduling failed after job completion",
+            extra={"job_id": str(job.id), "tenant_id": str(current_user.tenant_id)},
+        )
 
     # Kafka job-completed event is published only after the
     # authoritative completion transaction succeeds.

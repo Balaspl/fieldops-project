@@ -791,7 +791,7 @@ async def test_notify_manager_success(service):
         "app.services.twilio_sms.dispatch_twilio_message",
         mock_sms,
     ), patch(
-        "app.services.notification_services.SendGridService",
+        "app.services.notification_services.SMTPEmailService",
         return_value=mock_email_service,
     ), patch(
         "app.services.socket_manager.default_ws_manager",
@@ -868,7 +868,7 @@ async def test_notify_manager_notification_failures(
             "SMS error"
         ),
     ), patch(
-        "app.services.notification_services.SendGridService",
+        "app.services.notification_services.SMTPEmailService",
         return_value=mock_email_service,
     ), patch(
         "app.services.socket_manager.default_ws_manager",

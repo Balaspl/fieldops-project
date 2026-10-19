@@ -98,10 +98,6 @@ from app.redis_client import get_redis_client
 
 
 
-from app.services.customer_notification_services import (create_customer_job_status_notification)
-
-
-
 from ..models.user import User
 
 from ..models import ServiceRequest
@@ -1458,8 +1454,6 @@ async def accept_job(
 
         service_request.status = "ACCEPTED"
 
-
-
     # ---------------------------------------------------------
 
     # Mark assignment notifications as READ
@@ -1678,381 +1672,236 @@ async def accept_job(
 
 
 
+
 @router.post("/jobs/{job_id}/reject")
-
 async def reject_job(
-
     job_id: int,
-
     data: TechnicianJobRejectRequest,
-
     request: Request,
-
     current_user: AuthenticatedUser = Depends(
-
         require_permission(Permission.JOBS_ACCEPT_REJECT)
-
     ),
-
     db: Session = Depends(get_db),
-
 ):
+    """
+    Reject a job offered to the authenticated technician.
 
+    Cross-tenant rules:
+    - A technician can reject a job assigned to them, even if the
+      job belongs to another organization.
+    - Rejection history records the technician's organization.
+    - The technician rejection notification is scoped to that
+      technician's organization.
+    - The dispatcher graph resumes after the rejection is committed.
     """
 
-    Reject an assigned job.
-
-
-
-    - Saves rejection reason
-
-    - Updates job status to REJECTED_BY_TECHNICIAN
-
-    - Creates notification for dispatchers (in the JOB's tenant)
-
-    - Moves to Planning Page Declined Jobs list
-
-    - Cancels the acceptance timer
-
-    - Resumes the DispatcherGraph
-
-    """
-
-
-
+    # ---------------------------------------------------------
+    # 1. Resolve the authenticated technician
+    # ---------------------------------------------------------
     tech = _get_tech_for_user(
-
         db,
-
         current_user.user_id,
-
         current_user.tenant_id,
-
     )
-
-
 
     if not tech:
-
         raise HTTPException(
-
-            status_code=403,
-
+            status_code=status.HTTP_403_FORBIDDEN,
             detail="Technician record not found",
-
         )
 
-
-
+    # ---------------------------------------------------------
+    # 2. Verify that this job is assigned to this technician.
+    # Do not filter by job.tenant_id: cross-tenant dispatch is valid.
+    # ---------------------------------------------------------
     job = _get_my_job(db, job_id, tech)
 
-
-
     if not job:
-
         raise HTTPException(
-
-            status_code=403,
-
+            status_code=status.HTTP_403_FORBIDDEN,
             detail="Job not found or not assigned to you",
-
         )
 
-
+    # Prevent duplicate rejection processing.
+    if (
+        (job.status or "").upper()
+        == "REJECTED_BY_TECHNICIAN"
+        and job.assigned_technician_id is None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This job offer has already been rejected.",
+        )
 
     old_status = job.status
-
     old_technician_id = job.assigned_technician_id
-
-
-
-    # ---------------------------------------------------------
-
-    # Reject the job
-
-    # ---------------------------------------------------------
-
-
-
-    job.status = "REJECTED_BY_TECHNICIAN"
-
-
-
-    job.rejection_reason = data.reason
-
-    job.rejected_at = datetime.now(timezone.utc)
-
-    job.rejected_by_tech_id = (
-
-        tech.tech_id or str(tech.technician_id)
-
+    rejected_at = datetime.now(timezone.utc)
+    technician_recipient_id = str(
+        tech.tech_id or tech.technician_id
     )
-
-
-
-    # Persist the rejection against the rejecting technician's organization.
-    # RedispatchAttempt must have technician_tenant_id in models.py and the
-    # corresponding Alembic migration must be applied before deploying this.
-    attempt_number = (
-        db.query(RedispatchAttempt)
-        .filter(RedispatchAttempt.job_id == job.id)
-        .count()
-        + 1
-    )
-
-    db.add(
-        RedispatchAttempt(
-            job_id=job.id,
-            attempt_number=attempt_number,
-            technician_id=tech.technician_id,
-            technician_name=tech.technician_name,
-            technician_tenant_id=tech.tenant_id,
-            event_type="rejection",
-            reason=data.reason,
-        )
-    )
-
-    # Unassign technician after preserving the rejection record.
-    job.assigned_technician_id = None
-
-
-
-    # ---------------------------------------------------------
-
-    # Create rejection notification
-
-    #
-
-    # The people who need to see this are the dispatchers of the
-
-    # organization that OWNS the job, so use the job's tenant.
-
-    # ---------------------------------------------------------
-
-
-
-    notif = InAppNotification(
-
-        id=str(uuid.uuid4()),
-
-        tenant_id=job.tenant_id,
-
-        tech_id=tech.tech_id or str(tech.technician_id),
-
-        job_id=str(job_id),
-
-        type="JOB_REJECTED",
-
-        title="Job Rejected by Technician",
-
-        body=(
-
-            f"{tech.technician_name} rejected "
-
-            f"Job #{job_id}: {data.reason}"
-
-        ),
-
-        status="UNREAD",
-
-        priority="HIGH",
-
-    )
-
-
-
-    db.add(notif)
-
-
-
-    # ---------------------------------------------------------
-
-    # Audit
-
-    # ---------------------------------------------------------
-
-
-
-    audit_log(
-
-        db,
-
-        action=AuditAction.JOB_REJECTED_BY_TECHNICIAN,
-
-        tenant_id=current_user.tenant_id,
-
-        user_id=current_user.user_id,
-
-        role=current_user.role.value,
-
-        entity_type="job",
-
-        entity_id=str(job_id),
-
-        old_value={
-
-            "status": old_status,
-
-            "assigned_technician_id": old_technician_id,
-
-        },
-
-        new_value={
-
-            "status": "REJECTED_BY_TECHNICIAN",
-
-            "rejection_reason": data.reason,
-
-        },
-
-        request=request,
-
-    )
-
-
-
-    # ---------------------------------------------------------
-
-    # IMPORTANT:
-
-    # Commit the rejection before resuming LangGraph.
-
-    # ---------------------------------------------------------
-
-
-
-    db.commit()
-
-
-
-    # ---------------------------------------------------------
-
-    # Cancel acceptance timer
-
-    # ---------------------------------------------------------
-
-
 
     try:
+        # -----------------------------------------------------
+        # 3. Persist the rejection
+        # -----------------------------------------------------
+        job.status = "REJECTED_BY_TECHNICIAN"
+        job.rejection_reason = data.reason
+        job.rejected_at = rejected_at
+        job.rejected_by_tech_id = technician_recipient_id
 
-        redis_client = get_redis_client()
+        # Count prior attempts for this job.
+        # Preserve technician_tenant_id for organization-specific
+        # rejection history.
+        attempt_number = (
+            db.query(RedispatchAttempt)
+            .filter(RedispatchAttempt.job_id == job.id)
+            .count()
+            + 1
+        )
 
-
-
-        if redis_client:
-
-            TimerService.cancel_timer(
-
-                redis_client,
-
-                str(job_id),
-
+        db.add(
+            RedispatchAttempt(
+                job_id=job.id,
+                attempt_number=attempt_number,
+                technician_id=tech.technician_id,
+                technician_name=tech.technician_name,
+                technician_tenant_id=tech.tenant_id,
+                event_type="rejection",
+                reason=data.reason,
             )
-
-
-
-            # Remove warning keys associated with the old offer.
-
-            redis_client.delete(f"job:timer_warning:{job_id}")
-
-            redis_client.delete(f"job:timer_warned:{job_id}")
-
-
-
-    except Exception as timer_error:
-
-        # The rejection is already committed, so timer cleanup
-
-        # failure must not turn the response into HTTP 500.
-
-        logger.exception(
-
-            "Failed to cancel acceptance timer after technician "
-
-            "rejected job=%s: %s",
-
-            job_id,
-
-            timer_error,
-
         )
 
+        # Release the previous technician so the dispatcher can
+        # offer the job to another candidate.
+        job.assigned_technician_id = None
 
+        # -----------------------------------------------------
+        # 4. Create a rejection notification in the technician's
+        # own organization, not the job owner's organization.
+        # -----------------------------------------------------
+        notification = InAppNotification(
+            id=str(uuid.uuid4()),
+            tenant_id=tech.tenant_id,
+            tech_id=technician_recipient_id,
+            recipient_role="technician",
+            recipient_id=technician_recipient_id,
+            group_key=f"job_{job.id}_JOB_REJECTED",
+            job_id=str(job.id),
+            type="JOB_REJECTED",
+            title="Job Rejection Recorded",
+            body=(
+                f"You rejected Job #{job.id}. "
+                f"Reason: {data.reason}"
+            ),
+            status="UNREAD",
+            priority="HIGH",
+            created_at=rejected_at,
+        )
+        db.add(notification)
 
-    # ---------------------------------------------------------
-
-    # Resume DispatcherGraph
-
-    # ---------------------------------------------------------
-
-
-
-    try:
-
-        runtime = get_dispatcher_runtime()
-
-
-
-        await runtime.resume_dispatch(
-
-            job_id=job_id,
-
-            event="TECHNICIAN_REJECTED",
-
+        # -----------------------------------------------------
+        # 5. Audit the rejection in the acting technician's org
+        # -----------------------------------------------------
+        audit_log(
+            db,
+            action=AuditAction.JOB_REJECTED_BY_TECHNICIAN,
+            tenant_id=current_user.tenant_id,
+            user_id=current_user.user_id,
+            role=current_user.role.value,
+            entity_type="job",
+            entity_id=str(job.id),
+            old_value={
+                "status": old_status,
+                "assigned_technician_id": old_technician_id,
+            },
+            new_value={
+                "status": "REJECTED_BY_TECHNICIAN",
+                "rejection_reason": data.reason,
+                "technician_tenant_id": tech.tenant_id,
+            },
+            request=request,
         )
 
+        # Commit rejection, attempt history, and notification together.
+        db.commit()
 
-
-        logger.info(
-
-            "Dispatcher resumed after technician rejection "
-
-            "job=%s technician=%s",
-
-            job_id,
-
-            tech.technician_id,
-
-        )
-
-
+    except HTTPException:
+        db.rollback()
+        raise
 
     except Exception:
-
-        # Rejection has already been committed.
-
-        #
-
-        # Do not convert a successful REJECT into HTTP 500 merely
-
-        # because the dispatcher could not resume.
-
+        db.rollback()
         logger.exception(
-
-            "Failed to resume dispatcher after technician rejection "
-
-            "job=%s technician=%s",
-
+            "Failed to persist job rejection: job=%s technician=%s",
             job_id,
-
             tech.technician_id,
-
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to process job rejection",
         )
 
+    # ---------------------------------------------------------
+    # 6. Cancel the acceptance timer.
+    # A timer cleanup failure must not undo the committed rejection.
+    # ---------------------------------------------------------
+    try:
+        redis_client = get_redis_client()
 
+        if redis_client:
+            TimerService.cancel_timer(
+                redis_client,
+                str(job_id),
+            )
+            redis_client.delete(
+                f"job:timer_warning:{job_id}"
+            )
+            redis_client.delete(
+                f"job:timer_warned:{job_id}"
+            )
+
+    except Exception:
+        logger.exception(
+            "Failed to cancel acceptance timer after rejection: "
+            "job=%s technician=%s",
+            job_id,
+            tech.technician_id,
+        )
+
+    # ---------------------------------------------------------
+    # 7. Resume the dispatcher so it can try the next candidate.
+    # ---------------------------------------------------------
+    try:
+        runtime = get_dispatcher_runtime()
+
+        await runtime.resume_dispatch(
+            job_id=job_id,
+            event="TECHNICIAN_REJECTED",
+        )
+
+        logger.info(
+            "Dispatcher resumed after rejection: job=%s technician=%s",
+            job_id,
+            tech.technician_id,
+        )
+
+    except Exception:
+        # The rejection has already been committed. Do not report
+        # that the rejection failed simply because graph resumption
+        # failed. Investigate and retry graph recovery separately.
+        logger.exception(
+            "Failed to resume dispatcher after rejection: "
+            "job=%s technician=%s",
+            job_id,
+            tech.technician_id,
+        )
 
     return {
-
         "message": "Job rejected",
-
         "job_id": job_id,
-
         "status": "REJECTED_BY_TECHNICIAN",
-
         "rejection_reason": data.reason,
-
     }
-
 
 
 
@@ -2092,18 +1941,6 @@ async def start_job(
     old_status = job.status
 
     job.status = "EN_ROUTE"
-
-
-
-    create_customer_job_status_notification(
-
-        db=db,
-
-        job=job,
-
-        new_status="EN_ROUTE",
-
-    )
 
 
 
@@ -2211,17 +2048,8 @@ async def on_site_job(
 
 
 
-    create_customer_job_status_notification(
-
-        db=db,
-
-        job=job,
-
-        new_status="IN_PROGRESS",
-
-    )
-
-    job.on_site_at = datetime.now(timezone.utc)
+    transition_time = datetime.now(timezone.utc)
+    job.on_site_at = job.on_site_at or transition_time
 
     job.on_site_by = current_user.user_id
 
@@ -2580,6 +2408,20 @@ async def complete_job(
         )
 
         db.add(closure_record)
+
+        db.flush()
+
+    else:
+
+        closure_record = existing_closure
+
+
+    # The compatibility completion endpoint is used by the closure flow when
+    # the primary /jobs/{id}/close route is unavailable. Keep invoice delivery
+    # in this same transaction as the completed job and persisted closure.
+    from ..services.email.transactional_outbox import persist_invoice_email
+
+    persist_invoice_email(db, job, closure_record)
 
 
 

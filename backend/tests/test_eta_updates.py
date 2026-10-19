@@ -212,11 +212,30 @@ class TestSubscribeToJob:
         """subscribe_to_job event handler should call sio.enter_room with job:<id>."""
         from app.services import socket_manager
 
-        with patch.object(socket_manager.sio, "enter_room", new=AsyncMock()) as mock_enter:
+        identity = {"user_id": "customer-1", "role": "customer"}
+        mock_db = MagicMock()
+        with patch.object(
+            socket_manager.sio,
+            "get_session",
+            new=AsyncMock(return_value=identity),
+        ), patch.object(
+            socket_manager,
+            "SessionLocal",
+            return_value=mock_db,
+        ), patch.object(
+            socket_manager,
+            "_can_access_job",
+            return_value=True,
+        ), patch.object(
+            socket_manager.sio,
+            "enter_room",
+            new=AsyncMock(),
+        ) as mock_enter:
             asyncio.run(
                 socket_manager.subscribe_to_job("sid-abc", {"job_id": "7"})
             )
             mock_enter.assert_called_once_with("sid-abc", "job:7")
+        mock_db.close.assert_called_once()
 
     def test_subscribe_ignores_missing_job_id(self):
         """subscribe_to_job should not call enter_room when job_id is absent."""

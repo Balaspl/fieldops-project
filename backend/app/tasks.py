@@ -1,5 +1,7 @@
 import logging
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
+import hashlib
 from sqlalchemy import delete, text
 from sqlalchemy.orm import Session
 import time
@@ -19,7 +21,7 @@ from .services.socket_manager import ws_manager
 from .services.task_queue_worker import consume_task_queue
 from app.services.sms.twilio_service import TwilioSMSService
 from celery import shared_task
-from .services.email.sendgrid_email import SendGridEmailService
+from .services.email.smtp_email import SMTPEmailService
 import re
 
 @celery_app.task(name="app.tasks.aggregate_prompt_analytics_task")
@@ -584,7 +586,17 @@ def update_eta_task(self, technician_id: str, job_id, ping_id: str = None, corre
         db.close()
 
 @celery_app.task
-def process_job_status_transition_task(job_id, from_status, to_status, actor_id, actor_role, reason, correlation_id=None):
+def process_job_status_transition_task(
+    job_id,
+    from_status,
+    to_status,
+    actor_id,
+    actor_role,
+    reason,
+    correlation_id=None,
+    event_version: int | None = None,
+    technician_id: int | None = None,
+):
     from .context import correlation_id_ctx
     if correlation_id:
         correlation_id_ctx.set(correlation_id)
@@ -615,9 +627,16 @@ def process_job_status_transition_task(job_id, from_status, to_status, actor_id,
             logger.error(f"process_job_status_transition_task: Job {job_id} not found.")
             return
 
+        job_pk = job.id  # NEW: plain int, safe to use after commits/rollbacks
+
+        notification_technician_id = (
+            technician_id or job.assigned_technician_id
+        )
         tech = None
-        if job.assigned_technician_id:
-            tech = db.query(Technician).filter(Technician.technician_id == job.assigned_technician_id).first()
+        if notification_technician_id:
+            tech = db.query(Technician).filter(
+                Technician.technician_id == notification_technician_id
+            ).first()
 
         # Construct event
         event = JobStatusEvent(
@@ -631,14 +650,31 @@ def process_job_status_transition_task(job_id, from_status, to_status, actor_id,
             timestamp=datetime.now(timezone.utc),
             job_title=job.customer_name,
             job_location=job.location,
-            technician_id=str(job.assigned_technician_id) if job.assigned_technician_id else None,
+            technician_id=(
+                str(notification_technician_id)
+                if notification_technician_id
+                else None
+            ),
             technician_name=tech.technician_name if tech else None,
             customer_id=job.customer_id,
             customer_name=job.customer_name,
             customer_phone=job.contact_number,
             customer_email=job.customer_email,
             eta=get_cached_eta(str(job.assigned_technician_id), str(job.id)) if job.assigned_technician_id else None,
-            notification_channels=[]
+            notification_channels=[],
+            event_version=event_version,
+            email_managed_by_communication_graph=True,
+        )
+        logger.info(
+            "Legacy status-event routing started",
+            extra={
+                "job_id": str(job.id),
+                "old_status": str(from_status),
+                "new_status": str(to_status),
+                "event_version": event_version,
+                "correlation_id": correlation_id,
+                "pipeline": "EventPublisher+NotificationRouter",
+            },
         )
 
         # --------------------------------------------------
@@ -758,14 +794,50 @@ def process_job_status_transition_task(job_id, from_status, to_status, actor_id,
 
         try:
             if loop.is_running():
-                asyncio.ensure_future(
+                publisher_task = asyncio.ensure_future(
                     EventPublisher().publish(
                         event
                     )
                 )
 
-                asyncio.ensure_future(
+                # Route through the lifecycle-aware router exactly once.
+                # route_notifications_with_lifecycle() owns the Kafka producer
+                # lifecycle and invokes NotificationRouter.route(event).
+                router_task = asyncio.ensure_future(
                     route_notifications_with_lifecycle()
+                )
+
+                def log_route_task_failure(task, pipeline):
+                    if task.cancelled():
+                        return
+                    error = task.exception()
+                    if error:
+                        logger.error(
+                            "Legacy status-event routing task failed",
+                            exc_info=(
+                                type(error),
+                                error,
+                                error.__traceback__,
+                            ),
+                            extra={
+                                "job_id": str(job_pk),
+                                "old_status": str(from_status),
+                                "new_status": str(to_status),
+                                "event_version": event_version,
+                                "correlation_id": correlation_id,
+                                "pipeline": pipeline,
+                            },
+                        )
+
+                publisher_task.add_done_callback(
+                    lambda task: log_route_task_failure(
+                        task, "EventPublisher"
+                    )
+                )
+                router_task.add_done_callback(
+                    lambda task: log_route_task_failure(
+                        task, "NotificationRouter"
+                    )
                 )
 
             else:
@@ -784,8 +856,12 @@ def process_job_status_transition_task(job_id, from_status, to_status, actor_id,
                 "Job transition notification processing "
                 "failed.",
                 extra={
-                    "job_id": str(job.id),
-                    "to_status": to_status_upper,
+                    "job_id": str(job_pk),
+                    "old_status": from_status_upper,
+                    "new_status": to_status_upper,
+                    "event_version": event_version,
+                    "correlation_id": correlation_id,
+                    "pipeline": "EventPublisher+NotificationRouter",
                 },
             )
 
@@ -794,6 +870,62 @@ def process_job_status_transition_task(job_id, from_status, to_status, actor_id,
     finally:
         db.close()
 
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.send_job_event_task",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    max_retries=3,
+)
+def send_job_event_task(
+    self,
+    job_id: int,
+    event_value: str,
+    technician_id: int | None = None,
+    event_version: int | None = None,
+):
+    """Send a non-status-transition Communication Agent event.
+
+    The producer must allocate and persist event_version before enqueueing this
+    task. Celery retries must reuse the same version; never generate a version
+    inside the task.
+    """
+    from .services.ai.FieldOpsAI.agents.communication_agent.events import JobEvent
+    from .services.ai.FieldOpsAI.agents.communication_agent.service import handle
+
+    if event_version is None or event_version < 1:
+        raise ValueError(
+            "A persisted positive event_version is required for communication notifications"
+        )
+
+    db = SessionLocal()
+    try:
+        event = JobEvent(event_value)
+        handle(
+            db,
+            int(job_id),
+            event,
+            technician_id=technician_id,
+            version=event_version,
+        )
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(name="app.tasks.process_transactional_email_outbox")
+def process_transactional_email_outbox_task(limit: int = 50):
+    """Deliver persisted transactional messages directly through Gmail SMTP."""
+    from .services.email.transactional_outbox import process_due_emails
+
+    db = SessionLocal()
+    try:
+        return process_due_emails(db, limit=limit)
+    finally:
+        db.close()
 
 @celery_app.task
 def send_dispatcher_digest():
@@ -1869,6 +2001,94 @@ def _publish_sla_event_once(
         return False
 
 
+@celery_app.task(name="app.tasks.send_customer_daily_engagement")
+def send_customer_daily_engagement():
+    """Send a useful, opted-in appointment reminder at most once per local day.
+
+    The task intentionally skips customers without a job scheduled for their
+    local date. Tenant rollout is controlled by the organization setting
+    ``customer_daily_engagement_enabled`` (false unless explicitly enabled).
+    """
+    from sqlalchemy import func
+    from .models import CustomerProfile, Job, Organization
+    from .services.ai.FieldOpsAI.agents.communication_agent.store import insert_daily_engagement
+    from .services.ai.FieldOpsAI.agents.communication_agent.channels import push_live
+
+    db = SessionLocal()
+    sent = 0
+    now = datetime.now(timezone.utc)
+    try:
+        profiles = db.query(CustomerProfile).filter(
+            CustomerProfile.daily_engagement_enabled.is_(True),
+            CustomerProfile.portal_enabled.is_(True),
+        ).all()
+        for profile in profiles:
+            try:
+                organization = db.get(Organization, profile.tenant_id)
+                settings = (organization.settings or {}) if organization else {}
+                if not organization or organization.status != "ACTIVE" or not settings.get("customer_daily_engagement_enabled", False):
+                    continue
+                local_now = now.astimezone(ZoneInfo(profile.timezone or "UTC"))
+                local_time = local_now.strftime("%H:%M")
+                start, end = profile.quiet_hours_start, profile.quiet_hours_end
+                in_quiet_hours = (start <= local_time < end) if start < end else (local_time >= start or local_time < end)
+                if in_quiet_hours:
+                    continue
+                scheduled = db.query(Job).filter(
+                    Job.customer_id == profile.customer_id,
+                    func.coalesce(Job.customer_tenant_id, Job.tenant_id) == profile.tenant_id,
+                    Job.preferred_service_date == local_now.date(),
+                    ~func.upper(Job.status).in_(("COMPLETED", "CANCELLED", "CANCELED", "CLOSED")),
+                ).order_by(Job.id.asc()).first()
+                if not scheduled:
+                    continue
+                day_key = local_now.date().isoformat()
+                variants = (
+                    f"Your {scheduled.service_type} visit (request #{scheduled.id}) is scheduled for today. Keep this update handy here.",
+                    f"A quick heads-up: request #{scheduled.id} for {scheduled.service_type} is booked for today.",
+                    f"Today's the day for request #{scheduled.id} ({scheduled.service_type}). You can revisit the details whenever you need.",
+                )
+                digest = hashlib.sha256(f"{profile.tenant_id}|{profile.customer_id}|{day_key}".encode()).digest()
+                body = variants[int.from_bytes(digest[:4], "big") % len(variants)]
+                notification_id = insert_daily_engagement(
+                    db,
+                    tenant_id=profile.tenant_id,
+                    recipient_id=profile.customer_id,
+                    local_date=day_key,
+                    title="Your service visit today",
+                    body=body,
+                    job_id=scheduled.id,
+                )
+                if notification_id is None:
+                    db.rollback()
+                    continue
+                db.commit()
+                push_live(
+                    "customer", profile.tenant_id, scheduled.id,
+                    {
+                        "type": "notification",
+                        "id": notification_id,
+                        "group_key": f"daily_engagement_{day_key}",
+                        "job_id": str(scheduled.id),
+                        "recipient_role": "customer",
+                        "recipient_id": profile.customer_id,
+                        "event": "engagement_daily",
+                        "event_version": 0,
+                        "title": "Your service visit today",
+                        "body": body,
+                        "status": "UNREAD",
+                        "created_at": now.isoformat(),
+                        "notification_metadata": {"category": "engagement", "purpose": "daily_service_reminder", "local_date": day_key},
+                    },
+                    correlation_id=f"daily-engagement:{profile.tenant_id}:{profile.customer_id}:{day_key}",
+                )
+                sent += 1
+            except Exception:
+                db.rollback()
+                logger.exception("Daily customer engagement processing failed", extra={"tenant_id": profile.tenant_id})
+        return sent
+    finally:
+        db.close()
 @celery_app.task
 def broadcast_sla_countdown():
     from .database import SessionLocal
@@ -2096,6 +2316,97 @@ def send_sms_async(
         from_number=from_number,
     )
 
+
+def _build_customer_invoice_pdf_attachment(
+    delivery_id: int,
+    job_id: int,
+    closure_id: int,
+) -> dict | None:
+    """Build the existing PDF only for the customer who owns this invoice."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from .models import Job
+    from .models.job_closure import JobClosure
+    from .models_legacy import InAppNotification, NotificationChannelDelivery
+
+    db = SessionLocal()
+    try:
+        delivery = (
+            db.query(NotificationChannelDelivery)
+            .filter(NotificationChannelDelivery.id == int(delivery_id))
+            .first()
+        )
+        notification = (
+            db.get(InAppNotification, delivery.notification_id)
+            if delivery
+            else None
+        )
+        job = db.get(Job, int(job_id))
+        closure = (
+            db.query(JobClosure)
+            .filter(
+                JobClosure.id == int(closure_id),
+                JobClosure.job_id == int(job_id),
+                JobClosure.tenant_id == (job.tenant_id if job else None),
+            )
+            .first()
+        )
+        if not (
+            delivery
+            and notification
+            and job
+            and closure
+            and delivery.channel == "email"
+            and str(notification.tenant_id) == str(delivery.tenant_id)
+            and str(notification.job_id) == str(job.id)
+            and notification.recipient_role == "customer"
+            and str(notification.recipient_id) == str(job.customer_id)
+            and str(delivery.tenant_id)
+            == str(job.customer_tenant_id or job.tenant_id)
+            and str(job.status).upper() == "COMPLETED"
+        ):
+            logger.warning(
+                "Invoice PDF attachment skipped by ownership check",
+                extra={"delivery_id": int(delivery_id), "job_id": int(job_id)},
+            )
+            return None
+
+        # Reuse the existing, tenant-scoped PDF generator. Its job tenant is
+        # established above, while customer ownership was checked through the
+        # committed notification row and the persisted job.
+        from .routes.jobs import download_job_invoice_pdf
+
+        response = download_job_invoice_pdf(
+            int(job_id),
+            current_user=SimpleNamespace(tenant_id=str(job.tenant_id)),
+            db=db,
+        )
+
+        async def read_body() -> bytes:
+            chunks = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk)
+            return b"".join(chunks)
+
+        pdf_bytes = asyncio.run(read_body())
+        if not pdf_bytes.startswith(b"%PDF"):
+            raise ValueError("Invoice PDF generator returned invalid content")
+        return {
+            "filename": f"invoice_job_{job.id}.pdf",
+            "content": pdf_bytes,
+            "content_type": "application/pdf",
+        }
+    except Exception:
+        logger.warning(
+            "Invoice PDF attachment generation failed; email will include secure link",
+            extra={"delivery_id": int(delivery_id), "job_id": int(job_id)},
+        )
+        return None
+    finally:
+        db.close()
+
+
 @shared_task(
     bind=True,
     autoretry_for=(Exception,),
@@ -2135,14 +2446,44 @@ def send_email_async(
     html_body: str,
     plain_text: str | None = None,
     attachments: list[dict] | None = None,
+    delivery_id: int | None = None,
+    invoice_job_id: int | None = None,
+    invoice_closure_id: int | None = None,
 ):
     """
-    Send an email asynchronously through SendGrid.
+    Send an email asynchronously through the configured SMTP relay.
 
-    The API request only queues this task. The actual SendGrid
+    The API request only queues this task. The actual SMTP
     delivery happens inside the Celery worker.
     """
-    service = SendGridEmailService()
+    service = SMTPEmailService()
+    safe_delivery_id = int(delivery_id) if delivery_id is not None else None
+    logger.info(
+        "Email delivery attempt started",
+        extra={"delivery_id": safe_delivery_id,
+               "job_id": str(invoice_job_id) if invoice_job_id is not None else None},
+    )
+
+    if (
+        delivery_id is not None
+        and invoice_job_id is not None
+        and invoice_closure_id is not None
+    ):
+        invoice_attachment = _build_customer_invoice_pdf_attachment(
+            int(delivery_id), int(invoice_job_id), int(invoice_closure_id)
+        )
+        if invoice_attachment:
+            attachments = [*(attachments or []), invoice_attachment]
+
+    delivery_db = None
+    if delivery_id is not None:
+        from .services.ai.FieldOpsAI.agents.communication_agent.channels import begin_delivery_attempt
+
+        delivery_db = SessionLocal()
+        try:
+            begin_delivery_attempt(delivery_db, int(delivery_id))
+        finally:
+            delivery_db.close()
 
     import asyncio
 
@@ -2153,8 +2494,102 @@ def send_email_async(
             html_body=html_body,
             plain_text=plain_text,
             attachments=attachments,
+            message_id=(
+                f"<delivery-{int(delivery_id)}@fieldops.local>"
+                if delivery_id is not None
+                else None
+            ),
         )
     )
+
+    transient = (
+        result.status_code in {421, 450, 451, 452, 500, 502, 503, 504}
+        or (
+            result.status_code is None
+            and "transport" in (result.error or "").lower()
+        )
+    )
+    permanent_recipient_failure = (
+        result.status_code in {550, 551, 553}
+        or result.error in {
+            "Recipient email is required.",
+            "Invalid recipient email address.",
+        }
+    )
+    if transient and self.request.retries < self.max_retries:
+        logger.warning(
+            "Email delivery will retry",
+            extra={"delivery_id": safe_delivery_id,
+                   "job_id": str(invoice_job_id) if invoice_job_id is not None else None,
+                   "smtp_status": result.status_code,
+                   "reason": "temporary_provider_failure",
+                   "retry_number": self.request.retries + 1},
+        )
+        raise self.retry(
+            exc=RuntimeError("Temporary email provider failure"),
+            countdown=2 ** (self.request.retries + 1),
+        )
+
+    if delivery_id is not None:
+        from .models_legacy import InAppNotification, NotificationChannelDelivery
+        from .services.ai.FieldOpsAI.agents.communication_agent.channels import mark_delivery
+
+        delivery_db = SessionLocal()
+        try:
+            delivery_context = (
+                delivery_db.query(
+                    InAppNotification.type,
+                    InAppNotification.job_id,
+                )
+                .join(
+                    NotificationChannelDelivery,
+                    NotificationChannelDelivery.notification_id
+                    == InAppNotification.id,
+                )
+                .filter(NotificationChannelDelivery.id == int(delivery_id))
+                .first()
+            )
+            delivery_status = (
+                "accepted" if result.success
+                else "permanent_failure" if permanent_recipient_failure
+                else "failed"
+            )
+            mark_delivery(
+                delivery_db,
+                int(delivery_id),
+                delivery_status,
+                None if result.success else (result.error or "email provider rejected message")[:500],
+                provider_id=result.message_id,
+                increment_attempt=False,
+            )
+            logger.info(
+                "Email delivery attempt finished: %s",
+                "sent" if result.success else "not sent",
+                extra={
+                    "delivery_id": int(delivery_id),
+                    "job_id": str(delivery_context.job_id) if delivery_context else None,
+                    "event_type": delivery_context.type if delivery_context else None,
+                    "delivery_status": delivery_status,
+                    "provider_message_id": result.message_id,
+                    "smtp_status": result.status_code,
+                    "reason": None if result.success else (
+                        "invalid_or_rejected_recipient" if permanent_recipient_failure
+                        else "temporary_provider_failure" if transient
+                        else "smtp_delivery_failed"
+                    ),
+                },
+            )
+        finally:
+            delivery_db.close()
+    elif not result.success:
+        logger.warning(
+            "Email delivery attempt finished: not sent",
+            extra={"smtp_status": result.status_code,
+                   "reason": "invalid_or_rejected_recipient" if permanent_recipient_failure
+                   else "temporary_provider_failure" if transient else "smtp_delivery_failed"},
+        )
+    else:
+        logger.info("Email delivery attempt finished: sent")
 
     return {
         "success": result.success,

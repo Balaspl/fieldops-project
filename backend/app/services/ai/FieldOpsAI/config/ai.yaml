@@ -112,3 +112,9 @@ agents:
     timeout_seconds: 5.0
   closure: {}
   intake: {}
+
+# Communication copy is sent to customer portals, so keep its generation
+# setting outside the strict AgentConfig fields while retaining validation in
+# AIOrchestrator before it reaches a provider.
+communication_generation:
+  in_app_temperature: 0.7

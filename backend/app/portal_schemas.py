@@ -609,6 +609,8 @@ class CustomerJobTrackingResponse(BaseModel):
     live_tracking: bool = False
     tracking_tenant_id: Optional[str] = None
     created_at: Optional[datetime] = None
+    on_site_at: Optional[datetime] = None
+    work_started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)

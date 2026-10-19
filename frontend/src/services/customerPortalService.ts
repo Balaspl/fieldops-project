@@ -66,6 +66,10 @@ export interface CustomerNotificationPreferences {
   push_enabled: boolean;
   portal_enabled: boolean;
   preferred_locale: string;
+  daily_engagement_enabled: boolean;
+  timezone: string;
+  quiet_hours_start: string;
+  quiet_hours_end: string;
   revision: number;
   source:
     | "PROFILE"
@@ -80,6 +84,10 @@ export interface CustomerNotificationPreferencesUpdate {
   push_enabled?: boolean;
   portal_enabled?: boolean;
   preferred_locale?: string;
+  daily_engagement_enabled?: boolean;
+  timezone?: string;
+  quiet_hours_start?: string;
+  quiet_hours_end?: string;
 }
 
 
@@ -321,6 +329,8 @@ export interface CustomerJobTrackingResponse {
   eta_updated_at: string | null;
 
   created_at: string | null;
+  on_site_at: string | null;
+  work_started_at: string | null;
   completed_at: string | null;
 }
 

@@ -7,9 +7,7 @@ import {
   Briefcase,
   Users,
   Calendar,
-  FlaskConical,
   User,
-  ChevronDown,
   Activity,
   BellRing,
   LogOut,
@@ -23,7 +21,6 @@ import {
 import useAuthStore from "./store/authStore";
 
 // Import notification modules
-import NotificationBell from "./components/notifications/NotificationBell";
 import NotificationDrawer from "./components/notifications/NotificationDrawer";
 import NotificationDetail from "./components/notifications/NotificationDetail";
 import ToastContainer from "./components/notifications/ToastContainer";
@@ -44,14 +41,11 @@ import {
   startHeartbeatLoop,
   stopHeartbeatLoop,
 } from "./services/heartbeatService";
-import { getAllTechnicians } from "./services/technicianService";
-import { getTechnicianNotifications } from "./services/technicianPortalService";
 import { getAdminCustomerSupportRequests } from "./services/customerPortalService";
 import { ToastProvider, useToast } from "./hooks/useToast";
 import LoadingSpinner from "./components/ui/LoadingSpinner";
 import TechnicianLocationTracker from "./components/technician/TechnicianLocationTracker";
 import TechnicianAvailabilityLocation from "./components/technician/TechnicianAvailabilityLocation";
-
 
 // Lazy load page components
 const LoginPage = lazy(() => import("./pages/LoginPage"));
@@ -143,14 +137,6 @@ interface NotificationItem {
   createdAt: string;
   jobId?: string | number;
   job?: any;
-}
-
-interface Technician {
-  tech_id?: string | number;
-  technician_id?: string | number;
-  id?: string | number;
-  technician_name?: string;
-  name?: string;
 }
 
 const styles = {
@@ -472,140 +458,6 @@ const styles = {
     fontWeight: 500,
   } as React.CSSProperties,
 
-  sidebarSimulationControls: {
-    padding: "12px 10px",
-    borderTop: "1px solid #E3ECE7",
-    marginTop: "auto",
-    display: "flex",
-    flexDirection: "column",
-    gap: "8px",
-  } as React.CSSProperties,
-
-  simulationCard: {
-    background: "#F9FAF9",
-    border: "1px solid #E3ECE7",
-    borderRadius: "12px",
-    padding: "10px",
-    display: "flex",
-    flexDirection: "column",
-    gap: "10px",
-  } as React.CSSProperties,
-
-  simulationHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-  } as React.CSSProperties,
-
-  simulationTitleWrap: {
-    display: "flex",
-    alignItems: "center",
-    gap: "6px",
-  } as React.CSSProperties,
-
-  simulationTitle: {
-    fontSize: "12px",
-    fontWeight: 700,
-    color: "#1F2937",
-  } as React.CSSProperties,
-
-  simulationLabel: {
-    fontSize: "10px",
-    color: "#6B7280",
-    fontWeight: 500,
-  } as React.CSSProperties,
-
-  dropdownWrapper: {
-    position: "relative",
-    display: "flex",
-    alignItems: "center",
-    background: "#FFFFFF",
-    border: "1.5px solid #CBD5E1",
-    borderRadius: "10px",
-    width: "100%",
-    height: "36px",
-  } as React.CSSProperties,
-
-  userCircle: {
-    width: "24px",
-    height: "24px",
-    borderRadius: "50%",
-    background: "#E6F4EA",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    position: "absolute",
-    left: "8px",
-  } as React.CSSProperties,
-
-  simulationSelect: {
-    width: "100%",
-    height: "100%",
-    border: "none",
-    background: "transparent",
-    paddingLeft: "38px",
-    paddingRight: "28px",
-    fontSize: "12px",
-    fontWeight: 600,
-    color: "#1F2937",
-    outline: "none",
-    cursor: "pointer",
-    appearance: "none",
-  } as React.CSSProperties,
-
-  dropdownChevron: {
-    position: "absolute",
-    right: "10px",
-    pointerEvents: "none",
-  } as React.CSSProperties,
-
-  statusActiveBar: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: "6px 10px",
-    background: "#EDF7F2",
-    borderRadius: "8px",
-  } as React.CSSProperties,
-
-  statusActiveLeft: {
-    display: "flex",
-    alignItems: "center",
-    gap: "6px",
-  } as React.CSSProperties,
-
-  statusDot: {
-    width: "6px",
-    height: "6px",
-    borderRadius: "50%",
-    background: "#0F9D58",
-    display: "inline-block",
-  } as React.CSSProperties,
-
-  statusText: {
-    fontSize: "9.5px",
-    fontWeight: 700,
-    color: "#0F9D58",
-    letterSpacing: "0.02em",
-  } as React.CSSProperties,
-
-  simulateAlertBtn: {
-    width: "100%",
-    height: "36px",
-    background: "#7AAE8A",
-    border: "none",
-    borderRadius: "8px",
-    color: "#FFFFFF",
-    fontSize: "12px",
-    fontWeight: 700,
-    cursor: "pointer",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: "8px",
-    transition: "all 0.2s ease",
-  } as React.CSSProperties,
-
   mainArea: {
     flex: 1,
     height: "100vh",
@@ -658,13 +510,6 @@ const localCss = `
     display: none !important;
   }
 
-  .simulate-alert-btn-style:hover {
-    background-color: #5C9470 !important;
-  }
-
-  .simulate-alert-btn-style:active {
-    transform: scale(0.98) !important;
-  }
 `;
 
 function AppInner() {
@@ -725,6 +570,14 @@ function AppInner() {
 
   const [activeTab, setActiveTab] =
     useState(() => {
+      if (
+        isCustomer &&
+        new URLSearchParams(window.location.search).get("tab") ===
+          "cust_invoices"
+      ) {
+        return "cust_invoices";
+      }
+
       if (isTechnician)
         return "tech_dashboard";
 
@@ -733,6 +586,16 @@ function AppInner() {
 
       return "dashboard";
     });
+
+  useEffect(() => {
+    if (
+      isCustomer &&
+      new URLSearchParams(window.location.search).get("tab") ===
+        "cust_invoices"
+    ) {
+      setActiveTab("cust_invoices");
+    }
+  }, [isCustomer]);
 
   const [sidebarCollapsed, setSidebarCollapsed] =
     useState(false);
@@ -847,17 +710,6 @@ function AppInner() {
   const [isBellAnimated, setIsBellAnimated] =
     useState(false);
 
-  const [
-    activeTechId,
-    setActiveTechId,
-  ] =
-    useState<string | number | null>(
-      null,
-    );
-
-  const [techList, setTechList] =
-    useState<Technician[]>([]);
-
   const [windowWidth, setWindowWidth] =
     useState(
       typeof window !== "undefined"
@@ -883,85 +735,6 @@ function AppInner() {
       );
     };
   }, []);
-
-  // Real-time technician toast notification pop-up
-  const seenNotifIdsRef =
-    useRef<Set<string | number>>(
-      new Set(),
-    );
-
-  useEffect(() => {
-    if (!isTechnician) return;
-
-    let initialized = false;
-
-    const checkNewJobNotifications =
-      async () => {
-        try {
-          const res =
-            await getTechnicianNotifications();
-
-          const list =
-            res.data.notifications || [];
-
-          // First fetch after login:
-          // remember existing notifications but DO NOT show them as new.
-          if (!initialized) {
-            list.forEach((n: any) => {
-              seenNotifIdsRef.current.add(n.id);
-            });
-
-            initialized = true;
-            return;
-          }
-
-          // After initialization:
-          // only show notifications that were not already present.
-          list.forEach((n: any) => {
-            if (
-              !seenNotifIdsRef.current.has(n.id)
-            ) {
-              seenNotifIdsRef.current.add(n.id);
-
-              addToast({
-                title:
-                  n.title ||
-                  "New Job Assigned",
-
-                message:
-                  n.message ||
-                  "A new job has been assigned to you.",
-
-                type: "info",
-
-                autoDismiss: 7000,
-
-                priority: "normal",
-              });
-            }
-          });
-        } catch (e) {
-          console.error(
-            "Failed to check technician notifications:",
-            e,
-          );
-        }
-      };
-
-    checkNewJobNotifications();
-
-    const interval =
-      setInterval(
-        checkNewJobNotifications,
-        4000,
-      );
-
-    return () =>
-      clearInterval(interval);
-  }, [
-    isTechnician,
-    addToast,
-  ]);
 
   // Poll staff-visible support requests so new customer issues surface
   // immediately in the staff portal without overloading the notification table.
@@ -1047,91 +820,38 @@ function AppInner() {
   const isMobileLayout =
     windowWidth <= 500;
 
-  // Lazy fetch registered technicians if not already loaded
-  const ensureActiveTechLoaded =
-    async () => {
-      if (
-        techList.length > 0 &&
-        activeTechId !== null
-      ) {
-        return activeTechId;
-      }
-
-      try {
-        const response =
-          await getAllTechnicians();
-
-        if (
-          response.data &&
-          response.data.length > 0
-        ) {
-          setTechList(
-            response.data,
-          );
-
-          const firstTech =
-            response.data[0];
-
-          const techId =
-            firstTech.tech_id ||
-            firstTech.technician_id ||
-            firstTech.id;
-
-          if (techId) {
-            setActiveTechId(
-              techId,
-            );
-
-            return techId;
-          }
-        }
-      } catch (err) {
-        console.warn(
-          "Failed to fetch technicians list lazily.",
-          err,
-        );
-      }
-
-      return null;
-    };
-
-  // Fetch notifications only when drawer is opened
+  // Load notifications after authentication so the bell count is correct
+  // before the admin opens the drawer.
   useEffect(() => {
-    if (
-      !activeTechId ||
-      !isNotificationDrawerOpen
-    ) {
+    if (!user?.id) {
       return;
     }
 
-    const loadNotifications =
-      async () => {
-        try {
-          const data =
-            await fetchNotifications(
-              activeTechId,
-            );
+    let cancelled = false;
 
-          setNotifications(
-            data.notifications,
-          );
+    const loadNotifications = async () => {
+      try {
+        const data = await fetchNotifications(
+          user.id,
+          isTechnician ? "technician" : isCustomer ? "customer" : "admin",
+        );
 
-          setUnreadCount(
-            data.unreadCount,
-          );
-        } catch (err) {
-          console.error(
-            "Failed to load notifications:",
-            err,
-          );
-        }
-      };
+        if (cancelled) return;
 
-    loadNotifications();
-  }, [
-    activeTechId,
-    isNotificationDrawerOpen,
-  ]);
+        setNotifications(data.notifications || []);
+        setUnreadCount(data.unreadCount || 0);
+      } catch (err) {
+        console.error("Failed to load notifications:", err);
+      }
+    };
+
+    void loadNotifications();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, isTechnician, isCustomer]);
+
   // Technician heartbeat
   // Heartbeat must use the logged-in technician's user ID.
   // For Tech Bala:
@@ -1166,183 +886,121 @@ function AppInner() {
     user?.id,
   ]);
 
-  // Fetch notifications and initialize socket listeners
-  // Fetch notifications and initialize socket listeners
-useEffect(() => {
-  if (!activeTechId) return;
+  // Track socket notification IDs to prevent duplicate toasts on reconnects.
+  const seenSocketNotificationIdsRef = useRef<Set<string>>(new Set());
 
-  const socketHandlers = {
-    onConnect: () => {
-      console.log(
-        "Connected to notification server.",
-      );
-    },
+  // Connect using authenticated credentials. The backend derives user,
+  // tenant, and technician rooms from the verified JWT or SSO cookie.
+  useEffect(() => {
+    const isSsoSession = localStorage.getItem("auth_mode") === "sso";
 
-    onDisconnect: () => {
-      console.log(
-        "Disconnected from notification server.",
-      );
-    },
+    if (!accessToken && !isSsoSession) {
+      return;
+    }
 
-    onNewNotification: (
-      notif: NotificationItem,
-    ) => {
-      setNotifications(
-        (prev) => [
-          notif,
-          ...prev,
-        ],
-      );
+    const socketHandlers = {
+      onConnect: () => {
+        console.log("Connected to notification server.");
+      },
 
-      setUnreadCount(
-        (prev) => prev + 1,
-      );
+      onDisconnect: (reason?: string) => {
+        console.log("Disconnected from notification server.", reason);
+      },
 
-      addToast(
-        createToastFromNotification(
-          notif as any,
-        ),
-      );
+      onNewNotification: (notif: NotificationItem) => {
+        const notificationId = String(notif.id);
 
-      setIsBellAnimated(true);
+        if (seenSocketNotificationIdsRef.current.has(notificationId)) {
+          return;
+        }
+        seenSocketNotificationIdsRef.current.add(notificationId);
 
-      setTimeout(
-        () =>
-          setIsBellAnimated(
-            false,
-          ),
-        1000,
-      );
-    },
+        setNotifications((prev) => {
+          const alreadyPresent = prev.some(
+            (item) => String(item.id) === notificationId,
+          );
+          return alreadyPresent ? prev : [notif, ...prev];
+        });
 
-    onUnreadCount: (
-      count: number,
-    ) => {
-      setUnreadCount(
-        count,
-      );
-    },
-  };
+        if (!notif.isRead) {
+          setUnreadCount((prev) => prev + 1);
+        }
 
-  const socket =
-    connectNotificationSocket(
-      activeTechId,
+        // Only show a toast when the server sent actual notification content.
+        if (notif.title?.trim() || notif.message?.trim()) {
+          addToast(createToastFromNotification(notif as any));
+        }
+
+        setIsBellAnimated(true);
+        window.setTimeout(() => {
+          setIsBellAnimated(false);
+        }, 1000);
+      },
+
+      onUnreadCount: (count: number) => {
+        setUnreadCount(count);
+      },
+    };
+
+    const socket = connectNotificationSocket(
+      accessToken == null ? null : String(accessToken),
       socketHandlers,
     );
+    const unsubscribeDispatch = subscribeToDispatchEvents(socket, addToast);
 
-  const unsubscribeDispatch =
-    subscribeToDispatchEvents(
-      socket,
-      addToast,
-    );
+    return () => {
+      unsubscribeDispatch();
+      disconnectNotificationSocket(socket);
+    };
+  }, [accessToken, addToast]);
 
-  return () => {
-    unsubscribeDispatch();
-
-    disconnectNotificationSocket(
-      socket,
-    );
-  };
-}, [
-  activeTechId,
-  addToast,
-]);
   // NotificationDetail Actions
-  const handleAcceptJob =
-    async (
-      jobId: string | number,
-    ) => {
-      console.log(
-        `Accepting job ID: ${jobId}`,
-      );
-
-      const isMock =
-        selectedNotification &&
-        typeof selectedNotification.id ===
-          "string" &&
-        selectedNotification.id.startsWith(
-          "notif-",
-        );
-
-      if (!isMock) {
-        await acceptJob(
-          jobId,
-        );
-      }
-
+  const handleAcceptJob = async (jobId: string | number) => {
+    try {
+      await acceptJob(jobId);
       if (selectedNotification) {
-        await handleMarkAsRead(
-          selectedNotification.id,
-        );
+        await handleMarkAsRead(selectedNotification.id);
       }
-    };
+    } catch (error) {
+      console.error("Failed to accept job:", error);
+      throw error;
+    }
+  };
 
-  const handleRejectJob =
-    async (
-      jobId: string | number,
-      reason: string,
-    ) => {
-      console.log(
-        `Rejecting job ID: ${jobId} for reason: ${reason}`,
-      );
-
-      const isMock =
-        selectedNotification &&
-        typeof selectedNotification.id ===
-          "string" &&
-        selectedNotification.id.startsWith(
-          "notif-",
-        );
-
-      if (!isMock) {
-        await rejectJob(
-          jobId,
-          reason,
-        );
-      }
-
+  const handleRejectJob = async (
+    jobId: string | number,
+    reason: string,
+  ) => {
+    try {
+      await rejectJob(jobId, reason);
       if (selectedNotification) {
-        await handleMarkAsRead(
-          selectedNotification.id,
-        );
+        await handleMarkAsRead(selectedNotification.id);
       }
-    };
+    } catch (error) {
+      console.error("Failed to reject job:", error);
+      throw error;
+    }
+  };
 
-  const handleReassignJob =
-    async (
-      jobId: string | number,
-      colleagueId?: string | number,
-      reason?: string,
-    ) => {
-      console.log(
-        `Requesting reassignment for job ID: ${jobId} to colleague: ${colleagueId} with reason: ${reason}`,
-      );
+  const handleReassignJob = async (
+    jobId: string | number,
+    colleagueId?: string | number,
+    reason?: string,
+  ) => {
+    if (colleagueId === undefined || colleagueId === null || colleagueId === "") {
+      return;
+    }
 
-      const isMock =
-        selectedNotification &&
-        typeof selectedNotification.id ===
-          "string" &&
-        selectedNotification.id.startsWith(
-          "notif-",
-        );
-
-      if (
-        !isMock &&
-        colleagueId
-      ) {
-        await reassignJob(
-          jobId,
-          colleagueId,
-          reason || "",
-        );
-      }
-
+    try {
+      await reassignJob(jobId, colleagueId, reason || "");
       if (selectedNotification) {
-        await handleMarkAsRead(
-          selectedNotification.id,
-        );
+        await handleMarkAsRead(selectedNotification.id);
       }
-    };
+    } catch (error) {
+      console.error("Failed to reassign job:", error);
+      throw error;
+    }
+  };
 
   const handleNotificationClick =
     async (
@@ -1367,143 +1025,63 @@ useEffect(() => {
       }
     };
 
-  const handleMarkAsRead =
-    async (
-      notifId: string | number,
-    ) => {
-      const isMock =
-        typeof notifId ===
-          "string" &&
-        notifId.startsWith(
-          "notif-",
-        );
-
-      if (!isMock) {
-        await markNotificationAsRead(
-          notifId,
-        );
-      }
-
-      setNotifications(
-        (prev) =>
-          prev.map((n) =>
-            n.id === notifId
-              ? {
-                  ...n,
-                  isRead: true,
-                }
-              : n,
-          ),
+  const handleMarkAsRead = async (notifId: string | number) => {
+    try {
+      await markNotificationAsRead(notifId);
+      setNotifications((prev) =>
+        prev.map((notification) =>
+          String(notification.id) === String(notifId)
+            ? { ...notification, isRead: true }
+            : notification,
+        ),
       );
+      setUnreadCount((prev) => Math.max(0, prev - 1));
+    } catch (error) {
+      console.error("Failed to mark notification as read:", error);
+    }
+  };
 
-      setUnreadCount(
-        (prev) =>
-          Math.max(
-            0,
-            prev - 1,
-          ),
-      );
-    };
+  const handleMarkAllAsRead = async () => {
+    const unreadIds = notifications
+      .filter((notification) => !notification.isRead)
+      .map((notification) => String(notification.id));
 
-  const handleMarkAllAsRead =
-    async () => {
-      const unreadIds =
-        notifications
-          .filter(
-            (n) => !n.isRead,
-          )
-          .map((n) =>
-            String(n.id),
-          );
-
-      const realUnreadIds =
-        unreadIds.filter(
-          (id) =>
-            !id.startsWith(
-              "notif-",
-            ),
-        );
-
-      if (
-        realUnreadIds.length >
-        0
-      ) {
-        try {
-          await batchMarkAsRead(
-            realUnreadIds,
-          );
-        } catch (err) {
-          console.error(
-            "Failed to batch mark notifications as read",
-            err,
-          );
-        }
-      }
-
-      setNotifications(
-        (prev) =>
-          prev.map((n) => ({
-            ...n,
-            isRead: true,
-          })),
-      );
-
+    if (unreadIds.length === 0) {
       setUnreadCount(0);
-    };
+      return;
+    }
 
-  const handleDismissNotification =
-    async (
-      notifId: string,
-    ) => {
-      const isMock =
-        typeof notifId ===
-          "string" &&
-        notifId.startsWith(
-          "notif-",
-        );
+    try {
+      await batchMarkAsRead(unreadIds);
+      setNotifications((prev) =>
+        prev.map((notification) => ({ ...notification, isRead: true })),
+      );
+      setUnreadCount(0);
+    } catch (error) {
+      console.error("Failed to mark all notifications as read:", error);
+    }
+  };
 
-      if (!isMock) {
-        try {
-          await dismissNotification(
-            notifId,
-          );
-        } catch (err) {
-          console.error(
-            `Failed to dismiss notification ${notifId}`,
-            err,
-          );
-        }
-      }
-
-      setNotifications(
-        (prev) =>
-          prev.filter(
-            (n) =>
-              String(n.id) !==
-              String(notifId),
-          ),
+  const handleDismissNotification = async (notifId: string) => {
+    try {
+      await dismissNotification(notifId);
+      const dismissed = notifications.find(
+        (notification) => String(notification.id) === String(notifId),
       );
 
-      const notif =
-        notifications.find(
-          (n) =>
-            String(n.id) ===
-            String(notifId),
-        );
+      setNotifications((prev) =>
+        prev.filter(
+          (notification) => String(notification.id) !== String(notifId),
+        ),
+      );
 
-      if (
-        notif &&
-        !notif.isRead
-      ) {
-        setUnreadCount(
-          (prev) =>
-            Math.max(
-              0,
-              prev - 1,
-            ),
-        );
+      if (dismissed && !dismissed.isRead) {
+        setUnreadCount((prev) => Math.max(0, prev - 1));
       }
-    };
+    } catch (error) {
+      console.error(`Failed to dismiss notification ${notifId}:`, error);
+    }
+  };
 
   const handleToastNavigate =
     (jobId: string | number) => {
@@ -1571,226 +1149,11 @@ useEffect(() => {
           false,
         );
       } else {
-        const tempNotif: NotificationItem =
-          {
-            id: `notif-temp-${Date.now()}`,
-            type: "JOB_ASSIGNED",
-            title: "Job Notification",
-            message:
-              "Details for job #" +
-              jobId,
-            isRead: true,
-            createdAt:
-              new Date().toISOString(),
-            jobId,
-            job: {
-              id: jobId,
-              title:
-                "Dispatch Assignment",
-              description:
-                "Scheduled dispatch details for job #" +
-                jobId,
-              location:
-                "Chennai Site",
-              priority:
-                "MEDIUM",
-              customer_name:
-                "Customer",
-              customer_phone:
-                "+91 9876543210",
-              estimated_value:
-                1500,
-              sla_deadline:
-                new Date(
-                  Date.now() +
-                    2 *
-                      60 *
-                      60 *
-                      1000,
-                ).toISOString(),
-              distance_km: 4.5,
-              required_skills: [],
-            },
-          };
-
-        setSelectedNotification(
-          tempNotif,
-        );
-
-        setSelectedJobDetail(
-          tempNotif.job,
-        );
-
-        setIsNotificationDrawerOpen(
-          false,
+        console.warn(
+          "No persisted notification is available for this job:",
+          jobId,
         );
       }
-    };
-
-  // Mock dispatch events
-  const MOCK_EVENTS = [
-    {
-      eventType:
-        "job.assigned",
-      type: "info" as const,
-      title:
-        "Job Assigned",
-      message:
-        "AC Repair Service → Rajesh Kumar",
-      autoDismiss: 5000,
-      priority: "normal",
-      jobId: 101,
-    },
-    {
-      eventType:
-        "job.accepted",
-      type: "success" as const,
-      title:
-        "Job Accepted",
-      message:
-        "Rajesh Kumar accepted AC Repair at ABC Corp",
-      autoDismiss: 5000,
-      priority: "normal",
-      jobId: 101,
-    },
-    {
-      eventType:
-        "job.rejected",
-      type: "warning" as const,
-      title:
-        "Job Rejected",
-      message:
-        "Vijay Iyer rejected Plumbing — Too far",
-      autoDismiss: 8000,
-      priority: "critical",
-      jobId: 102,
-    },
-    {
-      eventType:
-        "job.expired",
-      type: "error" as const,
-      title:
-        "Job Expired",
-      message:
-        "Electrical Repair — Re-dispatching…",
-      autoDismiss: 10000,
-      priority: "critical",
-      jobId: 103,
-    },
-    {
-      eventType:
-        "job.en_route",
-      type: "info" as const,
-      title:
-        "Tech En Route",
-      message:
-        "Arjun Sharma is en route — ETA 12 min",
-      autoDismiss: 5000,
-      priority: "normal",
-      jobId: 104,
-    },
-  ];
-
-  const mockCursorRef =
-    useRef(0);
-
-  const triggerMockNotification =
-    () => {
-      const event =
-        MOCK_EVENTS[
-          mockCursorRef.current %
-            MOCK_EVENTS.length
-        ];
-
-      mockCursorRef.current +=
-        1;
-
-      addToast({
-        title:
-          event.title,
-        message:
-          event.message,
-        type: "info",
-        autoDismiss:
-          event.autoDismiss,
-        priority:
-          "low" as any,
-      });
-
-      const newNotif: NotificationItem =
-        {
-          id: `notif-${Date.now()}`,
-          type:
-            event.eventType ===
-            "job.assigned"
-              ? "JOB_ASSIGNED"
-              : "SYSTEM",
-          title:
-            event.title,
-          message:
-            event.message,
-          isRead: false,
-          createdAt:
-            new Date().toISOString(),
-          jobId:
-            event.jobId,
-          job: {
-            id:
-              event.jobId,
-            title:
-              event.title,
-            description:
-              event.message,
-            location:
-              "Chennai",
-            priority:
-              event.priority ===
-              "critical"
-                ? "HIGH"
-                : "MEDIUM",
-            customer_name:
-              "Demo Customer",
-            customer_phone:
-              "+91 9876543210",
-            estimated_value:
-              2500,
-            sla_deadline:
-              new Date(
-                Date.now() +
-                  2 *
-                    60 *
-                    60 *
-                    1000,
-              ).toISOString(),
-            distance_km:
-              6.8,
-            required_skills:
-              [],
-          },
-        };
-
-      setNotifications(
-        (prev) => [
-          newNotif,
-          ...prev,
-        ],
-      );
-
-      setUnreadCount(
-        (prev) => prev + 1,
-      );
-
-      setIsBellAnimated(
-        true,
-      );
-
-      setTimeout(
-        () =>
-          setIsBellAnimated(
-            false,
-          ),
-        1000,
-      );
     };
 
   const getItemStyle = (
@@ -2811,191 +2174,6 @@ useEffect(() => {
             </nav>
           )}
 
-          {/* Active tech switcher and demo controls */}
-          {isAdminOrDispatcher && (
-            <div
-              style={
-                isMobileLayout ||
-                sidebarCollapsed
-                  ? {
-                      display:
-                        "none",
-                    }
-                  : styles.sidebarSimulationControls
-              }
-              onMouseEnter={
-                ensureActiveTechLoaded
-              }
-            >
-              <div
-                style={
-                  styles.simulationCard
-                }
-              >
-                <div
-                  style={
-                    styles.simulationHeader
-                  }
-                >
-                  <div
-                    style={
-                      styles.simulationTitleWrap
-                    }
-                  >
-                    <FlaskConical
-                      size={14}
-                      color="#0F9D58"
-                      style={{
-                        flexShrink: 0,
-                      }}
-                    />
-
-                    <span
-                      style={
-                        styles.simulationTitle
-                      }
-                    >
-                      Simulation Lab
-                    </span>
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    display:
-                      "flex",
-                    flexDirection:
-                      "column",
-                    gap: "4px",
-                  }}
-                >
-                  <span
-                    style={
-                      styles.simulationLabel
-                    }
-                  >
-                    Simulated Technician
-                  </span>
-
-                  <div
-                    style={
-                      styles.dropdownWrapper
-                    }
-                  >
-                    <div
-                      style={
-                        styles.userCircle
-                      }
-                    >
-                      <User
-                        size={12}
-                        color="#0F9D58"
-                      />
-                    </div>
-
-                    {techList.length ===
-                    0 ? (
-                      <select
-                        style={
-                          styles.simulationSelect
-                        }
-                        onClick={
-                          ensureActiveTechLoaded
-                        }
-                        onFocus={
-                          ensureActiveTechLoaded
-                        }
-                      >
-                        <option>
-                          Click to load techs...
-                        </option>
-                      </select>
-                    ) : (
-                      activeTechId !==
-                        null && (
-                        <select
-                          style={
-                            styles.simulationSelect
-                          }
-                          value={
-                            activeTechId
-                          }
-                          onChange={(
-                            e,
-                          ) =>
-                            setActiveTechId(
-                              e.target
-                                .value,
-                            )
-                          }
-                        >
-                          {techList.map(
-                            (t) => {
-                              const val =
-                                t.tech_id ||
-                                t.technician_id ||
-                                t.id;
-
-                              return (
-                                <option
-                                  key={
-                                    val
-                                  }
-                                  value={
-                                    val
-                                  }
-                                >
-                                  {t.technician_name ||
-                                    t.name}
-                                </option>
-                              );
-                            },
-                          )}
-                        </select>
-                      )
-                    )}
-
-                    <ChevronDown
-                      size={14}
-                      color="#64748B"
-                      style={
-                        styles.dropdownChevron
-                      }
-                    />
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  className="simulate-alert-btn-style"
-                  style={
-                    styles.simulateAlertBtn
-                  }
-                  onClick={() => {
-                    ensureActiveTechLoaded().then(
-                      () => {
-                        triggerMockNotification();
-                      },
-                    );
-                  }}
-                  title="Test Notification UI"
-                >
-                  <BellRing
-                    size={16}
-                    color="#FFFFFF"
-                    style={{
-                      flexShrink: 0,
-                    }}
-                  />
-
-                  <span>
-                    Simulate Alert
-                  </span>
-                </button>
-              </div>
-            </div>
-          )}
-
           <div
             style={
               isMobileLayout
@@ -3244,7 +2422,6 @@ useEffect(() => {
                     setIsNotificationDrawerOpen(
                       true,
                     );
-                    ensureActiveTechLoaded();
                   }}
                 />
               )}

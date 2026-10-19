@@ -257,7 +257,10 @@ def test_raw_exception_absent_from_logs(caplog) -> None:
     secret = "gsk_SECRET_LOG_KEY_67890"
 
     def runner(name, provider):
-        raise ProviderExecutionError(f"Error {secret}", is_retryable=True)
+        raise ProviderExecutionError(
+            f"Error Authorization: Bearer {secret}",
+            is_retryable=True,
+        )
 
     executor = ProviderFailoverExecutor(provider_factory=FakeProviderFactory, config=mock_config)
 

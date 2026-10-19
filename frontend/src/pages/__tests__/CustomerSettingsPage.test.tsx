@@ -45,6 +45,10 @@ const preferences = {
   push_enabled: false,
   portal_enabled: true,
   preferred_locale: "en",
+  daily_engagement_enabled: false,
+  timezone: "UTC",
+  quiet_hours_start: "21:00",
+  quiet_hours_end: "08:00",
   revision: 4,
   source: "PROFILE" as const,
   updated_at: "2026-10-02T08:00:00Z",
@@ -253,6 +257,10 @@ describe(
             push_enabled: true,
             portal_enabled: true,
             preferred_locale: "ta",
+            daily_engagement_enabled: false,
+            timezone: "UTC",
+            quiet_hours_start: "21:00",
+            quiet_hours_end: "08:00",
           });
         });
 

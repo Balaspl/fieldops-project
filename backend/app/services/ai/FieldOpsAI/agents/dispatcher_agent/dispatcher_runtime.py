@@ -597,29 +597,7 @@ class DispatcherRuntime:
             #         f"Technician {technician_id} is no longer available"
             #     )
 
-            current_jobs = int(
-                getattr(
-                    technician,
-                    "current_jobs",
-                    0,
-                )
-                or 0
-            )
-
-            max_jobs = int(
-                getattr(
-                    technician,
-                    "max_jobs",
-                    5,
-                )
-                or 5
-            )
-
-            if current_jobs >= max_jobs:
-                raise ValueError(
-                    f"Technician {technician_id} is at job capacity"
-                )
-
+           
             # ----------------------------------------------------------
             # Assign job using the existing behavior.
             # ----------------------------------------------------------
@@ -856,17 +834,33 @@ class DispatcherRuntime:
         the existing technician portal.
         """
 
+        # Notifications belong to the recipient technician's organization,
+        # not necessarily the organization that owns the job. A job may be
+        # dispatched across organizations, but notification reads remain
+        # tenant-scoped in the technician portal.
+        technician_tenant_id = getattr(technician, "tenant_id", None)
+        technician_recipient_id = str(
+            getattr(technician, "tech_id", None)
+            or getattr(technician, "technician_id", "")
+        )
+
+        if not technician_tenant_id:
+            raise ValueError(
+                "Cannot create assignment notification: technician has no tenant_id"
+            )
+
+        # Use the same tenant-aware recipient/group identity as the
+        # Communication Agent. Check read and unread cards so that a read
+        # notification does not cause a duplicate-key error on reassignment.
+        assignment_group_key = f"job_{job.id}"
+
         existing = (
             db.query(models.InAppNotification)
             .filter(
-                models.InAppNotification.tech_id
-                == technician.tech_id,
-                models.InAppNotification.job_id
-                == str(job.id),
-                models.InAppNotification.type
-                == "JOB_ASSIGNED",
-                models.InAppNotification.status
-                == "UNREAD",
+                models.InAppNotification.tenant_id == technician_tenant_id,
+                models.InAppNotification.recipient_role == "technician",
+                models.InAppNotification.recipient_id == technician_recipient_id,
+                models.InAppNotification.group_key == assignment_group_key,
             )
             .first()
         )
@@ -883,8 +877,13 @@ class DispatcherRuntime:
 
         notification = models.InAppNotification(
             id=str(uuid.uuid4()),
-            tenant_id=technician.tenant_id,
+            # IMPORTANT: tenant_id is the recipient's organization. The job's
+            # tenant_id may be different for a cross-organization assignment.
+            tenant_id=technician_tenant_id,
             tech_id=technician.tech_id,
+            recipient_role="technician",
+            recipient_id=technician_recipient_id,
+            group_key=assignment_group_key,
             job_id=str(job.id),
             type="JOB_ASSIGNED",
             title="New Job Assigned",

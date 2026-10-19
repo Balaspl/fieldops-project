@@ -141,6 +141,9 @@ class CommunicationAgent(BaseAgent[CommunicationDecision]):
             if orchestrator is None
             else orchestrator
         )
+        # This lets graph callers distinguish provider output from the
+        # existing validated template fallback without changing the schema.
+        self.last_generation_used_fallback: bool | None = None
 
         self.personalization_pipeline = (
             personalization_pipeline
@@ -251,22 +254,21 @@ class CommunicationAgent(BaseAgent[CommunicationDecision]):
             ) from exc
 
         except Exception as exc:
-            logger.warning(
+            # Include the original traceback so the logs reveal the real
+            # provider/orchestrator failure instead of only its exception type.
+            logger.exception(
                 "Communication AI generation failed.",
                 extra={
                     "agent_id": str(self.agent_id),
                     "channel": context.channel,
-                    "notification_type": (
-                        context.notification_type
-                    ),
+                    "notification_type": context.notification_type,
                     "error_type": type(exc).__name__,
+                    "error_message": str(exc)[:1000],
                 },
             )
 
-            # DO NOT convert every AI exception into fallback.
-            #
-            # Existing tests expect orchestrator/provider failures
-            # to propagate through BaseAgent.
+            # Preserve the existing behavior: let BaseAgent and the outer
+            # communication graph handle provider failures and approved fallback.
             raise
 
         if not isinstance(
@@ -496,6 +498,7 @@ class CommunicationAgent(BaseAgent[CommunicationDecision]):
         """
 
         start_time = time.perf_counter()
+        self.last_generation_used_fallback = None
 
         # ------------------------------------------------------
         # Context validation
@@ -550,6 +553,7 @@ class CommunicationAgent(BaseAgent[CommunicationDecision]):
 
         decision: CommunicationDecision | None = None
         ai_failed = False
+        used_fallback = False
 
         try:
             decision = await self._generate_with_ai(
@@ -578,6 +582,7 @@ class CommunicationAgent(BaseAgent[CommunicationDecision]):
         # ------------------------------------------------------
 
         if ai_failed:
+            used_fallback = True
 
             decision = self._render_fallback(
                 context=validated_context
@@ -687,6 +692,7 @@ class CommunicationAgent(BaseAgent[CommunicationDecision]):
                     decision = self._render_fallback(
                         context=validated_context
                     )
+                    used_fallback = True
 
                     fallback_validation = (
                         self._validate_decision(
@@ -730,9 +736,11 @@ class CommunicationAgent(BaseAgent[CommunicationDecision]):
                     validated_context.notification_type
                 ),
                 "elapsed": elapsed,
-                "used_fallback": ai_failed,
+                "used_fallback": used_fallback,
             },
         )
+
+        self.last_generation_used_fallback = used_fallback
 
         return decision
 

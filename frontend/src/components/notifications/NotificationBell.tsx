@@ -104,7 +104,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({
   const bellStyle: React.CSSProperties = {
     ...styles.bell,
     backgroundColor: isHovered ? "#f8fafc" : "#ffffff",
-    color: isHovered ? "#1e293b" : "#64748b",
+    color: hasUnread ? "#dc2626" : "#16a34a",
     borderColor: isHovered ? "#cbd5e1" : "#e2e8f0",
     borderStyle: "solid",
     borderWidth: "1px",
@@ -112,7 +112,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({
 
   const badgeStyle: React.CSSProperties = {
     ...styles.badge,
-    backgroundColor: hasUnread ? "#ef4444" : "#94a3b8",
+    backgroundColor: hasUnread ? "#dc2626" : "#16a34a",
     color: "#ffffff",
   };
 
@@ -132,7 +132,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({
           transition={{ duration: 0.5 }}
           style={{ display: "flex", alignItems: "center", justifyContent: "center" }}
         >
-          <Bell size={16} />
+          <Bell size={16} fill="currentColor" strokeWidth={2.5} />
         </motion.div>
         
         <span

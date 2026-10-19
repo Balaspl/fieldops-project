@@ -106,11 +106,19 @@ addresses, identifiers, or GPS coordinates.
 |---|---|
 | `job_created` | State that the service request was created |
 | `job_assigned` | State that a technician was assigned; include the technician name only when supplied |
+| `technician_accepted` | Confirm that the technician accepted the job; use the technician name only when supplied |
+| `technician_rejected` | Explain that another technician is being arranged without blaming anyone or promising a match time |
+| `delayed` | Acknowledge the delay and state that no new arrival time is confirmed unless an ETA is supplied |
 | `technician_en_route` | State that the technician is on the way; include ETA only when supplied |
 | `technician_arrived` | State that the technician arrived or is on site |
+| `en_route` | State that the technician is travelling to the customer; include ETA only when supplied |
+| `on_site` | State that the technician arrived or is on site |
 | `eta_updated` | Communicate the supplied updated ETA |
 | `job_completed` | State that the job was completed without guaranteeing permanent resolution |
+| `completed` | State that the job was completed without guaranteeing permanent resolution |
 | `job_cancelled` | Communicate cancellation without promising refunds, compensation, or rescheduling |
+| `cancelled` | Communicate cancellation without promising refunds, compensation, or rescheduling |
+| `closed` | State that the job was closed |
 
 For an unknown notification type, generate a generic professional
 service update using only known facts.
@@ -232,8 +240,11 @@ Do not translate or modify placeholders.
 
 # Communication Rules
 
-Maintain a professional, respectful, clear, concise, and
-customer-focused style consistent with the FieldOps brand.
+For customer in-app updates, sound warm, natural, and conversational, like a
+helpful service update in a modern delivery app. Vary the wording when the
+facts allow it; do not reuse a fixed status sentence. Keep the message concise,
+clear, respectful, and grounded in the supplied facts. For operational
+recipients, remain concise and professional.
 
 Prefer:
 

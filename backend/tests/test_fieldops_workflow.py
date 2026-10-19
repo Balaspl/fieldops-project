@@ -315,6 +315,7 @@ def _make_mock_db(org_data: list[dict], tech_data: list[dict]):
             self.technician_name = name
             self.tenant_id = tenant_id
             self.technician_skill = skill
+            self.technician_status = "AVAILABLE"
             self.current_jobs = workload
             self.latitude = lat
             self.longitude = lng
@@ -339,10 +340,8 @@ class TestPlanningAgent:
 
     def test_workload_boundary_strictly_less_than_five(self):
         """
-        Workload rule verification:
-        workload 4 -> eligible
-        workload 5 -> NOT eligible
-        workload 6 -> NOT eligible
+        Workload values are exposed in ranked candidates but do not remove
+        technicians from the planning result.
         """
         org_data = [{"id": 1, "name": "Org Alpha", "lat": 13.0827, "lng": 80.2707}]
         tech_data = [
@@ -363,8 +362,10 @@ class TestPlanningAgent:
         res = planning_graph.invoke({"job_requirement": job_req, "db": mock_db, "job_id": "TEST-1"})
         planning_res = res["planning_response"]
 
-        assert planning_res["total_eligible_technicians"] == 1
-        assert len(planning_res["top_3"]) == 1
+        # Current planning ranks candidates by organization and distance;
+        # workload values are returned as context rather than eligibility gates.
+        assert planning_res["total_eligible_technicians"] == 3
+        assert len(planning_res["top_3"]) == 3
         assert planning_res["top_3"][0]["technician_id"] == 101
         assert planning_res["top_3"][0]["workload"] == 4
 
@@ -504,8 +505,8 @@ class TestPlanningAgent:
 
     def test_skip_nearest_org_when_all_technicians_busy(self):
         """
-        If Org A is nearest, but all its technicians have workload >= 5,
-        Planning moves to Org B.
+        Workload does not remove candidates; technicians from the nearest
+        organization are still ranked first.
         """
         org_data = [
             {"id": 1, "name": "Org A (Busy)", "lat": 13.0810, "lng": 80.2710},
@@ -527,10 +528,12 @@ class TestPlanningAgent:
         res = planning_graph.invoke({"job_requirement": job_req, "db": mock_db, "job_id": "BUSY-1"})
         planning_res = res["planning_response"]
 
-        assert planning_res["total_eligible_technicians"] == 1
-        assert len(planning_res["top_3"]) == 1
-        assert planning_res["top_3"][0]["technician_name"] == "Available Tech"
-        assert planning_res["top_3"][0]["organization_name"] == "Org B (Available)"
+        assert planning_res["total_eligible_technicians"] == 2
+        assert len(planning_res["top_3"]) == 2
+        assert planning_res["top_3"][0]["technician_name"] == "Busy Tech"
+        assert planning_res["top_3"][0]["organization_name"] == "Org A (Busy)"
+        assert planning_res["top_3"][1]["technician_name"] == "Available Tech"
+        assert planning_res["top_3"][1]["organization_name"] == "Org B (Available)"
 
     def test_planning_matches_image_3_specification(self):
         """

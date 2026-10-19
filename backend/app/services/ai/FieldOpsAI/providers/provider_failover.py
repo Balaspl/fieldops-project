@@ -14,7 +14,7 @@ Responsibilities
 - Preserve CircuitOpenError behavior.
 - Return validated execution results.
 - Record thread-safe failover metrics.
-- Emit only fixed, privacy-safe log messages.
+- Emit privacy-aware structured failure diagnostics without request payloads.
 """
 
 from __future__ import annotations
@@ -70,6 +70,74 @@ logger = logging.getLogger(__name__)
 SAFE_ERROR_CODE_REGEX = re.compile(
     r"^[A-Z][A-Z0-9_]{0,63}$"
 )
+
+
+# Common secret patterns are redacted before exception details are logged.
+# Keep these diagnostics short: provider exceptions can contain request data.
+_SECRET_PATTERNS = (
+    re.compile(r"(?i)(authorization\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+"),
+    re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/-]+=*"),
+    re.compile(r"(?i)(api[_ -]?key\s*[:=]\s*)[^\s,;]+"),
+    re.compile(r"(?i)(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{8,}"),
+    # Error bodies sometimes echo request fields; omit their values.
+    re.compile(r"(?i)((?:prompt|messages|input|content|request_body|payload)\s*[:=]\s*).*$"),
+)
+
+
+def _safe_diagnostic_value(value: Any, *, limit: int = 240) -> Optional[str]:
+    """Return a short, single-line diagnostic value with common secrets redacted."""
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        text_value = str(value)
+    else:
+        # Avoid repr() because arbitrary objects may expose payloads or secrets.
+        text_value = type(value).__name__
+    text_value = text_value.replace("\r", " ").replace("\n", " ")
+    for pattern in _SECRET_PATTERNS:
+        if pattern.groups:
+            text_value = pattern.sub(lambda match: (match.group(1) + "[REDACTED]") if len(match.groups()) else "[REDACTED]", text_value)
+        else:
+            text_value = pattern.sub("[REDACTED]", text_value)
+    return text_value[:limit]
+
+
+def _valid_http_status(value: Any) -> Optional[int]:
+    """Return an HTTP status only when it is a valid integer status code."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if 100 <= value <= 599 else None
+
+
+def _exception_diagnostics(error: BaseException) -> Dict[str, Any]:
+    """Extract useful structured metadata without logging request payloads."""
+    cause = error.__cause__
+    context = error.__context__
+    source = cause or context
+    status_code = _valid_http_status(getattr(error, "status_code", None))
+    if status_code is None and source is not None:
+        status_code = _valid_http_status(getattr(source, "status_code", None))
+
+    provider_code = None
+    provider_error_type = None
+    if source is not None:
+        provider_code = getattr(source, "code", None)
+        provider_error_type = getattr(source, "type", None)
+    if provider_code is None:
+        provider_code = getattr(error, "code", None)
+    if provider_error_type is None:
+        provider_error_type = getattr(error, "type", None)
+
+    return {
+        "error_type": type(error).__name__,
+        "status_code": status_code,
+        "retryable": getattr(error, "is_retryable", None),
+        "cause_type": type(cause).__name__ if cause is not None else None,
+        "context_type": type(context).__name__ if context is not None else None,
+        "provider_error_code": _safe_diagnostic_value(provider_code, limit=80),
+        "provider_error_type": _safe_diagnostic_value(provider_error_type, limit=80),
+        "diagnostic_message": _safe_diagnostic_value(str(source or error)),
+    }
 
 
 # ==========================================================
@@ -1039,11 +1107,22 @@ class ProviderFailoverExecutor:
                     with self._lock:
                         self._retryable_failures += 1
 
-                    logger.info(
-                        "Retryable failure for "
-                        "provider '%s'. Trying "
-                        "the next candidate.",
+                    diagnostic = _exception_diagnostics(error)
+                    logger.warning(
+                        "AI_PROVIDER_RETRYABLE_FAILURE "
+                        "provider=%s status_code=%s error_type=%s "
+                        "cause_type=%s context_type=%s "
+                        "provider_error_code=%s provider_error_type=%s "
+                        "diagnostic_message=%s",
                         provider_name,
+                        diagnostic["status_code"] or "none",
+                        diagnostic["error_type"],
+                        diagnostic["cause_type"] or "none",
+                        diagnostic["context_type"] or "none",
+                        diagnostic["provider_error_code"] or "none",
+                        diagnostic["provider_error_type"] or "none",
+                        diagnostic["diagnostic_message"] or "none",
+                        extra={"provider": provider_name, **diagnostic},
                     )
 
                     continue
@@ -1066,19 +1145,56 @@ class ProviderFailoverExecutor:
                 with self._lock:
                     self._non_retryable_failures += 1
 
-                logger.warning(
-                    "Non-retryable provider failure. "
-                    "Stopping failover."
+                failure_reason = (
+                    f"http_{status_code}"
+                    if status_code is not None
+                    else "non_retryable_provider_failure"
+                )
+                # Capture the cause AND implicit context before the public
+                # exception is sanitized. A provider adapter may use ``raise
+                # ... from None``; in that case __cause__ is empty while the
+                # original exception may still be available as __context__.
+                diagnostic = _exception_diagnostics(error)
+                failure_reason = (
+                    f"http_{status_code}"
+                    if status_code is not None
+                    else "non_retryable_provider_failure"
                 )
 
-                # Never expose the original provider message.
+                logger.error(
+                    "AI_PROVIDER_FAILURE_DIAGNOSTIC "
+                    "provider=%s stage=attempt_runner reason=%s "
+                    "error_type=%s status_code=%s retryable=%s "
+                    "cause_type=%s context_type=%s "
+                    "provider_error_code=%s provider_error_type=%s "
+                    "diagnostic_message=%s",
+                    provider_name,
+                    failure_reason,
+                    diagnostic["error_type"],
+                    diagnostic["status_code"] or "none",
+                    diagnostic["retryable"],
+                    diagnostic["cause_type"] or "none",
+                    diagnostic["context_type"] or "none",
+                    diagnostic["provider_error_code"] or "none",
+                    diagnostic["provider_error_type"] or "none",
+                    diagnostic["diagnostic_message"] or "none",
+                    extra={
+                        "provider": provider_name,
+                        "failure_reason": failure_reason,
+                        **diagnostic,
+                        "safe_error_code": "PROVIDER_EXECUTION_FAILED",
+                    },
+                )
+
+                # Keep the public error sanitized and suppress exception
+                # chaining so raw provider messages cannot leak in tracebacks.
                 raise ProviderExecutionError(
                     "AI provider execution failed.",
                     status_code=status_code,
                     is_retryable=False,
                 ) from None
 
-            except Exception:
+            except Exception as unexpected_error:
                 attempt_latency_ms = max(
                     0.0,
                     (
@@ -1125,9 +1241,26 @@ class ProviderFailoverExecutor:
                 with self._lock:
                     self._non_retryable_failures += 1
 
-                logger.warning(
-                    "Unexpected provider execution "
-                    "failure. Stopping failover."
+                diagnostic = _exception_diagnostics(unexpected_error)
+                logger.error(
+                    "AI_PROVIDER_UNEXPECTED_EXCEPTION "
+                    "provider=%s stage=attempt_runner error_type=%s "
+                    "status_code=%s cause_type=%s context_type=%s "
+                    "provider_error_code=%s provider_error_type=%s "
+                    "diagnostic_message=%s",
+                    provider_name,
+                    diagnostic["error_type"],
+                    diagnostic["status_code"] or "none",
+                    diagnostic["cause_type"] or "none",
+                    diagnostic["context_type"] or "none",
+                    diagnostic["provider_error_code"] or "none",
+                    diagnostic["provider_error_type"] or "none",
+                    diagnostic["diagnostic_message"] or "none",
+                    extra={
+                        "provider": provider_name,
+                        **diagnostic,
+                        "safe_error_code": "UNEXPECTED_PROVIDER_ERROR",
+                    },
                 )
 
                 raise ProviderExecutionError(

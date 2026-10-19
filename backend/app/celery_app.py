@@ -42,9 +42,18 @@ celery_app.conf.update(
     ),
 
     beat_schedule={
+        "process-transactional-email-outbox-every-30-seconds": {
+            "task": "app.tasks.process_transactional_email_outbox",
+            "schedule": 30.0,
+        },
         "send-dispatcher-digest-every-5-minutes": {
             "task": "app.tasks.send_dispatcher_digest",
             "schedule": 300.0,
+        },
+
+        "send-customer-daily-engagement-every-30-minutes": {
+            "task": "app.tasks.send_customer_daily_engagement",
+            "schedule": 1800.0,
         },
 
         "broadcast-sla-countdown-every-30-seconds": {

@@ -446,10 +446,10 @@ class SentimentEscalationService:
         if manager.email:
             try:
                 from app.services.notification_services import (
-                    SendGridService,
+                    SMTPEmailService,
                 )
 
-                email_service = SendGridService()
+                email_service = SMTPEmailService()
 
                 body_html = (
                     "<h2>FieldOps Escalation</h2>"

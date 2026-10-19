@@ -114,6 +114,16 @@ def client(db_session):
 
     app.dependency_overrides.clear()
 
+
+def authenticate_as_technician(tech):
+    user = AuthenticatedUser(
+        user_id=str(tech.tech_id),
+        tenant_id=str(tech.tenant_id),
+        role=UserRole.TECHNICIAN,
+        jti="technician-test-jti",
+    )
+    app.dependency_overrides[get_current_user] = lambda: user
+
 @pytest.fixture
 def auth_headers():
     def _headers(tenant_id="tenant-123", token="sample_token"):
@@ -137,6 +147,7 @@ def test_create_notification(db_session):
 
 def test_mark_as_read(client, db_session, auth_headers):
     tech = TechnicianFactory()
+    authenticate_as_technician(tech)
     notification = InAppNotificationFactory(tech_id=tech.tech_id, status="UNREAD")
     
     response = client.patch(f"/notifications/{notification.id}/read", headers=auth_headers())
@@ -151,6 +162,7 @@ def test_mark_as_read(client, db_session, auth_headers):
 
 def test_mark_as_dismissed(client, db_session, auth_headers):
     tech = TechnicianFactory()
+    authenticate_as_technician(tech)
     notification = InAppNotificationFactory(tech_id=tech.tech_id, status="UNREAD")
     
     response = client.patch(f"/notifications/{notification.id}/dismiss", headers=auth_headers())
@@ -164,6 +176,7 @@ def test_mark_as_dismissed(client, db_session, auth_headers):
 
 def test_unread_count(client, db_session, auth_headers):
     tech = TechnicianFactory()
+    authenticate_as_technician(tech)
     
     for _ in range(5):
         InAppNotificationFactory(tech_id=tech.tech_id, status="UNREAD")
@@ -176,8 +189,51 @@ def test_unread_count(client, db_session, auth_headers):
     assert response.status_code == 200
     assert response.json()["unread_count"] == 5
 
+
+def test_admin_notification_feed_is_authenticated_and_tenant_scoped(client, db_session):
+    from app.models import InAppNotification
+
+    own = InAppNotification(
+        id=str(uuid.uuid4()), tenant_id="tenant-123", recipient_id="test-user",
+        recipient_role="dispatcher", group_key="job_42:EN_ROUTE:2",
+        job_id="42", type="dispatcher_en_route", title="Tech en route",
+        body="The technician is travelling.", status="UNREAD", priority="NORMAL",
+    )
+    other_tenant = InAppNotification(
+        id=str(uuid.uuid4()), tenant_id="tenant-other", recipient_id="test-user",
+        recipient_role="dispatcher", group_key="job_43:EN_ROUTE:2",
+        job_id="43", type="dispatcher_en_route", title="Other tenant",
+        body="Must not be visible.", status="UNREAD", priority="NORMAL",
+    )
+    communication_agent_notification = InAppNotification(
+        id=str(uuid.uuid4()), tenant_id="tenant-123", recipient_id="test-user",
+        recipient_role="org_admin", group_key="job_44",
+        job_id="44", type="en_route", title="Job #44 technician en route",
+        body="Repair · Technician One", status="UNREAD", priority="NORMAL",
+        event_version=3,
+    )
+    db_session.add_all([own, other_tenant, communication_agent_notification])
+    db_session.commit()
+
+    response = client.get("/admin/notifications")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 2
+    assert data["unread_count"] == 2
+    assert {item["id"] for item in data["notifications"]} == {
+        own.id,
+        communication_agent_notification.id,
+    }
+
+
+def test_admin_notification_feed_allows_empty_list(client):
+    response = client.get("/admin/notifications")
+    assert response.status_code == 200
+    assert response.json() == {"notifications": [], "unread_count": 0, "total": 0}
+
 def test_pagination(client, db_session, auth_headers):
     tech = TechnicianFactory()
+    authenticate_as_technician(tech)
     
     for _ in range(25):
         InAppNotificationFactory(tech_id=tech.tech_id)
@@ -218,6 +274,7 @@ async def test_websocket_realtime(monkeypatch):
 
 def test_batch_mark_read(client, db_session, auth_headers):
     tech = TechnicianFactory()
+    authenticate_as_technician(tech)
     
     notifs = []
     for _ in range(5):
@@ -259,6 +316,7 @@ def test_auto_delete(client, db_session, auth_headers):
 
 def test_filter_by_type(client, db_session, auth_headers):
     tech = TechnicianFactory()
+    authenticate_as_technician(tech)
     
     for _ in range(3):
         InAppNotificationFactory(tech_id=tech.tech_id, type="job_assignment")
@@ -278,6 +336,7 @@ def test_filter_by_type(client, db_session, auth_headers):
 
 def test_expired_notification(client, db_session, auth_headers):
     tech = TechnicianFactory()
+    authenticate_as_technician(tech)
     
     # Active notification
     InAppNotificationFactory(

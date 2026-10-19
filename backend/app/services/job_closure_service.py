@@ -11,10 +11,6 @@ from ..context import correlation_id_ctx
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from .customer_notification_services import (
-    create_customer_job_status_notification,
-)
-
 from ..models import Job, Technician, AuditEvent, ServiceRequest
 from ..models.job_closure import JobClosure
 from ..repositories.completion_document_repository import (
@@ -247,12 +243,6 @@ def close_job(
         if service_request:
             service_request.status = "COMPLETED"
 
-        create_customer_job_status_notification(
-            db=db,
-            job=job,
-            new_status="COMPLETED",
-        )
-
         completed_at = job.completed_at
 
         if completed_at is None:
@@ -365,6 +355,11 @@ def close_job(
         )
 
         db.add(audit_event)
+
+        # The invoice email obligation commits atomically with the finalized
+        # closure and job completion, then a standalone SMTP worker delivers it.
+        from .email.transactional_outbox import persist_invoice_email
+        persist_invoice_email(db, job, closure_record)
 
         # Keep the technician available after the final completion is staged.
         tech.technician_status = "AVAILABLE"

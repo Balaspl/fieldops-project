@@ -9,7 +9,8 @@ import alembic.config
 import alembic.command
 from unittest.mock import patch
 
-from app.models import Technician, Job, CustomerProfile, CustomerPreferenceAudit, Base
+from app.models import Technician, Job, CustomerProfile, CustomerPreferenceAudit, InAppNotification, Base
+from app.services.ai.FieldOpsAI.agents.communication_agent.store import insert_daily_engagement
 from app.services.ai.FieldOpsAI.repositories.customer_profile_repository import CustomerProfileRepository
 from app.services.ai.FieldOpsAI.services.customer_preference_service import (
     CustomerPreferenceService,
@@ -51,6 +52,69 @@ def repo(db_session: Session):
 @pytest.fixture
 def service(repo):
     return CustomerPreferenceService(repo)
+
+
+def test_daily_engagement_settings_validate_timezone_and_quiet_hours():
+    from pydantic import ValidationError
+
+    prefs = CustomerPreferenceUpdate(
+        daily_engagement_enabled=True,
+        timezone="Asia/Kolkata",
+        quiet_hours_start="22:30",
+        quiet_hours_end="07:15",
+    )
+    assert prefs.timezone == "Asia/Kolkata"
+    assert prefs.quiet_hours_start == "22:30"
+    with pytest.raises(ValidationError):
+        CustomerPreferenceUpdate(timezone="not-a-timezone")
+    with pytest.raises(ValidationError):
+        CustomerPreferenceUpdate(quiet_hours_start="25:80")
+
+
+def test_daily_engagement_store_deduplicates_persistently_by_customer_day(db_session):
+    first = insert_daily_engagement(
+        db_session,
+        tenant_id="tenant-a",
+        recipient_id="customer-1",
+        local_date="2026-10-16",
+        title="Your service visit today",
+        body="Your plumbing visit is scheduled today.",
+        job_id=41,
+    )
+    duplicate = insert_daily_engagement(
+        db_session,
+        tenant_id="tenant-a",
+        recipient_id="customer-1",
+        local_date="2026-10-16",
+        title="Your service visit today",
+        body="Retry.",
+        job_id=41,
+    )
+    next_day = insert_daily_engagement(
+        db_session,
+        tenant_id="tenant-a",
+        recipient_id="customer-1",
+        local_date="2026-10-17",
+        title="Your service visit today",
+        body="Another scheduled appointment.",
+        job_id=41,
+    )
+    other_tenant = insert_daily_engagement(
+        db_session,
+        tenant_id="tenant-b",
+        recipient_id="customer-1",
+        local_date="2026-10-16",
+        title="Your service visit today",
+        body="Scoped to the other tenant.",
+        job_id=41,
+    )
+    db_session.commit()
+
+    assert first is not None
+    assert duplicate is None
+    assert next_day is not None
+    assert other_tenant is not None
+    assert db_session.query(InAppNotification).count() == 3
 
 # --- 1. Missing profile behavior ---
 # --- 11. Migration verification ---
@@ -121,6 +185,10 @@ def test_migration_verification():
                         email_enabled BOOLEAN NOT NULL DEFAULT 1,
                         push_enabled BOOLEAN NOT NULL DEFAULT 0,
                         portal_enabled BOOLEAN NOT NULL DEFAULT 1,
+                        daily_engagement_enabled BOOLEAN NOT NULL DEFAULT 0,
+                        timezone VARCHAR(64) NOT NULL DEFAULT 'UTC',
+                        quiet_hours_start VARCHAR(5) NOT NULL DEFAULT '21:00',
+                        quiet_hours_end VARCHAR(5) NOT NULL DEFAULT '08:00',
                         preferred_locale VARCHAR(20) NOT NULL DEFAULT 'en',
                         revision INTEGER NOT NULL DEFAULT 0,
                         created_at DATETIME,
@@ -187,6 +255,10 @@ def test_migration_verification():
             "email_enabled",
             "push_enabled",
             "portal_enabled",
+            "daily_engagement_enabled",
+            "timezone",
+            "quiet_hours_start",
+            "quiet_hours_end",
             "preferred_locale",
             "revision",
             "created_at",
