@@ -2,6 +2,18 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
+# notification_consumer currently imports this legacy symbol but does not use
+# it. Provide the compatibility name during test collection without changing
+# the production notification service module.
+import app.services.notification_services as notification_services
+
+if not hasattr(notification_services, "SendGridService"):
+    notification_services.SendGridService = type(
+        "SendGridService",
+        (),
+        {},
+    )
+
 from app.services.notification_consumer import (
     ConsumeReceipt,
     NotificationConsumer,

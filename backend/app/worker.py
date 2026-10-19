@@ -702,6 +702,20 @@ def sentiment_audit_archive_scheduler_job():
     finally:
         db.close()
 
+
+def process_transactional_email_outbox_job():
+    """Poll the durable SMTP outbox independently of AI and Kafka work."""
+    from .services.email.transactional_outbox import process_due_emails
+
+    db = SessionLocal()
+    try:
+        process_due_emails(db, limit=50)
+    except Exception:
+        db.rollback()
+        logger.exception("email_outbox_poll_failed")
+    finally:
+        db.close()
+
 def start_scheduler():
     if not scheduler.running:
         scheduler.add_job(check_technician_heartbeats, 'interval', seconds=60, id='heartbeat_checker')
@@ -721,8 +735,22 @@ def start_scheduler():
          timezone='UTC',
          id='sentiment_audit_archiver'
         )
+        scheduler.add_job(
+            process_transactional_email_outbox_job,
+            'interval',
+            seconds=15,
+            id='transactional_email_outbox_poller',
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=60,
+            replace_existing=True,
+        )
         scheduler.start()
         logger.info("Background heartbeat scheduler started.")
+        logger.info(
+            "email_outbox_worker_started",
+            extra={"poll_interval_seconds": 15},
+        )
         # Run once immediately on startup
         create_monthly_partitions()
 

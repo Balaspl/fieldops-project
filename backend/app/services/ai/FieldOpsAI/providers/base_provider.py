@@ -170,10 +170,6 @@ class BaseAIProvider(ABC):
                 max_tokens=max_tokens,
             )
         except Exception as exc:
-            logger.warning(
-                "AI provider execution failed during generate call."
-            )
-
             if isinstance(exc, ProviderExecutionError):
                 status_code = exc.status_code
                 is_retryable = exc.is_retryable
@@ -188,6 +184,23 @@ class BaseAIProvider(ABC):
                     status_code = None
 
                 is_retryable = is_retryable_provider_error(exc)
+
+            # Keep the original provider exception private, but preserve
+            # useful sanitized diagnostics before translating it into the
+            # stable public ProviderExecutionError contract.
+            try:
+                provider_label = self.provider_name()
+            except Exception:
+                provider_label = type(self).__name__
+            logger.warning(
+                "AI provider execution failed during generate call",
+                extra={
+                    "provider": provider_label,
+                    "exception_type": type(exc).__name__,
+                    "status_code": status_code,
+                    "retryable": is_retryable,
+                },
+            )
 
             raise ProviderExecutionError(
                 "AI provider execution failed.",

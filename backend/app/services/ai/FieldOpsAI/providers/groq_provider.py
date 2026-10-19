@@ -29,10 +29,14 @@ from app.services.ai.FieldOpsAI.schemas.provider import (
 )
 
 
-
 logger = logging.getLogger(__name__)
 
 ALLOWED_MODEL = "openai/gpt-oss-120b"
+
+# gpt-oss is a reasoning model. Short customer messages do not need deep
+# reasoning, and low effort leaves more of max_tokens for the actual answer.
+ALLOWED_REASONING_EFFORTS = {"low", "medium", "high"}
+DEFAULT_REASONING_EFFORT = "low"
 
 
 class GroqProvider(BaseAIProvider):
@@ -63,6 +67,16 @@ class GroqProvider(BaseAIProvider):
         self.model = ALLOWED_MODEL
         self.default_temperature = getattr(self.config, "temperature", 0.0)
         self.default_max_tokens = getattr(self.config, "max_tokens", 4096)
+
+        # Optional config override: config.reasoning_effort = "low" | "medium" | "high"
+        configured_effort = getattr(self.config, "reasoning_effort", DEFAULT_REASONING_EFFORT)
+        if (
+            isinstance(configured_effort, str)
+            and configured_effort.strip().lower() in ALLOWED_REASONING_EFFORTS
+        ):
+            self.reasoning_effort = configured_effort.strip().lower()
+        else:
+            self.reasoning_effort = DEFAULT_REASONING_EFFORT
 
         if client is not None:
             self.client = client
@@ -129,6 +143,37 @@ class GroqProvider(BaseAIProvider):
 
         return eff_temp, eff_max_tokens
 
+    def _log_empty_response(
+        self,
+        *,
+        response: Any,
+        choice: Any,
+        message: Any,
+        content: Any,
+        eff_max_tokens: int,
+    ) -> None:
+        """
+        Log safe diagnostics for an empty provider response.
+
+        Only flags, counts and the finish reason are logged. The prompt,
+        the response text and the reasoning text are never logged.
+        """
+        usage_dbg = getattr(response, "usage", None)
+
+        logger.warning(
+            "GROQ_EMPTY_CONTENT finish_reason=%s content_is_none=%s "
+            "content_type=%s has_reasoning=%s has_tool_calls=%s "
+            "has_refusal=%s completion_tokens=%s max_tokens=%s",
+            getattr(choice, "finish_reason", None),
+            content is None,
+            type(content).__name__,
+            bool(getattr(message, "reasoning", None)),
+            bool(getattr(message, "tool_calls", None)),
+            getattr(message, "refusal", None) is not None,
+            getattr(usage_dbg, "completion_tokens", None),
+            eff_max_tokens,
+        )
+
     def generate_result(
         self,
         messages: Sequence[Dict[str, Any]],
@@ -185,6 +230,10 @@ class GroqProvider(BaseAIProvider):
                             remaining_time,
                             overall_deadline,
                         ),
+                        # extra_body works on any version of the groq SDK.
+                        extra_body={
+                            "reasoning_effort": self.reasoning_effort,
+                        },
                     )
                 )
 
@@ -192,8 +241,11 @@ class GroqProvider(BaseAIProvider):
 
                 choices = getattr(response, "choices", None)
                 if not choices:
+                    usage_dbg = getattr(response, "usage", None)
                     logger.warning(
-                        "Groq provider returned an empty or invalid response."
+                        "GROQ_EMPTY_CHOICES completion_tokens=%s max_tokens=%s",
+                        getattr(usage_dbg, "completion_tokens", None),
+                        eff_max_tokens,
                     )
 
                     raise ProviderExecutionError(
@@ -211,8 +263,12 @@ class GroqProvider(BaseAIProvider):
                     or not isinstance(content, str)
                     or not content.strip()
                 ):
-                    logger.warning(
-                        "Groq provider returned an empty or invalid response."
+                    self._log_empty_response(
+                        response=response,
+                        choice=choice,
+                        message=message,
+                        content=content,
+                        eff_max_tokens=eff_max_tokens,
                     )
 
                     raise ProviderExecutionError(
@@ -300,6 +356,7 @@ class GroqProvider(BaseAIProvider):
                     self._cumulative_request_count += (
                         total_http_attempts
                     )
+
                 return GenerationResult(
                     text=normalized_text,
                     provider_name=self.provider_name(),
@@ -330,19 +387,45 @@ class GroqProvider(BaseAIProvider):
                 with self._lock:
                     self._cumulative_request_count += total_http_attempts
 
-                logger.error(
-                    "Groq provider request execution failed."
-                )
-
                 is_retryable = (
                     status_code == 429
                     or (isinstance(status_code, int) and 500 <= status_code <= 599)
-                    or isinstance(exc, (TimeoutError, ConnectionError, APITimeoutError, APIConnectionError))
+                    or isinstance(
+                        exc,
+                        (
+                            TimeoutError,
+                            ConnectionError,
+                            APITimeoutError,
+                            APIConnectionError,
+                        ),
+                    )
                     or is_retryable_provider_error(exc)
                 )
 
                 if status_code in {400, 401, 403}:
                     is_retryable = False
+
+                # Log only safe diagnostics. Do not log the prompt, response body,
+                # API key, or raw exception message because these may contain secrets.
+                logger.error(
+                    "Groq provider request execution failed.",
+                    extra={
+                        "provider": "Groq",
+                        "model": self.model,
+                        "error_type": type(exc).__name__,
+                        "status_code": (
+                            status_code
+                            if isinstance(status_code, int)
+                            else None
+                        ),
+                        "is_retryable": is_retryable,
+                        "attempt": attempt,
+                        "elapsed_ms": round(
+                            (self._now() - start_time) * 1000.0,
+                            2,
+                        ),
+                    },
+                )
 
                 if status_code == 401:
                     msg = "AI provider request unauthorized."
@@ -351,11 +434,13 @@ class GroqProvider(BaseAIProvider):
                 else:
                     msg = "AI provider execution failed."
 
+                # Preserve the original exception as the cause for internal
+                # debugging while keeping the public error message sanitized.
                 raise ProviderExecutionError(
                     msg,
                     status_code=status_code if isinstance(status_code, int) else None,
                     is_retryable=is_retryable,
-                ) from None
+                ) from exc
 
     def generate_completion(
         self,

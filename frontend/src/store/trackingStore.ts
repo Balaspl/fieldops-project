@@ -43,6 +43,13 @@ export interface JobData {
   eta_source?: string | null;
 }
 
+export interface JobLiveUpdate {
+  status?: string;
+  eta?: string | null;
+  duration_minutes?: number | null;
+  receivedAt: number;
+}
+
 const PRIORITY_ORDER = ['ON_SITE', 'EN_ROUTE', 'ASSIGNED', 'CREATED'];
 
 export const getTechnicianPrimaryStatus = (
@@ -85,7 +92,12 @@ interface TrackingState {
   
   // Job extensions
   jobs: Record<string, JobData>;
+  jobLiveUpdates: Record<string, JobLiveUpdate>;
   setJobs: (jobs: Record<string, JobData>) => void;
+  setJobTrackingSnapshot: (
+    jobId: string,
+    snapshot: Pick<JobLiveUpdate, 'status' | 'eta' | 'duration_minutes'>
+  ) => void;
   updateJobStatus: (jobId: string, status: string) => void;
   updateJobETA: (jobId: string, data: {
     eta?: string | null;
@@ -102,6 +114,7 @@ export const useTrackingStore = create<TrackingState>((set) => ({
   geofenceRadii: {},
   notifiedStates: {},
   jobs: {},
+  jobLiveUpdates: {},
 
   updateTechnicianLocation: (techId: string, data: Partial<TechGpsData>) => {
     set((state) => {
@@ -178,7 +191,16 @@ export const useTrackingStore = create<TrackingState>((set) => ({
 
   updateJobStatus: (jobId, status) => set((state) => {
     const jobKey = String(jobId);
-    if (!state.jobs[jobKey]) return {};
+    const jobLiveUpdates = {
+      ...state.jobLiveUpdates,
+      [jobKey]: {
+        ...state.jobLiveUpdates[jobKey],
+        status,
+        receivedAt: Date.now(),
+      },
+    };
+
+    if (!state.jobs[jobKey]) return { jobLiveUpdates };
 
     const updatedJobs = {
       ...state.jobs,
@@ -204,11 +226,30 @@ export const useTrackingStore = create<TrackingState>((set) => ({
     return {
       jobs: updatedJobs,
       technicians: updatedTechs,
+      jobLiveUpdates,
+    };
+  }),
+
+  setJobTrackingSnapshot: (jobId, snapshot) => set((state) => {
+    const jobKey = String(jobId);
+    return {
+      jobLiveUpdates: {
+        ...state.jobLiveUpdates,
+        [jobKey]: {
+          status: snapshot.status ?? undefined,
+          eta: snapshot.eta,
+          duration_minutes: snapshot.duration_minutes,
+          receivedAt: Date.now(),
+        },
+      },
     };
   }),
 
   updateJobETA: (jobId, data) => set((state) => {
     const jobKey = String(jobId);
+    const liveUpdate = state.jobLiveUpdates[jobKey] || {
+      receivedAt: Date.now(),
+    };
     const existingJob = state.jobs[jobKey] || {
       job_id: jobKey,
       title: `Job #${jobKey}`,
@@ -248,6 +289,18 @@ export const useTrackingStore = create<TrackingState>((set) => ({
 
     return {
       jobs: updatedJobs,
+      jobLiveUpdates: {
+        ...state.jobLiveUpdates,
+        [jobKey]: {
+          ...liveUpdate,
+          eta: data.eta !== undefined ? data.eta : liveUpdate.eta ?? null,
+          duration_minutes:
+            data.duration_minutes !== undefined
+              ? data.duration_minutes
+              : liveUpdate.duration_minutes ?? null,
+          receivedAt: Date.now(),
+        },
+      },
     };
   }),
 }));

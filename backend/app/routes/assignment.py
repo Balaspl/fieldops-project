@@ -406,10 +406,19 @@ def assign_job(
         # 9. Create Technician Notification
         # ============================================================
 
+        technician_recipient_id = str(
+            technician.tech_id or technician.technician_id
+        )
+
         notification = models.InAppNotification(
             id=str(uuid.uuid4()),
+            # Technician notifications belong to the recipient's organization,
+            # even when the job is owned by another organization.
             tenant_id=technician.tenant_id,
-            tech_id=technician.tech_id,
+            tech_id=technician_recipient_id,
+            recipient_role="technician",
+            recipient_id=technician_recipient_id,
+            group_key=f"job_{job.id}_JOB_ASSIGNED",
             job_id=str(job.id),
             type="JOB_ASSIGNED",
             title="New Job Assigned",
@@ -844,10 +853,18 @@ def assign_jobs_bulk(
             # Technician Notification
             # ========================================================
 
+            technician_recipient_id = str(
+                technician.tech_id or technician.technician_id
+            )
+
             notification = models.InAppNotification(
                 id=str(uuid.uuid4()),
+                # Keep this notification in the recipient technician's tenant.
                 tenant_id=technician.tenant_id,
-                tech_id=technician.tech_id,
+                tech_id=technician_recipient_id,
+                recipient_role="technician",
+                recipient_id=technician_recipient_id,
+                group_key=f"job_{job.id}_JOB_ASSIGNED",
                 job_id=str(job.id),
                 type="JOB_ASSIGNED",
                 title="New Job Assigned",

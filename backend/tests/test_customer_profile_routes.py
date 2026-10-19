@@ -181,6 +181,13 @@ class FakeDB:
         self.flush_error = flush_error
         self.commit_error = commit_error
 
+    def get_bind(self):
+        # Transactional outbox helpers need only the dialect name for these
+        # route tests; SQL writes remain covered by their dedicated tests.
+        return SimpleNamespace(
+            dialect=SimpleNamespace(name="sqlite")
+        )
+
     def query(self, *models):
         key = models[0]
 
@@ -196,6 +203,11 @@ class FakeDB:
 
     def add(self, obj):
         self.added.append(obj)
+
+    def execute(self, statement):
+        # Route tests do not exercise SQL execution; the booking outbox
+        # insert is covered by the outbox service tests.
+        return None
 
     def flush(self):
         self.flush_count += 1
@@ -354,6 +366,8 @@ def make_job(
     customer_id="customer-1",
     created_at=NOW,
     completed_at=None,
+    on_site_at=None,
+    work_started_at=None,
 ):
     return SimpleNamespace(
         id=job_id,
@@ -371,6 +385,8 @@ def make_job(
         customer_tenant_id="tenant-1",
         created_at=created_at,
         completed_at=completed_at,
+        on_site_at=on_site_at,
+        work_started_at=work_started_at,
     )
 
 
@@ -439,6 +455,9 @@ def make_notification(
         created_at=created_at,
         job_id=101,
         read_at=None,
+        group_key=f"job_{101}:status:1",
+        event_version=1,
+        notification_metadata={},
     )
 
 

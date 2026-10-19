@@ -1022,7 +1022,7 @@ async def test_ai_timeout_uses_jinja2_fallback() -> None:
         "_generate_with_ai",
         side_effect=TimeoutError("AI timed out"),
     ), patch(
-        "app.services.ai.FieldOpsAI.agents.communication_agent.render_managed_template"
+        "app.services.ai.FieldOpsAI.agents.communication_agent_impl.render_managed_template"
     ) as mock_render:
 
         mock_render.return_value = MagicMock(
@@ -1095,7 +1095,7 @@ async def test_ai_timeout_fallback_template_engine_error() -> None:
         "_generate_with_ai",
         side_effect=TimeoutError("AI timed out"),
     ), patch(
-        "app.services.ai.FieldOpsAI.agents.communication_agent.render_managed_template",
+        "app.services.ai.FieldOpsAI.agents.communication_agent_impl.render_managed_template",
         side_effect=Exception("template failure"),
     ):
 
@@ -1143,7 +1143,7 @@ async def test_fallback_renders_all_supported_channels(
     )
 
     with patch(
-        "app.services.ai.FieldOpsAI.agents.communication_agent.render_managed_template",
+        "app.services.ai.FieldOpsAI.agents.communication_agent_impl.render_managed_template",
         return_value=rendered,
     ):
 
@@ -1181,7 +1181,7 @@ async def test_email_html_fallback_contains_html_body() -> None:
     )
 
     with patch(
-        "app.services.ai.FieldOpsAI.agents.communication_agent.render_managed_template",
+        "app.services.ai.FieldOpsAI.agents.communication_agent_impl.render_managed_template",
         return_value=rendered,
     ):
 
@@ -1251,7 +1251,7 @@ async def test_guardrail_can_trigger_jinja2_fallback() -> None:
     )
 
     with patch(
-        "app.services.ai.FieldOpsAI.agents.communication_agent.render_managed_template",
+        "app.services.ai.FieldOpsAI.agents.communication_agent_impl.render_managed_template",
         return_value=rendered,
     ):
 
@@ -1341,7 +1341,7 @@ async def test_guardrail_fallback_that_fails_validation_raises() -> None:
     )
 
     with patch(
-        "app.services.ai.FieldOpsAI.agents.communication_agent.render_managed_template",
+        "app.services.ai.FieldOpsAI.agents.communication_agent_impl.render_managed_template",
         return_value=rendered,
     ):
 
@@ -1455,7 +1455,7 @@ async def test_generate_with_ai_timeout() -> None:
         raise asyncio.TimeoutError()
 
     with patch(
-        "app.services.ai.FieldOpsAI.agents.communication_agent.asyncio.wait_for",
+        "app.services.ai.FieldOpsAI.agents.communication_agent_impl.asyncio.wait_for",
         side_effect=fake_wait_for,
     ):
         with pytest.raises(
@@ -1554,7 +1554,7 @@ def test_render_fallback_converts_template_engine_error() -> None:
     )
 
     with patch(
-        "app.services.ai.FieldOpsAI.agents.communication_agent.render_managed_template",
+        "app.services.ai.FieldOpsAI.agents.communication_agent_impl.render_managed_template",
         side_effect=MessageTemplateEngineError("template failed"),
     ):
         with pytest.raises(
@@ -1605,7 +1605,7 @@ def test_render_fallback_rejects_unsupported_channel() -> None:
     )
 
     with patch(
-        "app.services.ai.FieldOpsAI.agents.communication_agent.render_managed_template",
+        "app.services.ai.FieldOpsAI.agents.communication_agent_impl.render_managed_template",
         return_value=rendered,
     ):
         with pytest.raises(
@@ -1641,7 +1641,7 @@ async def test_ai_failure_fallback_validation_failure_raises() -> None:
         "_generate_with_ai",
         side_effect=TimeoutError("AI timed out"),
     ), patch(
-        "app.services.ai.FieldOpsAI.agents.communication_agent.render_managed_template",
+        "app.services.ai.FieldOpsAI.agents.communication_agent_impl.render_managed_template",
         return_value=rendered,
     ), patch.object(
         agent.message_validator,

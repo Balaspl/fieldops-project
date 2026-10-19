@@ -1,4 +1,4 @@
-﻿from dataclasses import dataclass
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 import asyncio
@@ -80,97 +80,18 @@ class JobStatusEvent:
 
 
 # ======================================================
-# SendGrid Service
+# SMTP Service
 # ======================================================
 
-class SendGridService:
-    """
-    Send customer email through SendGrid.
+class SMTPEmailService:
+    """Send customer email through the configured SMTP relay."""
 
-    Recipient addresses and message bodies are deliberately
-    not written to application logs.
-    """
-
-    def __init__(
-        self,
-        api_key: str | None = None,
-    ) -> None:
-        import os
-
-        self.api_key = (
-            api_key
-            or os.getenv(
-                "SENDGRID_API_KEY",
-                "SG.mock_key",
-            )
+    async def send_email(self, to_email: str, subject: str, html_content: str) -> bool:
+        from app.services.email.smtp_email import SMTPEmailService as DeliveryService
+        result = await DeliveryService().send_email(
+            to_email=to_email, subject=subject, html_body=html_content
         )
-
-    async def send_email(
-        self,
-        to_email: str,
-        subject: str,
-        html_content: str,
-    ) -> bool:
-        """
-        Send one email or simulate delivery in local mode.
-        """
-
-        import os
-
-        if (
-            not self.api_key
-            or "mock" in self.api_key.lower()
-            or not os.getenv("SENDGRID_API_KEY")
-        ):
-            logger.info(
-                "SendGrid email delivery simulated."
-            )
-            return True
-
-        try:
-            from sendgrid import SendGridAPIClient
-            from sendgrid.helpers.mail import Mail
-
-            message = Mail(
-                from_email=os.getenv(
-                    "SENDGRID_FROM_EMAIL",
-                    "no-reply@fieldops.io",
-                ),
-                to_emails=to_email,
-                subject=subject,
-                html_content=html_content,
-            )
-
-            sendgrid = SendGridAPIClient(
-                self.api_key
-            )
-
-            loop = asyncio.get_running_loop()
-
-            response = await loop.run_in_executor(
-                None,
-                sendgrid.send,
-                message,
-            )
-
-            logger.info(
-                "SendGrid accepted email delivery. "
-                "status_code=%s",
-                response.status_code,
-            )
-
-            return response.status_code in {
-                200,
-                201,
-                202,
-            }
-
-        except Exception:
-            logger.error(
-                "SendGrid email delivery failed."
-            )
-            return False
-
+        return result.success
 
 # ======================================================
 # Event Publisher
@@ -611,7 +532,7 @@ class NotificationRouter:
         self.email = (
             email_service
             if email_service is not None
-            else SendGridService()
+            else SMTPEmailService()
         )
 
         self.ws = ws_manager
@@ -1968,7 +1889,7 @@ async def route_escalation(
                 "Failed to send escalation dashboard notification"
             )
 
-    # Email will be connected using SendGridService.
+    # Email delivery uses the configured SMTP relay.
     if manager_email:
         try:
             results["email"] = bool(

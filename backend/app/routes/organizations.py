@@ -44,6 +44,7 @@ from ..models.organization_onboarding import OrganizationOnboarding
 import os
 import smtplib
 from email.message import EmailMessage
+from email.utils import formataddr
 from ..routes.auth import _build_token_response
 from ..auth.jwt_handler import create_access_token, create_refresh_token
 
@@ -58,22 +59,24 @@ async def send_otp_email(
     otp: str,
 ) -> bool:
     """
-    Send organization verification OTP using Gmail SMTP.
+    Send organization verification OTP using the configured SMTP relay.
     """
 
-    SMTP_HOST= os.getenv("SMTP_HOST", "smtp.gmail.com")
+    SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
     SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-    SMTP_USERNAME = os.getenv("SMTP_USERNAME")
-    SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+    SMTP_USERNAME = (os.getenv("SMTP_USERNAME") or "").strip()
+    SMTP_PASSWORD = "".join((os.getenv("SMTP_PASSWORD") or "").split())
+    SMTP_FROM_EMAIL = (os.getenv("SMTP_FROM_EMAIL") or SMTP_USERNAME).strip()
+    SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "FieldOps")
 
-    if not SMTP_USERNAME or not SMTP_PASSWORD:
-        logger.error("Gmail SMTP credentials are not configured.")
+    if not SMTP_USERNAME or not SMTP_PASSWORD or not SMTP_FROM_EMAIL:
+        logger.error("SMTP email configuration is incomplete.")
         return False
 
     message = EmailMessage()
 
     message["Subject"] = "FieldOps organization verification code"
-    message["From"] = SMTP_USERNAME
+    message["From"] = formataddr((SMTP_FROM_NAME, SMTP_FROM_EMAIL))
     message["To"] = to_email
 
     message.set_content(
@@ -94,16 +97,20 @@ FieldOps Team
     )
 
     try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.starttls()
+        smtp_class = smtplib.SMTP_SSL if SMTP_PORT == 465 else smtplib.SMTP
+        with smtp_class(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+            if SMTP_PORT != 465:
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
             server.login(SMTP_USERNAME, SMTP_PASSWORD)
             server.send_message(message)
 
-        logger.info("OTP email sent successfully.")
+        logger.info("Organization verification email accepted by SMTP relay.")
         return True
 
     except Exception:
-        logger.exception("Failed to send OTP email through Gmail SMTP.")
+        logger.error("Organization verification email delivery failed.")
         return False
 
 

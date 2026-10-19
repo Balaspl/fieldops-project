@@ -66,6 +66,26 @@ def test_resolve_six_aitasks(base_config_data: dict[str, Any]) -> None:
         assert config.tenant_id == "tenant-123"
 
 
+def test_real_communication_agent_config_resolves_with_generation_temperature():
+    """Provider generation settings stay separate from strict AgentConfig."""
+    loader = ConfigLoader()
+    manager = AgentConfigManager(config_loader=loader)
+
+    resolved = manager.resolve(
+        agent_type=AITask.COMMUNICATION,
+        tenant_id="customer-tenant",
+    )
+
+    assert resolved.timeout_seconds == 5.0
+    assert resolved.tenant_id == "customer-tenant"
+    assert (
+        loader.get_config_snapshot()["communication_generation"][
+            "in_app_temperature"
+        ]
+        == 0.7
+    )
+
+
 def test_shared_defaults(base_config_data: dict[str, Any]) -> None:
     """
     2. Shared defaults

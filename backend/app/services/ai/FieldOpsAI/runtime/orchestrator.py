@@ -54,6 +54,7 @@ from app.services.ai.FieldOpsAI.providers.budget import (
     BudgetInfrastructureError,
     SyncTokenBudgetManager,
     TokenBudgetConfig,
+    count_tokens,
 )
 from app.services.ai.FieldOpsAI.providers.cache import (
     CacheTTLPolicy,
@@ -427,6 +428,21 @@ class AIOrchestrator(RuntimeInterface):
                 self.provider_health_monitor
             )
 
+        self.model_temperature = float(config_loader.temperature)
+        communication_settings = config_loader.get_config_snapshot().get(
+            "communication_generation", {}
+        )
+        self.communication_in_app_temperature = float(
+            communication_settings.get(
+                "in_app_temperature",
+                self.model_temperature,
+            )
+        )
+        if not 0.0 <= self.communication_in_app_temperature <= 1.0:
+            raise ValueError(
+                "communication_generation.in_app_temperature must be between 0 and 1"
+            )
+
         # --------------------------------------------------
         # Failover executor
         # --------------------------------------------------
@@ -672,14 +688,6 @@ class AIOrchestrator(RuntimeInterface):
             # 4. Request metadata
             # ----------------------------------------------
 
-            estimated_input_tokens = (
-                len(system_prompt.split())
-                + len(
-                    sanitized_user_prompt
-                    .split()
-                )
-            )
-
             category = "general"
 
             if task == AITask.SENTIMENT:
@@ -711,6 +719,16 @@ class AIOrchestrator(RuntimeInterface):
                         "portal",
                     ):
                         category = "portal"
+
+            generation_temperature = self.model_temperature
+            if (
+                task == AITask.COMMUNICATION
+                and str(sanitized_context.get("channel", "")).upper()
+                in {"IN_APP", "PORTAL"}
+            ):
+                generation_temperature = (
+                    self.communication_in_app_temperature
+                )
 
             tenant_id = (
                 sanitized_context.get(
@@ -762,6 +780,14 @@ class AIOrchestrator(RuntimeInterface):
                         is_retryable=False,
                     ) from None
 
+                # Estimate input tokens with the actual model selected for this provider.
+                # The framing allowance accounts for chat message boundaries.
+                estimated_input_tokens = (
+                    count_tokens(system_prompt, model_name)
+                    + count_tokens(sanitized_user_prompt, model_name)
+                    + 8
+                )
+
                 max_output_tokens = (
                     self.token_budget_manager
                     .config
@@ -786,7 +812,7 @@ class AIOrchestrator(RuntimeInterface):
                         sanitized_messages=(
                             messages
                         ),
-                        temperature=0.7,
+                        temperature=generation_temperature,
                         max_tokens=(
                             max_output_tokens
                         ),
@@ -876,11 +902,28 @@ class AIOrchestrator(RuntimeInterface):
                             )
                         )
 
-                    except BudgetExceededError:
+                    except BudgetExceededError as exc:
+                        correlation_id = sanitized_context.get("correlation_id")
                         logger.warning(
-                            "Token budget exceeded "
-                            "for provider '%s'.",
+                            "AI_BUDGET_REJECTED provider=%s category=%s "
+                            "model=%s estimated_input=%s max_output=%s "
+                            "correlation_id=%s reason=%s",
                             normalized_provider,
+                            category,
+                            model_name,
+                            estimated_input_tokens,
+                            max_output_tokens,
+                            correlation_id,
+                            str(exc)[:160],
+                            extra={
+                                "provider": normalized_provider,
+                                "category": category,
+                                "model": model_name,
+                                "estimated_input_tokens": estimated_input_tokens,
+                                "max_output_tokens": max_output_tokens,
+                                "correlation_id": correlation_id,
+                                "budget_reason": str(exc)[:160],
+                            },
                         )
 
                         raise ProviderExecutionError(
@@ -890,12 +933,21 @@ class AIOrchestrator(RuntimeInterface):
                             is_retryable=False,
                         ) from None
 
-                    except BudgetInfrastructureError:
+                    except BudgetInfrastructureError as exc:
+                        correlation_id = sanitized_context.get("correlation_id")
                         logger.warning(
-                            "Token budget "
-                            "infrastructure error "
-                            "for provider '%s'.",
+                            "AI_BUDGET_INFRASTRUCTURE_FAILURE provider=%s "
+                            "category=%s correlation_id=%s error_type=%s",
                             normalized_provider,
+                            category,
+                            correlation_id,
+                            type(exc).__name__,
+                            extra={
+                                "provider": normalized_provider,
+                                "category": category,
+                                "correlation_id": correlation_id,
+                                "error_type": type(exc).__name__,
+                            },
                         )
 
                         raise ProviderExecutionError(
@@ -935,14 +987,22 @@ class AIOrchestrator(RuntimeInterface):
                     if callable(
                         generate_result_method
                     ):
-                        raw_result = (
-                            generate_result_method(
-                                task=task,
-                                messages=messages,
-                                context=(
-                                    sanitized_context
-                                ),
+                        generation_kwargs = {
+                            "task": task,
+                            "messages": messages,
+                            "context": sanitized_context,
+                        }
+                        if isinstance(provider_client, GroqClient):
+                            generation_kwargs["temperature"] = (
+                                generation_temperature
                             )
+                            # Enforce the same output limit that was reserved
+                            # by the token budget manager.
+                            generation_kwargs["max_tokens"] = (
+                                max_output_tokens
+                            )
+                        raw_result = generate_result_method(
+                            **generation_kwargs
                         )
 
                     else:
@@ -980,10 +1040,8 @@ class AIOrchestrator(RuntimeInterface):
                             raw_text,
                             str,
                         ):
-                            actual_output_tokens = (
-                                len(
-                                    raw_text.split()
-                                )
+                            actual_output_tokens = count_tokens(
+                                raw_text, model_name
                             )
 
                             usage = UsageStats(
@@ -1129,15 +1187,28 @@ class AIOrchestrator(RuntimeInterface):
                 #         )
                 #     )
 
-                except Exception:
-                    import traceback
-                    traceback.print_exc()
-                    provider_error = (
-                        ProviderExecutionError(
-                            "AI provider execution "
-                            "failed.",
-                            is_retryable=False,
-                        )
+                except Exception as exc:
+                    # Preserve the real provider/client exception in logs.
+                    # The old code printed a traceback and then replaced the
+                    # exception with a generic error, making the root cause
+                    # difficult to identify from application logs.
+                    logger.exception(
+                        "Unexpected exception during AI provider execution.",
+                        extra={
+                            "task": task.value,
+                            "provider": normalized_provider,
+                            "model": model_name,
+                            "exception_type": type(exc).__name__,
+                            "exception_message": str(exc)[:1000],
+                            "category": category,
+                        },
+                    )
+                    provider_error = ProviderExecutionError(
+                        (
+                            "AI provider execution failed "
+                            f"({type(exc).__name__}): {str(exc)[:500]}"
+                        ),
+                        is_retryable=False,
                     )
 
                 # ------------------------------------------
@@ -1170,15 +1241,22 @@ class AIOrchestrator(RuntimeInterface):
                                 )
                             )
 
-                        except BudgetExceededError:
-                            cleanup_error = (
-                                ProviderExecutionError(
-                                    "AI token budget "
-                                    "overrun detected.",
-                                    is_retryable=False,
-                                )
+                        except BudgetExceededError as exc:
+                            logger.warning(
+                                "AI_BUDGET_RECONCILE_OVERRUN provider=%s category=%s "
+                                "est_in=%s actual_in=%s max_out=%s actual_out=%s reason=%s",
+                                normalized_provider,
+                                category,
+                                estimated_input_tokens,
+                                generation_result.usage.prompt_tokens,
+                                max_output_tokens,
+                                generation_result.usage.completion_tokens,
+                                str(exc)[:200],
                             )
-
+                            cleanup_error = ProviderExecutionError(
+                                "AI token budget overrun detected.",
+                                is_retryable=False,
+                            )
                         except Exception:
                             cleanup_error = (
                                 ProviderExecutionError(
@@ -1330,14 +1408,33 @@ class AIOrchestrator(RuntimeInterface):
                 ProviderExecutionError,
                 CircuitBreakerInfrastructureError,
                 ProviderHealthInfrastructureError,
-            ):
+            ) as exc:
+                logger.error(
+                    "AI_PROVIDER_PIPELINE_FAILED task=%s correlation_id=%s "
+                    "error_type=%s status_code=%s retryable=%s",
+                    task.value,
+                    sanitized_context.get("correlation_id"),
+                    type(exc).__name__,
+                    getattr(exc, "status_code", None),
+                    getattr(exc, "is_retryable", None),
+                    extra={
+                        "task": task.value,
+                        "correlation_id": sanitized_context.get("correlation_id"),
+                        "error_type": type(exc).__name__,
+                        "status_code": getattr(exc, "status_code", None),
+                        "is_retryable": getattr(exc, "is_retryable", None),
+                    },
+                )
                 raise
 
-            except Exception:
-                logger.warning(
-                    "AI orchestration failed "
-                    "for task '%s'.",
+            except Exception as exc:
+                correlation_id = sanitized_context.get("correlation_id")
+                logger.exception(
+                    "AI orchestration failed for task '%s' "
+                    "correlation_id=%s error_type=%s.",
                     task.value,
+                    correlation_id,
+                    type(exc).__name__,
                 )
 
                 raise RuntimeError(
@@ -1401,12 +1498,28 @@ class AIOrchestrator(RuntimeInterface):
                     response_schema.__name__,
                 )
 
-                return (
-                    self.response_parser.parse(
+                try:
+                    return self.response_parser.parse(
                         restored_response,
                         response_schema,
+                        correlation_id=sanitized_context.get("correlation_id"),
                     )
-                )
+                except (ValueError, TypeError) as exc:
+                    logger.error(
+                        "AI_RESPONSE_SCHEMA_REJECTED task=%s schema=%s "
+                        "correlation_id=%s error_type=%s",
+                        task.value,
+                        response_schema.__name__,
+                        sanitized_context.get("correlation_id"),
+                        type(exc).__name__,
+                        extra={
+                            "task": task.value,
+                            "schema": response_schema.__name__,
+                            "correlation_id": sanitized_context.get("correlation_id"),
+                            "error_type": type(exc).__name__,
+                        },
+                    )
+                    raise
 
             return restored_response
 

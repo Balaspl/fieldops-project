@@ -1,4 +1,5 @@
 from typing import Optional
+import logging
 
 from sqlalchemy import Boolean,CheckConstraint,Column,Date,DateTime,Float,ForeignKey,Index,Integer,JSON,String, Text,UniqueConstraint
 from sqlalchemy.orm import relationship
@@ -7,6 +8,9 @@ import uuid
 from .database import Base
 from sqlalchemy.types import TypeDecorator
 from datetime import datetime, timezone
+from sqlalchemy import BigInteger
+
+logger = logging.getLogger(__name__)
 
 class Tenant(Base):
     __tablename__ = "tenants"
@@ -127,6 +131,7 @@ class Job(Base):
     assigned_at = Column(DateTime(timezone=True), nullable=True)
     en_route_at = Column(DateTime(timezone=True), nullable=True)
     on_site_at = Column(DateTime(timezone=True), nullable=True)
+    work_started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(UTCDateTime(), nullable=True)
     cancelled_at = Column(DateTime(timezone=True), nullable=True)
     closed_at = Column(DateTime(timezone=True), nullable=True)
@@ -142,6 +147,13 @@ class Job(Base):
     # Reason fields
     cancellation_reason = Column(Text, nullable=True)
     closure_reason = Column(Text, nullable=True)
+
+    notification_event_version = Column(
+    BigInteger,
+    nullable=False,
+    default=0,
+    server_default="0",
+)
 
     # Technician rejection fields
     rejection_reason = Column(Text, nullable=True)
@@ -264,6 +276,7 @@ class SMSDelivery(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+
 class InAppNotification(Base):
     __tablename__ = "notifications"
 
@@ -290,23 +303,50 @@ class InAppNotification(Base):
         index=True,
     )
 
+
     job_id = Column(String(36), nullable=True)
     type = Column(String(50), nullable=False)
     title = Column(String(200), nullable=False)
     body = Column(Text, nullable=True)
-    status = Column(String(20), default="UNREAD")
+    status = Column(
+        String(20),
+        default="UNREAD",
+    )
+
     action_url = Column(String(500), nullable=True)
     action_type = Column(String(50), nullable=True)
     priority = Column(String(20), default="NORMAL")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
     read_at = Column(DateTime(timezone=True), nullable=True)
     dismissed_at = Column(DateTime(timezone=True), nullable=True)
     expires_at = Column(DateTime(timezone=True), nullable=True)
+    event_version = Column(
+    BigInteger,
+    nullable=False,
+    default=0,
+    server_default="0",
+)
+
     notification_metadata = Column(JSON, default=dict)
 
     organization = relationship(
         "Organization",
         back_populates="InApp_Notification",
+    )
+
+    # Generic recipient identity
+    recipient_id = Column(String(50), nullable=True)
+    recipient_role = Column(String(20), nullable=True)
+    group_key = Column(String(100), nullable=True)
+
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
     __table_args__ = (
@@ -315,8 +355,26 @@ class InAppNotification(Base):
             name="valid_status",
         ),
         CheckConstraint(
-            "tech_id IS NOT NULL OR customer_user_id IS NOT NULL",
+            """
+            tech_id IS NOT NULL
+            OR customer_user_id IS NOT NULL
+            OR recipient_id IS NOT NULL
+            """,
             name="notification_has_recipient",
+        ),
+        Index(
+            "uq_notifications_recipient_group",
+            "tenant_id",
+            "recipient_role",
+            "recipient_id",
+            "group_key",
+            unique=True,
+        ),
+        Index(
+            "ix_notifications_recipient_unread",
+            "tenant_id",
+            "recipient_id",
+            "read_at",
         ),
         Index(
             "idx_notifications_tech_status",
@@ -336,6 +394,27 @@ class InAppNotification(Base):
             "idx_notifications_type",
             "type",
         ),
+    )
+
+class NotificationChannelDelivery(Base):
+    __tablename__ = "notification_channel_deliveries"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True)
+    notification_id = Column(String(36), ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False)
+    channel = Column(String(20), nullable=False)          # in_app | sms | email
+    recipient_id = Column(String(50), nullable=False)
+    status = Column(String(30), nullable=False, default="queued")
+    provider_id = Column(String(255), nullable=True)
+    error_message = Column(Text, nullable=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    idempotency_key = Column(String(255), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("uq_ncd_idempotency", "idempotency_key", unique=True),
+        Index("ix_ncd_notification", "notification_id"),
     )
 
 class NotificationTemplate(Base):
@@ -896,79 +975,339 @@ class GPSRejectedPingLog(Base):
     organization=relationship("Organization",back_populates="gps_rejected_ping_logs")
 
 
-@event.listens_for(Job, 'after_update')
+
+@event.listens_for(Job, "after_update")
 def on_job_status_changed(mapper, connection, target):
-    from sqlalchemy import inspect
+    from sqlalchemy import inspect, select, update
     from sqlalchemy.orm import object_session
+    from sqlalchemy.orm.attributes import set_committed_value
     from sqlalchemy import event as sa_event
+    import threading
+    import time
+
     state = inspect(target)
-    history = state.get_history('status', True)
-    if history.has_changes():
-        new_status = history.added[0] if history.added else None
-        old_status = history.deleted[0] if history.deleted else None
-        
-        from .redis_client import get_redis_client
-        from .context import correlation_id_ctx
-        import time
+    history = state.get_history("status", True)
 
-        job_id = target.id
-        tenant_id = target.tenant_id or "tenant-1"
-        correlation_id = correlation_id_ctx.get() or None
+    if not history.has_changes():
+        return
 
-        # Store transition start time in Redis for SLA tracking
-        try:
-            redis_client = get_redis_client()
-            if redis_client:
-                redis_client.set(f"gps_purge_start_time:{job_id}", str(time.time()), ex=3600)
-        except Exception:
-            pass
+    new_status = history.added[0] if history.added else None
+    old_status = history.deleted[0] if history.deleted else None
 
-        def dispatch_tasks():
-            # Trigger GPS Purge if terminal
-            if new_status and str(new_status).upper().strip() in ["CLOSED", "CANCELLED", "CANCELED"]:
-                from .tasks import purge_job_gps_data_task, execute_job_gps_purge_sync
-                from .database import SessionLocal
-                import threading
-                try:
-                    purge_job_gps_data_task.delay(job_id, tenant_id, "event_based", correlation_id)
-                except Exception:
-                    def run_purge_in_thread():
-                        db = SessionLocal()
-                        try:
-                            execute_job_gps_purge_sync(db, job_id, tenant_id, "event_based", correlation_id)
-                        finally:
-                            db.close()
-                    threading.Thread(target=run_purge_in_thread).start()
+    from .redis_client import get_redis_client
+    from .context import correlation_id_ctx
 
-            # Trigger transition processing (notifications, SLA, events)
-            from .tasks import process_job_status_transition_task
-            from .database import SessionLocal
-            import threading
-            actor_id = getattr(target, "_actor_id", "system")
-            actor_role = getattr(target, "_actor_role", "system")
-            reason = getattr(target, "_transition_reason", None)
+    job_id = target.id
+    tenant_id = target.tenant_id or "tenant-1"
+    correlation_id = correlation_id_ctx.get() or None
+
+    # Atomically increment the version in the same transaction
+    # as the job status change.
+    version_result = connection.execute(
+        update(Job.__table__)
+        .where(Job.__table__.c.id == job_id)
+        .values(
+            notification_event_version=(
+                Job.__table__.c.notification_event_version + 1
+            )
+        )
+        .returning(Job.__table__.c.notification_event_version)
+    )
+
+    event_version = version_result.scalar_one()
+    technician_id_for_notification = target.assigned_technician_id
+    if (
+        technician_id_for_notification is None
+        and str(new_status or "").upper().strip()
+        == "REJECTED_BY_TECHNICIAN"
+        and target.rejected_by_tech_id
+    ):
+        rejected_technician_id = str(target.rejected_by_tech_id)
+        technician_id_for_notification = connection.execute(
+            select(Technician.__table__.c.technician_id).where(
+                Technician.__table__.c.tech_id == rejected_technician_id
+            )
+        ).scalar_one_or_none()
+        if (
+            technician_id_for_notification is None
+            and rejected_technician_id.isdigit()
+        ):
+            technician_id_for_notification = connection.execute(
+                select(Technician.__table__.c.technician_id).where(
+                    Technician.__table__.c.technician_id
+                    == int(rejected_technician_id)
+                )
+            ).scalar_one_or_none()
+
+    # Keep the ORM object aligned with the atomic Core UPDATE without
+    # marking it dirty for another flush.
+    set_committed_value(target, "notification_event_version", event_version)
+
+    logger.info(
+        "Job status change captured for customer communication",
+        extra={
+            "job_id": str(job_id),
+            "old_status": str(old_status),
+            "new_status": str(new_status),
+            "event_version": event_version,
+            "correlation_id": correlation_id,
+        },
+    )
+
+    # Store transition start time for SLA tracking.
+    try:
+        redis_client = get_redis_client()
+        if redis_client:
+            redis_client.set(
+                f"gps_purge_start_time:{job_id}",
+                str(time.time()),
+                ex=3600,
+            )
+    except Exception:
+        pass
+
+    def dispatch_tasks():
+        # Run customer communication independently of Celery. Local Compose
+        # deployments do not include a Celery worker, so a successfully queued
+        # task could otherwise remain unprocessed indefinitely.
+        def run_communication_agent():
+            comm_db = None
             try:
-                process_job_status_transition_task.delay(
-                    job_id, old_status, new_status, actor_id, actor_role, reason, correlation_id
+                from .database import SessionLocal
+                from .services.ai.FieldOpsAI.agents.communication_agent.events import (
+                    event_for_transition,
+                )
+                from .services.ai.FieldOpsAI.agents.communication_agent.service import (
+                    handle as comm_handle,
+                )
+
+                comm_event = event_for_transition(old_status, new_status)
+                if comm_event is None:
+                    logger.info(
+                        "No Communication Agent event mapped for job status change",
+                        extra={
+                            "job_id": str(job_id),
+                            "old_status": str(old_status),
+                            "new_status": str(new_status),
+                            "event_type": None,
+                            "event_version": event_version,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+                    return
+                if (
+                    not isinstance(event_version, int)
+                    or isinstance(event_version, bool)
+                    or event_version < 1
+                ):
+                    logger.error(
+                        "Communication Agent skipped: invalid event version "
+                        "job_id=%s event=%s version=%s correlation_id=%s",
+                        job_id, comm_event.value, event_version, correlation_id,
+                    )
+                    return
+
+                logger.info(
+                    "Starting Communication Agent after job commit",
+                    extra={
+                        "job_id": str(job_id),
+                        "old_status": str(old_status),
+                        "new_status": str(new_status),
+                        "event_type": comm_event.value,
+                        "event_version": event_version,
+                        "correlation_id": correlation_id,
+                    },
+                )
+                # Include session construction in the exception boundary. A
+                # failing connection/session factory must be visible as well.
+                comm_db = SessionLocal()
+                comm_handle(
+                    comm_db,
+                    int(job_id),
+                    comm_event,
+                    technician_id=technician_id_for_notification,
+                    version=event_version,
+                    correlation_id=correlation_id,
+                )
+                logger.info(
+                    "Communication Agent completed after job commit",
+                    extra={
+                        "job_id": str(job_id),
+                        "old_status": str(old_status),
+                        "new_status": str(new_status),
+                        "event_type": comm_event.value,
+                        "event_version": event_version,
+                        "correlation_id": correlation_id,
+                    },
                 )
             except Exception:
-                def run_transition_in_thread():
+                logger.exception(
+                    "Communication Agent background execution failed",
+                    extra={
+                        "job_id": str(job_id),
+                        "old_status": str(old_status),
+                        "new_status": str(new_status),
+                        "event_version": event_version,
+                        "correlation_id": correlation_id,
+                    },
+                )
+                if comm_db is not None:
+                    try:
+                        comm_db.rollback()
+                    except Exception:
+                        logger.exception(
+                            "Communication Agent session rollback failed",
+                            extra={
+                                "job_id": str(job_id),
+                                "old_status": str(old_status),
+                                "new_status": str(new_status),
+                                "event_version": event_version,
+                                "correlation_id": correlation_id,
+                            },
+                        )
+            finally:
+                if comm_db is not None:
+                    try:
+                        comm_db.close()
+                    except Exception:
+                        logger.exception(
+                            "Communication Agent session close failed",
+                            extra={
+                                "job_id": str(job_id),
+                                "old_status": str(old_status),
+                                "new_status": str(new_status),
+                                "event_version": event_version,
+                                "correlation_id": correlation_id,
+                            },
+                        )
+
+        try:
+            threading.Thread(
+                target=run_communication_agent,
+                name=f"customer-notification-agent-{job_id}",
+                daemon=True,
+            ).start()
+            logger.info(
+                "Communication Agent background thread started",
+                extra={
+                    "job_id": str(job_id),
+                    "old_status": str(old_status),
+                    "new_status": str(new_status),
+                    "event_version": event_version,
+                    "correlation_id": correlation_id,
+                },
+            )
+        except Exception:
+            logger.exception(
+                "Could not start Communication Agent thread",
+                extra={
+                    "job_id": str(job_id),
+                    "old_status": str(old_status),
+                    "new_status": str(new_status),
+                    "event_version": event_version,
+                    "correlation_id": correlation_id,
+                },
+            )
+
+        # Preserve GPS purge behavior for terminal statuses.
+        if new_status and str(new_status).upper().strip() in {
+            "CLOSED", "CANCELLED", "CANCELED"
+        }:
+            from .tasks import (
+                purge_job_gps_data_task,
+                execute_job_gps_purge_sync,
+            )
+            from .database import SessionLocal
+
+            try:
+                purge_job_gps_data_task.delay(
+                    job_id,
+                    tenant_id,
+                    "event_based",
+                    correlation_id,
+                )
+            except Exception:
+                def run_purge_in_thread():
                     db = SessionLocal()
                     try:
-                        process_job_status_transition_task(
-                            job_id, old_status, new_status, actor_id, actor_role, reason, correlation_id
+                        execute_job_gps_purge_sync(
+                            db,
+                            job_id,
+                            tenant_id,
+                            "event_based",
+                            correlation_id,
                         )
                     finally:
                         db.close()
-                threading.Thread(target=run_transition_in_thread).start()
 
-        session = object_session(target)
-        if session:
-            @sa_event.listens_for(session, "after_commit", once=True)
-            def do_after_commit(session_arg):
-                dispatch_tasks()
-        else:
+                threading.Thread(
+                    target=run_purge_in_thread,
+                    daemon=True,
+                ).start()
+
+        # Queue notification/SLA/event processing with the
+        # exact version captured for this transition.
+        from .tasks import process_job_status_transition_task
+        from .database import SessionLocal
+
+        actor_id = getattr(target, "_actor_id", "system")
+        actor_role = getattr(target, "_actor_role", "system")
+        reason = getattr(target, "_transition_reason", None)
+
+        try:
+            process_job_status_transition_task.delay(
+                job_id,
+                old_status,
+                new_status,
+                actor_id,
+                actor_role,
+                reason,
+                correlation_id,
+                event_version,
+                technician_id_for_notification,
+            )
+        except Exception:
+            def run_transition_in_thread():
+                db = SessionLocal()
+                try:
+                    process_job_status_transition_task(
+                        job_id,
+                        old_status,
+                        new_status,
+                        actor_id,
+                        actor_role,
+                        reason,
+                        correlation_id,
+                        event_version,
+                        technician_id_for_notification,
+                    )
+                finally:
+                    db.close()
+
+            threading.Thread(
+                target=run_transition_in_thread,
+                daemon=True,
+            ).start()
+
+    session = object_session(target)
+
+    if session:
+        @sa_event.listens_for(session, "after_commit", once=True)
+        def do_after_commit(session_arg):
+            logger.info(
+                "Job status after-commit callback fired",
+                extra={
+                    "job_id": str(job_id),
+                    "old_status": str(old_status),
+                    "new_status": str(new_status),
+                    "event_version": event_version,
+                    "correlation_id": correlation_id,
+                },
+            )
             dispatch_tasks()
+    else:
+        dispatch_tasks()
+
 
 
 class CommunicationChannelConfiguration(Base):
@@ -1289,6 +1628,10 @@ class CustomerProfile(Base):
     email_enabled = Column(Boolean, nullable=False, default=True)
     push_enabled = Column(Boolean, nullable=False, default=False)
     portal_enabled = Column(Boolean, nullable=False, default=True)
+    daily_engagement_enabled = Column(Boolean, nullable=False, default=False, server_default="false")
+    timezone = Column(String(64), nullable=False, default="UTC", server_default="UTC")
+    quiet_hours_start = Column(String(5), nullable=False, default="21:00", server_default="21:00")
+    quiet_hours_end = Column(String(5), nullable=False, default="08:00", server_default="08:00")
 
     revision = Column(Integer, nullable=False, default=1)
     updated_by = Column(String(100), nullable=False)

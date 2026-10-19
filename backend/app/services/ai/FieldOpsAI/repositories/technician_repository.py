@@ -49,30 +49,27 @@ class TechnicianRepository:
 
     # ---------------------------------------------------------
 
+   
     def get_available(
-    self,
-    tenant_id: str | None = None,
-) -> List[Technician]:
+        self,
+        tenant_id: str | None = None,
+    ) -> List[Technician]:
         """
-        Retrieve all available technicians.
+        Retrieve technicians regardless of their current status.
     
+        Technician status does not block planning.
         If tenant_id is provided, restrict results to that tenant.
-        If tenant_id is None, return available technicians
-        across all tenants.
-    
-        This method only performs database access.
+        If tenant_id is None, search across tenants.
         """
-    
-        query = self.db.query(Technician).filter(
-            Technician.technician_status == "AVAILABLE",
-        )
+        query = self.db.query(Technician)
     
         if tenant_id is not None:
             query = query.filter(
-                Technician.tenant_id == tenant_id,
+                Technician.tenant_id == tenant_id
             )
     
         return query.all()
+
 
     # ---------------------------------------------------------
 

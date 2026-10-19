@@ -10,11 +10,42 @@ import hashlib
 import json
 import logging
 import secrets
+from functools import lru_cache
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Optional, Tuple
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=8)
+def _get_token_encoding(model: str = "openai/gpt-oss-120b") -> Any:
+    """Return a tokenizer compatible with the configured model family.
+
+    GPT-OSS uses the o200k tokenizer family. Keep this lazy so importing the
+    budget module does not require loading tokenizer data until needed.
+    """
+    try:
+        import tiktoken
+    except ImportError as exc:  # fail closed: never silently use word counts
+        raise BudgetInfrastructureError(
+            "Token estimation requires the 'tiktoken' dependency."
+        ) from exc
+
+    model_name = (model or "").strip().lower()
+    try:
+        return tiktoken.encoding_for_model(model_name)
+    except (KeyError, ValueError):
+        # GPT-OSS model identifiers may not be registered in every tiktoken
+        # release. o200k_base is the intended fallback for this model family.
+        return tiktoken.get_encoding("o200k_base")
+
+
+def count_tokens(text: str, model: str = "openai/gpt-oss-120b") -> int:
+    """Count text tokens with the configured model's compatible encoding."""
+    if not isinstance(text, str):
+        raise TypeError("text must be a string")
+    return len(_get_token_encoding(model).encode(text, disallowed_special=()))
 
 
 # --- Custom Exceptions ---

@@ -26,9 +26,9 @@ load_dotenv()
 async def test_kafka_producer_to_consumer_e2e():
     topic = "fieldops.audit.events"
     group_id = f"fieldops-audit-e2e-{uuid.uuid4()}"
+    test_id = str(uuid.uuid4())
 
     producer = KafkaProducer()
-
     consumer = KafkaConsumerManager(
         topic=topic,
         group_id=group_id,
@@ -39,7 +39,19 @@ async def test_kafka_producer_to_consumer_e2e():
     messages = []
 
     async def handler(message):
-        if not received.is_set():
+        # Ignore historical messages and unrelated events on the shared topic.
+        if not isinstance(message, dict):
+            return
+
+        payload = message.get("payload")
+        if not isinstance(payload, dict):
+            return
+
+        if (
+            payload.get("test") == "kafka-e2e"
+            and payload.get("test_id") == test_id
+            and payload.get("job_id") == "E2E-TEST-001"
+        ):
             messages.append(message)
             received.set()
 
@@ -49,9 +61,7 @@ async def test_kafka_producer_to_consumer_e2e():
         await producer.start()
         await consumer.start()
 
-        consumer_task = asyncio.create_task(
-            consumer.consume(handler)
-        )
+        consumer_task = asyncio.create_task(consumer.consume(handler))
 
         message = MessageEnvelope(
             sender=AgentAddress(
@@ -63,29 +73,27 @@ async def test_kafka_producer_to_consumer_e2e():
             message_type=MessageType.EVENT,
             payload={
                 "test": "kafka-e2e",
+                "test_id": test_id,
                 "job_id": "E2E-TEST-001",
             },
-            correlation_id=str(uuid.uuid4()),
+            correlation_id=test_id,
             topic=topic,
         )
 
         result = await producer.publish(message)
-
         assert result is True
 
-        await asyncio.wait_for(
-            received.wait(),
-            timeout=10,
-        )
+        await asyncio.wait_for(received.wait(), timeout=10)
 
         assert len(messages) == 1
-        assert messages[0]["payload"]["test"] == "kafka-e2e"
-        assert messages[0]["payload"]["job_id"] == "E2E-TEST-001"
+        received_payload = messages[0]["payload"]
+        assert received_payload["test"] == "kafka-e2e"
+        assert received_payload["test_id"] == test_id
+        assert received_payload["job_id"] == "E2E-TEST-001"
 
     finally:
         if consumer_task is not None:
             consumer_task.cancel()
-
             try:
                 await consumer_task
             except asyncio.CancelledError:
@@ -93,7 +101,6 @@ async def test_kafka_producer_to_consumer_e2e():
 
         await consumer.stop()
         await producer.stop()
-
 
 @pytest.mark.asyncio
 async def test_kafka_unauthorized_consumer_group_rejected():

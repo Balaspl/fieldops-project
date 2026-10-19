@@ -226,7 +226,7 @@ class ChannelSelector:
         Check channel availability.
 
         Health is injectable because the existing project has a
-        provider-health monitor, while Twilio/SendGrid are currently
+        provider-health monitor, while Twilio/SMTP are currently
         delivered through the notification service.
         """
 

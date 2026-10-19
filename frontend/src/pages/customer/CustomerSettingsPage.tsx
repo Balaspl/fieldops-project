@@ -20,6 +20,10 @@ type CustomerNotificationPreferencesForm = {
   push_enabled: boolean;
   portal_enabled: boolean;
   preferred_locale: string;
+  daily_engagement_enabled: boolean;
+  timezone: string;
+  quiet_hours_start: string;
+  quiet_hours_end: string;
 };
 export default function CustomerSettingsPage() {
   const [currentPw, setCurrentPw] = useState("");
@@ -52,6 +56,10 @@ export default function CustomerSettingsPage() {
     push_enabled: preferences.push_enabled,
     portal_enabled: preferences.portal_enabled,
     preferred_locale: preferences.preferred_locale,
+    daily_engagement_enabled: preferences.daily_engagement_enabled ?? false,
+    timezone: preferences.timezone ?? "UTC",
+    quiet_hours_start: preferences.quiet_hours_start ?? "21:00",
+    quiet_hours_end: preferences.quiet_hours_end ?? "08:00",
   });
 
   useEffect(() => {
@@ -215,6 +223,10 @@ export default function CustomerSettingsPage() {
           push_enabled: notificationDraft.push_enabled,
           portal_enabled: notificationDraft.portal_enabled,
           preferred_locale: preferredLocale,
+          daily_engagement_enabled: notificationDraft.daily_engagement_enabled,
+          timezone: notificationDraft.timezone,
+          quiet_hours_start: notificationDraft.quiet_hours_start,
+          quiet_hours_end: notificationDraft.quiet_hours_end,
         });
 
       setNotificationPreferences(response.data);
@@ -255,7 +267,12 @@ export default function CustomerSettingsPage() {
       notificationDraft.portal_enabled !==
         notificationPreferences.portal_enabled ||
       notificationDraft.preferred_locale.trim() !==
-        notificationPreferences.preferred_locale
+        notificationPreferences.preferred_locale ||
+      notificationDraft.daily_engagement_enabled !==
+        notificationPreferences.daily_engagement_enabled ||
+      notificationDraft.timezone.trim() !== notificationPreferences.timezone ||
+      notificationDraft.quiet_hours_start !== notificationPreferences.quiet_hours_start ||
+      notificationDraft.quiet_hours_end !== notificationPreferences.quiet_hours_end
     );
 
   const inputStyle = {
@@ -656,6 +673,20 @@ export default function CustomerSettingsPage() {
                     />
                   </label>
                 ))}
+
+                <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", padding: "12px 14px", border: "1px solid #E3ECE7", borderRadius: "10px", background: "#F9FBFA", cursor: "pointer" }}>
+                  <span style={{ fontSize: "14px", fontWeight: 600, color: "#1F2937" }}>Daily appointment reminders</span>
+                  <input type="checkbox" checked={notificationDraft.daily_engagement_enabled} disabled={notificationSaving} onChange={(e) => setNotificationDraft((current) => current ? { ...current, daily_engagement_enabled: e.target.checked } : current)} aria-label="Enable daily service tips and reminders" />
+                </label>
+
+                <div style={{ marginTop: "4px" }}>
+                  <label style={labelStyle}>Timezone (IANA)</label>
+                  <input type="text" value={notificationDraft.timezone} disabled={notificationSaving} onChange={(e) => setNotificationDraft((current) => current ? { ...current, timezone: e.target.value } : current)} placeholder="Asia/Kolkata" style={{ ...inputStyle, paddingRight: "12px" }} />
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                  <label style={labelStyle}>Quiet hours start<input type="time" value={notificationDraft.quiet_hours_start} disabled={notificationSaving} onChange={(e) => setNotificationDraft((current) => current ? { ...current, quiet_hours_start: e.target.value } : current)} style={{ ...inputStyle, paddingRight: "12px" }} /></label>
+                  <label style={labelStyle}>Quiet hours end<input type="time" value={notificationDraft.quiet_hours_end} disabled={notificationSaving} onChange={(e) => setNotificationDraft((current) => current ? { ...current, quiet_hours_end: e.target.value } : current)} style={{ ...inputStyle, paddingRight: "12px" }} /></label>
+                </div>
 
                 <div style={{ marginTop: "4px" }}>
                   <label style={labelStyle}>

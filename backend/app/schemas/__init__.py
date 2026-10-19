@@ -2,6 +2,7 @@ from datetime import date, datetime
 from typing import Literal, Optional, Union
 import re
 from pydantic import BaseModel, field_validator, ConfigDict, Field
+from email_validator import EmailNotValidError, validate_email
 from ..services.ai.FieldOpsAI.schemas.prompt_variable import PromptVariableDeclaration
 from .completion_document import (
     CompletionDocumentCreate,
@@ -36,6 +37,7 @@ class JobCreate(BaseModel):
     ]
     service_type: str
     contact_number: str
+    customer_email: Optional[str] = None
     preferred_service_date: date
     required_skill: Optional[str] = None
     status: str = "active"
@@ -84,6 +86,18 @@ class JobCreate(BaseModel):
             raise ValueError("Contact number must be 10 digits")
 
         return value
+
+    @field_validator("customer_email")
+    @classmethod
+    def validate_customer_email(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not value.strip():
+            return None
+        try:
+            return validate_email(
+                value.strip(), check_deliverability=False
+            ).normalized
+        except EmailNotValidError as exc:
+            raise ValueError("A valid customer email address is required") from exc
 
 
 class JobResponse(BaseModel):
@@ -444,7 +458,11 @@ class SMSBulkSendRequest(BaseModel):
     
 class InAppNotificationResponse(BaseModel):
     id: str
-    tech_id: str
+    tech_id: Optional[str] = None
+    recipient_id: Optional[str] = None
+    recipient_role: Optional[str] = None
+    group_key: Optional[str] = None
+    event_version: Optional[int] = None
     job_id: Optional[str] = None
     type: str
     title: str

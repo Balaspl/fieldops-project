@@ -9564,7 +9564,11 @@ def test_cov_create_job_kafka_publish_results(monkeypatch, publish_result):
     import asyncio
 
     class Producer:
+        def __init__(self):
+            self.published = []
+
         async def publish(self, event):
+            self.published.append(event)
             assert event.payload["event_type"] == "job-created"
             assert event.topic == "fieldops.job.events"
             return publish_result
@@ -9586,7 +9590,8 @@ def test_cov_create_job_kafka_publish_results(monkeypatch, publish_result):
             attempt_count=0,
         )
 
-        request = _cov_request(Producer())
+        producer = Producer()
+        request = _cov_request(producer)
         background_tasks = BackgroundTasks()
 
         result = create_job(
@@ -9598,10 +9603,15 @@ def test_cov_create_job_kafka_publish_results(monkeypatch, publish_result):
         )
 
         assert result.customer_name == "Coverage Customer"
-        assert len(background_tasks.tasks) == 2
+        assert len(background_tasks.tasks) == 3
 
-        task = background_tasks.tasks[0]
+        task = next(
+            task
+            for task in background_tasks.tasks
+            if task.func.__name__ == "publish_job_created_event"
+        )
         asyncio.run(task.func(*task.args, **task.kwargs))
+        assert len(producer.published) == 1
     finally:
         db.close()
 
@@ -9613,7 +9623,11 @@ def test_cov_create_job_kafka_publish_exception():
     import asyncio
 
     class Producer:
+        def __init__(self):
+            self.published = []
+
         async def publish(self, event):
+            self.published.append(event)
             raise RuntimeError("Kafka unavailable")
 
     db = TestingSessionLocal()
@@ -9633,7 +9647,8 @@ def test_cov_create_job_kafka_publish_exception():
             attempt_count=0,
         )
 
-        request = _cov_request(Producer())
+        producer = Producer()
+        request = _cov_request(producer)
         background_tasks = BackgroundTasks()
 
         result = create_job(
@@ -9645,12 +9660,13 @@ def test_cov_create_job_kafka_publish_exception():
         )
 
         assert result.customer_name == "Coverage Kafka Error"
-        asyncio.run(
-            background_tasks.tasks[0].func(
-                *background_tasks.tasks[0].args,
-                **background_tasks.tasks[0].kwargs,
-            )
+        task = next(
+            task
+            for task in background_tasks.tasks
+            if task.func.__name__ == "publish_job_created_event"
         )
+        asyncio.run(task.func(*task.args, **task.kwargs))
+        assert len(producer.published) == 1
     finally:
         db.close()
 

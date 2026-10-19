@@ -1,3 +1,4 @@
+
 export interface JobNotificationDetail {
   id: string | number;
   title: string;
@@ -12,15 +13,43 @@ export interface JobNotificationDetail {
   required_skills: string[];
 }
 
+/* ─── Notification Models ─────────────────────────────────────────── */
+
+export type NotificationType =
+  | "JOB_ASSIGNED"
+  | "SLA_WARNING"
+  | "JOB_UPDATED"
+  | "SYSTEM"
+  | "TECHNICIAN_ACCEPTED"
+  | "TECHNICIAN_REJECTED"
+  | "EN_ROUTE"
+  | "ON_SITE"
+  | "COMPLETED"
+  | "CANCELLED"
+  | "CLOSED"
+  | "DELAYED";
+
 export interface TechnicianNotification {
   id: string;
-  type: 'JOB_ASSIGNED' | 'SLA_WARNING' | 'JOB_UPDATED' | 'SYSTEM';
+  type: NotificationType;
   title: string;
   message: string;
   isRead: boolean;
   createdAt: string;
   jobId?: string | number;
-  job?: JobNotificationDetail;
+  job?: JobNotificationDetail | null;
+
+  /**
+   * Stable identifier for the notification card.
+   * Example: "job_123".
+   */
+  groupKey?: string;
+
+  /**
+   * Monotonically increasing backend event version.
+   * A card should not be replaced by an older or equal version.
+   */
+  eventVersion?: number;
 }
 
 export interface NotificationBellProps {
@@ -38,7 +67,11 @@ export interface NotificationDetailProps {
   error?: string;
   onAccept: (jobId: string | number) => void;
   onReject: (jobId: string | number, reason: string) => void;
-  onReassign: (jobId: string | number, colleagueId?: number, reason?: string) => void;
+  onReassign: (
+    jobId: string | number,
+    colleagueId?: number,
+    reason?: string
+  ) => void;
   onClose: () => void;
   socket?: any;
 }
@@ -47,7 +80,9 @@ export interface NotificationDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   notifications: TechnicianNotification[];
-  onNotificationClick: (notification: TechnicianNotification) => void;
+  onNotificationClick: (
+    notification: TechnicianNotification
+  ) => void;
   onMarkAllAsRead?: () => void;
   onDismissNotification?: (notificationId: string) => void;
   loading?: boolean;
@@ -61,11 +96,21 @@ export interface PermissionRequestProps {
 
 /* ─── Acceptance Timer & Action Components ─────────────────────────── */
 
-export type UrgencyLevel = "safe" | "caution" | "warning" | "critical";
-export type ActionState = "IDLE" | "LOADING" | "SUCCESS" | "ERROR" | "TIMEOUT";
+export type UrgencyLevel =
+  | "safe"
+  | "caution"
+  | "warning"
+  | "critical";
+
+export type ActionState =
+  | "IDLE"
+  | "LOADING"
+  | "SUCCESS"
+  | "ERROR"
+  | "TIMEOUT";
 
 export interface CountdownTimerProps {
-  expiresAt: string; // ISO 8601
+  expiresAt: string;
   onExpire: () => void;
   onWarning: () => void;
   jobId: string | number;
@@ -75,8 +120,15 @@ export interface CountdownTimerProps {
 
 export interface ActionButtonsProps {
   onAccept: (jobId: string | number) => Promise<void>;
-  onReject: (jobId: string | number, reason: string) => Promise<void>;
-  onReassign: (jobId: string | number, colleagueId?: number, reason?: string) => Promise<void>;
+  onReject: (
+    jobId: string | number,
+    reason: string
+  ) => Promise<void>;
+  onReassign: (
+    jobId: string | number,
+    colleagueId?: number,
+    reason?: string
+  ) => Promise<void>;
   jobId: string | number;
   disabled?: boolean;
 }
@@ -100,22 +152,30 @@ export interface UseCountdownReturn {
 export interface UseActionStateReturn {
   state: ActionState;
   message: string;
-  execute: (actionFn: () => Promise<void>, label?: string) => Promise<void>;
+  execute: (
+    actionFn: () => Promise<void>,
+    label?: string
+  ) => Promise<void>;
   retry: () => void;
   reset: () => void;
 }
 
-/* ─── Toast Notification System ─────────────────────────────────────── */
+/* ─── Toast Notification System ────────────────────────────────────── */
 
-export type ToastType = 'success' | 'warning' | 'error' | 'info';
-export type ToastPriority = 'normal' | 'critical';
+export type ToastType =
+  | "success"
+  | "warning"
+  | "error"
+  | "info";
+
+export type ToastPriority = "normal" | "critical";
 
 export type DispatchEventType =
-  | 'job.assigned'
-  | 'job.accepted'
-  | 'job.rejected'
-  | 'job.expired'
-  | 'job.en_route';
+  | "job.assigned"
+  | "job.accepted"
+  | "job.rejected"
+  | "job.expired"
+  | "job.en_route";
 
 export interface ToastItem {
   id: string;
@@ -124,21 +184,24 @@ export interface ToastItem {
   message: string;
   jobId?: string | number;
   timestamp: string;
-  autoDismiss: number;       // ms — 0 means never
+  autoDismiss: number;
   priority: ToastPriority;
   eventType?: DispatchEventType;
-  // Batch grouping
   batchCount?: number;
-  batchItems?: Array<{ title: string; message: string }>;
+  batchItems?: Array<{
+    title: string;
+    message: string;
+  }>;
 }
 
 export interface ToastContextValue {
   toasts: ToastItem[];
-  addToast: (toast: Omit<ToastItem, 'id' | 'timestamp'>) => string;
+  addToast: (
+    toast: Omit<ToastItem, "id" | "timestamp">
+  ) => string;
   dismissToast: (id: string) => void;
   pauseToast: (id: string) => void;
   resumeToast: (id: string) => void;
   soundEnabled: boolean;
   setSoundEnabled: (enabled: boolean) => void;
 }
-

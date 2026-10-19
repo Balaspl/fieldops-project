@@ -454,6 +454,9 @@ async def test_exception_secrecy_and_invocation_count(caplog: pytest.LogCaptureF
     assert "gsk_secret_123" not in log_text
     assert secret_prompt not in log_text
     assert original_err_msg not in log_text
+    assert caplog.records[-1].exception_type == "RuntimeError"
+    assert caplog.records[-1].provider == "FakeProvider"
+    assert caplog.records[-1].retryable is False
 
     # Verify generate_completion is invoked exactly once
     provider.generate_completion.assert_called_once_with(

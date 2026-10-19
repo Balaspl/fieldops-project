@@ -242,7 +242,7 @@ async def test_customer_sms_uses_safe_communication(
 async def test_customer_email_uses_safe_subject_and_body(
 ) -> None:
     """
-    SendGrid receives the validated CommunicationDecision.
+    Email receives the validated CommunicationDecision.
     """
 
     integration = (

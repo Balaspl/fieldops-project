@@ -5,12 +5,11 @@ through the production-safe communication workflow.
 
 from __future__ import annotations
 
-import json
-
 from datetime import (
     datetime,
     timezone,
 )
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -185,6 +184,28 @@ class FakeWebSocketManager:
         )
 
         return True
+
+
+def _patch_dispatcher_notification_db(monkeypatch):
+    """Provide one dispatcher recipient for the persistence/broadcast path."""
+    db = MagicMock()
+    dispatcher = SimpleNamespace(id="dispatcher-1")
+
+    def query(model):
+        result = MagicMock()
+        if model.__name__ == "User":
+            result.filter.return_value.all.return_value = [dispatcher]
+        else:
+            result.filter.return_value.first.return_value = None
+        return result
+
+    db.query.side_effect = query
+    monkeypatch.setattr(
+        notification_module,
+        "SessionLocal",
+        lambda: db,
+    )
+    return db
 
 
 class FakeEmailService:
@@ -406,12 +427,15 @@ async def test_technician_sms_uses_safe_message(
 
 @pytest.mark.anyio
 async def test_dispatcher_digest_contains_safe_content(
+    monkeypatch,
 ) -> None:
     """
-    Redis digest payload contains the safe in-app decision.
+    Batched dispatcher delivery persists and broadcasts safe in-app content.
     """
 
     redis = FakeRedis()
+    websocket = FakeWebSocketManager()
+    _patch_dispatcher_notification_db(monkeypatch)
 
     integration = (
         FakeCommunicationIntegration()
@@ -421,7 +445,7 @@ async def test_dispatcher_digest_contains_safe_content(
         fcm_service=MagicMock(),
         sms_service=MagicMock(),
         email_service=FakeEmailService(),
-        ws_manager=FakeWebSocketManager(),
+        ws_manager=websocket,
         redis_client=redis,
         communication_integration=(
             integration
@@ -441,33 +465,20 @@ async def test_dispatcher_digest_contains_safe_content(
 
     assert delivered is True
 
-    key = (
-        "dispatcher_digest:"
-        "tenant-123"
-    )
-
-    assert key in redis.values
-    assert len(redis.values[key]) == 1
-
-    payload = json.loads(
-        redis.values[key][0]
-    )
-
-    assert payload["title"] == (
-        "Safe dispatcher update"
-    )
-
-    assert payload["message"] == (
+    assert redis.values == {}
+    assert len(websocket.calls) == 1
+    _, envelope = websocket.calls[0]
+    assert envelope["payload"]["title"] == "Safe dispatcher update"
+    assert envelope["payload"]["body"].startswith(
         "The job status has changed safely."
     )
-
-    assert payload[
-        "notification_type"
-    ] == "dispatcher_job_assigned"
+    assert "Technician: John Tech." in envelope["payload"]["body"]
+    assert envelope["payload"]["type"] == "dispatcher_job_assigned"
 
 
 @pytest.mark.anyio
 async def test_dispatcher_immediate_broadcast_uses_safe_content(
+    monkeypatch,
 ) -> None:
     """
     WebSocket receives safe in-app content.
@@ -476,6 +487,7 @@ async def test_dispatcher_immediate_broadcast_uses_safe_content(
     websocket = (
         FakeWebSocketManager()
     )
+    _patch_dispatcher_notification_db(monkeypatch)
 
     router = NotificationRouter(
         fcm_service=MagicMock(),
@@ -512,17 +524,16 @@ async def test_dispatcher_immediate_broadcast_uses_safe_content(
         "tenant:tenant-123:dispatchers"
     )
 
-    assert envelope["type"] == (
-        "notification"
-    )
+    assert envelope["type"] == "new_notification"
 
     assert envelope["payload"]["title"] == (
         "Safe dispatcher update"
     )
 
-    assert envelope["payload"]["message"] == (
+    assert envelope["payload"]["body"].startswith(
         "The job status has changed safely."
     )
+    assert "Technician: John Tech." in envelope["payload"]["body"]
 
 
 def test_routing_uses_recipient_specific_templates(

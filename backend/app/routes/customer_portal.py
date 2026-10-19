@@ -752,6 +752,7 @@ async def create_service_request(
             current_user.user_id
         ),
         customer_email=cust_email,
+        notification_event_version=1,
     )
 
     try:
@@ -808,10 +809,31 @@ async def create_service_request(
             request=request,
         )
 
+        # Persist customer email work in the same transaction as the job so
+        # SMTP delivery does not depend on AI, Kafka, or background dispatch.
+        from ..services.email.transactional_outbox import persist_booking_email
+        persist_booking_email(
+            db,
+            new_job,
+            customer_id=str(current_user.user_id),
+            tenant_id=str(current_user.tenant_id),
+        )
+
         # The Job, linked ServiceRequest, and audit record share one transaction.
         db.commit()
         db.refresh(sr)
         db.refresh(new_job)
+        # Publish the existing Communication Agent event only after the job,
+        # service request, and audit record commit successfully.
+        from .jobs import _dispatch_communication_event
+        from ..services.ai.FieldOpsAI.agents.communication_agent.events import JobEvent
+
+        background_tasks.add_task(
+            _dispatch_communication_event,
+            int(new_job.id),
+            JobEvent.JOB_CREATED.value,
+            1,
+        )
         logger.info(
         "🔥 CUSTOMER SERVICE REQUEST COMMITTED | job_id=%s | status=%s",
         new_job.id,
@@ -1145,10 +1167,9 @@ def _customer_invoice_response(
     closure: JobClosure,
 ) -> CustomerInvoiceResponse:
     """Map the existing persisted billing contract into the customer schema."""
-    subtotal = round(float(closure.subtotal or 0), 2)
-    gst_rate = 5.0
-    gst_amount = round(subtotal * gst_rate / 100.0, 2)
-    total_amount = round(subtotal + gst_amount, 2)
+    from ..services.invoice_service import invoice_totals
+
+    totals = invoice_totals(closure.subtotal)
 
     return CustomerInvoiceResponse(
         id=str(closure.id),
@@ -1163,10 +1184,10 @@ def _customer_invoice_response(
         work_summary=closure.work_summary or "N/A",
         labour_cost=round(float(closure.labour_cost or 0), 2),
         material_cost=round(float(closure.material_cost or 0), 2),
-        subtotal=subtotal,
-        gst_rate=gst_rate,
-        gst_amount=gst_amount,
-        total_amount=total_amount,
+        subtotal=totals["subtotal"],
+        gst_rate=totals["gst_rate"],
+        gst_amount=totals["gst_amount"],
+        total_amount=totals["total_amount"],
         completed_at=closure.completed_at,
         created_at=closure.created_at,
     )
@@ -1178,10 +1199,9 @@ def _customer_payment_history_response(
 ) -> CustomerPaymentHistoryResponse:
     """Map persisted billing/payment records into the customer-safe history contract."""
 
-    subtotal = round(float(closure.subtotal or 0), 2)
-    gst_rate = 5.0
-    gst_amount = round(subtotal * gst_rate / 100.0, 2)
-    total_amount = round(subtotal + gst_amount, 2)
+    from ..services.invoice_service import invoice_totals
+
+    totals = invoice_totals(closure.subtotal)
 
     normalized_status = (
         str(payment_status.status or "UNAVAILABLE").strip().upper()
@@ -1203,7 +1223,7 @@ def _customer_payment_history_response(
         invoice_id=str(closure.id),
         job_id=job.id,
         service_type=job.service_type or "Service",
-        total_amount=total_amount,
+        total_amount=totals["total_amount"],
         payment_status=normalized_status,
         payment_status_updated_at=(
             payment_status.updated_at
@@ -1673,6 +1693,8 @@ async def track_customer_jobs(
                 live_tracking=(str(job.status).upper() == "EN_ROUTE" and latest_ping is not None),
                 tracking_tenant_id=str(job.tenant_id) if job.tenant_id else None,
                 created_at=job.created_at,
+                on_site_at=job.on_site_at,
+                work_started_at=job.work_started_at,
                 completed_at=job.completed_at,
             )
         )
@@ -1818,6 +1840,8 @@ async def get_customer_job_detail(
         live_tracking=(str(job.status).upper() == "EN_ROUTE" and latest_ping is not None),
         tracking_tenant_id=str(job.tenant_id) if job.tenant_id else None,
         created_at=job.created_at,
+        on_site_at=job.on_site_at,
+        work_started_at=job.work_started_at,
         completed_at=job.completed_at,
     )
 
@@ -2223,6 +2247,84 @@ async def submit_customer_feedback(
             detail="Feedback has already been submitted for this job.",
         )
 
+    # Customer feedback is also a dispatch event. Persist one notification
+    # per active dispatcher/admin and publish it only to this job's tenant.
+    try:
+        admins = (
+            db.query(User)
+            .filter(
+                User.tenant_id == job.tenant_id,
+                User.role.in_(
+                    [UserRole.DISPATCHER.value, UserRole.SUPER_ADMIN.value]
+                ),
+                User.is_active.is_(True),
+                User.deleted_at.is_(None),
+            )
+            .all()
+        )
+        comment = (feedback.comment or "").strip()
+        body = f"Customer left a {feedback.rating}/5 rating for Job #{job.id}."
+        if comment:
+            body += f" Comment: {comment[:400]}"
+
+        notifications = []
+        for admin in admins:
+            notification = InAppNotification(
+                id=str(uuid.uuid4()),
+                tenant_id=str(job.tenant_id),
+                recipient_id=str(admin.id),
+                recipient_role="dispatcher",
+                group_key=f"job_{job.id}:customer_feedback:{feedback.id}",
+                job_id=str(job.id),
+                type="customer_feedback",
+                title=f"Customer feedback for Job #{job.id}",
+                body=body,
+                status="UNREAD",
+                priority="NORMAL",
+                event_version=1,
+                notification_metadata={
+                    "job_id": str(job.id),
+                    "feedback_id": str(feedback.id),
+                    "rating": feedback.rating,
+                },
+            )
+            db.add(notification)
+            notifications.append(notification)
+
+        db.commit()
+        from ..services.socket_manager import ws_manager
+
+        for notification in notifications:
+            db.refresh(notification)
+            await ws_manager.broadcast(
+                f"tenant:{job.tenant_id}:dispatchers",
+                {
+                    "type": "new_notification",
+                    "payload": {
+                        "id": notification.id,
+                        "tenant_id": notification.tenant_id,
+                        "job_id": notification.job_id,
+                        "type": notification.type,
+                        "title": notification.title,
+                        "body": notification.body,
+                        "status": notification.status,
+                        "created_at": (
+                            notification.created_at.isoformat()
+                            if notification.created_at
+                            else None
+                        ),
+                        "event_version": notification.event_version,
+                        "group_key": notification.group_key,
+                    },
+                },
+            )
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Failed to notify dispatchers about customer feedback: job=%s",
+            job.id,
+        )
+
     return _customer_feedback_response(
         job,
         feedback,
@@ -2390,6 +2492,17 @@ async def get_notifications(
         InAppNotification.status == "UNREAD",
     ).count()
 
+    from ..context import correlation_id_ctx
+    logger.info(
+        "Customer notification feed loaded",
+        extra={
+            "tenant_id": str(current_user.tenant_id),
+            "notification_count": len(notifications),
+            "unread_count": unread_count,
+            "correlation_id": correlation_id_ctx.get() or None,
+        },
+    )
+
     return {
         "notifications": [
             {
@@ -2404,6 +2517,9 @@ async def get_notifications(
                     else None
                 ),
                 "jobId": n.job_id,
+                "groupKey": n.group_key,
+                "eventVersion": n.event_version,
+                "metadata": n.notification_metadata or {},
             }
             for n in notifications
         ],

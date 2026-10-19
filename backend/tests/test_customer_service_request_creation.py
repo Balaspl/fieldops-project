@@ -15,6 +15,8 @@ from app.models import Job, Organization, ServiceRequest, Technician, User
 from app.portal_schemas import ServiceRequestCreate
 from app.routes import customer_portal
 from app.routes.jobs import get_jobs, get_pending_jobs
+from app.services.ai.FieldOpsAI.agents.communication_agent.events import JobEvent
+from app.services.ai.FieldOpsAI.agents.communication_agent.recipients import resolve_recipients
 
 
 @pytest.fixture
@@ -127,11 +129,12 @@ def _payload() -> ServiceRequestCreate:
 def test_service_request_creation_commits_one_canonical_provider_job(
     db_session,
 ):
+    background_tasks = BackgroundTasks()
     response = asyncio.run(
         customer_portal.create_service_request(
             _payload(),
             _request(),
-            BackgroundTasks(),
+            background_tasks,
             current_user=_customer(),
             db=db_session,
         )
@@ -154,6 +157,8 @@ def test_service_request_creation_commits_one_canonical_provider_job(
     assert job.tenant_id == "provider-tenant"
     assert job.customer_tenant_id == "customer-tenant"
     assert job.customer_id == "customer-user"
+    assert job.customer_email == "customer@example.test"
+    assert job.notification_event_version == 1
     assert job.site_latitude == pytest.approx(13.085)
     assert job.site_longitude == pytest.approx(80.2101)
     assert job.status == "CREATED"
@@ -164,6 +169,17 @@ def test_service_request_creation_commits_one_canonical_provider_job(
         .count()
         == 1
     )
+    communication_task = background_tasks.tasks[0]
+    assert communication_task.args == (job.id, "job_created", 1)
+
+    # A persisted request email cannot override the registered customer's
+    # tenant-scoped account address used by lifecycle notification delivery.
+    job.customer_email = "untrusted@example.test"
+    db_session.flush()
+    recipients = resolve_recipients(db_session, job, JobEvent.JOB_CREATED)
+    customer_recipient = next(r for r in recipients if r.role == "customer")
+    assert customer_recipient.tenant_id == "customer-tenant"
+    assert customer_recipient.email == "customer@example.test"
 
 
 def test_customer_job_is_visible_to_provider_dispatch_and_stays_unassigned(
@@ -266,6 +282,7 @@ def test_service_request_creation_rolls_back_job_and_request_if_audit_fails(
         fail_audit,
     )
 
+    background_tasks = BackgroundTasks()
     with pytest.raises(
         RuntimeError,
         match="audit storage unavailable",
@@ -274,7 +291,7 @@ def test_service_request_creation_rolls_back_job_and_request_if_audit_fails(
             customer_portal.create_service_request(
                 _payload(),
                 _request(),
-                BackgroundTasks(),
+                background_tasks,
                 current_user=_customer(),
                 db=db_session,
             )
@@ -282,6 +299,7 @@ def test_service_request_creation_rolls_back_job_and_request_if_audit_fails(
 
     assert db_session.query(Job).count() == 0
     assert db_session.query(ServiceRequest).count() == 0
+    assert background_tasks.tasks == []
 
 
 @pytest.mark.parametrize(
