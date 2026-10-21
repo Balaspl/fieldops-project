@@ -2053,6 +2053,52 @@ def replay_dlq_event_task(
     return dict(result)
 
 
+def _process_duplicate_prevention_event_once(
+    *,
+    redis,
+    event_payload: dict,
+    domain: Optional[str] = None,
+    attempt: int = 1,
+) -> dict:
+    """Process an event once with distributed idempotency and duplicate prevention."""
+    import asyncio
+    from .services.consumer_idempotency import ConsumerIdempotency
+
+    consumer = ConsumerIdempotency(redis_client=redis)
+    result = asyncio.run(consumer.process_event(event_payload, domain=domain, attempt=attempt))
+    return dict(result)
+
+
+@celery_app.task(name="app.tasks.process_duplicate_prevention_event_task")
+def process_duplicate_prevention_event_task(
+    event_payload: dict,
+    domain: Optional[str] = None,
+    attempt: int = 1,
+):
+    """Celery background task to process consumed event with duplicate prevention."""
+    redis_client = get_redis_client()
+    return _process_duplicate_prevention_event_once(
+        redis=redis_client,
+        event_payload=event_payload,
+        domain=domain,
+        attempt=attempt,
+    )
+
+
+@celery_app.task(name="app.tasks.prevent_duplicate_event_processing_task")
+def prevent_duplicate_event_processing_task(
+    event_payload: dict,
+    domain: Optional[str] = None,
+    attempt: int = 1,
+):
+    """Celery task alias conforming to story naming: Prevent duplicate event processing."""
+    return process_duplicate_prevention_event_task(
+        event_payload=event_payload,
+        domain=domain,
+        attempt=attempt,
+    )
+
+
 def _publish_sla_event_once(
     *,
     redis,

@@ -87,3 +87,19 @@ async def get_kafka_consumers_health() -> dict:
 async def get_kafka_dlq_metrics() -> dict:
     dlq_service = ConsumerDeadLetterTopics()
     return dlq_service.get_dlq_metrics()
+
+
+@router.get(
+    "/kafka/idempotency",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def get_kafka_idempotency_metrics() -> dict:
+    from app.services.consumer_idempotency import ConsumerIdempotency
+    return ConsumerIdempotency.get_idempotency_metrics()
+
