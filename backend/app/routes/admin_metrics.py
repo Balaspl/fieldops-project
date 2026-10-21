@@ -5,6 +5,7 @@ from app.auth.rbac import Permission
 from app.runtime.metrics import MetricsCollector
 from app.services.kafka.consumer import DEFAULT_CONSUMER_GROUPS
 from app.services.kafka.monitoring import kafka_monitoring
+from app.services.consumer_health_checks import ConsumerHealthChecks
 
 router = APIRouter(prefix="/admin/metrics", tags=["Admin Metrics"])
 collector = MetricsCollector()
@@ -47,9 +48,26 @@ async def get_kafka_metrics() -> dict:
             group_id,
         )
 
+    consumers_health = await ConsumerHealthChecks.get_all_consumers_health_summary()
+
     return {
         "broker": broker,
         "topics": topics,
         "consumer_lag": consumer_lag,
+        "consumer_health": consumers_health,
         "operations": kafka_monitoring.snapshot(),
     }
+
+
+@router.get(
+    "/kafka/consumers",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def get_kafka_consumers_health() -> dict:
+    return await ConsumerHealthChecks.get_all_consumers_health_summary()

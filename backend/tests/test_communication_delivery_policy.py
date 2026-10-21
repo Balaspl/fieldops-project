@@ -462,6 +462,7 @@ def test_53_54_execution_time_policy(monkeypatch):
     
     # Patch providers
     mock_twilio = MagicMock(return_value="SM_task_test")
+    monkeypatch.setattr(twilio_module, "TWILIO_ACCOUNT_SID", "AC_test_account")
     monkeypatch.setattr(twilio_module, "dispatch_twilio_message", mock_twilio)
     
     mock_smtp = AsyncMock(return_value=True)

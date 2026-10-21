@@ -7964,7 +7964,7 @@ def test_close_job_terminal_status_lowercase():
 
 
 def test_get_job_closure_endpoint_technician_success(monkeypatch):
-    from app.routes.jobs import get_job_closure_endpoint
+    from app.routes.jobs import get_job_closure_endpoint, get_technician_for_current_user
 
     expected = {
         "job_id": 101,
@@ -7982,7 +7982,8 @@ def test_get_job_closure_endpoint_technician_success(monkeypatch):
         job = db.query(Job).filter(Job.id == 101).first()
         assert job is not None
 
-        job.assigned_technician_id = 1
+        technician = get_technician_for_current_user(db, _technician_enum_user())
+        job.assigned_technician_id = technician.technician_id
         db.commit()
 
         result = get_job_closure_endpoint(
