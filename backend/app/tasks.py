@@ -2009,6 +2009,50 @@ def process_health_checks_event_task(
     )
 
 
+def _process_dead_letter_event_once(
+    *,
+    redis,
+    event_payload: dict,
+    max_retries: int = 3,
+) -> dict:
+    """Process an event once through the dead-letter consumer with isolation."""
+    import asyncio
+    from .services.consumer_dead_letter_topics import ConsumerDeadLetterTopics
+
+    consumer = ConsumerDeadLetterTopics(redis_client=redis, max_retries=max_retries)
+    result = asyncio.run(consumer.process_event(event_payload, max_retries=max_retries))
+    return dict(result)
+
+
+@celery_app.task(name="app.tasks.process_dead_letter_event_task")
+def process_dead_letter_event_task(
+    event_payload: dict,
+    max_retries: int = 3,
+):
+    """Celery background task to process consumed event with dead-letter topic isolation."""
+    redis_client = get_redis_client()
+    return _process_dead_letter_event_once(
+        redis=redis_client,
+        event_payload=event_payload,
+        max_retries=max_retries,
+    )
+
+
+@celery_app.task(name="app.tasks.replay_dlq_event_task")
+def replay_dlq_event_task(
+    dlq_record: dict,
+    force: bool = False,
+):
+    """Celery background task to replay an event isolated in the DLQ."""
+    import asyncio
+    from .services.consumer_dead_letter_topics import ConsumerDeadLetterTopics
+
+    redis_client = get_redis_client()
+    consumer = ConsumerDeadLetterTopics(redis_client=redis_client)
+    result = asyncio.run(consumer.replay_dlq_event(dlq_record, force=force))
+    return dict(result)
+
+
 def _publish_sla_event_once(
     *,
     redis,

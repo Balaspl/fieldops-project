@@ -1893,3 +1893,71 @@ async def test_health_checks_consumer_lifecycle_e2e():
 
         await consumer.stop()
         await kafka_producer.stop()
+
+
+@pytest.mark.asyncio
+async def test_dead_letter_topics_consumer_lifecycle_e2e():
+    """
+    End-to-end verification of Kafka dead-letter topics lifecycle,
+    poison message isolation, and recovery output contract.
+    """
+    from app.services.consumer_dead_letter_topics import ConsumerDeadLetterTopics
+
+    topic = "fieldops.job.events"
+    run_id = str(uuid.uuid4())
+    event_id = f"evt_dlq_e2e_{run_id[:8]}"
+
+    kafka_producer = KafkaProducer()
+    try:
+        await kafka_producer.start()
+    except Exception as exc:
+        pytest.skip(f"Kafka unavailable for dead-letter topics E2E test: {exc}")
+
+    consumer = ConsumerDeadLetterTopics(
+        topic=topic,
+        kafka_producer=kafka_producer,
+    )
+
+    try:
+        # 1. Verify healthy processing returns recovery contract
+        healthy_msg = {
+            "event_id": event_id,
+            "tenant_id": "tenant-e2e",
+            "topic": topic,
+            "payload": {"job_id": "JOB-E2E-DLQ", "status": "ASSIGNED"},
+        }
+
+        def handler(p):
+            return True
+
+        res_healthy = await consumer.process_event(healthy_msg, handler=handler)
+        assert res_healthy["status"] == "RECOVERED"
+        assert res_healthy["event_id"] == event_id
+        assert res_healthy["retries"] == 1
+        assert res_healthy["idempotent"] is True
+        assert res_healthy["dlq"] is False
+
+        # 2. Verify poison pill isolates to DLQ topic
+        poison_msg = {
+            "event_id": f"evt_poison_{run_id[:8]}",
+            "tenant_id": "tenant-e2e",
+            "topic": topic,
+            "payload": {"job_id": "JOB-E2E-POISON", "corrupted": True},
+        }
+
+        def poison_handler(p):
+            raise ValueError("Poison pill schema validation error")
+
+        res_poison = await consumer.process_event(poison_msg, handler=poison_handler, max_retries=1)
+        assert res_poison["status"] == "DEAD_LETTER"
+        assert res_poison["dlq"] is True
+        assert res_poison["dlq_topic"] == "fieldops.job.events.dlq"
+        assert res_poison["idempotent"] is True
+
+        # 3. Verify metrics
+        metrics = consumer.get_dlq_metrics()
+        assert metrics["dlq_routed_total"] >= 1
+        assert metrics["recovered_total"] >= 1
+
+    finally:
+        await kafka_producer.stop()

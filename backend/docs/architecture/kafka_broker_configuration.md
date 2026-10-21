@@ -74,6 +74,29 @@ Kafka guarantees ordering only within a partition. Stable partition keys ensure 
 
 Partition increases should be avoided unless required because changing the partition count can change the partition mapping for keyed events.
 
+## Dead-Letter Queue (DLQ) Topics
+
+FieldOps Kafka event streaming isolates poison messages and unrecoverable consumer failures into dedicated DLQ topics:
+
+| DLQ Topic | Base Topic | Partitions | Retention | Purpose |
+|---|---|---:|---|---|
+| `fieldops.events.dlq` | `fieldops.events` | 3 | 14 days (1209600000 ms) | Poison message isolation for generic domain events |
+| `fieldops.job.events.dlq` | `fieldops.job.events` | 6 | 14 days (1209600000 ms) | Poison message isolation for dispatch/job events |
+| `fieldops.gps.events.dlq` | `fieldops.gps.events` | 12 | 14 days (1209600000 ms) | Poison message isolation for GPS tracking pings |
+| `fieldops.sla.events.dlq` | `fieldops.sla.events` | 6 | 14 days (1209600000 ms) | Poison message isolation for SLA monitoring |
+| `fieldops.notification.events.dlq` | `fieldops.notification.events` | 6 | 14 days (1209600000 ms) | Poison message isolation for notifications |
+| `fieldops.billing.events.dlq` | `fieldops.billing.events` | 3 | 14 days (1209600000 ms) | Poison message isolation for billing workflows |
+| `fieldops.payment.events.dlq` | `fieldops.payment.events` | 3 | 14 days (1209600000 ms) | Poison message isolation for payment events |
+| `fieldops.audit.events.dlq` | `fieldops.audit.events` | 6 | 14 days (1209600000 ms) | Poison message isolation for enterprise audit |
+| `fieldops.dlq.events` | Shared fallback | 3 | 14 days (1209600000 ms) | Shared fallback DLQ for untyped messages |
+
+### DLQ Rules and Access Controls
+
+1. **Isolation Without Blocking**: When a consumer encounters a fatal poison pill or exhausts its bounded exponential backoff retries, it forwards the event to its corresponding DLQ topic without throwing an uncaught exception, preserving stream continuity for healthy events.
+2. **Diagnostic Enrichment**: Every DLQ message is enriched with original source topic, partition, offset, failure timestamp, failure classification, and retry counts.
+3. **Secret Redaction**: Passwords, tokens, API keys, and authorization secrets are recursively redacted with `[REDACTED]` prior to publication to DLQ topics or log storage.
+4. **Idempotent Replay**: Replaying DLQ messages enforces Redis-backed deduplication markers (`consumer_dlq:event_processed:{event_id}`) to prevent duplicate downstream business side effects.
+
 ## Kafka Authentication
 
 The external Kafka listener uses SASL/PLAIN authentication.

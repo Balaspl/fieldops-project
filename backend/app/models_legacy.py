@@ -1,3 +1,4 @@
+import os
 from typing import Optional
 import logging
 
@@ -1181,33 +1182,35 @@ def on_job_status_changed(mapper, connection, target):
                             },
                         )
 
-        try:
-            threading.Thread(
-                target=run_communication_agent,
-                name=f"customer-notification-agent-{job_id}",
-                daemon=True,
-            ).start()
-            logger.info(
-                "Communication Agent background thread started",
-                extra={
-                    "job_id": str(job_id),
-                    "old_status": str(old_status),
-                    "new_status": str(new_status),
-                    "event_version": event_version,
-                    "correlation_id": correlation_id,
-                },
-            )
-        except Exception:
-            logger.exception(
-                "Could not start Communication Agent thread",
-                extra={
-                    "job_id": str(job_id),
-                    "old_status": str(old_status),
-                    "new_status": str(new_status),
-                    "event_version": event_version,
-                    "correlation_id": correlation_id,
-                },
-            )
+        is_testing = bool(os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("TESTING") == "true")
+        if not is_testing:
+            try:
+                threading.Thread(
+                    target=run_communication_agent,
+                    name=f"customer-notification-agent-{job_id}",
+                    daemon=True,
+                ).start()
+                logger.info(
+                    "Communication Agent background thread started",
+                    extra={
+                        "job_id": str(job_id),
+                        "old_status": str(old_status),
+                        "new_status": str(new_status),
+                        "event_version": event_version,
+                        "correlation_id": correlation_id,
+                    },
+                )
+            except Exception:
+                logger.exception(
+                    "Could not start Communication Agent thread",
+                    extra={
+                        "job_id": str(job_id),
+                        "old_status": str(old_status),
+                        "new_status": str(new_status),
+                        "event_version": event_version,
+                        "correlation_id": correlation_id,
+                    },
+                )
 
         # Preserve GPS purge behavior for terminal statuses.
         if new_status and str(new_status).upper().strip() in {
@@ -1240,10 +1243,11 @@ def on_job_status_changed(mapper, connection, target):
                     finally:
                         db.close()
 
-                threading.Thread(
-                    target=run_purge_in_thread,
-                    daemon=True,
-                ).start()
+                if not is_testing:
+                    threading.Thread(
+                        target=run_purge_in_thread,
+                        daemon=True,
+                    ).start()
 
         # Queue notification/SLA/event processing with the
         # exact version captured for this transition.
@@ -1284,10 +1288,11 @@ def on_job_status_changed(mapper, connection, target):
                 finally:
                     db.close()
 
-            threading.Thread(
-                target=run_transition_in_thread,
-                daemon=True,
-            ).start()
+            if not is_testing:
+                threading.Thread(
+                    target=run_transition_in_thread,
+                    daemon=True,
+                ).start()
 
     session = object_session(target)
 

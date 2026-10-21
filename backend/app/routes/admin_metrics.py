@@ -6,6 +6,7 @@ from app.runtime.metrics import MetricsCollector
 from app.services.kafka.consumer import DEFAULT_CONSUMER_GROUPS
 from app.services.kafka.monitoring import kafka_monitoring
 from app.services.consumer_health_checks import ConsumerHealthChecks
+from app.services.consumer_dead_letter_topics import ConsumerDeadLetterTopics
 
 router = APIRouter(prefix="/admin/metrics", tags=["Admin Metrics"])
 collector = MetricsCollector()
@@ -71,3 +72,18 @@ async def get_kafka_metrics() -> dict:
 )
 async def get_kafka_consumers_health() -> dict:
     return await ConsumerHealthChecks.get_all_consumers_health_summary()
+
+
+@router.get(
+    "/kafka/dlq",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def get_kafka_dlq_metrics() -> dict:
+    dlq_service = ConsumerDeadLetterTopics()
+    return dlq_service.get_dlq_metrics()

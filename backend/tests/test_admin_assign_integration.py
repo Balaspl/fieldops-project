@@ -168,49 +168,65 @@ def patch_job_lock():
 
 @pytest.fixture(autouse=True)
 def setup_db():
-    Base.metadata.drop_all(bind=engine)
+    import time
+    for attempt in range(10):
+        try:
+            Base.metadata.drop_all(bind=engine)
+            break
+        except Exception:
+            if attempt == 9:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+
     Base.metadata.create_all(bind=engine)
 
     db = TestingSessionLocal()
+    try:
+        organization = Organization(
+            id="tenant-1",
+            name="Test Organization",
+            slug="test-organization",
+        )
 
-    organization = Organization(
-        id="tenant-1",
-        name="Test Organization",
-        slug="test-organization",
-    )
+        db.add(organization)
+        db.commit()
 
-    db.add(organization)
-    db.commit()
+        test_user = User(
+            id="test-admin",
+            email="test-admin@example.com",
+            password_hash="test-password",
+            first_name="Test",
+            last_name="Admin",
+            role="super_admin",
+            tenant_id="tenant-1",
+            is_active=True,
+            is_email_verified=True,
+        )
 
-    test_user = User(
-        id="test-admin",
-        email="test-admin@example.com",
-        password_hash="test-password",
-        first_name="Test",
-        last_name="Admin",
-        role="super_admin",
-        tenant_id="tenant-1",
-        is_active=True,
-        is_email_verified=True,
-    )
+        db.add(test_user)
+        db.commit()
 
-    db.add(test_user)
-    db.commit()
+        db.query(AuditEvent).delete()
+        db.query(Job).delete()
+        db.query(Technician).delete()
+        db.query(SLAEscalation).delete()
+        db.query(AssignmentOverride).delete()
+        db.query(OverrideAuditEvent).delete()
 
-    db.query(AuditEvent).delete()
-    db.query(Job).delete()
-    db.query(Technician).delete()
-    db.query(SLAEscalation).delete()
-    db.query(AssignmentOverride).delete()
-    db.query(OverrideAuditEvent).delete()
+        db.commit()
 
-    db.commit()
+        mock_redis.data = {}
 
-    mock_redis.data = {}
-
-    yield db
-
-    db.close()
+        yield db
+    finally:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        try:
+            db.close()
+        except Exception:
+            pass
 
 
 # ============================================================
