@@ -62,6 +62,8 @@ class KafkaConsumerManager:
         group_id: Optional[str] = None,
         bootstrap_servers: Optional[str] = None,
         monitoring: Optional[KafkaMonitoring] = None,
+        enable_auto_commit: bool = True,
+        auto_offset_reset: str = "earliest",
     ):
         self.bootstrap_servers = bootstrap_servers or os.getenv(
             "KAFKA_BOOTSTRAP_SERVERS",
@@ -101,11 +103,13 @@ class KafkaConsumerManager:
             "KAFKA_SASL_PASSWORD"
         )
 
+        self.enable_auto_commit = enable_auto_commit
+        self.auto_offset_reset = auto_offset_reset
         consumer_kwargs = {
             "bootstrap_servers": self.bootstrap_servers,
             "group_id": self.group_id,
-            "enable_auto_commit": True,
-            "auto_offset_reset": "earliest",
+            "enable_auto_commit": self.enable_auto_commit,
+            "auto_offset_reset": self.auto_offset_reset,
             "value_deserializer": lambda value: json.loads(
                 value.decode("utf-8")
             ),
@@ -151,6 +155,16 @@ class KafkaConsumerManager:
 
     async def stop(self) -> None:
         await self.consumer.stop()
+
+    async def commit(self, offsets: Optional[Any] = None) -> None:
+        if hasattr(self.consumer, "commit"):
+            await self.consumer.commit(offsets)
+
+    async def committed(self, partition: Any) -> Optional[int]:
+        if hasattr(self.consumer, "committed"):
+            return await self.consumer.committed(partition)
+        return None
+
 
     async def consume(
         self,

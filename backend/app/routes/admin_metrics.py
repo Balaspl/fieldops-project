@@ -163,4 +163,20 @@ async def trigger_kafka_event_replay(request_data: dict) -> dict:
     return dict(result)
 
 
+@router.get(
+    "/kafka/offsets",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def get_kafka_offset_metrics() -> dict:
+    from app.services.consumer_offset_management import ConsumerOffsetManagement
+    return ConsumerOffsetManagement.get_offset_metrics()
+
+
+
 

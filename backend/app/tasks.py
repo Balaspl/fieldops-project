@@ -2230,6 +2230,71 @@ def replay_batch_events_task(
     return [dict(r) for r in results]
 
 
+def _process_offset_management_event_once(
+    *,
+    redis,
+    event_payload: dict,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+) -> dict:
+    """Process an event with reliable manual offset commit at the success boundary."""
+    import asyncio
+    from .services.consumer_offset_management import ConsumerOffsetManagement
+
+    consumer = ConsumerOffsetManagement(redis_client=redis)
+    result = asyncio.run(
+        consumer.process_event(
+            message=event_payload,
+            topic=topic,
+            partition=partition,
+            offset=offset,
+            attempt=attempt,
+        )
+    )
+    return dict(result)
+
+
+@celery_app.task(name="app.tasks.process_offset_management_event_task")
+def process_offset_management_event_task(
+    event_payload: dict,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+):
+    """Celery background task to process consumed event with manual offset management."""
+    redis_client = get_redis_client()
+    return _process_offset_management_event_once(
+        redis=redis_client,
+        event_payload=event_payload,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        attempt=attempt,
+    )
+
+
+@celery_app.task(name="app.tasks.add_consumer_offset_management_task")
+def add_consumer_offset_management_task(
+    event_payload: dict,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+):
+    """Celery task alias conforming to story naming: Add consumer offset management."""
+    return process_offset_management_event_task(
+        event_payload=event_payload,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        attempt=attempt,
+    )
+
+
+
 
 
 def _publish_sla_event_once(
