@@ -2416,6 +2416,70 @@ def add_failed_event_storage_task(
     )
 
 
+def _process_schema_versioning_event_once(
+    *,
+    redis,
+    event_payload: dict,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+) -> dict:
+    """Process an event with explicit schema version validation and compatibility."""
+    import asyncio
+    from .services.event_schema_versioning import EventSchemaVersioning
+
+    consumer = EventSchemaVersioning(redis_client=redis)
+    result = asyncio.run(
+        consumer.process_event(
+            message=event_payload,
+            topic=topic,
+            partition=partition,
+            offset=offset,
+            attempt=attempt,
+        )
+    )
+    return dict(result)
+
+
+@celery_app.task(name="app.tasks.process_schema_versioning_event_task")
+def process_schema_versioning_event_task(
+    event_payload: dict,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+):
+    """Celery background task to process consumed event with schema versioning."""
+    redis_client = get_redis_client()
+    return _process_schema_versioning_event_once(
+        redis=redis_client,
+        event_payload=event_payload,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        attempt=attempt,
+    )
+
+
+@celery_app.task(name="app.tasks.add_event_schema_versioning_task")
+def add_event_schema_versioning_task(
+    event_payload: dict,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+):
+    """Celery task alias conforming to story naming: Add event schema versioning."""
+    return process_schema_versioning_event_task(
+        event_payload=event_payload,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        attempt=attempt,
+    )
+
+
 
 
 

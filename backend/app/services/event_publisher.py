@@ -39,6 +39,7 @@ def publish_dispatch_event(
     correlation_id: Optional[str] = None,
     event_id: Optional[str] = None,
     idempotency_key: Optional[str] = None,
+    schema_version: int = 1,
 ):
     """
     Publish a canonical dispatch event after successful persistence.
@@ -89,6 +90,7 @@ def publish_dispatch_event(
         "event_type": event_type.lower(),
         "event_id": event_id,
         "idempotency_key": idempotency_key,
+        "schema_version": schema_version,
         "job_id": str(job_id),
         "old_status": old_status,
         "new_status": new_status,

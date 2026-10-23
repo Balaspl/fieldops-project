@@ -208,5 +208,20 @@ async def get_kafka_failed_event_metrics() -> dict:
     return FailedEventStorage.get_storage_metrics()
 
 
+@router.get(
+    "/kafka/schemas",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def get_kafka_schema_metrics() -> dict:
+    from app.services.event_schema_versioning import EventSchemaVersioning
+    return EventSchemaVersioning.get_schema_metrics()
+
+
 
 
