@@ -2099,6 +2099,48 @@ def prevent_duplicate_event_processing_task(
     )
 
 
+def _process_ordered_event_once(
+    *,
+    redis,
+    event_payload: dict,
+    attempt: int = 1,
+) -> dict:
+    """Process an event once preserving strict aggregate ordering and monotonic progression."""
+    import asyncio
+    from .services.consumer_event_ordering import ConsumerEventOrdering
+
+    consumer = ConsumerEventOrdering(redis_client=redis)
+    result = asyncio.run(consumer.process_event(event_payload, attempt=attempt))
+    return dict(result)
+
+
+@celery_app.task(name="app.tasks.process_ordered_event_task")
+def process_ordered_event_task(
+    event_payload: dict,
+    attempt: int = 1,
+):
+    """Celery background task to process consumed event with ordering guarantees."""
+    redis_client = get_redis_client()
+    return _process_ordered_event_once(
+        redis=redis_client,
+        event_payload=event_payload,
+        attempt=attempt,
+    )
+
+
+@celery_app.task(name="app.tasks.maintain_event_ordering_task")
+def maintain_event_ordering_task(
+    event_payload: dict,
+    attempt: int = 1,
+):
+    """Celery task alias conforming to story naming: Maintain event ordering."""
+    return process_ordered_event_task(
+        event_payload=event_payload,
+        attempt=attempt,
+    )
+
+
+
 def _publish_sla_event_once(
     *,
     redis,

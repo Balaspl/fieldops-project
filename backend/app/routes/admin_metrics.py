@@ -103,3 +103,19 @@ async def get_kafka_idempotency_metrics() -> dict:
     from app.services.consumer_idempotency import ConsumerIdempotency
     return ConsumerIdempotency.get_idempotency_metrics()
 
+
+@router.get(
+    "/kafka/ordering",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def get_kafka_ordering_metrics() -> dict:
+    from app.services.consumer_event_ordering import ConsumerEventOrdering
+    return ConsumerEventOrdering.get_ordering_metrics()
+
+
