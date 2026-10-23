@@ -2294,6 +2294,64 @@ def add_consumer_offset_management_task(
     )
 
 
+def _process_idempotency_keys_event_once(
+    *,
+    redis,
+    event_payload: dict,
+    topic: Optional[str] = None,
+    headers: Optional[dict] = None,
+    attempt: int = 1,
+) -> dict:
+    """Process an event with stable idempotency key duplicate prevention."""
+    import asyncio
+    from .services.idempotency_keys import ConsumerIdempotencyKeys
+
+    consumer = ConsumerIdempotencyKeys(redis_client=redis)
+    result = asyncio.run(
+        consumer.process_event(
+            message=event_payload,
+            topic=topic,
+            headers=headers,
+            attempt=attempt,
+        )
+    )
+    return dict(result)
+
+
+@celery_app.task(name="app.tasks.process_idempotency_keys_event_task")
+def process_idempotency_keys_event_task(
+    event_payload: dict,
+    topic: Optional[str] = None,
+    headers: Optional[dict] = None,
+    attempt: int = 1,
+):
+    """Celery background task to process consumed event with idempotency keys."""
+    redis_client = get_redis_client()
+    return _process_idempotency_keys_event_once(
+        redis=redis_client,
+        event_payload=event_payload,
+        topic=topic,
+        headers=headers,
+        attempt=attempt,
+    )
+
+
+@celery_app.task(name="app.tasks.add_idempotency_keys_task")
+def add_idempotency_keys_task(
+    event_payload: dict,
+    topic: Optional[str] = None,
+    headers: Optional[dict] = None,
+    attempt: int = 1,
+):
+    """Celery task alias conforming to story naming: Add idempotency keys."""
+    return process_idempotency_keys_event_task(
+        event_payload=event_payload,
+        topic=topic,
+        headers=headers,
+        attempt=attempt,
+    )
+
+
 
 
 

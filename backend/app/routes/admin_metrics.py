@@ -178,5 +178,20 @@ async def get_kafka_offset_metrics() -> dict:
     return ConsumerOffsetManagement.get_offset_metrics()
 
 
+@router.get(
+    "/kafka/idempotency-keys",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def get_kafka_idempotency_key_metrics() -> dict:
+    from app.services.idempotency_keys import ConsumerIdempotencyKeys
+    return ConsumerIdempotencyKeys.get_idempotency_metrics()
+
+
 
 
