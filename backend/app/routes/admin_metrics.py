@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends
+from typing import Optional
+from fastapi import APIRouter, Depends, Query
 
 from app.auth.dependencies import require_permission
 from app.auth.rbac import Permission
@@ -221,6 +222,39 @@ async def get_kafka_failed_event_metrics() -> dict:
 async def get_kafka_schema_metrics() -> dict:
     from app.services.event_schema_versioning import EventSchemaVersioning
     return EventSchemaVersioning.get_schema_metrics()
+
+
+@router.get(
+    "/kafka/dashboard",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def get_kafka_dashboard(
+    tenant_id: Optional[str] = Query(default=None, description="Optional tenant ID to filter failed events and recovery"),
+) -> dict:
+    from app.services.kafka_monitoring_dashboard import KafkaMonitoringDashboard
+    dashboard = KafkaMonitoringDashboard()
+    return await dashboard.get_dashboard_summary(tenant_id=tenant_id)
+
+
+@router.get(
+    "/kafka/dashboard/metrics",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def get_kafka_dashboard_metrics() -> dict:
+    from app.services.kafka_monitoring_dashboard import KafkaMonitoringDashboard
+    return KafkaMonitoringDashboard.get_dashboard_metrics()
 
 
 

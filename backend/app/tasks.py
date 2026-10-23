@@ -6,7 +6,7 @@ from sqlalchemy import delete, text
 from sqlalchemy.orm import Session
 import time
 import uuid
-from typing import Optional
+from typing import Any, Optional
 from .runtime.dlq import DeadLetterQueue
 from .services.enterprise_audit import AuditAction, audit_log
 from .celery_app import celery_app
@@ -2473,6 +2473,83 @@ def add_event_schema_versioning_task(
     """Celery task alias conforming to story naming: Add event schema versioning."""
     return process_schema_versioning_event_task(
         event_payload=event_payload,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        attempt=attempt,
+    )
+
+
+def _process_kafka_monitoring_dashboard_once(
+    event_payload: Any = None,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+    redis: Optional[Any] = None,
+    redis_client: Optional[Any] = None,
+    raw_message: Any = None,
+) -> dict:
+    """Process an event with Kafka monitoring dashboard telemetry."""
+    import asyncio
+    from .services.kafka_monitoring_dashboard import KafkaMonitoringDashboard
+
+    r_client = redis if redis is not None else redis_client
+    msg = event_payload if event_payload is not None else raw_message
+    if isinstance(msg, str):
+        try:
+            msg = json.loads(msg)
+        except Exception:
+            pass
+
+    consumer = KafkaMonitoringDashboard(redis_client=r_client)
+    result = asyncio.run(
+        consumer.process_event(
+            message=msg,
+            topic=topic,
+            partition=partition,
+            offset=offset,
+            attempt=attempt,
+        )
+    )
+    return dict(result)
+
+
+@celery_app.task(name="app.tasks.process_kafka_monitoring_dashboard_task")
+def process_kafka_monitoring_dashboard_task(
+    event_payload: Any = None,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+    raw_message: Any = None,
+):
+    """Celery background task to process consumed event with monitoring dashboard."""
+    redis_client = get_redis_client()
+    return _process_kafka_monitoring_dashboard_once(
+        event_payload=event_payload,
+        raw_message=raw_message,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        attempt=attempt,
+        redis=redis_client,
+    )
+
+
+@celery_app.task(name="app.tasks.add_kafka_monitoring_dashboard_task")
+def add_kafka_monitoring_dashboard_task(
+    event_payload: Any = None,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+    raw_message: Any = None,
+):
+    """Celery task alias conforming to story naming: Add Kafka monitoring dashboard."""
+    return process_kafka_monitoring_dashboard_task(
+        event_payload=event_payload,
+        raw_message=raw_message,
         topic=topic,
         partition=partition,
         offset=offset,
