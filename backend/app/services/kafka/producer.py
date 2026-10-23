@@ -44,6 +44,14 @@ class KafkaProducer:
             "fieldops.analytics.events",
         }
 
+        if topic.endswith(".dlq") or topic == "fieldops.dlq.events":
+            job_id = message.payload.get("job_id") if isinstance(message.payload, dict) else None
+            if job_id is not None and str(job_id).strip() != "":
+                return str(job_id)
+            if message.tenant_id:
+                return str(message.tenant_id)
+            return str(message.message_id)
+
         if topic in job_ordered_topics:
             job_id = message.payload.get("job_id")
 

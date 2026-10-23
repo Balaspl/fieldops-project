@@ -1956,6 +1956,405 @@ def process_retry_mechanism_event_task(
     )
 
 
+def _process_health_checks_event_once(
+    *,
+    redis,
+    event_payload: dict,
+    attempt: int = 1,
+) -> dict:
+    """Process an event via the health checks consumer once using a stable Redis idempotency marker."""
+    import asyncio
+    from .services.consumer_health_checks import ConsumerHealthChecks
+
+    event_id = event_payload.get("event_id") if isinstance(event_payload, dict) else None
+    if not event_id:
+        return {
+            "status": "FAILED",
+            "consumer": "Add_health_checks",
+            "event_id": "unknown",
+            "attempt": attempt,
+            "error": "Missing event_id in event payload",
+        }
+
+    marker_key = f"consumer_health:event_processed:{event_id}"
+    if redis and redis.get(marker_key):
+        logger.info(
+            "Health checks event %s already processed; skipping duplicate.",
+            event_id,
+        )
+        return {
+            "status": "PROCESSED",
+            "consumer": "Add_health_checks",
+            "event_id": event_id,
+            "attempt": attempt,
+            "idempotent_duplicate": True,
+        }
+
+    consumer = ConsumerHealthChecks(redis_client=redis)
+    result = asyncio.run(consumer.process_event(event_payload, attempt=attempt))
+    return dict(result)
+
+
+@celery_app.task
+def process_health_checks_event_task(
+    event_payload: dict,
+    attempt: int = 1,
+):
+    """Celery background task to process consumed event with health checks monitoring."""
+    redis_client = get_redis_client()
+    return _process_health_checks_event_once(
+        redis=redis_client,
+        event_payload=event_payload,
+        attempt=attempt,
+    )
+
+
+def _process_dead_letter_event_once(
+    *,
+    redis,
+    event_payload: dict,
+    max_retries: int = 3,
+) -> dict:
+    """Process an event once through the dead-letter consumer with isolation."""
+    import asyncio
+    from .services.consumer_dead_letter_topics import ConsumerDeadLetterTopics
+
+    consumer = ConsumerDeadLetterTopics(redis_client=redis, max_retries=max_retries)
+    result = asyncio.run(consumer.process_event(event_payload, max_retries=max_retries))
+    return dict(result)
+
+
+@celery_app.task(name="app.tasks.process_dead_letter_event_task")
+def process_dead_letter_event_task(
+    event_payload: dict,
+    max_retries: int = 3,
+):
+    """Celery background task to process consumed event with dead-letter topic isolation."""
+    redis_client = get_redis_client()
+    return _process_dead_letter_event_once(
+        redis=redis_client,
+        event_payload=event_payload,
+        max_retries=max_retries,
+    )
+
+
+@celery_app.task(name="app.tasks.replay_dlq_event_task")
+def replay_dlq_event_task(
+    dlq_record: dict,
+    force: bool = False,
+):
+    """Celery background task to replay an event isolated in the DLQ."""
+    import asyncio
+    from .services.consumer_dead_letter_topics import ConsumerDeadLetterTopics
+
+    redis_client = get_redis_client()
+    consumer = ConsumerDeadLetterTopics(redis_client=redis_client)
+    result = asyncio.run(consumer.replay_dlq_event(dlq_record, force=force))
+    return dict(result)
+
+
+def _process_duplicate_prevention_event_once(
+    *,
+    redis,
+    event_payload: dict,
+    domain: Optional[str] = None,
+    attempt: int = 1,
+) -> dict:
+    """Process an event once with distributed idempotency and duplicate prevention."""
+    import asyncio
+    from .services.consumer_idempotency import ConsumerIdempotency
+
+    consumer = ConsumerIdempotency(redis_client=redis)
+    result = asyncio.run(consumer.process_event(event_payload, domain=domain, attempt=attempt))
+    return dict(result)
+
+
+@celery_app.task(name="app.tasks.process_duplicate_prevention_event_task")
+def process_duplicate_prevention_event_task(
+    event_payload: dict,
+    domain: Optional[str] = None,
+    attempt: int = 1,
+):
+    """Celery background task to process consumed event with duplicate prevention."""
+    redis_client = get_redis_client()
+    return _process_duplicate_prevention_event_once(
+        redis=redis_client,
+        event_payload=event_payload,
+        domain=domain,
+        attempt=attempt,
+    )
+
+
+@celery_app.task(name="app.tasks.prevent_duplicate_event_processing_task")
+def prevent_duplicate_event_processing_task(
+    event_payload: dict,
+    domain: Optional[str] = None,
+    attempt: int = 1,
+):
+    """Celery task alias conforming to story naming: Prevent duplicate event processing."""
+    return process_duplicate_prevention_event_task(
+        event_payload=event_payload,
+        domain=domain,
+        attempt=attempt,
+    )
+
+
+def _process_ordered_event_once(
+    *,
+    redis,
+    event_payload: dict,
+    attempt: int = 1,
+) -> dict:
+    """Process an event once preserving strict aggregate ordering and monotonic progression."""
+    import asyncio
+    from .services.consumer_event_ordering import ConsumerEventOrdering
+
+    consumer = ConsumerEventOrdering(redis_client=redis)
+    result = asyncio.run(consumer.process_event(event_payload, attempt=attempt))
+    return dict(result)
+
+
+@celery_app.task(name="app.tasks.process_ordered_event_task")
+def process_ordered_event_task(
+    event_payload: dict,
+    attempt: int = 1,
+):
+    """Celery background task to process consumed event with ordering guarantees."""
+    redis_client = get_redis_client()
+    return _process_ordered_event_once(
+        redis=redis_client,
+        event_payload=event_payload,
+        attempt=attempt,
+    )
+
+
+@celery_app.task(name="app.tasks.maintain_event_ordering_task")
+def maintain_event_ordering_task(
+    event_payload: dict,
+    attempt: int = 1,
+):
+    """Celery task alias conforming to story naming: Maintain event ordering."""
+    return process_ordered_event_task(
+        event_payload=event_payload,
+        attempt=attempt,
+    )
+
+
+def _process_event_replay_once(
+    *,
+    redis,
+    event_payload: dict,
+    operator_role: str = "operator",
+    operator_id: Optional[str] = None,
+    force: bool = False,
+    reason: Optional[str] = None,
+) -> dict:
+    """Process a controlled event replay once with authorization and idempotency."""
+    import asyncio
+    from .services.consumer_event_replay import ConsumerEventReplay
+
+    consumer = ConsumerEventReplay(redis_client=redis)
+    result = asyncio.run(
+        consumer.replay_event(
+            event_or_payload=event_payload,
+            operator_role=operator_role,
+            operator_id=operator_id,
+            force=force,
+            reason=reason,
+        )
+    )
+    return dict(result)
+
+
+@celery_app.task(name="app.tasks.process_event_replay_task")
+def process_event_replay_task(
+    event_payload: dict,
+    operator_role: str = "operator",
+    operator_id: Optional[str] = None,
+    force: bool = False,
+    reason: Optional[str] = None,
+):
+    """Celery background task to safely replay an event."""
+    redis_client = get_redis_client()
+    return _process_event_replay_once(
+        redis=redis_client,
+        event_payload=event_payload,
+        operator_role=operator_role,
+        operator_id=operator_id,
+        force=force,
+        reason=reason,
+    )
+
+
+@celery_app.task(name="app.tasks.add_event_replay_support_task")
+def add_event_replay_support_task(
+    event_payload: dict,
+    operator_role: str = "operator",
+    operator_id: Optional[str] = None,
+    force: bool = False,
+    reason: Optional[str] = None,
+):
+    """Celery task alias conforming to story naming: Add event replay support."""
+    return process_event_replay_task(
+        event_payload=event_payload,
+        operator_role=operator_role,
+        operator_id=operator_id,
+        force=force,
+        reason=reason,
+    )
+
+
+@celery_app.task(name="app.tasks.replay_batch_events_task")
+def replay_batch_events_task(
+    events: list,
+    operator_role: str = "operator",
+    operator_id: Optional[str] = None,
+    force: bool = False,
+    reason: Optional[str] = None,
+):
+    """Celery background task to replay a batch of events."""
+    import asyncio
+    from .services.consumer_event_replay import ConsumerEventReplay
+
+    redis_client = get_redis_client()
+    consumer = ConsumerEventReplay(redis_client=redis_client)
+    results = asyncio.run(
+        consumer.replay_batch(
+            events=events,
+            operator_role=operator_role,
+            operator_id=operator_id,
+            force=force,
+            reason=reason,
+        )
+    )
+    return [dict(r) for r in results]
+
+
+def _process_offset_management_event_once(
+    *,
+    redis,
+    event_payload: dict,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+) -> dict:
+    """Process an event with reliable manual offset commit at the success boundary."""
+    import asyncio
+    from .services.consumer_offset_management import ConsumerOffsetManagement
+
+    consumer = ConsumerOffsetManagement(redis_client=redis)
+    result = asyncio.run(
+        consumer.process_event(
+            message=event_payload,
+            topic=topic,
+            partition=partition,
+            offset=offset,
+            attempt=attempt,
+        )
+    )
+    return dict(result)
+
+
+@celery_app.task(name="app.tasks.process_offset_management_event_task")
+def process_offset_management_event_task(
+    event_payload: dict,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+):
+    """Celery background task to process consumed event with manual offset management."""
+    redis_client = get_redis_client()
+    return _process_offset_management_event_once(
+        redis=redis_client,
+        event_payload=event_payload,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        attempt=attempt,
+    )
+
+
+@celery_app.task(name="app.tasks.add_consumer_offset_management_task")
+def add_consumer_offset_management_task(
+    event_payload: dict,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+):
+    """Celery task alias conforming to story naming: Add consumer offset management."""
+    return process_offset_management_event_task(
+        event_payload=event_payload,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        attempt=attempt,
+    )
+
+
+def _process_idempotency_keys_event_once(
+    *,
+    redis,
+    event_payload: dict,
+    topic: Optional[str] = None,
+    headers: Optional[dict] = None,
+    attempt: int = 1,
+) -> dict:
+    """Process an event with stable idempotency key duplicate prevention."""
+    import asyncio
+    from .services.idempotency_keys import ConsumerIdempotencyKeys
+
+    consumer = ConsumerIdempotencyKeys(redis_client=redis)
+    result = asyncio.run(
+        consumer.process_event(
+            message=event_payload,
+            topic=topic,
+            headers=headers,
+            attempt=attempt,
+        )
+    )
+    return dict(result)
+
+
+@celery_app.task(name="app.tasks.process_idempotency_keys_event_task")
+def process_idempotency_keys_event_task(
+    event_payload: dict,
+    topic: Optional[str] = None,
+    headers: Optional[dict] = None,
+    attempt: int = 1,
+):
+    """Celery background task to process consumed event with idempotency keys."""
+    redis_client = get_redis_client()
+    return _process_idempotency_keys_event_once(
+        redis=redis_client,
+        event_payload=event_payload,
+        topic=topic,
+        headers=headers,
+        attempt=attempt,
+    )
+
+
+@celery_app.task(name="app.tasks.add_idempotency_keys_task")
+def add_idempotency_keys_task(
+    event_payload: dict,
+    topic: Optional[str] = None,
+    headers: Optional[dict] = None,
+    attempt: int = 1,
+):
+    """Celery task alias conforming to story naming: Add idempotency keys."""
+    return process_idempotency_keys_event_task(
+        event_payload=event_payload,
+        topic=topic,
+        headers=headers,
+        attempt=attempt,
+    )
+
+
+
+
+
 def _publish_sla_event_once(
     *,
     redis,

@@ -6,6 +6,26 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+def generate_idempotency_key(
+    domain: str,
+    tenant_id: str,
+    aggregate_id: str,
+    event_type: str,
+    qualifier: Optional[str] = None,
+) -> str:
+    """
+    Generate a deterministic, stable idempotency key for business events across
+    producer and consumer boundaries.
+    """
+    norm_domain = (domain or "default").lower().strip()
+    norm_tenant = (tenant_id or "default").lower().strip()
+    norm_agg = str(aggregate_id or "unknown").strip()
+    norm_type = (event_type or "event").lower().strip()
+    if qualifier:
+        return f"idem:{norm_domain}:{norm_tenant}:{norm_agg}:{norm_type}:{str(qualifier).strip().lower()}"
+    return f"idem:{norm_domain}:{norm_tenant}:{norm_agg}:{norm_type}"
+
+
 def publish_dispatch_event(
     redis_client,
     event_type: str,
@@ -18,6 +38,7 @@ def publish_dispatch_event(
     completed_at: Optional[datetime] = None,
     correlation_id: Optional[str] = None,
     event_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
 ):
     """
     Publish a canonical dispatch event after successful persistence.
@@ -52,6 +73,13 @@ def publish_dispatch_event(
         )
 
     event_id = event_id or f"{event_type}:{tenant_id}:{job_id}"
+    idempotency_key = idempotency_key or generate_idempotency_key(
+        domain="dispatch",
+        tenant_id=tenant_id,
+        aggregate_id=job_id,
+        event_type=event_type,
+        qualifier=new_status if new_status != "UNKNOWN" else None,
+    )
 
     payload = {
         # Keep legacy key for existing WebSocket consumers.
@@ -60,6 +88,7 @@ def publish_dispatch_event(
         # Canonical event contract.
         "event_type": event_type.lower(),
         "event_id": event_id,
+        "idempotency_key": idempotency_key,
         "job_id": str(job_id),
         "old_status": old_status,
         "new_status": new_status,
@@ -104,6 +133,7 @@ def publish_invoice_event(
     correlation_id: Optional[str] = None,
     event_id: Optional[str] = None,
     payload: Optional[dict] = None,
+    idempotency_key: Optional[str] = None,
 ):
     """
     Publish a canonical invoice event after successful database persistence.
@@ -122,11 +152,18 @@ def publish_invoice_event(
     )
 
     event_id = event_id or f"{event_type}:{tenant_id}:{job_id}"
+    idempotency_key = idempotency_key or generate_idempotency_key(
+        domain="billing",
+        tenant_id=tenant_id,
+        aggregate_id=invoice_id or job_id,
+        event_type=event_type,
+    )
 
     data = {
         "event": event_type,
         "event_type": event_type.lower(),
         "event_id": event_id,
+        "idempotency_key": idempotency_key,
         "job_id": str(job_id),
         "tenant_id": str(tenant_id),
         "timestamp": timestamp,
@@ -171,6 +208,7 @@ def publish_payment_event(
     correlation_id: Optional[str] = None,
     event_id: Optional[str] = None,
     payload: Optional[dict] = None,
+    idempotency_key: Optional[str] = None,
 ):
     """
     Publish a canonical payment event after successful database persistence.
@@ -189,11 +227,18 @@ def publish_payment_event(
     )
 
     event_id = event_id or f"{event_type}:{tenant_id}:{job_id}"
+    idempotency_key = idempotency_key or generate_idempotency_key(
+        domain="payment",
+        tenant_id=tenant_id,
+        aggregate_id=payment_id or job_id,
+        event_type=event_type,
+    )
 
     data = {
         "event": event_type,
         "event_type": event_type.lower(),
         "event_id": event_id,
+        "idempotency_key": idempotency_key,
         "job_id": str(job_id),
         "tenant_id": str(tenant_id),
         "timestamp": timestamp,
@@ -235,6 +280,7 @@ def publish_audit_event(
     correlation_id: Optional[str] = None,
     event_id: Optional[str] = None,
     payload: Optional[dict] = None,
+    idempotency_key: Optional[str] = None,
 ):
     """
     Publish a canonical audit event after successful database persistence.
@@ -253,11 +299,18 @@ def publish_audit_event(
     )
 
     event_id = event_id or f"{event_type}:{tenant_id}:{job_id or 'system'}"
+    idempotency_key = idempotency_key or generate_idempotency_key(
+        domain="audit",
+        tenant_id=tenant_id,
+        aggregate_id=job_id or user_id or "system",
+        event_type=event_type,
+    )
 
     data = {
         "event": event_type,
         "event_type": event_type.lower(),
         "event_id": event_id,
+        "idempotency_key": idempotency_key,
         "tenant_id": str(tenant_id),
         "timestamp": timestamp,
         "schema_version": 1,
@@ -305,6 +358,7 @@ def publish_gps_event(
     event_id: Optional[str] = None,
     accuracy: Optional[float] = None,
     altitude: Optional[float] = None,
+    idempotency_key: Optional[str] = None,
 ):
     """
     Publish a GPS location event to Redis channel for real-time tracking coordination.
@@ -313,9 +367,17 @@ def publish_gps_event(
         logger.warning("Redis client unavailable; skipping GPS event publish.")
         return
 
+    idempotency_key = idempotency_key or generate_idempotency_key(
+        domain="gps",
+        tenant_id=tenant_id,
+        aggregate_id=f"{technician_id}:{job_id}",
+        event_type=event_type,
+    )
+
     data = {
         "event_type": event_type,
         "event_id": event_id or f"gps:{tenant_id}:{technician_id}:{job_id}",
+        "idempotency_key": idempotency_key,
         "technician_id": str(technician_id),
         "job_id": str(job_id),
         "latitude": float(latitude),
@@ -360,6 +422,7 @@ def publish_notification_event(
     correlation_id: Optional[str] = None,
     event_id: Optional[str] = None,
     payload: Optional[dict] = None,
+    idempotency_key: Optional[str] = None,
 ):
     """
     Publish a canonical notification event to Redis channel.
@@ -378,11 +441,19 @@ def publish_notification_event(
     )
 
     event_id = event_id or f"{event_type}:{tenant_id}:{job_id}"
+    idempotency_key = idempotency_key or generate_idempotency_key(
+        domain="notification",
+        tenant_id=tenant_id,
+        aggregate_id=job_id,
+        event_type=event_type,
+        qualifier=channel,
+    )
 
     data = {
         "event": event_type,
         "event_type": event_type.lower(),
         "event_id": event_id,
+        "idempotency_key": idempotency_key,
         "job_id": str(job_id),
         "tenant_id": str(tenant_id),
         "timestamp": timestamp,
@@ -423,6 +494,7 @@ def publish_sla_event(
     correlation_id: Optional[str] = None,
     event_id: Optional[str] = None,
     payload: Optional[dict] = None,
+    idempotency_key: Optional[str] = None,
 ):
     """
     Publish a canonical SLA event to Redis channel.
@@ -441,11 +513,18 @@ def publish_sla_event(
     )
 
     event_id = event_id or f"{event_type}:{tenant_id}:{job_id}"
+    idempotency_key = idempotency_key or generate_idempotency_key(
+        domain="sla",
+        tenant_id=tenant_id,
+        aggregate_id=job_id,
+        event_type=event_type,
+    )
 
     data = {
         "event": event_type,
         "event_type": event_type.lower(),
         "event_id": event_id,
+        "idempotency_key": idempotency_key,
         "job_id": str(job_id),
         "tenant_id": str(tenant_id),
         "timestamp": timestamp,
@@ -482,6 +561,7 @@ def publish_analytics_event(
     correlation_id: Optional[str] = None,
     event_id: Optional[str] = None,
     payload: Optional[dict] = None,
+    idempotency_key: Optional[str] = None,
 ):
     """
     Publish a canonical analytics/metrics event.
@@ -500,11 +580,18 @@ def publish_analytics_event(
     )
 
     event_id = event_id or f"{event_type}:{tenant_id}:{job_id or 'global'}"
+    idempotency_key = idempotency_key or generate_idempotency_key(
+        domain="analytics",
+        tenant_id=tenant_id,
+        aggregate_id=job_id or "global",
+        event_type=event_type,
+    )
 
     data = {
         "event": event_type,
         "event_type": event_type.lower(),
         "event_id": event_id,
+        "idempotency_key": idempotency_key,
         "tenant_id": str(tenant_id),
         "timestamp": timestamp,
         "schema_version": 1,

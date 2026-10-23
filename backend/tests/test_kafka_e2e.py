@@ -1787,3 +1787,177 @@ async def test_retry_mechanism_consumer_lifecycle_e2e():
 
         await consumer_manager.stop()
         await kafka_producer.stop()
+
+
+
+@pytest.mark.asyncio
+async def test_health_checks_consumer_lifecycle_e2e():
+    from app.services.consumer_health_checks import ConsumerHealthChecks
+
+    topic = "fieldops.events"
+    group_id = f"fieldops-health-checks-e2e-{uuid.uuid4()}"
+
+    consumer_manager = KafkaConsumerManager(
+        topic=topic,
+        group_id=group_id,
+        bootstrap_servers="localhost:29092",
+    )
+    kafka_producer = KafkaProducer()
+
+    processed_event = asyncio.Event()
+    results = []
+    run_id = uuid.uuid4().hex
+    event_id = f"evt_health_e2e_{run_id}"
+
+    consumer = ConsumerHealthChecks(
+        topic=topic,
+        group_id=group_id,
+        consumer_manager=consumer_manager,
+    )
+
+    async def handler(message):
+        payload = message.get("payload", {})
+        if payload.get("event_id") == event_id:
+            receipt = await consumer.handle_message(message, attempt=1)
+            results.append(receipt)
+            processed_event.set()
+
+    consumer_task = None
+
+    try:
+        try:
+            await kafka_producer.start()
+            await consumer.start()
+        except KafkaConnectionError:
+            pytest.skip(
+                "Kafka broker at localhost:29092 is not reachable. "
+                "Start Docker / Kafka container to run live broker E2E test."
+            )
+        except (TopicAuthorizationFailedError, GroupAuthorizationFailedError):
+            pytest.skip(
+                "Kafka broker does not grant the identity "
+                "read access to fieldops.events."
+            )
+
+        assert consumer.is_connected() is True
+        assert consumer.is_ready() is True
+
+        consumer_task = asyncio.create_task(
+            consumer_manager.consume(handler)
+        )
+
+        message = MessageEnvelope(
+            sender=AgentAddress(
+                agent_type="monitoring",
+                agent_id="health-checks-e2e-producer",
+                tenant_id="tenant-e2e",
+            ),
+            recipient=None,
+            message_type=MessageType.EVENT,
+            payload={
+                "event_type": "job_created",
+                "event_id": event_id,
+                "tenant_id": "tenant-e2e",
+                "schema_version": 1,
+            },
+            correlation_id=run_id,
+            topic=topic,
+        )
+
+        published = await kafka_producer.publish(message)
+        assert published is True
+
+        await asyncio.wait_for(processed_event.wait(), timeout=10)
+
+        assert len(results) == 1
+        receipt = results[0]
+        assert receipt["status"] == "PROCESSED"
+        assert receipt["consumer"] == "Add_health_checks"
+        assert receipt["event_id"] == event_id
+        assert receipt["attempt"] == 1
+
+        health_snapshot = await consumer.get_health()
+        assert health_snapshot["connected"] is True
+        assert health_snapshot["ready"] is True
+        assert health_snapshot["consumer"] == "Add_health_checks"
+        assert health_snapshot["processing"]["last_event_id"] == event_id
+        assert health_snapshot["processing"]["processed_total"] >= 1
+
+    finally:
+        if consumer_task is not None:
+            consumer_task.cancel()
+            try:
+                await consumer_task
+            except asyncio.CancelledError:
+                pass
+
+        await consumer.stop()
+        await kafka_producer.stop()
+
+
+@pytest.mark.asyncio
+async def test_dead_letter_topics_consumer_lifecycle_e2e():
+    """
+    End-to-end verification of Kafka dead-letter topics lifecycle,
+    poison message isolation, and recovery output contract.
+    """
+    from app.services.consumer_dead_letter_topics import ConsumerDeadLetterTopics
+
+    topic = "fieldops.job.events"
+    run_id = str(uuid.uuid4())
+    event_id = f"evt_dlq_e2e_{run_id[:8]}"
+
+    kafka_producer = KafkaProducer()
+    try:
+        await kafka_producer.start()
+    except Exception as exc:
+        pytest.skip(f"Kafka unavailable for dead-letter topics E2E test: {exc}")
+
+    consumer = ConsumerDeadLetterTopics(
+        topic=topic,
+        kafka_producer=kafka_producer,
+    )
+
+    try:
+        # 1. Verify healthy processing returns recovery contract
+        healthy_msg = {
+            "event_id": event_id,
+            "tenant_id": "tenant-e2e",
+            "topic": topic,
+            "payload": {"job_id": "JOB-E2E-DLQ", "status": "ASSIGNED"},
+        }
+
+        def handler(p):
+            return True
+
+        res_healthy = await consumer.process_event(healthy_msg, handler=handler)
+        assert res_healthy["status"] == "RECOVERED"
+        assert res_healthy["event_id"] == event_id
+        assert res_healthy["retries"] == 1
+        assert res_healthy["idempotent"] is True
+        assert res_healthy["dlq"] is False
+
+        # 2. Verify poison pill isolates to DLQ topic
+        poison_msg = {
+            "event_id": f"evt_poison_{run_id[:8]}",
+            "tenant_id": "tenant-e2e",
+            "topic": topic,
+            "payload": {"job_id": "JOB-E2E-POISON", "corrupted": True},
+        }
+
+        def poison_handler(p):
+            raise ValueError("Poison pill schema validation error")
+
+        res_poison = await consumer.process_event(poison_msg, handler=poison_handler, max_retries=1)
+        assert res_poison["status"] == "DEAD_LETTER"
+        assert res_poison["dlq"] is True
+        assert res_poison["dlq_topic"] == "fieldops.job.events.dlq"
+        assert res_poison["idempotent"] is True
+
+        # 3. Verify metrics
+        metrics = consumer.get_dlq_metrics()
+        assert metrics["dlq_routed_total"] >= 1
+        assert metrics["recovered_total"] >= 1
+
+    finally:
+        await kafka_producer.stop()

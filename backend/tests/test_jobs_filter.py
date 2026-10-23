@@ -106,105 +106,129 @@ def make_test_request():
 
 @pytest.fixture(autouse=True)
 def setup_db():
-    Base.metadata.drop_all(bind=engine)
+    import time
+    for attempt in range(10):
+        try:
+            Base.metadata.drop_all(bind=engine)
+            break
+        except Exception:
+            if attempt == 9:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+
     Base.metadata.create_all(bind=engine)
 
     db = TestingSessionLocal()
+    try:
+        db.query(Job).delete()
+        db.query(Technician).delete()
+        db.commit()
 
-    db.query(Job).delete()
-    db.query(Technician).delete()
-    db.commit()
-
-    # Seed technician
-    tech = Technician(
-        technician_id=1,
-        tech_id="tech-1",
-        technician_name="Alice Smith",
-        technician_skill="HVAC Repair",
-        technician_location="North Zone",
-        technician_status="Available",
-        current_jobs=0,
-        max_jobs=5,
-        tenant_id="tenant-1",
-    )
-
-    db.add(tech)
-    db.commit()
-
-    now = datetime.now(timezone.utc)
-
-    # Seed jobs
-    jobs = [
-        Job(
-            id=101,
+        # Seed technician
+        tech = Technician(
+            technician_id=1,
+            tech_id="tech-1",
+            technician_name="Alice Smith",
+            technician_skill="HVAC Repair",
+            technician_location="North Zone",
+            technician_status="Available",
+            current_jobs=0,
+            max_jobs=5,
             tenant_id="tenant-1",
-            customer_name="John Doe",
-            status="active",
-            priority="CRITICAL",
-            service_type="HVAC Repair",
-            location="North Zone",
-            issue_description="AC not cooling",
-            contact_number="9876543210",
-            preferred_service_date=now,
-            assigned_technician_id=None,
-            sla_deadline=now + timedelta(minutes=30),
-        ),
-        Job(
-            id=102,
-            tenant_id="tenant-1",
-            customer_name="Jane Smith",
-            status="in progress",
-            priority="HIGH",
-            service_type="Electrical Service",
-            location="South Zone",
-            issue_description="Fuse blown",
-            contact_number="9876543211",
-            preferred_service_date=now,
-            assigned_technician_id=1,
-            sla_deadline=now + timedelta(minutes=10),
-        ),
+        )
 
-        Job(
-            id=103,
-            tenant_id="tenant-1",
-            customer_name="Bob Johnson",
-            status="completed",
-            priority="MEDIUM",
-            service_type="Plumbing Service",
-            location="East Zone",
-            issue_description="Leak in pipe",
-            contact_number="9876543212",
-            preferred_service_date=now,
-            assigned_technician_id=None,
-            sla_deadline=now - timedelta(minutes=10),
-        ),
-        Job(
-            id=104,
-            tenant_id="tenant-1",
-            customer_name="Dave Adams",
-            status="cancelled",
-            priority="LOW",
-            service_type="Network Support",
-            location="West Zone",
-            issue_description="WiFi offline",
-            contact_number="9876543213",
-            preferred_service_date=now,
-            assigned_technician_id=None,
-        ),
-    ]
+        db.add(tech)
+        db.commit()
 
-    for job in jobs:
-        db.add(job)
+        now = datetime.now(timezone.utc)
 
-    db.commit()
+        # Seed jobs
+        jobs = [
+            Job(
+                id=101,
+                tenant_id="tenant-1",
+                customer_name="John Doe",
+                status="active",
+                priority="CRITICAL",
+                service_type="HVAC Repair",
+                location="North Zone",
+                issue_description="AC not cooling",
+                contact_number="9876543210",
+                preferred_service_date=now,
+                assigned_technician_id=None,
+                sla_deadline=now + timedelta(minutes=30),
+            ),
+            Job(
+                id=102,
+                tenant_id="tenant-1",
+                customer_name="Jane Smith",
+                status="in progress",
+                priority="HIGH",
+                service_type="Electrical Service",
+                location="South Zone",
+                issue_description="Fuse blown",
+                contact_number="9876543211",
+                preferred_service_date=now,
+                assigned_technician_id=1,
+                sla_deadline=now + timedelta(minutes=10),
+            ),
 
-    yield db
+            Job(
+                id=103,
+                tenant_id="tenant-1",
+                customer_name="Bob Johnson",
+                status="completed",
+                priority="MEDIUM",
+                service_type="Plumbing Service",
+                location="East Zone",
+                issue_description="Leak in pipe",
+                contact_number="9876543212",
+                preferred_service_date=now,
+                assigned_technician_id=None,
+                sla_deadline=now - timedelta(minutes=10),
+            ),
+            Job(
+                id=104,
+                tenant_id="tenant-1",
+                customer_name="Dave Adams",
+                status="cancelled",
+                priority="LOW",
+                service_type="Network Support",
+                location="West Zone",
+                issue_description="WiFi offline",
+                contact_number="9876543213",
+                preferred_service_date=now,
+                assigned_technician_id=None,
+            ),
+        ]
 
-    db.close()
+        for job in jobs:
+            db.add(job)
+
+        db.commit()
+
+        yield db
+    finally:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        try:
+            db.close()
+        except Exception:
+            pass
 
 
 @pytest.fixture(autouse=True)
-def apply_overrides():
+def apply_overrides(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.ai.FieldOpsAI.agents.communication_agent.service.handle",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.tasks.process_job_status_transition_task",
+        lambda *args, **kwargs: None,
+    )
     app.dependency_overrides[get_db] = override_get_db
 
     test_user = AuthenticatedUser(
@@ -7964,7 +7988,7 @@ def test_close_job_terminal_status_lowercase():
 
 
 def test_get_job_closure_endpoint_technician_success(monkeypatch):
-    from app.routes.jobs import get_job_closure_endpoint
+    from app.routes.jobs import get_job_closure_endpoint, get_technician_for_current_user
 
     expected = {
         "job_id": 101,
@@ -7982,7 +8006,8 @@ def test_get_job_closure_endpoint_technician_success(monkeypatch):
         job = db.query(Job).filter(Job.id == 101).first()
         assert job is not None
 
-        job.assigned_technician_id = 1
+        technician = get_technician_for_current_user(db, _technician_enum_user())
+        job.assigned_technician_id = technician.technician_id
         db.commit()
 
         result = get_job_closure_endpoint(
