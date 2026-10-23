@@ -2140,6 +2140,97 @@ def maintain_event_ordering_task(
     )
 
 
+def _process_event_replay_once(
+    *,
+    redis,
+    event_payload: dict,
+    operator_role: str = "operator",
+    operator_id: Optional[str] = None,
+    force: bool = False,
+    reason: Optional[str] = None,
+) -> dict:
+    """Process a controlled event replay once with authorization and idempotency."""
+    import asyncio
+    from .services.consumer_event_replay import ConsumerEventReplay
+
+    consumer = ConsumerEventReplay(redis_client=redis)
+    result = asyncio.run(
+        consumer.replay_event(
+            event_or_payload=event_payload,
+            operator_role=operator_role,
+            operator_id=operator_id,
+            force=force,
+            reason=reason,
+        )
+    )
+    return dict(result)
+
+
+@celery_app.task(name="app.tasks.process_event_replay_task")
+def process_event_replay_task(
+    event_payload: dict,
+    operator_role: str = "operator",
+    operator_id: Optional[str] = None,
+    force: bool = False,
+    reason: Optional[str] = None,
+):
+    """Celery background task to safely replay an event."""
+    redis_client = get_redis_client()
+    return _process_event_replay_once(
+        redis=redis_client,
+        event_payload=event_payload,
+        operator_role=operator_role,
+        operator_id=operator_id,
+        force=force,
+        reason=reason,
+    )
+
+
+@celery_app.task(name="app.tasks.add_event_replay_support_task")
+def add_event_replay_support_task(
+    event_payload: dict,
+    operator_role: str = "operator",
+    operator_id: Optional[str] = None,
+    force: bool = False,
+    reason: Optional[str] = None,
+):
+    """Celery task alias conforming to story naming: Add event replay support."""
+    return process_event_replay_task(
+        event_payload=event_payload,
+        operator_role=operator_role,
+        operator_id=operator_id,
+        force=force,
+        reason=reason,
+    )
+
+
+@celery_app.task(name="app.tasks.replay_batch_events_task")
+def replay_batch_events_task(
+    events: list,
+    operator_role: str = "operator",
+    operator_id: Optional[str] = None,
+    force: bool = False,
+    reason: Optional[str] = None,
+):
+    """Celery background task to replay a batch of events."""
+    import asyncio
+    from .services.consumer_event_replay import ConsumerEventReplay
+
+    redis_client = get_redis_client()
+    consumer = ConsumerEventReplay(redis_client=redis_client)
+    results = asyncio.run(
+        consumer.replay_batch(
+            events=events,
+            operator_role=operator_role,
+            operator_id=operator_id,
+            force=force,
+            reason=reason,
+        )
+    )
+    return [dict(r) for r in results]
+
+
+
 
 def _publish_sla_event_once(
     *,

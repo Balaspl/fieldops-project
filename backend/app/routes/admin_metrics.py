@@ -119,3 +119,48 @@ async def get_kafka_ordering_metrics() -> dict:
     return ConsumerEventOrdering.get_ordering_metrics()
 
 
+@router.get(
+    "/kafka/replay",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def get_kafka_replay_metrics() -> dict:
+    from app.services.consumer_event_replay import ConsumerEventReplay
+    return ConsumerEventReplay.get_replay_metrics()
+
+
+@router.post(
+    "/kafka/replay",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def trigger_kafka_event_replay(request_data: dict) -> dict:
+    from app.services.consumer_event_replay import ConsumerEventReplay
+    consumer = ConsumerEventReplay()
+    event_payload = request_data.get("event") or request_data.get("payload") or request_data
+    operator_role = request_data.get("operator_role", "admin")
+    operator_id = request_data.get("operator_id", "admin_operator")
+    force = bool(request_data.get("force", False))
+    reason = request_data.get("reason", "Admin API triggered replay")
+
+    result = await consumer.replay_event(
+        event_or_payload=event_payload,
+        operator_role=operator_role,
+        operator_id=operator_id,
+        force=force,
+        reason=reason,
+    )
+    return dict(result)
+
+
+
