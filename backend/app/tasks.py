@@ -2352,6 +2352,70 @@ def add_idempotency_keys_task(
     )
 
 
+def _process_failed_event_storage_once(
+    *,
+    redis,
+    event_payload: dict,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+) -> dict:
+    """Process an event with durable failed-event storage and error context."""
+    import asyncio
+    from .services.failed_event_storage import FailedEventStorage
+
+    consumer = FailedEventStorage(redis_client=redis)
+    result = asyncio.run(
+        consumer.process_event(
+            message=event_payload,
+            topic=topic,
+            partition=partition,
+            offset=offset,
+            attempt=attempt,
+        )
+    )
+    return dict(result)
+
+
+@celery_app.task(name="app.tasks.process_failed_event_storage_task")
+def process_failed_event_storage_task(
+    event_payload: dict,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+):
+    """Celery background task to process consumed event with durable failed-event storage."""
+    redis_client = get_redis_client()
+    return _process_failed_event_storage_once(
+        redis=redis_client,
+        event_payload=event_payload,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        attempt=attempt,
+    )
+
+
+@celery_app.task(name="app.tasks.add_failed_event_storage_task")
+def add_failed_event_storage_task(
+    event_payload: dict,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+):
+    """Celery task alias conforming to story naming: Add failed-event storage."""
+    return process_failed_event_storage_task(
+        event_payload=event_payload,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        attempt=attempt,
+    )
+
+
 
 
 

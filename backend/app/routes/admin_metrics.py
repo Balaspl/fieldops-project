@@ -193,5 +193,20 @@ async def get_kafka_idempotency_key_metrics() -> dict:
     return ConsumerIdempotencyKeys.get_idempotency_metrics()
 
 
+@router.get(
+    "/kafka/failed-events",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def get_kafka_failed_event_metrics() -> dict:
+    from app.services.failed_event_storage import FailedEventStorage
+    return FailedEventStorage.get_storage_metrics()
+
+
 
 
