@@ -103,34 +103,22 @@ def normalize_skill(value: Any) -> str:
     )
 
 
-def technician_has_required_skill(
+def check_skill_match_level(
     technician_skills: Any,
     required_skill: Any,
     service: Any = None,
-) -> bool:
+    category: Any = None,
+    issue: Any = None,
+) -> int:
     """
-    Match a required skill against a technician's skill list.
-
-    Examples:
-        Required: HVAC
-        Technician skills: Electrical, HVAC Repair
-        Result: match
-
-        Required: Plumbing
-        Technician skills: Electrical
-        Result: no match
+    Computes taxonomy match level for a technician:
+      3 = Full match: Matches service AND category (title) AND issue
+      2 = Partial match: Matches service AND category (or issue)
+      1 = Base match: Matches service or required_skill
+      0 = No match
     """
-
-    requirements = {
-        normalize_skill(required_skill),
-        normalize_skill(service),
-    }
-    requirements.discard("")
-
-    if not requirements:
-        # Do not accidentally match every technician when
-        # the job has no required skill.
-        return False
+    if not technician_skills:
+        return 0
 
     if isinstance(technician_skills, str):
         skills = technician_skills.split(",")
@@ -145,23 +133,84 @@ def technician_has_required_skill(
         if normalize_skill(skill)
     ]
 
-    for required in requirements:
-        for skill in normalized_skills:
-            if required == skill:
-                return True
+    if not normalized_skills:
+        return 0
 
-            # Permit specific service variants, such as
-            # HVAC matching HVAC Repair.
-            if (
-                len(required) >= 3
-                and re.search(
-                    rf"(?<![a-z0-9]){re.escape(required)}(?![a-z0-9])",
-                    skill,
-                )
-            ):
-                return True
+    # 1. Base Service / Trade match
+    service_reqs = {
+        normalize_skill(required_skill),
+        normalize_skill(service),
+    }
+    service_reqs.discard("")
 
-    return False
+    service_matched = False
+    for req in service_reqs:
+        for s in normalized_skills:
+            if req == s:
+                service_matched = True
+                break
+            if len(req) >= 3 and re.search(rf"(?<![a-z0-9]){re.escape(req)}(?![a-z0-9])", s):
+                service_matched = True
+                break
+            if len(s) >= 3 and re.search(rf"(?<![a-z0-9]){re.escape(s)}(?![a-z0-9])", req):
+                service_matched = True
+                break
+        if service_matched:
+            break
+
+    if not service_matched:
+        return 0
+
+    # 2. Check Category and Issue
+    def matches_target(target: Any) -> bool:
+        if not target:
+            return False
+        norm = normalize_skill(target)
+        if not norm:
+            return False
+        for s in normalized_skills:
+            if norm == s:
+                return True
+            if len(norm) >= 3 and re.search(rf"(?<![a-z0-9]){re.escape(norm)}(?![a-z0-9])", s):
+                return True
+            if len(s) >= 3 and re.search(rf"(?<![a-z0-9]){re.escape(s)}(?![a-z0-9])", norm):
+                return True
+        return False
+
+    has_cat = matches_target(category) if category else False
+    has_issue = matches_target(issue) if issue else False
+
+    if category and issue:
+        if has_cat and has_issue:
+            return 3
+        elif has_cat or has_issue:
+            return 2
+        else:
+            return 1
+    elif category:
+        return 3 if has_cat else 1
+    elif issue:
+        return 3 if has_issue else 1
+    return 1
+
+
+def technician_has_required_skill(
+    technician_skills: Any,
+    required_skill: Any,
+    service: Any = None,
+    category: Any = None,
+    issue: Any = None,
+    min_match_level: int = 1,
+) -> bool:
+    """Check if technician meets the required skill / taxonomy level."""
+    level = check_skill_match_level(
+        technician_skills,
+        required_skill,
+        service,
+        category,
+        issue,
+    )
+    return level >= min_match_level
 
 
 # ---------------------------------------------------------
@@ -233,6 +282,12 @@ def find_nearest_organizations_node(
         or job_req.get("service_type")
         or ""
     )
+    category = job_req.get("category") or job_req.get("title") or ""
+    issue = job_req.get("issue") or ""
+    if not issue and job_req.get("description"):
+        parts = str(job_req["description"]).split(" - ")
+        if len(parts) >= 2 and parts[0].strip():
+            issue = parts[0].strip()
 
     customer_coords = (
         state.get("customer_coordinates")
@@ -242,37 +297,73 @@ def find_nearest_organizations_node(
     db, own_db = get_database(state)
 
     try:
+        from collections import defaultdict
+
+        # Fetch all candidate technicians across active organizations in a single query
+        all_candidate_techs = (
+            db.query(Technician)
+            .join(Organization, Organization.id == Technician.tenant_id)
+            .filter(
+                Organization.site_latitude.isnot(None),
+                Organization.site_longitude.isnot(None),
+                Organization.deleted_at.is_(None),
+                Technician.technician_skill.isnot(None),
+            )
+            .all()
+        )
+
+        techs_by_org = defaultdict(list)
+        for t in all_candidate_techs:
+            techs_by_org[t.tenant_id].append(t)
+
+        candidate_org_ids = list(techs_by_org.keys())
+
+        # Query only organizations that actually employ candidate technicians
         organizations = (
             db.query(Organization)
             .filter(
+                Organization.id.in_(candidate_org_ids),
                 Organization.site_latitude.isnot(None),
                 Organization.site_longitude.isnot(None),
                 Organization.deleted_at.is_(None),
             )
             .all()
+            if candidate_org_ids
+            else []
+        )
+
+        scores = [
+            check_skill_match_level(t.technician_skill, required_skill, service, category, issue)
+            for t in all_candidate_techs
+        ]
+        max_level = max(scores, default=0)
+        min_level_needed = max(1, max_level)
+
+        logger.info(
+            "PLANNING TAXONOMY SCAN | job_id=%s | category=%s | issue=%s | max_level_found=%s",
+            state.get("job_id"),
+            category,
+            issue,
+            max_level,
         )
 
         eligible_organizations = []
 
         for org in organizations:
-            technicians = (
-                db.query(Technician)
-                .filter(
-                    Technician.tenant_id == org.id,
-                    Technician.technician_skill.isnot(None),
-                )
-                .all()
-            )
+            # Use in-memory grouping instead of N+1 database queries
+            technicians = techs_by_org.get(org.id, [])
 
-            # Do not filter on technician_status or current_jobs.
+            # Match only technicians meeting the required taxonomy depth (e.g. Level 3 when title/category/issue match exists)
             matching_technicians = [
                 tech
                 for tech in technicians
-                if technician_has_required_skill(
+                if check_skill_match_level(
                     tech.technician_skill,
                     required_skill,
                     service,
-                )
+                    category,
+                    issue,
+                ) >= min_level_needed
             ]
 
             logger.info(
@@ -331,6 +422,9 @@ def find_nearest_organizations_node(
 
         return {
             "eligible_organizations": eligible_organizations,
+            "required_match_level": min_level_needed,
+            "taxonomy_category": category,
+            "taxonomy_issue": issue,
         }
 
     finally:
@@ -381,6 +475,13 @@ def find_and_rank_technicians_node(
     excluded_ids = normalize_ids(
         state.get("excluded_technician_ids")
     )
+    min_level_needed = state.get("required_match_level", 1)
+    taxonomy_category = state.get("taxonomy_category") or job_req.get("category") or job_req.get("title") or ""
+    taxonomy_issue = state.get("taxonomy_issue") or job_req.get("issue") or ""
+    if not taxonomy_issue and job_req.get("description"):
+        parts = str(job_req["description"]).split(" - ")
+        if len(parts) >= 2 and parts[0].strip():
+            taxonomy_issue = parts[0].strip()
 
     db, own_db = get_database(state)
 
@@ -426,11 +527,14 @@ def find_and_rank_technicians_node(
                     excluded_count += 1
                     continue
 
-                if not technician_has_required_skill(
+                match_lvl = check_skill_match_level(
                     tech.technician_skill,
                     required_skill,
                     service,
-                ):
+                    taxonomy_category,
+                    taxonomy_issue,
+                )
+                if match_lvl < min_level_needed:
                     skill_rejected_count += 1
                     continue
 
@@ -513,6 +617,8 @@ def find_and_rank_technicians_node(
                         "technician_distance": distance,
                         "distance_km": round(distance, 2),
                         "workload": workload,
+                        "technician_skill": tech.technician_skill,
+                        "match_level": match_lvl,
                     }
                 )
 
@@ -530,9 +636,9 @@ def find_and_rank_technicians_node(
                 skill_rejected_count,
             )
 
-            # Rank technicians within this organization by distance.
+            # Rank technicians within this organization by taxonomy match level then distance.
             eligible_for_org.sort(
-                key=lambda tech: tech["distance_km"]
+                key=lambda tech: (-tech.get("match_level", 1), tech["distance_km"])
             )
 
             # Keep the organization-first ranking strategy.

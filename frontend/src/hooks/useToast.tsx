@@ -90,14 +90,46 @@ export function ToastProvider({ children }: ToastProviderProps) {
   }, []);
 
   const addToast = useCallback(
-    (incoming: Omit<ToastItem, 'id' | 'timestamp'>): string => {
-      const { eventType } = incoming;
+    (incoming: Omit<ToastItem, 'id' | 'timestamp'> | string, maybeType?: ToastType): string => {
+      let toastPayload: Omit<ToastItem, 'id' | 'timestamp'>;
+
+      if (typeof incoming === 'string') {
+        const typeStr = maybeType || 'info';
+        const validTypes = ['success', 'warning', 'error', 'info'] as const;
+        const normalizedType = validTypes.includes(typeStr as any) ? (typeStr as ToastType) : 'info';
+        toastPayload = {
+          type: normalizedType,
+          title: normalizedType === 'error' ? 'Error' : normalizedType === 'success' ? 'Success' : 'Notice',
+          message: incoming,
+          priority: normalizedType === 'error' ? 'critical' : 'normal',
+          autoDismiss: 4000,
+        };
+      } else if (incoming && typeof incoming === 'object') {
+        toastPayload = {
+          ...incoming,
+          type: incoming.type || 'info',
+          title: incoming.title || (incoming.type === 'error' ? 'Error' : 'Notice'),
+          message: incoming.message || '',
+          priority: incoming.priority || (incoming.type === 'error' ? 'critical' : 'normal'),
+          autoDismiss: incoming.autoDismiss ?? 4000,
+        };
+      } else {
+        toastPayload = {
+          type: 'info',
+          title: 'Notice',
+          message: String(incoming || ''),
+          priority: 'normal',
+          autoDismiss: 4000,
+        };
+      }
+
+      const { eventType } = toastPayload;
 
       // ── Batch check ──────────────────────────────────────────────
       if (eventType) {
         const existing = batchRef.current.get(eventType);
         if (existing) {
-          const newItem = { title: incoming.title, message: incoming.message };
+          const newItem = { title: toastPayload.title, message: toastPayload.message };
           existing.items.push(newItem);
           setToasts((prev) =>
             prev.map((t) =>
@@ -118,9 +150,9 @@ export function ToastProvider({ children }: ToastProviderProps) {
       // ── New toast ────────────────────────────────────────────────
       const id = makeId();
       const timestamp = formatTimestamp();
-      const toast: ToastItem = { ...incoming, id, timestamp };
+      const toast: ToastItem = { ...toastPayload, id, timestamp };
 
-      triggerSound(incoming.priority, eventType);
+      triggerSound(toastPayload.priority, eventType);
 
       setToasts((prev) => {
         const next = [toast, ...prev];
@@ -134,7 +166,7 @@ export function ToastProvider({ children }: ToastProviderProps) {
         }, BATCH_WINDOW_MS);
         batchRef.current.set(eventType, {
           id,
-          items: [{ title: incoming.title, message: incoming.message }],
+          items: [{ title: toastPayload.title, message: toastPayload.message }],
           timer,
         });
       }
