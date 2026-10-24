@@ -827,10 +827,19 @@ export default function JobLiveTrackingMap({
   // Technician location displayed by the map
   // ---------------------------------------------------------------------------
 
+  const initialPropPoint = useMemo<Point | null>(() => {
+    const lat = toFiniteNumber(_technicianLatitude);
+    const lng = toFiniteNumber(_technicianLongitude);
+    if (lat === null || lng === null) return null;
+    const pt = { lat, lng };
+    return isValidPoint(pt) ? pt : null;
+  }, [_technicianLatitude, _technicianLongitude]);
+
   const streamedTechnician =
     mode === "customer"
       ? storePoint ??
         lastKnownTechnician?.point ??
+        initialPropPoint ??
         null
       : ownPosition;
 
@@ -926,7 +935,7 @@ export default function JobLiveTrackingMap({
           point,
         )
           ? point
-          : null;
+          : DEFAULT_CENTER;
       },
       [
         customerLatitude,
@@ -1414,13 +1423,12 @@ export default function JobLiveTrackingMap({
           }
         };
 
-      const startTimer = window.setTimeout(() => {
-        if (!cancelled) void initializeMap();
-        }, 0);
+      if (!cancelled) {
+        void initializeMap();
+      }
 
       return () => {
         cancelled = true;
-        window.clearTimeout(startTimer);
 
         if (
           markerAnimationRef.current !==
@@ -2184,7 +2192,8 @@ useEffect(() => {
         position:
           "relative",
         width: "100%",
-        height: 560,
+        height: "100%",
+        minHeight: 480,
         borderRadius: 14,
         overflow:
           "hidden",

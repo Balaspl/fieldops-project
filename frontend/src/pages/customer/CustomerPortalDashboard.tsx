@@ -70,32 +70,32 @@ export default function CustomerPortalDashboard({
 
   const cards = [
     {
-      label: "Total Requests",
+      label: "TOTAL REQUESTS",
       value: stats?.total_requests ?? 0,
       icon: <FileText size={20} />,
-      bg: "#E8F5E9",
-      color: "#2E7D32",
+      bg: "#E8F8F2",
+      color: "#059669",
     },
     {
-      label: "Unassigned",
+      label: "UNASSIGNED",
       value: stats?.pending_requests ?? 0,
       icon: <Clock size={20} />,
-      bg: "#FFF8E1",
-      color: "#F57F17",
+      bg: "#FFFBEB",
+      color: "#D97706",
     },
     {
-      label: "Active Jobs",
+      label: "ACTIVE JOBS",
       value: stats?.active_jobs ?? 0,
       icon: <PlusCircle size={20} />,
-      bg: "#E3F2FD",
-      color: "#1565C0",
+      bg: "#EFF6FF",
+      color: "#2563EB",
     },
     {
-      label: "Completed",
+      label: "COMPLETED",
       value: stats?.completed_jobs ?? 0,
       icon: <CheckCircle size={20} />,
-      bg: "#F3E5F5",
-      color: "#7B1FA2",
+      bg: "#F5F3FF",
+      color: "#7C3AED",
     },
   ];
 
@@ -114,7 +114,7 @@ export default function CustomerPortalDashboard({
       <div
         style={{
           padding: "24px",
-          background: "#EEF4F1",
+          background: "#F8FAFC",
           height: "100%",
           display: "flex",
           alignItems: "center",
@@ -135,7 +135,7 @@ export default function CustomerPortalDashboard({
           padding: "24px",
           height: "100%",
           overflowY: "auto",
-          background: "#EEF4F1",
+          background: "#F8FAFC",
           fontFamily: "'Inter', sans-serif",
           display: "flex",
           alignItems: "center",
@@ -203,7 +203,7 @@ export default function CustomerPortalDashboard({
         padding: "24px",
         height: "100%",
         overflowY: "auto",
-        background: "#EEF4F1",
+        background: "#F8FAFC",
         fontFamily: "'Inter', sans-serif",
       }}
     >
@@ -244,7 +244,7 @@ export default function CustomerPortalDashboard({
             padding: "12px 20px",
             border: "none",
             borderRadius: "10px",
-            background: "#7AB38A",
+            background: "#1E6B52",
             color: "#fff",
             fontSize: "14px",
             fontWeight: 700,
@@ -252,6 +252,7 @@ export default function CustomerPortalDashboard({
             display: "flex",
             alignItems: "center",
             gap: "8px",
+            boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
           }}
         >
           <PlusCircle size={18} />
@@ -272,17 +273,17 @@ export default function CustomerPortalDashboard({
             key={i}
             style={{
               background: "#fff",
-              borderRadius: "14px",
-              padding: "20px",
-              boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
-              border: "1px solid #E3ECE7",
+              borderRadius: "16px",
+              padding: "22px 24px",
+              boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
+              border: "1px solid #F1F5F9",
             }}
           >
             <div
               style={{
-                width: "40px",
-                height: "40px",
-                borderRadius: "10px",
+                width: "42px",
+                height: "42px",
+                borderRadius: "12px",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -294,12 +295,19 @@ export default function CustomerPortalDashboard({
               {c.icon}
             </div>
             <div
-              style={{ fontSize: "12px", color: "#6B7280", fontWeight: 500 }}
+              style={{
+                fontSize: "11px",
+                color: "#64748B",
+                fontWeight: 700,
+                letterSpacing: "0.06em",
+                marginTop: "12px",
+                marginBottom: "4px",
+              }}
             >
               {c.label}
             </div>
             <div
-              style={{ fontSize: "28px", fontWeight: 700, color: "#1F2933" }}
+              style={{ fontSize: "32px", fontWeight: 700, color: "#0F172A" }}
             >
               {c.value}
             </div>
@@ -310,10 +318,10 @@ export default function CustomerPortalDashboard({
       <div
         style={{
           background: "#fff",
-          borderRadius: "14px",
-          padding: "20px",
-          boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
-          border: "1px solid #E3ECE7",
+          borderRadius: "16px",
+          padding: "24px",
+          boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
+          border: "1px solid #F1F5F9",
         }}
       >
         <div
@@ -327,7 +335,7 @@ export default function CustomerPortalDashboard({
             gap: "8px",
           }}
         >
-          <FileText size={18} color="#7AAE8A" /> Recent Requests
+          <FileText size={20} color="#059669" /> Recent Requests
         </div>
 
         {recent.length === 0 ? (
@@ -428,7 +436,7 @@ export default function CustomerPortalDashboard({
               marginTop: "12px",
               background: "none",
               border: "none",
-              color: "#7AAE8A",
+              color: "#059669",
               fontSize: "13px",
               fontWeight: 600,
               cursor: "pointer",

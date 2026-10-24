@@ -167,4 +167,14 @@ describe("CustomerNotificationsPage", () => {
       expect(screen.getByText("Your job is complete")).toBeTruthy();
     }
   });
+
+  it("renders close button and triggers onClose when clicked", async () => {
+    const handleClose = vi.fn();
+    render(<CustomerNotificationsPage onClose={handleClose} />);
+
+    const closeBtn = await screen.findByRole("button", { name: /close notifications/i });
+    expect(closeBtn).toBeInTheDocument();
+    fireEvent.click(closeBtn);
+    expect(handleClose).toHaveBeenCalledTimes(1);
+  });
 });

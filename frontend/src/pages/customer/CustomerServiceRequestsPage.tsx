@@ -3,60 +3,102 @@ import {
   FileText,
   PlusCircle,
   XCircle,
-  Edit3,
   AlertCircle,
   CheckCircle,
+  CheckCircle2,
   X,
   Clock,
   Send,
   MapPin,
+  UserCheck,
+  Users,
+  Briefcase,
+  Navigation,
+  Phone,
+  User,
+  Receipt,
+  Printer,
+  Download,
+  ExternalLink,
+  ShieldCheck,
 } from "lucide-react";
 
 import {
   getServiceRequests,
   createServiceRequest,
-  updateServiceRequest,
   cancelServiceRequest,
+  getCustomerInvoice,
+  type CustomerInvoiceResponse,
 } from "../../services/customerPortalService";
 
 import api from "../../services/api";
 import { OlaMaps } from "olamaps-web-sdk";
+import AnimatedJobProgress from "../../components/customer-tracking/AnimatedJobProgress";
+import JobLiveTrackingMap from "../../components/customer-tracking/JobLiveTrackingMap";
+import CustomerNewRequestMarketplace from "../../components/customer/CustomerNewRequestMarketplace";
+import { useTrackingStore } from "../../store/trackingStore";
 
 const OLA_STYLE =
   "https://api.olamaps.io/tiles/vector/v1/styles/default-light-standard/style.json";
 
+const getDisplayStatusText = (status: string) => {
+  const s = String(status || "").trim().toUpperCase();
+  switch (s) {
+    case "CREATED":
+    case "PENDING":
+    case "UNASSIGNED":
+      return "UNASSIGNED";
+    case "ASSIGNED":
+      return "AWAITING ACCEPTANCE";
+    case "ACCEPTED":
+      return "ASSIGNED";
+    case "EN_ROUTE":
+      return "EN ROUTE";
+    case "ON_SITE":
+    case "IN_PROGRESS":
+      return "IN PROGRESS";
+    case "COMPLETED":
+    case "CLOSED":
+      return "COMPLETED";
+    case "CANCELLED":
+      return "CANCELLED";
+    case "QUEUED":
+      return "UNASSIGNED";
+    case "REJECTED_BY_TECHNICIAN":
+      return "REJECTED";
+    default:
+      return s;
+  }
+};
+
 const badge = (status: string) => {
-  const c: Record<string, string> = {
-    UNASSIGNED: "#DD6B20",
-    "AWAITING ACCEPTANCE": "#1E40AF",
-    ASSIGNED: "#1E40AF",
-    "EN ROUTE": "#7C3AED",
-    IN_PROGRESS: "#92400E",
-    COMPLETED: "#065F46",
-    CANCELLED: "#991B1B",
+  const displayStatus = getDisplayStatusText(status);
+
+  const colors: Record<string, { bg: string; color: string; border: string }> = {
+    UNASSIGNED: { bg: "#FEF3C7", color: "#B45309", border: "#FDE68A" },
+    "AWAITING ACCEPTANCE": { bg: "#FFF7ED", color: "#C2410C", border: "#FFEDD5" },
+    ASSIGNED: { bg: "#EFF6FF", color: "#1D4ED8", border: "#DBEAFE" },
+    "EN ROUTE": { bg: "#F0F9FF", color: "#0284C7", border: "#BAE6FD" },
+    "IN PROGRESS": { bg: "#F5F3FF", color: "#7C3AED", border: "#DDD6FE" },
+    COMPLETED: { bg: "#ECFDF5", color: "#059669", border: "#A7F3D0" },
+    CANCELLED: { bg: "#FEF2F2", color: "#DC2626", border: "#FECACA" },
   };
 
-  const displayStatus =
-    status === "CREATED"
-      ? "UNASSIGNED"
-      : status === "ASSIGNED"
-      ? "AWAITING ACCEPTANCE"
-      : status === "ACCEPTED"
-      ? "ASSIGNED"
-      : status === "EN_ROUTE"
-      ? "EN ROUTE"
-      : status === "IN_PROGRESS"
-      ? "IN_PROGRESS"
-      : status;
+  const style = colors[displayStatus] || { bg: "#F1F5F9", color: "#64748B", border: "#E2E8F0" };
 
   return {
     fontSize: "11px",
-    fontWeight: 600,
+    fontWeight: 700,
     padding: "3px 10px",
     borderRadius: "20px",
-    background: (c[displayStatus] || "#6B7280") + "18",
-    color: c[displayStatus] || "#6B7280",
-    display: "inline-block",
+    background: style.bg,
+    color: style.color,
+    border: `1px solid ${style.border}`,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "4px",
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.3px",
   };
 };
 
@@ -70,10 +112,372 @@ export default function CustomerServiceRequestsPage({
   onNavigate,
 }: CustomerServiceRequestsPageProps) {
   const [requests, setRequests] = useState<any[]>([]);
+  const [activeCardFilter, setActiveCardFilter] = useState<string>("ALL");
+
+  const normalizeStatus = (status: any) => {
+    if (!status) return "";
+    return String(status).trim().toUpperCase();
+  };
+
+  const isUnassigned = (s: string) =>
+    ["CREATED", "PENDING", "UNASSIGNED", "ASSIGNED", "QUEUED"].includes(s);
+
+  const isAssigned = (s: string) =>
+    s === "ACCEPTED";
+
+  const isActiveJob = (s: string) =>
+    ["EN_ROUTE", "ON_SITE", "IN_PROGRESS"].includes(s);
+
+  const isCompleted = (s: string) =>
+    ["COMPLETED", "CLOSED"].includes(s);
+
+  const isCancelled = (s: string) =>
+    s === "CANCELLED";
+
+  const totalRequestsCount = requests.length;
+  const unassignedCount = requests.filter((r) => isUnassigned(normalizeStatus(r.status))).length;
+  const assignedCount = requests.filter((r) => isAssigned(normalizeStatus(r.status))).length;
+  const activeJobsCount = requests.filter((r) => isActiveJob(normalizeStatus(r.status))).length;
+  const completedJobsCount = requests.filter((r) => isCompleted(normalizeStatus(r.status))).length;
+  const cancelledJobsCount = requests.filter((r) => isCancelled(normalizeStatus(r.status))).length;
+
+  const statsCards = [
+    {
+      key: "ALL",
+      label: "Total Requests",
+      value: totalRequestsCount,
+      icon: <FileText size={18} strokeWidth={2.2} />,
+      iconBg: "#DCFCE7",
+      color: "#10B981",
+      valueColor: "#0F172A",
+      gradStart: "rgba(167, 243, 208, 0.45)",
+      gradEnd: "rgba(110, 231, 183, 0.85)",
+    },
+    {
+      key: "UNASSIGNED",
+      label: "Unassigned Jobs",
+      value: unassignedCount,
+      icon: <Clock size={18} strokeWidth={2.2} />,
+      iconBg: "#FEF3C7",
+      color: "#F59E0B",
+      valueColor: "#92400E",
+      gradStart: "rgba(254, 215, 170, 0.45)",
+      gradEnd: "rgba(253, 224, 71, 0.85)",
+    },
+    {
+      key: "ASSIGNED",
+      label: "Assigned Jobs",
+      value: assignedCount,
+      icon: <Users size={18} strokeWidth={2.2} />,
+      iconBg: "#DBEAFE",
+      color: "#2563EB",
+      valueColor: "#1E40AF",
+      gradStart: "rgba(191, 219, 254, 0.45)",
+      gradEnd: "rgba(147, 197, 253, 0.85)",
+    },
+    {
+      key: "ACTIVE",
+      label: "Active Jobs",
+      value: activeJobsCount,
+      icon: <Briefcase size={18} strokeWidth={2.2} />,
+      iconBg: "#F3E8FF",
+      color: "#9333EA",
+      valueColor: "#581C87",
+      gradStart: "rgba(233, 213, 255, 0.45)",
+      gradEnd: "rgba(196, 181, 253, 0.85)",
+    },
+    {
+      key: "COMPLETED",
+      label: "Completed Jobs",
+      value: completedJobsCount,
+      icon: <CheckCircle2 size={18} strokeWidth={2.2} />,
+      iconBg: "#DCFCE7",
+      color: "#10B981",
+      valueColor: "#065F46",
+      gradStart: "rgba(167, 243, 208, 0.45)",
+      gradEnd: "rgba(110, 231, 183, 0.85)",
+    },
+    {
+      key: "CANCELLED",
+      label: "Cancelled Jobs",
+      value: cancelledJobsCount,
+      icon: <XCircle size={18} strokeWidth={2.2} />,
+      iconBg: "#FEE2E2",
+      color: "#EF4444",
+      valueColor: "#991B1B",
+      gradStart: "rgba(254, 202, 202, 0.5)",
+      gradEnd: "rgba(248, 113, 113, 0.85)",
+    },
+  ];
+
+  const displayedRequests = requests.filter((sr) => {
+    const s = normalizeStatus(sr.status);
+    if (activeCardFilter === "UNASSIGNED") return isUnassigned(s);
+    if (activeCardFilter === "ASSIGNED") return isAssigned(s);
+    if (activeCardFilter === "ACTIVE") return isActiveJob(s);
+    if (activeCardFilter === "COMPLETED") return isCompleted(s);
+    if (activeCardFilter === "CANCELLED") return isCancelled(s);
+    return true;
+  });
   const [loading, setLoading] = useState(!createOnly);
 
   const [showCreate, setShowCreate] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
+
+  // Job Tracking & Invoice Modal State
+  const [trackingModalRequest, setTrackingModalRequest] = useState<any | null>(null);
+  const [trackingJobDetails, setTrackingJobDetails] = useState<any | null>(null);
+  const [trackingInvoiceDetails, setTrackingInvoiceDetails] = useState<CustomerInvoiceResponse | null>(null);
+  const [trackingLoading, setTrackingLoading] = useState<boolean>(false);
+
+  // Dedicated Standalone Live Map Modal State
+  const [liveMapModalRequest, setLiveMapModalRequest] = useState<any | null>(null);
+  const [liveMapJobDetails, setLiveMapJobDetails] = useState<any | null>(null);
+  const [liveMapLoading, setLiveMapLoading] = useState<boolean>(false);
+
+  const handleOpenDedicatedLiveMap = async (sr: any, existingJobDetails?: any) => {
+    if (!sr) return;
+    setLiveMapModalRequest(sr);
+
+    if (existingJobDetails) {
+      setLiveMapJobDetails(existingJobDetails);
+      setLiveMapLoading(false);
+    } else {
+      setLiveMapJobDetails({
+        id: sr.linked_job_id || sr.id,
+        site_latitude: sr.site_latitude || 13.0495,
+        site_longitude: sr.site_longitude || 80.2282,
+        status: sr.status,
+        location: sr.location,
+        assigned_technician_id: sr.assigned_technician_id,
+        assigned_technician_name: sr.assigned_technician_name,
+        technician_latitude: sr.technician_latitude || null,
+        technician_longitude: sr.technician_longitude || null,
+      });
+      setLiveMapLoading(false);
+    }
+
+    const targetJobId = sr.linked_job_id || sr.id;
+    if (targetJobId) {
+      try {
+        const res = await api.get(`/api/customer/jobs/${targetJobId}`);
+        if (res.data) {
+          setLiveMapJobDetails(res.data);
+        }
+      } catch (err) {
+        console.error("Error fetching live map details:", err);
+      }
+    }
+  };
+
+  const handleOpenTracking = async (sr: any) => {
+    setTrackingModalRequest(sr);
+    setTrackingJobDetails(null);
+    setTrackingInvoiceDetails(null);
+    setTrackingLoading(true);
+
+    try {
+      if (sr.linked_job_id) {
+        let fetchedJobStatus = sr.status;
+        try {
+          const res = await api.get(`/api/customer/jobs/${sr.linked_job_id}`);
+          if (res.data) {
+            setTrackingJobDetails(res.data);
+            fetchedJobStatus = res.data.status || sr.status;
+            useTrackingStore.getState().setJobTrackingSnapshot(String(sr.linked_job_id), {
+              status: fetchedJobStatus,
+              eta: res.data.estimated_arrival ?? null,
+              duration_minutes: res.data.eta_duration_minutes ?? null,
+            });
+            if (res.data.status && res.data.status !== sr.status) {
+              setRequests((prev) =>
+                prev.map((r) => (r.id === sr.id ? { ...r, status: res.data.status } : r))
+              );
+            }
+          }
+        } catch (err) {
+          console.error("Error fetching job tracking details:", err);
+        }
+
+        const s = normalizeStatus(fetchedJobStatus);
+        if (["COMPLETED", "CLOSED"].includes(s)) {
+          try {
+            const invRes = await getCustomerInvoice(sr.linked_job_id);
+            if (invRes.data) {
+              setTrackingInvoiceDetails(invRes.data);
+            }
+          } catch (invErr) {
+            console.error("Error fetching invoice:", invErr);
+          }
+        }
+      }
+    } finally {
+      setTrackingLoading(false);
+    }
+  };
+
+  // Real-time polling while Track Job modal is open
+  useEffect(() => {
+    const linkedJobId = trackingModalRequest?.linked_job_id;
+    if (!linkedJobId) return;
+
+    let isMounted = true;
+    const interval = setInterval(async () => {
+      try {
+        const res = await api.get(`/api/customer/jobs/${linkedJobId}`);
+        if (!isMounted || !res.data) return;
+
+        setTrackingJobDetails(res.data);
+
+        useTrackingStore.getState().setJobTrackingSnapshot(String(linkedJobId), {
+          status: res.data.status,
+          eta: res.data.estimated_arrival ?? null,
+          duration_minutes: res.data.eta_duration_minutes ?? null,
+        });
+
+        const normSt = normalizeStatus(res.data.status);
+        if (["COMPLETED", "CLOSED"].includes(normSt) && !trackingInvoiceDetails) {
+          try {
+            const invRes = await getCustomerInvoice(linkedJobId);
+            if (isMounted && invRes.data) {
+              setTrackingInvoiceDetails(invRes.data);
+            }
+          } catch (invErr) {
+            console.error("Error polling invoice:", invErr);
+          }
+        }
+
+        setRequests((prev) =>
+          prev.map((r) =>
+            r.linked_job_id === linkedJobId || r.id === trackingModalRequest.id
+              ? { ...r, status: res.data.status }
+              : r
+          )
+        );
+      } catch (err) {
+        console.error("Error polling tracking job details:", err);
+      }
+    }, 3000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [trackingModalRequest?.linked_job_id, trackingModalRequest?.id, trackingInvoiceDetails]);
+
+  const handlePrintInvoice = (inv: CustomerInvoiceResponse, req: any) => {
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) return;
+
+    const orgName = inv.organization_name || "FieldOps Certified Service";
+    const techName = inv.technician_name || "Assigned Technician";
+    const dateStr = inv.completed_at ? new Date(inv.completed_at).toLocaleDateString("en-IN", {
+      day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit"
+    }) : new Date().toLocaleDateString("en-IN");
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Invoice #${inv.id} - ${orgName}</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 40px; color: #1e293b; line-height: 1.5; }
+          .header { border-bottom: 2px solid #069660; padding-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-start; }
+          .org-name { font-size: 26px; font-weight: 800; color: #069660; margin: 0; }
+          .invoice-badge { background: #dcfce7; color: #065f46; font-weight: 700; font-size: 14px; padding: 6px 14px; border-radius: 20px; text-transform: uppercase; }
+          .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 24px; }
+          .meta-label { font-size: 12px; color: #64748b; font-weight: 600; text-transform: uppercase; margin-bottom: 4px; }
+          .meta-val { font-size: 15px; font-weight: 600; color: #0f172a; }
+          table { width: 100%; border-collapse: collapse; margin-top: 24px; }
+          th { background: #f8fafc; text-align: left; padding: 12px; font-size: 12px; color: #475569; text-transform: uppercase; border-bottom: 1px solid #e2e8f0; }
+          td { padding: 14px 12px; border-bottom: 1px solid #f1f5f9; font-size: 14px; }
+          .amount-col { text-align: right; }
+          .total-row td { font-size: 18px; font-weight: 800; color: #069660; border-top: 2px solid #069660; }
+          .footer { margin-top: 50px; text-align: center; font-size: 13px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 20px; }
+          @media print {
+            body { margin: 20px; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div>
+            <h1 class="org-name">${orgName}</h1>
+            <p style="margin: 4px 0 0; color: #64748b; font-size: 14px;">Official Service Receipt & Tax Invoice</p>
+          </div>
+          <div style="text-align: right;">
+            <span class="invoice-badge">PAID</span>
+            <p style="margin: 8px 0 0; font-size: 14px; font-weight: 700; color: #334155;">Invoice #${inv.id}</p>
+            <p style="margin: 2px 0 0; font-size: 12px; color: #64748b;">${dateStr}</p>
+          </div>
+        </div>
+
+        <div class="grid">
+          <div>
+            <div class="meta-label">Customer Details</div>
+            <div class="meta-val">${inv.customer_name || req.contact_number || "Valued Customer"}</div>
+            <div style="font-size: 13px; color: #64748b; margin-top: 4px;">${inv.location || req.location || "Service Location"}</div>
+          </div>
+          <div style="text-align: right;">
+            <div class="meta-label">Service Organization</div>
+            <div class="meta-val">${orgName}</div>
+            <div style="font-size: 13px; color: #64748b; margin-top: 4px;">Technician: <strong>${techName}</strong></div>
+            <div style="font-size: 12px; color: #94a3b8; margin-top: 2px;">Job ID: #${inv.job_id}</div>
+          </div>
+        </div>
+
+        <div style="margin-top: 20px;">
+          <div class="meta-label">Service Summary</div>
+          <div style="font-size: 14px; color: #334155; background: #f8fafc; padding: 12px 16px; border-radius: 8px; border: 1px solid #e2e8f0;">
+            <strong>${inv.service_type || req.service_type || "Service"}</strong>: ${inv.work_summary || req.description || "Work completed successfully as per specifications."}
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Description</th>
+              <th class="amount-col">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Labour Charges</td>
+              <td class="amount-col">₹${inv.labour_cost.toFixed(2)}</td>
+            </tr>
+            <tr>
+              <td>Material / Spares Charges</td>
+              <td class="amount-col">₹${inv.material_cost.toFixed(2)}</td>
+            </tr>
+            <tr>
+              <td style="font-weight: 600;">Subtotal</td>
+              <td class="amount-col" style="font-weight: 600;">₹${inv.subtotal.toFixed(2)}</td>
+            </tr>
+            <tr>
+              <td>GST (${((inv.gst_rate || 0.18) * 100).toFixed(0)}%)</td>
+              <td class="amount-col">₹${inv.gst_amount.toFixed(2)}</td>
+            </tr>
+            <tr class="total-row">
+              <td>Total Paid</td>
+              <td class="amount-col">₹${inv.total_amount.toFixed(2)}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="footer">
+          Thank you for choosing ${orgName}. Official digital record for completed service job #${inv.job_id}.
+        </div>
+
+        <script>
+          window.onload = function() { window.print(); }
+        </script>
+      </body>
+      </html>
+    `;
+
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
 
   const [form, setForm] = useState({
     title: "",
@@ -1036,6 +1440,29 @@ export default function CustomerServiceRequestsPage({
     }
   }, [createOnly]);
 
+  // Auto-refresh requests list in background so status updates appear without manual refresh
+  useEffect(() => {
+    if (createOnly) return;
+
+    let isMounted = true;
+    const interval = setInterval(async () => {
+      if (document.hidden) return;
+      try {
+        const r = await getServiceRequests();
+        if (isMounted && Array.isArray(r.data)) {
+          setRequests(r.data);
+        }
+      } catch (err) {
+        // Silent background failure
+      }
+    }, 4000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [createOnly]);
+
   const reset = () => {
     setForm({
       title: "",
@@ -1414,741 +1841,7 @@ export default function CustomerServiceRequestsPage({
   };
 
   if (createOnly) {
-    return (
-      <div
-        style={{
-          padding: "24px",
-          height: "100%",
-          overflowY: "auto",
-          background: "#EEF4F1",
-          fontFamily:
-            "'Inter', sans-serif",
-        }}
-      >
-        <div
-          style={{
-            width: "100%",
-            maxWidth: "760px",
-            margin: "0 auto",
-            padding:
-              "10px 0 40px",
-          }}
-        >
-          <h2
-            style={{
-              fontSize: "26px",
-              fontWeight: 700,
-              color: "#1F2933",
-              marginBottom:
-                "28px",
-            }}
-          >
-            Create Service Request
-          </h2>
-
-          {error && (
-            <div
-              style={{
-                background:
-                  "#FEF2F2",
-                border:
-                  "1px solid #FECACA",
-                borderRadius: "8px",
-                padding: "10px",
-                color: "#991B1B",
-                fontSize: "13px",
-                marginBottom:
-                  "14px",
-                display: "flex",
-                alignItems:
-                  "center",
-                gap: "6px",
-              }}
-            >
-              <AlertCircle
-                size={14}
-              />
-              {error}
-            </div>
-          )}
-
-          <div
-            style={{
-              display: "flex",
-              flexDirection:
-                "column",
-              gap: "18px",
-            }}
-          >
-            <div>
-              <label
-                style={
-                  labelStyle
-                }
-              >
-                Title{" "}
-                <span
-                  style={
-                    requiredStar
-                  }
-                >
-                  *
-                </span>
-              </label>
-
-              <input
-                style={inputStyle}
-                value={
-                  form.title
-                }
-                onChange={(e) =>
-                  upd(
-                    "title",
-                    e.target.value
-                  )
-                }
-                placeholder="Brief title for your request"
-              />
-            </div>
-
-            <div>
-              <label
-                style={
-                  labelStyle
-                }
-              >
-                Description{" "}
-                <span
-                  style={
-                    requiredStar
-                  }
-                >
-                  *
-                </span>
-              </label>
-
-              <textarea
-                style={{
-                  ...inputStyle,
-                  minHeight: "120px",
-                  resize:
-                    "vertical",
-                }}
-                value={
-                  form.description
-                }
-                onChange={(e) =>
-                  upd(
-                    "description",
-                    e.target.value
-                  )
-                }
-                placeholder="Describe the issue in detail..."
-              />
-            </div>
-
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns:
-                  "1fr 1fr",
-                gap: "16px",
-              }}
-            >
-              <div>
-                <label
-                  style={
-                    labelStyle
-                  }
-                >
-                  Service Type{" "}
-                  <span
-                    style={{
-                      color: "red",
-                    }}
-                  >
-                    *
-                  </span>
-                </label>
-
-                <select
-                  required
-                  style={{
-                    ...inputStyle,
-                    color:
-                      form.service_type
-                        ? "#111827"
-                        : "#9CA3AF",
-                  }}
-                  value={
-                    form.service_type
-                  }
-                  onChange={(e) =>
-                    upd(
-                      "service_type",
-                      e.target.value
-                    )
-                  }
-                >
-                  <option value="">
-                    select service
-                  </option>
-                  <option value="HVAC Repair">
-                    HVAC Repair
-                  </option>
-                  <option value="Electrical">
-                    Electrical
-                  </option>
-                  <option value="Plumbing">
-                    Plumbing
-                  </option>
-                  <option value="Network Support">
-                    Network Support
-                  </option>
-                  <option value="General Maintenance">
-                    General Maintenance
-                  </option>
-                  <option value="Appliance Repair">
-                    Appliance Repair
-                  </option>
-                  <option value="Roofing & Carpentry">
-                    Roofing & Carpentry
-                  </option>
-                  <option value="CCTV & Security">
-                    CCTV & Security
-                  </option>
-                </select>
-              </div>
-
-              <div>
-                <label
-                  style={
-                    labelStyle
-                  }
-                >
-                  Priority{" "}
-                  <span
-                    style={{
-                      color: "red",
-                    }}
-                  >
-                    *
-                  </span>
-                </label>
-
-                <select
-                  required
-                  style={{
-                    ...inputStyle,
-                    color:
-                      form.priority !==
-                      "select priority"
-                        ? "#111827"
-                        : "#9CA3AF",
-                  }}
-                  value={
-                    form.priority
-                  }
-                  onChange={(e) =>
-                    upd(
-                      "priority",
-                      e.target.value
-                    )
-                  }
-                >
-                  <option value="select priority">
-                    select priority
-                  </option>
-                  <option value="LOW">
-                    LOW
-                  </option>
-                  <option value="MEDIUM">
-                    MEDIUM
-                  </option>
-                  <option value="HIGH">
-                    HIGH
-                  </option>
-                  <option value="URGENT">
-                    URGENT
-                  </option>
-                </select>
-              </div>
-            </div>
-
-            <div>
-              <label
-                style={
-                  labelStyle
-                }
-              >
-                Preferred Visit Date
-              </label>
-
-              <input
-                type="date"
-                style={inputStyle}
-                value={
-                  form.preferred_visit_date
-                }
-                onChange={(e) =>
-                  upd(
-                    "preferred_visit_date",
-                    e.target.value
-                  )
-                }
-              />
-            </div>
-
-            <div>
-              <label
-                style={
-                  labelStyle
-                }
-              >
-                Contact Number{" "}
-                <span
-                  style={
-                    requiredStar
-                  }
-                >
-                  *
-                </span>
-              </label>
-
-              <input
-                type="tel"
-                style={inputStyle}
-                value={
-                  form.contact_number
-                }
-                onChange={(e) =>
-                  upd(
-                    "contact_number",
-                    e.target.value
-                      .replace(/\D/g, "")
-                      .slice(0, 10)
-                  )
-                }
-                maxLength={10}
-                placeholder="Enter contact number"
-              />
-            </div>
-
-            <div>
-              <label
-                style={
-                  labelStyle
-                }
-              >
-                Service Location{" "}
-                <span
-                  style={
-                    requiredStar
-                  }
-                >
-                  *
-                </span>
-              </label>
-
-              <div
-                style={{
-                  display: "flex",
-                  gap: "8px",
-                  marginBottom:
-                    "8px",
-                }}
-              >
-                <input
-                  style={{
-                    ...inputStyle,
-                    flex: 1,
-                  }}
-                  value={
-                    locationSearch
-                  }
-                  onChange={(e) => {
-                    setLocationSearch(
-                      e.target.value
-                    );
-                    setLocationConfirmed(
-                      false
-                    );
-                  }}
-                  placeholder="Search service location"
-                />
-
-                <button
-                  type="button"
-                  onClick={
-                    getCurrentLocation
-                  }
-                  disabled={
-                    isGettingLocation
-                  }
-                  style={{
-                    border:
-                      "1px solid #D1D5DB",
-                    background:
-                      "#FFFFFF",
-                    borderRadius:
-                      "8px",
-                    padding:
-                      "0 12px",
-                    cursor:
-                      isGettingLocation
-                        ? "not-allowed"
-                        : "pointer",
-                    display:
-                      "flex",
-                    alignItems:
-                      "center",
-                    gap: "6px",
-                    whiteSpace:
-                      "nowrap",
-                  }}
-                >
-                  <MapPin
-                    size={15}
-                  />
-                  {isGettingLocation
-                    ? "Locating..."
-                    : "Use My Location"}
-                </button>
-              </div>
-
-              {locationSearchError && (
-                <div
-                  style={{
-                    color:
-                      "#991B1B",
-                    fontSize:
-                      "12px",
-                    marginBottom:
-                      "8px",
-                  }}
-                >
-                  {
-                    locationSearchError
-                  }
-                </div>
-              )}
-
-              {isSearchingLocations && (
-                <div
-                  style={{
-                    color:
-                      "#6B7280",
-                    fontSize:
-                      "12px",
-                    marginBottom:
-                      "8px",
-                  }}
-                >
-                  Searching...
-                </div>
-              )}
-
-              {locationResults.length >
-                0 && (
-                <div
-                  style={{
-                    border:
-                      "1px solid #E5E7EB",
-                    borderRadius:
-                      "8px",
-                    background:
-                      "#FFFFFF",
-                    overflow:
-                      "hidden",
-                    marginBottom:
-                      "8px",
-                  }}
-                >
-                  {locationResults.map(
-                    (
-                      result,
-                      index
-                    ) => (
-                      <button
-                        type="button"
-                        key={
-                          result.id ||
-                          result.place_id ||
-                          index
-                        }
-                        onClick={() =>
-                          void selectLocation(
-                            result
-                          )
-                        }
-                        style={{
-                          display:
-                            "block",
-                          width:
-                            "100%",
-                          border:
-                            "none",
-                          borderBottom:
-                            index ===
-                            locationResults.length -
-                              1
-                              ? "none"
-                              : "1px solid #F3F4F6",
-                          background:
-                            "#FFFFFF",
-                          textAlign:
-                            "left",
-                          padding:
-                            "10px 12px",
-                          cursor:
-                            "pointer",
-                          fontSize:
-                            "13px",
-                          color:
-                            "#374151",
-                        }}
-                      >
-                        {result.description ||
-                          result.display_name ||
-                          result.name ||
-                          result.place_name ||
-                          result.formatted_address ||
-                          "Location"}
-                      </button>
-                    )
-                  )}
-                </div>
-              )}
-
-              <div
-                style={{
-                  display:
-                    "flex",
-                  justifyContent:
-                    "space-between",
-                  alignItems:
-                    "center",
-                  marginBottom:
-                    "8px",
-                  gap:
-                    "10px",
-                }}
-              >
-                <span
-                  style={{
-                    fontSize:
-                      "12px",
-                    color:
-                      locationConfirmed
-                        ? "#166534"
-                        : "#6B7280",
-                    fontWeight:
-                      locationConfirmed
-                        ? 600
-                        : 400,
-                  }}
-                >
-                  {locationConfirmed
-                    ? `✓ Location confirmed${
-                        selectedLocationName
-                          ? `: ${selectedLocationName}`
-                          : ""
-                      }`
-                    : "Select a point on the map to get the address at that location. GPS location requires ≤150 m accuracy."}
-                </span>
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    setMapVisible(
-                      (value) =>
-                        !value
-                    )
-                  }
-                  style={{
-                    border:
-                      "1px solid #D1D5DB",
-                    background:
-                      "#FFFFFF",
-                    borderRadius:
-                      "8px",
-                    padding:
-                      "6px 10px",
-                    fontSize:
-                      "12px",
-                    fontWeight:
-                      600,
-                    cursor:
-                      "pointer",
-                  }}
-                >
-                  {mapVisible
-                    ? "Hide Map"
-                    : "Show Map"}
-                </button>
-              </div>
-
-              {mapVisible && (
-                <div>
-                  {mapError && (
-                    <div
-                      style={{
-                        background:
-                          "#FEF2F2",
-                        border:
-                          "1px solid #FECACA",
-                        color:
-                          "#991B1B",
-                        borderRadius:
-                          "8px",
-                        padding:
-                          "8px 10px",
-                        fontSize:
-                          "12px",
-                        marginBottom:
-                          "8px",
-                      }}
-                    >
-                      Map could not
-                      be loaded.
-                      You can still
-                      enter the
-                      location manually
-                      and continue if
-                      coordinates are
-                      already available.
-                    </div>
-                  )}
-
-                  <div
-                    ref={
-                      mapContainerRef
-                    }
-                    style={{
-                      height:
-                        "280px",
-                      border:
-                        "1px solid #D1D5DB",
-                      borderRadius:
-                        "10px",
-                      overflow:
-                        "hidden",
-                      background:
-                        "#F3F4F6",
-                    }}
-                  />
-
-                  {isResolvingMapCenter && (
-                    <div
-                      style={{
-                        fontSize:
-                          "12px",
-                        color:
-                          "#6B7280",
-                        marginTop:
-                          "6px",
-                      }}
-                    >
-                      Resolving selected
-                      location...
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div
-              style={{
-                display: "flex",
-                justifyContent:
-                  "flex-end",
-                gap: "10px",
-                marginTop: "4px",
-              }}
-            >
-              <button
-                type="button"
-                onClick={
-                  reset
-                }
-                disabled={
-                  saving
-                }
-                style={{
-                  padding:
-                    "10px 20px",
-                  border:
-                    "1px solid #D1D5DB",
-                  borderRadius:
-                    "8px",
-                  background:
-                    "#FFFFFF",
-                  color:
-                    "#374151",
-                  fontSize:
-                    "13px",
-                  fontWeight:
-                    700,
-                  cursor:
-                    saving
-                      ? "not-allowed"
-                      : "pointer",
-                }}
-              >
-                Cancel
-              </button>
-
-              <button
-                type="button"
-                onClick={() =>
-                  void handleSubmit()
-                }
-                disabled={
-                  saving
-                }
-                style={{
-                  padding:
-                    "10px 24px",
-                  border:
-                    "none",
-                  borderRadius:
-                    "8px",
-                  background:
-                    "#7AAE8A",
-                  color:
-                    "#fff",
-                  fontSize:
-                    "13px",
-                  fontWeight:
-                    700,
-                  cursor:
-                    saving
-                      ? "not-allowed"
-                      : "pointer",
-                  display:
-                    "flex",
-                  alignItems:
-                    "center",
-                  gap:
-                    "6px",
-                  opacity:
-                    saving
-                      ? 0.7
-                      : 1,
-                }}
-              >
-                <Send
-                  size={14}
-                />
-                {saving
-                  ? "Submitting..."
-                  : "Submit"}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+    return <CustomerNewRequestMarketplace onNavigate={onNavigate} />;
   }
 
   return (
@@ -2204,7 +1897,9 @@ export default function CustomerServiceRequestsPage({
             borderRadius:
               "10px",
             background:
-              "#7AAE8A",
+              "linear-gradient(180deg, #069660 0%, #058353 100%)",
+            boxShadow:
+              "0 2px 6px rgba(5, 131, 83, 0.28)",
             color: "#fff",
             fontSize:
               "13px",
@@ -2224,6 +1919,177 @@ export default function CustomerServiceRequestsPage({
           />
           New Request
         </button>
+      </div>
+
+      {/* 6 Stats Cards */}
+      <style>{`
+        .kpi-cards-grid {
+          display: grid;
+          grid-template-columns: repeat(6, minmax(0, 1fr));
+          gap: 12px;
+          margin-bottom: 24px;
+        }
+        @media (max-width: 1024px) {
+          .kpi-cards-grid {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+        }
+        @media (max-width: 640px) {
+          .kpi-cards-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+      `}</style>
+      <div className="kpi-cards-grid">
+        {statsCards.map((c) => {
+          const isSelected = activeCardFilter === c.key;
+          return (
+            <div
+              key={c.key}
+              onClick={() => {
+                setActiveCardFilter((prev) => (prev === c.key ? "ALL" : c.key));
+              }}
+              title={`Click to filter by ${c.label}`}
+              style={{
+                position: "relative",
+                background: "#ffffff",
+                borderRadius: "22px",
+                padding: "16px 16px 14px 16px",
+                overflow: "hidden",
+                boxShadow: isSelected
+                  ? `0 8px 24px ${c.color}25`
+                  : "0 1px 3px rgba(0,0,0,0.03)",
+                border: isSelected
+                  ? `2px solid ${c.color}`
+                  : "1px solid #E5E7EB",
+                cursor: "pointer",
+                transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
+                userSelect: "none",
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "space-between",
+                minHeight: "135px",
+              }}
+              onMouseEnter={(e) => {
+                if (!isSelected) {
+                  e.currentTarget.style.borderColor = c.color;
+                  e.currentTarget.style.transform = "translateY(-3px)";
+                  e.currentTarget.style.boxShadow = `0 8px 20px ${c.color}18`;
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!isSelected) {
+                  e.currentTarget.style.borderColor = "#E5E7EB";
+                  e.currentTarget.style.transform = "translateY(0)";
+                  e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.03)";
+                }
+              }}
+            >
+              {/* Bottom-Right Organic Layered Waves */}
+              <svg
+                style={{
+                  position: "absolute",
+                  right: 0,
+                  bottom: 0,
+                  width: "145px",
+                  height: "110px",
+                  pointerEvents: "none",
+                  zIndex: 0,
+                }}
+                viewBox="0 0 145 110"
+                fill="none"
+                preserveAspectRatio="none"
+              >
+                <defs>
+                  <linearGradient
+                    id={`wave-front-${c.key}`}
+                    x1="0%"
+                    y1="100%"
+                    x2="100%"
+                    y2="0%"
+                  >
+                    <stop offset="0%" stopColor={c.gradStart} stopOpacity="0.5" />
+                    <stop offset="100%" stopColor={c.gradEnd} stopOpacity="0.9" />
+                  </linearGradient>
+                  <linearGradient
+                    id={`wave-back-${c.key}`}
+                    x1="0%"
+                    y1="100%"
+                    x2="100%"
+                    y2="0%"
+                  >
+                    <stop offset="0%" stopColor={c.gradStart} stopOpacity="0.25" />
+                    <stop offset="100%" stopColor={c.gradEnd} stopOpacity="0.45" />
+                  </linearGradient>
+                </defs>
+
+                {/* Back undulating wave */}
+                <path
+                  d="M10,110 C32,104 42,78 68,82 C94,86 112,56 132,38 C138,32 142,28 145,24 L145,110 Z"
+                  fill={`url(#wave-back-${c.key})`}
+                />
+
+                {/* Front undulating wave with crests and ripples */}
+                <path
+                  d="M25,110 C46,108 58,90 82,93 C106,96 120,68 136,52 C140,46 143,42 145,38 L145,110 Z"
+                  fill={`url(#wave-front-${c.key})`}
+                />
+              </svg>
+
+              {/* Top-Left Squircle Icon Container */}
+              <div style={{ position: "relative", zIndex: 2 }}>
+                <div
+                  style={{
+                    width: "40px",
+                    height: "40px",
+                    borderRadius: "14px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: c.iconBg,
+                    color: c.color,
+                  }}
+                >
+                  {c.icon}
+                </div>
+              </div>
+
+              {/* Middle & Bottom: Label + Count */}
+              <div
+                style={{
+                  position: "relative",
+                  zIndex: 2,
+                  marginTop: "12px",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: "13px",
+                    color: "#374151",
+                    fontWeight: 500,
+                    marginBottom: "4px",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {c.label}
+                </div>
+                <div
+                  style={{
+                    fontSize: "30px",
+                    fontWeight: 800,
+                    color: c.valueColor,
+                    lineHeight: 1,
+                    letterSpacing: "-0.02em",
+                  }}
+                >
+                  {c.value}
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       {/* Success */}
@@ -2346,416 +2212,223 @@ export default function CustomerServiceRequestsPage({
           No service requests yet.
           Create your first one!
         </div>
+      ) : displayedRequests.length === 0 ? (
+        <div
+          style={{
+            textAlign: "center",
+            padding: "48px",
+            background: "#fff",
+            borderRadius: "14px",
+            border: "1px solid #E3ECE7",
+            color: "#64748B",
+          }}
+        >
+          <div style={{ fontSize: "15px", fontWeight: 600, marginBottom: "8px", color: "#1F2933" }}>
+            No {activeCardFilter.toLowerCase().replace("_", " ")} requests found.
+          </div>
+          <button
+            type="button"
+            onClick={() => setActiveCardFilter("ALL")}
+            style={{
+              padding: "8px 16px",
+              background: "#7AAE8A",
+              color: "#fff",
+              border: "none",
+              borderRadius: "8px",
+              fontSize: "12px",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Show All Requests
+          </button>
+        </div>
       ) : (
         <div
           style={{
             display:
               "grid",
             gridTemplateColumns:
-              "repeat(3, 1fr)",
+              "repeat(auto-fill, minmax(300px, 1fr))",
             gap:
-              "12px",
+              "14px",
           }}
         >
-          {requests.map(
-            (sr) => (
+          {displayedRequests.map((sr) => {
+            const rawStatus = normalizeStatus(sr.status);
+            const displayStatus = getDisplayStatusText(sr.status);
+            const canCancel = ["CREATED", "PENDING", "UNASSIGNED", "ASSIGNED"].includes(rawStatus);
+
+            return (
               <div
                 key={sr.id}
                 style={{
-                  background:
-                    "#fff",
-                  borderRadius:
-                    "14px",
-                  padding:
-                    "18px",
-                  boxShadow:
-                    "0 2px 8px rgba(0,0,0,0.05)",
-                  border:
-                    "1px solid #E3ECE7",
+                  background: "#FFFFFF",
+                  borderRadius: "16px",
+                  padding: "20px",
+                  boxShadow: "0 4px 12px rgba(0,0,0,0.04)",
+                  border: "1px solid #E2E8F0",
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "space-between",
+                  transition: "transform 0.2s ease, box-shadow 0.2s ease",
                 }}
               >
-                {/* Request Header */}
-                <div
-                  style={{
-                    display:
-                      "flex",
-                    justifyContent:
-                      "space-between",
-                    alignItems:
-                      "flex-start",
-                    marginBottom:
-                      "8px",
-                    gap:
-                      "10px",
-                  }}
-                >
+                <div>
+                  {/* Card Header: Job ID + Status Badge */}
                   <div
                     style={{
-                      minWidth:
-                        0,
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      marginBottom: "12px",
+                      gap: "8px",
                     }}
                   >
                     <span
                       style={{
-                        fontSize:
-                          "11px",
-                        color:
-                          "#9CA3AF",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                        color: "#64748B",
+                        background: "#F1F5F9",
+                        padding: "3px 8px",
+                        borderRadius: "6px",
                       }}
                     >
-                      {
-                        sr.request_number
-                      }
+                      Job #{sr.linked_job_id || sr.id}
                     </span>
 
-                    <div
-                      style={{
-                        fontSize:
-                          "15px",
-                        fontWeight:
-                          600,
-                        color:
-                          "#1F2933",
-                        marginTop:
-                          "3px",
-                        whiteSpace:
-                          "nowrap",
-                        overflow:
-                          "hidden",
-                        textOverflow:
-                          "ellipsis",
-                      }}
-                      title={
-                        sr.title
-                      }
-                    >
-                      {
-                        sr.title
-                      }
-                    </div>
+                    <span style={badge(sr.status)}>
+                      {displayStatus}
+                    </span>
                   </div>
 
-                  <span
-                    style={badge(
-                      sr.status
-                    )}
+                  {/* Title */}
+                  <h3
+                    style={{
+                      fontSize: "16px",
+                      fontWeight: 700,
+                      color: "#0F172A",
+                      margin: "0 0 10px 0",
+                      lineHeight: 1.35,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                    title={sr.title}
                   >
-                    {sr.status ===
-                    "CREATED"
-                      ? "UNASSIGNED"
-                      : sr.status ===
-                        "ASSIGNED"
-                      ? "AWAITING ACCEPTANCE"
-                      : sr.status ===
-                        "ACCEPTED"
-                      ? "ASSIGNED"
-                      : sr.status ===
-                        "EN_ROUTE"
-                      ? "EN ROUTE"
-                      : sr.status}
-                  </span>
-                </div>
+                    {sr.title}
+                  </h3>
 
-                {/* Description */}
-                <div
-                  style={{
-                    fontSize:
-                      "12px",
-                    lineHeight:
-                      1.5,
-                    color:
-                      "#6B7280",
-                    marginBottom:
-                      "14px",
-                    minHeight:
-                      "36px",
-                  }}
-                >
-                  {
-                    sr.description
-                  }
-                </div>
-
-                {/* Details */}
-                <div
-                  style={{
-                    display:
-                      "flex",
-                    flexDirection:
-                      "column",
-                    gap:
-                      "7px",
-                    fontSize:
-                      "12px",
-                    color:
-                      "#4B5563",
-                  }}
-                >
-                  {sr.service_type && (
-                    <div
-                      style={{
-                        display:
-                          "flex",
-                        justifyContent:
-                          "space-between",
-                        gap:
-                          "8px",
-                      }}
-                    >
-                      <span>
-                        Service
-                      </span>
-                      <strong>
-                        {
-                          sr.service_type
-                        }
+                  {/* Preferred Date */}
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      fontSize: "13px",
+                      color: "#64748B",
+                      marginBottom: "16px",
+                    }}
+                  >
+                    <Clock size={14} color="#94A3B8" />
+                    <span>
+                      Preferred Date:{" "}
+                      <strong style={{ color: "#334155" }}>
+                        {sr.preferred_visit_date
+                          ? new Date(sr.preferred_visit_date).toLocaleDateString()
+                          : "Flexible"}
                       </strong>
-                    </div>
-                  )}
-
-                  {sr.priority && (
-                    <div
-                      style={{
-                        display:
-                          "flex",
-                        justifyContent:
-                          "space-between",
-                        gap:
-                          "8px",
-                      }}
-                    >
-                      <span>
-                        Priority
-                      </span>
-                      <strong>
-                        {
-                          sr.priority
-                        }
-                      </strong>
-                    </div>
-                  )}
-
-                  {sr.preferred_visit_date && (
-                    <div
-                      style={{
-                        display:
-                          "flex",
-                        justifyContent:
-                          "space-between",
-                        gap:
-                          "8px",
-                      }}
-                    >
-                      <span
-                        style={{
-                          display:
-                            "flex",
-                          alignItems:
-                            "center",
-                          gap:
-                            "4px",
-                        }}
-                      >
-                        <Clock
-                          size={
-                            12
-                          }
-                        />
-                        Preferred
-                      </span>
-
-                      <strong>
-                        {new Date(
-                          sr.preferred_visit_date
-                        ).toLocaleDateString()}
-                      </strong>
-                    </div>
-                  )}
-
-                  {sr.location && (
-                    <div
-                      style={{
-                        display:
-                          "flex",
-                        alignItems:
-                          "flex-start",
-                        gap:
-                          "5px",
-                        color:
-                          "#6B7280",
-                      }}
-                    >
-                      <MapPin
-                        size={
-                          12
-                        }
-                        style={{
-                          marginTop:
-                            "2px",
-                          flexShrink:
-                            0,
-                        }}
-                      />
-
-                      <span
-                        style={{
-                          overflow:
-                            "hidden",
-                          textOverflow:
-                            "ellipsis",
-                          whiteSpace:
-                            "nowrap",
-                        }}
-                        title={
-                          sr.location
-                        }
-                      >
-                        {
-                          sr.location
-                        }
-                      </span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Actions */}
-                <div
-                  style={{
-                    display:
-                      "flex",
-                    justifyContent:
-                      "flex-end",
-                    gap:
-                      "6px",
-                    marginTop:
-                      "16px",
-                    paddingTop:
-                      "12px",
-                    borderTop:
-                      "1px solid #F3F4F6",
-                  }}
-                >
-                  {[
-                    "CREATED",
-                    "UNASSIGNED",
-                  ].includes(
-                    sr.status
-                  ) && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          startEdit(
-                            sr
-                          )
-                        }
-                        style={{
-                          border:
-                            "1px solid #D1D5DB",
-                          background:
-                            "#FFFFFF",
-                          borderRadius:
-                            "7px",
-                          padding:
-                            "6px 9px",
-                          fontSize:
-                            "11px",
-                          fontWeight:
-                            600,
-                          color:
-                            "#374151",
-                          cursor:
-                            "pointer",
-                          display:
-                            "flex",
-                          alignItems:
-                            "center",
-                          gap:
-                            "4px",
-                        }}
-                      >
-                        <Edit3
-                          size={
-                            12
-                          }
-                        />
-                        Edit
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void handleCancel(
-                            sr.id
-                          )
-                        }
-                        style={{
-                          border:
-                            "1px solid #FECACA",
-                          background:
-                            "#FEF2F2",
-                          borderRadius:
-                            "7px",
-                          padding:
-                            "6px 9px",
-                          fontSize:
-                            "11px",
-                          fontWeight:
-                            600,
-                          color:
-                            "#991B1B",
-                          cursor:
-                            "pointer",
-                          display:
-                            "flex",
-                          alignItems:
-                            "center",
-                          gap:
-                            "4px",
-                        }}
-                      >
-                        <XCircle
-                          size={
-                            12
-                          }
-                        />
-                        Cancel
-                      </button>
-                    </>
-                  )}
-
-                  {[
-                    "CANCELLED",
-                    "COMPLETED",
-                  ].includes(
-                    sr.status
-                  ) && (
-                    <span
-                      style={{
-                        fontSize:
-                          "11px",
-                        color:
-                          "#9CA3AF",
-                        display:
-                          "flex",
-                        alignItems:
-                          "center",
-                        gap:
-                          "4px",
-                      }}
-                    >
-                      <CheckCircle
-                        size={
-                          12
-                        }
-                      />
-                      Finalized
                     </span>
+                  </div>
+                </div>
+
+                {/* Card Actions: Cancel (if before start) + Track Job */}
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "flex-end",
+                    alignItems: "center",
+                    gap: "8px",
+                    paddingTop: "14px",
+                    borderTop: "1px solid #F1F5F9",
+                  }}
+                >
+                  {canCancel && (
+                    <button
+                      type="button"
+                      onClick={() => void handleCancel(sr.id)}
+                      style={{
+                        border: "1px solid #FECACA",
+                        background: "#FEF2F2",
+                        borderRadius: "8px",
+                        padding: "7px 12px",
+                        fontSize: "12px",
+                        fontWeight: 600,
+                        color: "#DC2626",
+                        cursor: "pointer",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "4px",
+                        transition: "background 0.15s ease",
+                      }}
+                    >
+                      <XCircle size={13} />
+                      Cancel
+                    </button>
                   )}
+
+                  {rawStatus === "EN_ROUTE" && (
+                    <button
+                      type="button"
+                      onClick={() => void handleOpenDedicatedLiveMap(sr)}
+                      style={{
+                        border: "none",
+                        background: "linear-gradient(135deg, #1D4ED8 0%, #2563EB 100%)",
+                        borderRadius: "8px",
+                        padding: "7px 14px",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                        color: "#FFFFFF",
+                        cursor: "pointer",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        boxShadow: "0 2px 6px rgba(37, 99, 235, 0.3)",
+                        transition: "transform 0.15s ease, box-shadow 0.15s ease",
+                      }}
+                    >
+                      <MapPin size={13} />
+                      Live Map
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => void handleOpenTracking(sr)}
+                    style={{
+                      border: "none",
+                      background: "linear-gradient(135deg, #058353 0%, #069660 100%)",
+                      borderRadius: "8px",
+                      padding: "7px 14px",
+                      fontSize: "12px",
+                      fontWeight: 700,
+                      color: "#FFFFFF",
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      boxShadow: "0 2px 6px rgba(6, 150, 96, 0.25)",
+                      transition: "transform 0.15s ease, box-shadow 0.15s ease",
+                    }}
+                  >
+                    <Navigation size={13} />
+                    Track Job
+                  </button>
                 </div>
               </div>
-            )
-          )}
+            );
+          })}
         </div>
       )}
 
@@ -3639,6 +3312,658 @@ export default function CustomerServiceRequestsPage({
                 </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Track Job Modal & Drawer */}
+      {/* Dedicated Standalone Live Map Modal */}
+      {liveMapModalRequest && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.65)",
+            backdropFilter: "blur(4px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "20px",
+            zIndex: 1200,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setLiveMapModalRequest(null);
+            }
+          }}
+        >
+          <div
+            style={{
+              width: "100%",
+              maxWidth: "880px",
+              height: "85vh",
+              maxHeight: "650px",
+              background: "#FFFFFF",
+              borderRadius: "20px",
+              boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.35)",
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+            }}
+          >
+            {/* Header: Title, Live Status Badge, and Close Button */}
+            <div
+              style={{
+                padding: "16px 20px",
+                borderBottom: "1px solid #E2E8F0",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                background: "#F8FAFC",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <div
+                  style={{
+                    width: "36px",
+                    height: "36px",
+                    borderRadius: "10px",
+                    background: "#DBEAFE",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "#1D4ED8",
+                  }}
+                >
+                  <MapPin size={20} />
+                </div>
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <h3 style={{ margin: 0, fontSize: "16px", fontWeight: 700, color: "#0F172A" }}>
+                      Live Technician Tracking
+                    </h3>
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "4px",
+                        padding: "2px 8px",
+                        borderRadius: "12px",
+                        fontSize: "11px",
+                        fontWeight: 700,
+                        background: "#DCFCE7",
+                        color: "#059669",
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: "6px",
+                          height: "6px",
+                          borderRadius: "50%",
+                          background: "#10B981",
+                          boxShadow: "0 0 0 2px rgba(16,185,129,0.3)",
+                        }}
+                      />
+                      LIVE GPS
+                    </span>
+                  </div>
+                  <div style={{ fontSize: "12px", color: "#64748B", marginTop: "2px" }}>
+                    Job #{liveMapModalRequest.linked_job_id || liveMapModalRequest.id} • {liveMapJobDetails?.assigned_technician_name ? `Technician: ${liveMapJobDetails.assigned_technician_name}` : "En route to your location"}
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setLiveMapModalRequest(null)}
+                style={{
+                  border: "none",
+                  background: "#F1F5F9",
+                  borderRadius: "50%",
+                  width: "34px",
+                  height: "34px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                  color: "#64748B",
+                  transition: "background 0.15s ease",
+                }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Map Body: Always display map instantly */}
+            <div style={{ flex: 1, position: "relative", minHeight: "450px", width: "100%", height: "100%" }}>
+              <div style={{ position: "relative", width: "100%", height: "100%" }}>
+                  <JobLiveTrackingMap
+                    jobId={liveMapJobDetails?.id || liveMapModalRequest.linked_job_id || liveMapModalRequest.id}
+                    customerLatitude={liveMapJobDetails?.site_latitude ?? liveMapModalRequest.site_latitude ?? 13.0495}
+                    customerLongitude={liveMapJobDetails?.site_longitude ?? liveMapModalRequest.site_longitude ?? 80.2282}
+                    technicianLatitude={liveMapJobDetails?.technician_latitude ?? null}
+                    technicianLongitude={liveMapJobDetails?.technician_longitude ?? null}
+                    technicianId={liveMapJobDetails?.assigned_technician_id ?? null}
+                    mode="customer"
+                    tenantId={liveMapJobDetails?.tenant_id || localStorage.getItem("tenant_id") || "default"}
+                    trackingTenantId={liveMapJobDetails?.tracking_tenant_id}
+                    buildingAddress={liveMapModalRequest.location || liveMapJobDetails?.location}
+                  />
+
+                  {["ON_SITE", "IN_PROGRESS", "COMPLETED"].includes(
+                    normalizeStatus(liveMapJobDetails?.status || liveMapModalRequest.status)
+                  ) && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: 16,
+                        right: 16,
+                        zIndex: 20,
+                        background: "rgba(255, 255, 255, 0.95)",
+                        backdropFilter: "blur(6px)",
+                        border: "1px solid #E2E8F0",
+                        borderRadius: "10px",
+                        padding: "8px 14px",
+                        boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                      }}
+                    >
+                      <CheckCircle2 size={16} color="#7C3AED" />
+                      <span style={{ fontSize: "12px", fontWeight: 600, color: "#1E293B" }}>
+                        Technician on site / Job active
+                      </span>
+                    </div>
+                  )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {trackingModalRequest && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.55)",
+            backdropFilter: "blur(4px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "20px",
+            zIndex: 1100,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setTrackingModalRequest(null);
+            }
+          }}
+        >
+          <div
+            style={{
+              width: "100%",
+              maxWidth: "800px",
+              maxHeight: "90vh",
+              overflowY: "auto",
+              background: "#FFFFFF",
+              borderRadius: "20px",
+              boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            {/* Modal Header */}
+            <div
+              style={{
+                padding: "20px 24px",
+                borderBottom: "1px solid #E2E8F0",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                background: "#F8FAFC",
+                borderTopLeftRadius: "20px",
+                borderTopRightRadius: "20px",
+              }}
+            >
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
+                  <span
+                    style={{
+                      fontSize: "12px",
+                      fontWeight: 700,
+                      color: "#64748B",
+                      background: "#E2E8F0",
+                      padding: "3px 9px",
+                      borderRadius: "6px",
+                    }}
+                  >
+                    Job #{trackingModalRequest.linked_job_id || trackingModalRequest.id}
+                  </span>
+                  <span style={{ fontSize: "12px", color: "#94A3B8" }}>
+                    • {trackingModalRequest.request_number}
+                  </span>
+                </div>
+                <h2 style={{ margin: 0, fontSize: "20px", fontWeight: 800, color: "#0F172A" }}>
+                  {trackingModalRequest.title}
+                </h2>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <span style={badge(trackingJobDetails?.status || trackingModalRequest.status)}>
+                  {getDisplayStatusText(trackingJobDetails?.status || trackingModalRequest.status)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setTrackingModalRequest(null)}
+                  style={{
+                    border: "none",
+                    background: "#F1F5F9",
+                    borderRadius: "50%",
+                    width: "32px",
+                    height: "32px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    color: "#64748B",
+                  }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            {/* 6-Step Animated Progress Bar */}
+            <div
+              style={{
+                padding: "16px 20px",
+                borderBottom: "1px solid #E2E8F0",
+                background: "#FFFFFF",
+              }}
+            >
+              <AnimatedJobProgress
+                jobId={trackingModalRequest.linked_job_id || trackingModalRequest.id}
+                status={trackingJobDetails?.status || trackingModalRequest.status}
+                workStartedAt={trackingJobDetails?.work_started_at}
+                arrivedAt={trackingJobDetails?.on_site_at}
+                completedAt={trackingJobDetails?.completed_at}
+              />
+            </div>
+
+            {/* Modal Content Body */}
+            <div style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "20px" }}>
+              {trackingLoading ? (
+                <div style={{ padding: "40px", textAlign: "center", color: "#64748B" }}>
+                  <Clock size={24} style={{ animation: "spin 1s linear infinite", margin: "0 auto 10px" }} />
+                  <div>Loading job and technician status...</div>
+                </div>
+              ) : (
+                <>
+                  {/* Job Details Card */}
+                  <div
+                    style={{
+                      background: "#F8FAFC",
+                      border: "1px solid #E2E8F0",
+                      borderRadius: "14px",
+                      padding: "18px",
+                    }}
+                  >
+                    <h4 style={{ margin: "0 0 12px 0", fontSize: "14px", fontWeight: 700, color: "#334155" }}>
+                      Service Request Details
+                    </h4>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                        gap: "12px",
+                        fontSize: "13px",
+                      }}
+                    >
+                      <div>
+                        <span style={{ color: "#64748B", display: "block", fontSize: "11px", fontWeight: 600 }}>SERVICE TYPE</span>
+                        <strong style={{ color: "#0F172A" }}>{trackingModalRequest.service_type || "General Service"}</strong>
+                      </div>
+                      <div>
+                        <span style={{ color: "#64748B", display: "block", fontSize: "11px", fontWeight: 600 }}>PREFERRED DATE</span>
+                        <strong style={{ color: "#0F172A" }}>
+                          {trackingModalRequest.preferred_visit_date
+                            ? new Date(trackingModalRequest.preferred_visit_date).toLocaleDateString()
+                            : "Flexible"}
+                        </strong>
+                      </div>
+                      <div>
+                        <span style={{ color: "#64748B", display: "block", fontSize: "11px", fontWeight: 600 }}>CONTACT NUMBER</span>
+                        <strong style={{ color: "#0F172A" }}>{trackingModalRequest.contact_number || "N/A"}</strong>
+                      </div>
+                      <div>
+                        <span style={{ color: "#64748B", display: "block", fontSize: "11px", fontWeight: 600 }}>LOCATION</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: "4px", color: "#0F172A", fontWeight: 600 }}>
+                          <MapPin size={13} color="#069660" />
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {trackingModalRequest.location || "Service address"}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {trackingModalRequest.description && (
+                      <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid #E2E8F0" }}>
+                        <span style={{ color: "#64748B", display: "block", fontSize: "11px", fontWeight: 600, marginBottom: "4px" }}>
+                          PROBLEM DESCRIPTION
+                        </span>
+                        <div style={{ fontSize: "13px", color: "#334155", lineHeight: 1.5 }}>
+                          {trackingModalRequest.description}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Technician Card (Privacy Protected - Only after accepted) */}
+                  {trackingJobDetails?.assigned_technician_name ? (
+                    <div
+                      style={{
+                        background: "#FFFFFF",
+                        border: "1px solid #CFE0D6",
+                        borderRadius: "14px",
+                        padding: "18px",
+                        boxShadow: "0 2px 6px rgba(0,0,0,0.03)",
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                        <h4 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "#065F46", display: "flex", alignItems: "center", gap: "6px" }}>
+                          <ShieldCheck size={16} color="#069660" />
+                          Assigned Field Technician
+                        </h4>
+                        <span style={{ fontSize: "11px", fontWeight: 700, color: "#059669", background: "#DCFCE7", padding: "2px 8px", borderRadius: "12px" }}>
+                          ACCEPTED & ASSIGNED
+                        </span>
+                      </div>
+
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "16px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+                          {trackingJobDetails.assigned_technician_photo ? (
+                            <img
+                              src={trackingJobDetails.assigned_technician_photo}
+                              alt={trackingJobDetails.assigned_technician_name}
+                              style={{ width: "48px", height: "48px", borderRadius: "50%", objectFit: "cover", border: "2px solid #069660" }}
+                            />
+                          ) : (
+                            <div
+                              style={{
+                                width: "48px",
+                                height: "48px",
+                                borderRadius: "50%",
+                                background: "#DCFCE7",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                color: "#065F46",
+                              }}
+                            >
+                              <User size={24} />
+                            </div>
+                          )}
+
+                          <div>
+                            <div style={{ fontSize: "15px", fontWeight: 700, color: "#0F172A" }}>
+                              {trackingJobDetails.assigned_technician_name}
+                            </div>
+                            <div style={{ fontSize: "12px", color: "#64748B", marginTop: "2px" }}>
+                              {trackingJobDetails.assigned_technician_skills?.[0] || "Certified Field Specialist"}
+                            </div>
+                          </div>
+                        </div>
+
+                        {trackingJobDetails.assigned_technician_phone && (
+                          <a
+                            href={`tel:${trackingJobDetails.assigned_technician_phone}`}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "6px",
+                              padding: "8px 14px",
+                              background: "#069660",
+                              color: "#FFFFFF",
+                              borderRadius: "8px",
+                              fontSize: "13px",
+                              fontWeight: 700,
+                              textDecoration: "none",
+                              boxShadow: "0 2px 4px rgba(6,150,96,0.2)",
+                            }}
+                          >
+                            <Phone size={14} />
+                            <span>Call {trackingJobDetails.assigned_technician_phone}</span>
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  ) : normalizeStatus(trackingModalRequest.status) === "CANCELLED" ? (
+                    <div
+                      style={{
+                        background: "#FEF2F2",
+                        border: "1px solid #FECACA",
+                        borderRadius: "14px",
+                        padding: "16px",
+                        color: "#991B1B",
+                        fontSize: "13px",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "10px",
+                      }}
+                    >
+                      <XCircle size={18} color="#EF4444" />
+                      <div>This job request is cancelled. If you need service, please submit a new request.</div>
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        background: "#FFFBEB",
+                        border: "1px solid #FDE68A",
+                        borderRadius: "14px",
+                        padding: "16px",
+                        color: "#92400E",
+                        fontSize: "13px",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "10px",
+                      }}
+                    >
+                      <Clock size={18} color="#F59E0B" />
+                      <div>
+                        Finding and offering your job to the best ranked technician in your area. Technician contact details will appear here as soon as they accept.
+                      </div>
+                    </div>
+                  )}
+
+                  {/* En Route Notification Banner */}
+                  {normalizeStatus(trackingJobDetails?.status || trackingModalRequest.status) === "EN_ROUTE" && (
+                    <div
+                      style={{
+                        background: "#EFF6FF",
+                        border: "1px solid #BFDBFE",
+                        borderRadius: "14px",
+                        padding: "16px 18px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        flexWrap: "wrap",
+                        gap: "12px",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                        <span
+                          style={{
+                            width: "10px",
+                            height: "10px",
+                            borderRadius: "50%",
+                            background: "#2563EB",
+                            display: "inline-block",
+                            boxShadow: "0 0 0 4px rgba(37, 99, 235, 0.2)",
+                          }}
+                        />
+                        <div>
+                          <strong style={{ fontSize: "14px", color: "#1E40AF", display: "block" }}>
+                            Technician is En Route
+                          </strong>
+                          <span style={{ fontSize: "12px", color: "#3B82F6" }}>
+                            Live GPS telemetry is active for this trip.
+                          </span>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const details = trackingJobDetails;
+                          const req = trackingModalRequest;
+                          setTrackingModalRequest(null);
+                          void handleOpenDedicatedLiveMap(req, details);
+                        }}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "6px",
+                          padding: "8px 16px",
+                          background: "linear-gradient(135deg, #1D4ED8 0%, #2563EB 100%)",
+                          color: "#FFFFFF",
+                          border: "none",
+                          borderRadius: "8px",
+                          fontSize: "12px",
+                          fontWeight: 700,
+                          cursor: "pointer",
+                          boxShadow: "0 2px 6px rgba(37, 99, 235, 0.3)",
+                        }}
+                      >
+                        <MapPin size={13} />
+                        View Live Map
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Live Tracking Closed Banner (When ON_SITE or IN_PROGRESS) */}
+                  {["ON_SITE", "IN_PROGRESS"].includes(normalizeStatus(trackingJobDetails?.status || trackingModalRequest.status)) && (
+                    <div
+                      style={{
+                        background: "#F5F3FF",
+                        border: "1px solid #DDD6FE",
+                        borderRadius: "14px",
+                        padding: "14px 18px",
+                        color: "#5B21B6",
+                        fontSize: "13px",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "10px",
+                      }}
+                    >
+                      <CheckCircle2 size={18} color="#7C3AED" />
+                      <div>
+                        <strong>Technician Arrived On Site:</strong> The technician is currently carrying out service at your premises. Live GPS tracking has concluded.
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Completed Job & Invoice Section */}
+                  {["COMPLETED", "CLOSED"].includes(normalizeStatus(trackingJobDetails?.status || trackingModalRequest.status)) && (
+                    <div
+                      style={{
+                        background: "#FFFFFF",
+                        border: "2px solid #069660",
+                        borderRadius: "14px",
+                        padding: "20px",
+                        boxShadow: "0 4px 12px rgba(6, 150, 96, 0.08)",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "flex-start",
+                          marginBottom: "16px",
+                          flexWrap: "wrap",
+                          gap: "10px",
+                        }}
+                      >
+                        <div>
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                            <Receipt size={20} color="#069660" />
+                            <h3 style={{ margin: 0, fontSize: "16px", fontWeight: 800, color: "#065F46" }}>
+                              Official Job Invoice
+                            </h3>
+                          </div>
+                          <p style={{ margin: "4px 0 0", fontSize: "13px", color: "#64748B" }}>
+                            Service Organization: <strong style={{ color: "#0F172A" }}>
+                              {trackingInvoiceDetails?.organization_name || "FieldOps Certified Service"}
+                            </strong>
+                          </p>
+                        </div>
+
+                        {trackingInvoiceDetails && (
+                          <button
+                            type="button"
+                            onClick={() => handlePrintInvoice(trackingInvoiceDetails, trackingModalRequest)}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "6px",
+                              padding: "8px 16px",
+                              background: "linear-gradient(135deg, #058353 0%, #069660 100%)",
+                              color: "#FFFFFF",
+                              border: "none",
+                              borderRadius: "8px",
+                              fontSize: "13px",
+                              fontWeight: 700,
+                              cursor: "pointer",
+                              boxShadow: "0 2px 6px rgba(6, 150, 96, 0.25)",
+                            }}
+                          >
+                            <Download size={14} />
+                            Download Invoice
+                          </button>
+                        )}
+                      </div>
+
+                      {trackingInvoiceDetails ? (
+                        <div style={{ background: "#F8FAFC", borderRadius: "10px", padding: "14px", fontSize: "13px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", color: "#475569" }}>
+                            <span>Labour Charges:</span>
+                            <strong>₹{trackingInvoiceDetails.labour_cost.toFixed(2)}</strong>
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", color: "#475569" }}>
+                            <span>Material & Spares:</span>
+                            <strong>₹{trackingInvoiceDetails.material_cost.toFixed(2)}</strong>
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", color: "#475569" }}>
+                            <span>GST ({((trackingInvoiceDetails.gst_rate || 0.18) * 100).toFixed(0)}%):</span>
+                            <strong>₹{trackingInvoiceDetails.gst_amount.toFixed(2)}</strong>
+                          </div>
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              padding: "10px 0 4px",
+                              marginTop: "6px",
+                              borderTop: "1px solid #E2E8F0",
+                              fontSize: "15px",
+                              color: "#065F46",
+                              fontWeight: 800,
+                            }}
+                          >
+                            <span>Total Amount Paid:</span>
+                            <span>₹{trackingInvoiceDetails.total_amount.toFixed(2)}</span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: "13px", color: "#64748B" }}>
+                          Invoice processing complete. Click refresh if billing summary is taking a moment to load.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         </div>
       )}

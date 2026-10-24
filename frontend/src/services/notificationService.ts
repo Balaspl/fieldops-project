@@ -108,7 +108,11 @@ const normalizeNotification = (
     type: payload.type || "SYSTEM",
     title: payload.title || "Alert",
     message: payload.body || payload.message || "",
-    isRead: payload.status === "READ",
+    isRead:
+      payload.isRead === true ||
+      payload.status === "READ" ||
+      (typeof payload.status === "string" &&
+        payload.status.toUpperCase() !== "UNREAD"),
     createdAt:
       payload.created_at ||
       payload.createdAt ||
@@ -230,10 +234,17 @@ export const markNotificationAsRead = async (
   notificationId: string | number
 ): Promise<any> => {
   try {
-    const response = await api.patch(
-      `/notifications/${notificationId}/read`
-    );
-    return response.data;
+    try {
+      const response = await api.put(
+        `/api/customer/notifications/${notificationId}/read`
+      );
+      return response.data;
+    } catch {
+      const response = await api.patch(
+        `/notifications/${notificationId}/read`
+      );
+      return response.data;
+    }
   } catch (error) {
     console.error(
       "Failed to mark notification as read",
@@ -247,11 +258,18 @@ export const batchMarkAsRead = async (
   notificationIds: string[]
 ): Promise<any> => {
   try {
-    const response = await api.patch(
-      "/notifications/batch-read",
-      { notification_ids: notificationIds }
-    );
-    return response.data;
+    try {
+      const response = await api.put(
+        "/api/customer/notifications/read-all"
+      );
+      return response.data;
+    } catch {
+      const response = await api.patch(
+        "/notifications/batch-read",
+        { notification_ids: notificationIds }
+      );
+      return response.data;
+    }
   } catch (error) {
     console.error(
       "Failed to batch mark notifications as read",

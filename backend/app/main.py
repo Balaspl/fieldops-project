@@ -537,6 +537,8 @@ app.include_router(sentiment_dashboard_router)
 app.include_router(oauth2.router)
 app.include_router(sso.router)
 app.include_router(status_router)
+from .routes import services_catalog
+app.include_router(services_catalog.router)
 
 # Lifespan events handled via asynccontextmanager lifespan handler
 

@@ -96,6 +96,31 @@
 .customer-notifications__retry:focus-visible,
 .customer-notification-card__read-button:focus-visible { outline: 3px solid #79bd91; outline-offset: 3px; }
 
+.customer-notifications__close {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #cce1d4;
+  border-radius: 12px;
+  padding: 0 18px;
+  color: #1e3a2b;
+  background: #ffffff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all .16s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.customer-notifications__close:hover {
+  background: #eef7f1;
+  border-color: #a8cfb7;
+  transform: translateY(-1px);
+}
+
 .customer-notifications__list {
   display: grid;
   max-width: 900px;

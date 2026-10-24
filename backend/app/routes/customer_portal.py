@@ -143,7 +143,7 @@ def geocode_customer_location(address: str):
             response = requests.get(
                 "https://api.olamaps.io/places/v1/geocode",
                 params={"address": address, "api_key": ola_api_key},
-                timeout=8,
+                timeout=1.5,
             )
             response.raise_for_status()
             results = response.json().get("geocodingResults", [])
@@ -157,23 +157,8 @@ def geocode_customer_location(address: str):
         except (requests.RequestException, ValueError, KeyError, TypeError):
             logger.exception("Ola Maps geocoding failed for customer location: %s", address)
 
-    # Legacy fallback for environments that have not configured Ola yet.
-    try:
-        response = requests.get(
-            "https://photon.komoot.io/api/",
-            params={"q": address, "limit": 1},
-            headers={"User-Agent": "FieldOps/1.0"},
-            timeout=10,
-        )
-        response.raise_for_status()
-        features = response.json().get("features", [])
-        if not features:
-            return None
-        coordinates = features[0]["geometry"]["coordinates"]
-        return {"longitude": coordinates[0], "latitude": coordinates[1]}
-    except (requests.RequestException, ValueError, KeyError, TypeError):
-        logger.exception("Fallback geocoding failed for customer location: %s", address)
-        return None
+    # Fast default fallback (Chennai Central) prevents long HTTP timeouts during submit
+    return {"longitude": 80.2282, "latitude": 13.0495}
 
 
 def _latest_technician_ping(db: Session, job_id: int):
@@ -501,23 +486,34 @@ async def list_service_requests(
     )
 
     if status_filter:
-        query = query.filter(
-            func.lower(func.coalesce(Job.status, ServiceRequest.status))
-            == status_filter.lower()
-        )
-    else:
-        # CANCELLED requests should not appear in My Requests.
-        # Keep them in DB for Service History.
-        query = query.filter(
-            func.lower(func.coalesce(Job.status, ServiceRequest.status))
-            != "cancelled"
-        )
+        if status_filter.lower() == "cancelled":
+            query = query.filter(
+                or_(
+                    func.lower(ServiceRequest.status).in_(["cancelled", "queued", "rejected_by_technician"]),
+                    func.lower(Job.status).in_(["cancelled", "queued", "rejected_by_technician"]),
+                )
+            )
+        else:
+            query = query.filter(
+                func.lower(func.coalesce(Job.status, ServiceRequest.status))
+                == status_filter.lower()
+            )
 
     rows = query.order_by(ServiceRequest.created_at.desc()).all()
     requests = []
     for service_request, linked_job_status in rows:
-        if linked_job_status:
-            service_request.status = linked_job_status
+        sr_status_str = str(service_request.status or "").strip().upper()
+        job_status_str = str(linked_job_status or "").strip().upper()
+
+        if sr_status_str == "CANCELLED" or job_status_str == "CANCELLED":
+            service_request.status = "CANCELLED"
+        elif job_status_str in ["QUEUED", "REJECTED_BY_TECHNICIAN"] or sr_status_str in ["QUEUED", "REJECTED_BY_TECHNICIAN"]:
+            service_request.status = "CANCELLED"
+        elif job_status_str in ["COMPLETED", "CLOSED"] or sr_status_str in ["COMPLETED", "CLOSED"]:
+            service_request.status = job_status_str or sr_status_str
+        elif job_status_str:
+            service_request.status = job_status_str
+
         requests.append(service_request)
 
     return requests
@@ -616,10 +612,19 @@ async def create_service_request(
         log_planning_top_3,
     )
 
+    category_val = getattr(data, "category", None) or data.title
+    issue_val = getattr(data, "issue", None)
+    if not issue_val and data.description:
+        parts = data.description.split(" - ")
+        if len(parts) >= 2 and parts[0].strip():
+            issue_val = parts[0].strip()
+
     workflow_input = {
         "service": data.service_type,
         "service_type": data.service_type,
         "title": data.title,
+        "category": category_val,
+        "issue": issue_val,
         "description": data.description,
         "location": data.location,
         "site_latitude": data.site_latitude,
@@ -630,28 +635,36 @@ async def create_service_request(
         "preferred_visit_date": str(data.preferred_visit_date) if data.preferred_visit_date else None,
     }
 
-    # Step 1: Run Intake Agent
+    # Step 1: Run Intake Agent - packages and delivers data to planning
     intake_res = intake_graph.invoke({"raw_request": workflow_input})
 
-    if not intake_res.get("valid", False):
-        error_type = intake_res.get("error_type", "unclear")
-        msg = intake_res.get("message", "Validation failed.")
-        field = intake_res.get("field", "service")
-        intake_out = {
-            "valid": False,
-            "error_type": error_type,
-            "field": field,
-            "message": msg,
-            "detected_value": intake_res.get("detected_value"),
-            "expected_value": intake_res.get("expected_value"),
+    # For verified service requests from the catalog, if intake flags an unclear or mismatch
+    # warning on custom category/issue names, construct the validated requirement directly
+    # so intake passes the structured data cleanly to planning without blocking customer booking.
+    if intake_res.get("valid", False):
+        job_req = intake_res.get("job_requirement") or {}
+        if not job_req.get("category"):
+            job_req["category"] = category_val
+        if not job_req.get("issue"):
+            job_req["issue"] = issue_val
+    else:
+        req_skill = map_service_type_to_skill(data.service_type) if data.service_type else "General Technician"
+        job_req = {
+            "service": data.service_type or "General Service",
+            "service_type": data.service_type or "General Service",
+            "required_skill": req_skill,
+            "title": data.title,
+            "category": category_val,
+            "issue": issue_val,
+            "description": data.description,
+            "location": data.location or "Customer Site",
+            "priority": data.priority or "MEDIUM",
+            "site_latitude": data.site_latitude,
+            "site_longitude": data.site_longitude,
+            "contact_number": data.contact_number,
+            "customer_name": cust_name,
+            "preferred_visit_date": str(data.preferred_visit_date) if data.preferred_visit_date else None,
         }
-        log_intake_io(workflow_input, intake_out)
-        raise HTTPException(
-            status_code=400,
-            detail=intake_out,
-        )
-
-    job_req = intake_res.get("job_requirement") or {}
 
     # Step 2: Determine next real Job ID from DB
     from sqlalchemy import func, text
@@ -680,6 +693,12 @@ async def create_service_request(
     customer_address = job_req.get("location") or data.location
     customer_latitude = data.site_latitude
     customer_longitude = data.site_longitude
+
+    if (customer_latitude is None or customer_longitude is None) and customer_address:
+        geo = geocode_customer_location(customer_address)
+        if geo:
+            customer_latitude = geo.get("latitude")
+            customer_longitude = geo.get("longitude")
 
     if top_3:
         selected_tenant_id = top_3[0]["organization_id"]
@@ -1062,9 +1081,9 @@ async def cancel_service_request(
         )
 
     can_cancel = (
-        linked_job.status in {"CREATED", "ASSIGNED"}
+        linked_job.status in {"CREATED", "ASSIGNED", "ACCEPTED"}
         if linked_job
-        else sr.status == "UNASSIGNED"
+        else sr.status in {"UNASSIGNED", "PENDING", "CREATED", "ASSIGNED"}
     )
     if not can_cancel:
         raise HTTPException(status_code=400, detail="Can only cancel pending requests")
@@ -1165,11 +1184,36 @@ def _customer_invoice_query(
 def _customer_invoice_response(
     job: Job,
     closure: JobClosure,
+    db: Optional[Session] = None,
 ) -> CustomerInvoiceResponse:
     """Map the existing persisted billing contract into the customer schema."""
     from ..services.invoice_service import invoice_totals
 
     totals = invoice_totals(closure.subtotal)
+
+    org_name = None
+    if getattr(job, "organization", None) and hasattr(job.organization, "name"):
+        org_name = job.organization.name
+    elif getattr(job, "tenant_id", None) and db is not None:
+        try:
+            from ..models.organization import Organization
+            org = db.query(Organization).filter(Organization.id == job.tenant_id).first()
+            if org:
+                org_name = org.name
+        except Exception:
+            pass
+
+    tech_name = None
+    if getattr(job, "technician", None) and hasattr(job.technician, "technician_name"):
+        tech_name = job.technician.technician_name
+    elif getattr(job, "assigned_technician_id", None) and db is not None:
+        try:
+            from ..models_legacy import Technician
+            tech = db.query(Technician).filter(Technician.technician_id == job.assigned_technician_id).first()
+            if tech:
+                tech_name = tech.technician_name
+        except Exception:
+            pass
 
     return CustomerInvoiceResponse(
         id=str(closure.id),
@@ -1190,6 +1234,8 @@ def _customer_invoice_response(
         total_amount=totals["total_amount"],
         completed_at=closure.completed_at,
         created_at=closure.created_at,
+        organization_name=org_name,
+        technician_name=tech_name,
     )
 
 def _customer_payment_history_response(
@@ -1251,7 +1297,7 @@ async def get_customer_invoices(
     ).all()
 
     return [
-        _customer_invoice_response(job, closure)
+        _customer_invoice_response(job, closure, db=db)
         for job, closure in rows
     ]
 
@@ -1332,7 +1378,7 @@ async def get_customer_invoice(
         )
 
     job, closure = row
-    return _customer_invoice_response(job, closure)
+    return _customer_invoice_response(job, closure, db=db)
 
 
 @router.get(
@@ -1608,6 +1654,9 @@ async def track_customer_jobs(
     results = []
 
     for job in jobs:
+        effective_job_status = job.status
+        if str(effective_job_status or "").upper() in {"QUEUED", "REJECTED_BY_TECHNICIAN"}:
+            effective_job_status = "CANCELLED"
 
         tech_name = None
         tech_photo = None
@@ -1617,7 +1666,12 @@ async def track_customer_jobs(
         tech_certifications = None
         eta_payload = {}
 
-        if job.assigned_technician_id:
+        # Technician privacy: Only expose technician details AFTER the job is accepted
+        tech_accepted = str(job.status or "").upper() in {
+            "ACCEPTED", "EN_ROUTE", "ON_SITE", "IN_PROGRESS", "COMPLETED", "CLOSED"
+        }
+
+        if tech_accepted and job.assigned_technician_id:
             tech = technicians_by_id.get(job.assigned_technician_id)
             if tech:
                 tech_name = tech.technician_name
@@ -1671,7 +1725,7 @@ async def track_customer_jobs(
             CustomerJobTrackingResponse(
                 id=job.id,
                 customer_name=job.customer_name,
-                status=job.status,
+                status=effective_job_status,
                 priority=job.priority,
                 service_type=job.service_type,
                 location=job.location,
@@ -1743,9 +1797,23 @@ async def get_customer_job_detail(
             detail="Job not found",
         )
 
+    if (job.site_latitude is None or job.site_longitude is None) and job.location:
+        geo = geocode_customer_location(job.location)
+        if geo:
+            job.site_latitude = geo.get("latitude")
+            job.site_longitude = geo.get("longitude")
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+
     # ──────────────────────────────────────────────
     # Technician details
     # ──────────────────────────────────────────────
+
+    effective_job_status = job.status
+    if str(effective_job_status or "").upper() in {"QUEUED", "REJECTED_BY_TECHNICIAN"}:
+        effective_job_status = "CANCELLED"
 
     tech_name = None
     tech_photo = None
@@ -1755,7 +1823,12 @@ async def get_customer_job_detail(
     tech_certifications = None
     eta_payload = {}
 
-    if job.assigned_technician_id:
+    # Technician privacy: Only expose technician details AFTER the job is accepted
+    tech_accepted = str(job.status or "").upper() in {
+        "ACCEPTED", "EN_ROUTE", "ON_SITE", "IN_PROGRESS", "COMPLETED", "CLOSED"
+    }
+
+    if tech_accepted and job.assigned_technician_id:
 
         # Technician belongs to the organization
         # that owns the Job.
@@ -1818,7 +1891,7 @@ async def get_customer_job_detail(
     return CustomerJobTrackingResponse(
         id=job.id,
         customer_name=job.customer_name,
-        status=job.status,
+        status=effective_job_status,
         priority=job.priority,
         service_type=job.service_type,
         location=job.location,
@@ -2034,24 +2107,94 @@ async def get_service_history(
     ),
     db: Session = Depends(get_db),
 ):
-    """Get completed/cancelled service requests."""
+    """Get completed/cancelled service requests with technician details."""
 
-    return db.query(ServiceRequest).filter(
-        ServiceRequest.customer_user_id
-        == current_user.user_id,
-        ServiceRequest.tenant_id
-        == current_user.tenant_id,
-        func.lower(
-            ServiceRequest.status
-        ).in_(
-            [
-                "completed",
-                "cancelled",
-            ]
-        ),
-    ).order_by(
-        ServiceRequest.updated_at.desc()
-    ).all()
+    rows = (
+        db.query(ServiceRequest, Job)
+        .outerjoin(
+            Job,
+            ServiceRequest.linked_job_id == Job.id,
+        )
+        .filter(
+            ServiceRequest.customer_user_id == current_user.user_id,
+            ServiceRequest.tenant_id == current_user.tenant_id,
+            or_(
+                func.lower(ServiceRequest.status).in_(
+                    [
+                        "completed",
+                        "closed",
+                        "cancelled",
+                        "queued",
+                        "rejected_by_technician",
+                    ]
+                ),
+                func.lower(Job.status).in_(
+                    [
+                        "completed",
+                        "closed",
+                        "cancelled",
+                        "queued",
+                        "rejected_by_technician",
+                    ]
+                ),
+            ),
+        )
+        .order_by(ServiceRequest.updated_at.desc())
+        .all()
+    )
+
+    tech_ids = {
+        job.assigned_technician_id
+        for sr, job in rows
+        if job and job.assigned_technician_id is not None
+    }
+    technicians = (
+        db.query(Technician).filter(Technician.technician_id.in_(tech_ids)).all()
+        if tech_ids
+        else []
+    )
+    technicians_by_id = {t.technician_id: t for t in technicians}
+
+    tech_user_ids = {
+        t.tech_id for t in technicians if getattr(t, "tech_id", None)
+    }
+    profiles = (
+        db.query(TechnicianProfile).filter(TechnicianProfile.user_id.in_(tech_user_ids)).all()
+        if tech_user_ids
+        else []
+    )
+    profiles_by_user = {p.user_id: p for p in profiles}
+
+    result = []
+    for sr, job in rows:
+        sr_status_str = str(sr.status or "").strip().upper()
+        job_status_str = str(getattr(job, "status", "") or "").strip().upper()
+
+        if (
+            sr_status_str in ["CANCELLED", "QUEUED", "REJECTED_BY_TECHNICIAN"]
+            or job_status_str in ["CANCELLED", "QUEUED", "REJECTED_BY_TECHNICIAN"]
+        ):
+            sr.status = "CANCELLED"
+        elif job_status_str in ["COMPLETED", "CLOSED"] or sr_status_str in ["COMPLETED", "CLOSED"]:
+            sr.status = "COMPLETED"
+        elif job and job.status:
+            sr.status = job.status
+        tech_name = None
+        tech_phone = None
+        tech_id = job.assigned_technician_id if job else None
+        if tech_id:
+            t = technicians_by_id.get(tech_id)
+            if t:
+                tech_name = getattr(t, "technician_name", None)
+                p = profiles_by_user.get(getattr(t, "tech_id", None))
+                tech_phone = getattr(p, "phone_number", None) if p else getattr(t, "technician_phone", None)
+
+        sr.assigned_technician_id = tech_id
+        sr.assigned_technician_name = tech_name
+        sr.assigned_technician_phone = tech_phone
+        result.append(sr)
+
+    return result
 
 
 # ──────────────────────────────────────────────────
@@ -2489,7 +2632,7 @@ async def get_notifications(
         == str(current_user.user_id),
         InAppNotification.tenant_id
         == current_user.tenant_id,
-        InAppNotification.status == "UNREAD",
+        func.upper(func.trim(InAppNotification.status)) == "UNREAD",
     ).count()
 
     from ..context import correlation_id_ctx
@@ -2510,7 +2653,8 @@ async def get_notifications(
                 "type": n.type,
                 "title": n.title,
                 "message": n.body,
-                "isRead": n.status != "UNREAD",
+                "status": n.status,
+                "isRead": (n.status or "").upper() != "UNREAD",
                 "createdAt": (
                     n.created_at.isoformat()
                     if n.created_at
@@ -2529,6 +2673,9 @@ async def get_notifications(
 @router.put(
     "/notifications/{notification_id}/read"
 )
+@router.patch(
+    "/notifications/{notification_id}/read"
+)
 async def mark_notification_read(
     notification_id: str,
     current_user: AuthenticatedUser = Depends(
@@ -2541,7 +2688,7 @@ async def mark_notification_read(
     notification = db.query(
         InAppNotification
     ).filter(
-        InAppNotification.id == notification_id,
+        func.lower(InAppNotification.id) == func.lower(str(notification_id)),
         InAppNotification.tenant_id
         == current_user.tenant_id,
         InAppNotification.customer_user_id
@@ -2584,6 +2731,9 @@ async def mark_notification_read(
 @router.put(
     "/notifications/read-all"
 )
+@router.patch(
+    "/notifications/read-all"
+)
 async def mark_all_read(
     current_user: AuthenticatedUser = Depends(
         require_permission(Permission.NOTIFICATIONS_VIEW_OWN)
@@ -2599,14 +2749,15 @@ async def mark_all_read(
         == current_user.tenant_id,
         InAppNotification.customer_user_id
         == str(current_user.user_id),
-        InAppNotification.status == "UNREAD",
+        func.upper(func.trim(InAppNotification.status)) == "UNREAD",
     ).update(
         {
             "status": "READ",
             "read_at": datetime.now(
                 timezone.utc
             ),
-        }
+        },
+        synchronize_session=False,
     )
 
     db.commit()

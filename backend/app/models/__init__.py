@@ -89,3 +89,4 @@ from .customer_confirmation import CustomerConfirmation  # noqa: F401
 from .transactional_email_outbox import TransactionalEmailOutbox  # noqa: F401
 from .job_expense import JobExpense  # noqa: F401
 from ..models_legacy import RedispatchAttempt  # noqa: F401
+from .services_catalog import ServiceCatalogItem  # noqa: F401
