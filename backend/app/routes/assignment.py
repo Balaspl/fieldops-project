@@ -83,7 +83,7 @@ def get_nearest_technician(
     db: Session = Depends(get_db)
 ):
     """
-    Identify the nearest available technician based on skill and location.
+    Identify the nearest technician based on skill and location, regardless of presence status.
     """
 
     user, tenant_id = user_tenant
@@ -106,14 +106,6 @@ def get_nearest_technician(
         )
 
     tech_query = db.query(models.Technician).filter(
-        models.Technician.technician_status.in_(
-            [
-                "AVAILABLE",
-                "ASSIGNED",
-                "Available",
-                "Assigned",
-            ]
-        ),
         models.Technician.current_jobs < models.Technician.max_jobs,
     )
 
@@ -298,14 +290,6 @@ def assign_job(
         elif assignment.job_type:
 
             t_q = db.query(models.Technician).filter(
-                models.Technician.technician_status.in_(
-                    [
-                        "AVAILABLE",
-                        "ASSIGNED",
-                        "Available",
-                        "Assigned",
-                    ]
-                ),
                 models.Technician.current_jobs
                 < models.Technician.max_jobs,
             )

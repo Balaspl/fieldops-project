@@ -377,8 +377,7 @@ def close_job(
         from .email.transactional_outbox import persist_invoice_email
         persist_invoice_email(db, job, closure_record)
 
-        # Keep the technician available after the final completion is staged.
-        tech.technician_status = "AVAILABLE"
+        # Completing work updates workload only; availability is user-controlled.
         tech.current_jobs = max(
             0,
             (tech.current_jobs or 1) - 1,

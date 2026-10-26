@@ -57,7 +57,7 @@ def create_technician(
                 technician_name=tech_data.technician_name,
                 technician_skill=tech_data.technician_skill,
                 technician_location=tech_data.technician_location,
-                technician_status=tech_data.technician_status,
+                technician_status="OFFLINE",
                 tenant_id=tenant_id
             )
             db.add(new_tech)
@@ -214,25 +214,11 @@ def update_technician_status(
     ),
     db: Session = Depends(get_db)
 ):
-    """
-    Manually update technician availability status.
-    """
-    tech = db.query(models.Technician).filter(
-        models.Technician.technician_id == update.technician_id,
-        models.Technician.tenant_id == current_user.tenant_id
-    ).first()
-    if not tech:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Technician not found")
-        
-    tech.technician_status = update.status
-    
-    try:
-        db.commit()
-        db.refresh(tech)
-        return tech
-    except SQLAlchemyError as e:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Database error: {str(e)}")
+    """Reject legacy admin status writes; technicians use their own controls."""
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Technician availability can only be changed from the technician portal.",
+    )
 
 
 @router.get("/validate-workload", response_model=schemas.WorkloadValidationResponse)
@@ -267,25 +253,17 @@ def get_available_technicians(
 ):
     """
     Retrieve available technicians for assignment.
-    Includes tenant isolation fallback and all candidate statuses so candidate selection is never empty.
+    Includes all technician statuses; online/offline presence does not affect planning eligibility.
     """
     query = db.query(models.Technician).filter(
         models.Technician.tenant_id == current_user.tenant_id
     )
     
-    # Try fetching available or assigned technicians first
-    available_query = query.filter(
-        models.Technician.technician_status.in_(["AVAILABLE", "ASSIGNED", "Available", "Assigned"])
-    )
-    techs = available_query.all()
-    
-    # If no active/available technicians found, fallback to fetching all technicians
-    if not techs:
-        techs = query.all()
+    techs = query.all()
     
     result = []
     for tech in techs:
-        is_eligible = (tech.current_jobs < tech.max_jobs) and ((tech.technician_status or "").upper() in ["AVAILABLE", "ASSIGNED"])
+        is_eligible = (tech.current_jobs or 0) < (tech.max_jobs or 0)
         result.append({
             "technician_id": tech.technician_id,
             "technician": tech.technician_name,
@@ -355,38 +333,11 @@ def update_technician_availability(
     ),
     db: Session = Depends(get_db)
 ):
-    """
-    Update the availability status of a technician by their integer ID or string tech_id.
-    """
-    tech = None
-    if id.isdigit():
-        tech = db.query(models.Technician).filter(
-            models.Technician.technician_id == int(id),
-            models.Technician.tenant_id == current_user.tenant_id
-        ).first()
-    if not tech:
-        tech = db.query(models.Technician).filter(
-            models.Technician.tech_id == id,
-            models.Technician.tenant_id == current_user.tenant_id
-        ).first()
-        
-    if not tech:
-        raise HTTPException(status_code=404, detail="Technician not found")
-    
-    # Validation is handled by Pydantic Literal
-    tech.technician_status = update_data.technician_status
-    db.commit()
-    db.refresh(tech)
-    
-    return {
-        "message": "Technician availability updated successfully",
-        "technician": {
-            "id": tech.technician_id,
-            "tech_id": tech.tech_id,
-            "name": tech.technician_name,
-            "technician_status": tech.technician_status
-        }
-    }
+    """Reject legacy admin status writes; only self-service controls are valid."""
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Technician availability can only be changed from the technician portal.",
+    )
 
 from ..schemas import NotificationPreferencesInput, PreferencesUpdateResponse
 from ..services.preferences import get_technician_preferences, update_technician_preferences, DEFAULT_PREFS
@@ -503,7 +454,7 @@ def update_technician(
     tech.technician_name = technician.technician_name
     tech.technician_skill = technician.technician_skill
     tech.technician_location = technician.technician_location
-    tech.technician_status = technician.technician_status
+    # Availability is deliberately preserved during profile edits.
     
     try:
         db.commit()
@@ -548,31 +499,10 @@ def update_technician_status_by_id(
     ),
     db: Session = Depends(get_db)
 ):
-    """
-    Update the status of a technician.
-    """
-    tech = db.query(models.Technician).filter(
-        models.Technician.technician_id == technician_id,
-        models.Technician.tenant_id == current_user.tenant_id
-    ).first()
-    if not tech:
-        raise HTTPException(status_code=404, detail="Technician not found")
-    
-    tech.technician_status = update_data.technician_status
-    
-    try:
-        db.commit()
-        db.refresh(tech)
-        return {
-            "message": "Technician status updated successfully",
-            "technician": {
-                "id": tech.technician_id,
-                "name": tech.technician_name,
-                "technician_status": tech.technician_status
-            }
-        }
-    except SQLAlchemyError as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    """Reject legacy admin status writes; only self-service controls are valid."""
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Technician availability can only be changed from the technician portal.",
+    )
 
 

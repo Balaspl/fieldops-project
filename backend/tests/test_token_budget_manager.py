@@ -53,6 +53,10 @@ def test_budget_config_validation() -> None:
         per_request={"sms": 10, "email": 100}
     )
     assert config.daily_token_limit == 1000
+    customer_support_config = TokenBudgetConfig(
+        per_request={"customer_support": 1200}
+    )
+    assert customer_support_config.per_request["customer_support"] == 1200
 
     # Invalid limits
     with pytest.raises(ValidationError):

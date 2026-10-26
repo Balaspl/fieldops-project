@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Callable, Mapping, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
@@ -72,18 +72,27 @@ DEFAULT_ROUTE_POLICIES: Mapping[str, RateLimitPolicy] = {
     "/auth/login": RateLimitPolicy("auth_login", 10, 60, True),
     "/auth/register": RateLimitPolicy("auth_register", 5, 60, True),
     "/auth/forgot-password": RateLimitPolicy("auth_forgot_password", 3, 300, True),
+    "/auth/reset-password": RateLimitPolicy("auth_reset_password", 3, 300, True),
+    "/auth/change-password": RateLimitPolicy("auth_change_password", 10, 60, True),
     "/auth/refresh": RateLimitPolicy("auth_refresh", 20, 60, True),
     "/auth/sso/login": RateLimitPolicy("auth_sso_login", 20, 60, True),
     "/auth/sso/callback": RateLimitPolicy("auth_sso_callback", 30, 60, True),
     # Every other /auth/* route: stricter than general, but fail-open so a
     # Redis blip does not lock everybody out of e.g. /auth/me.
     "/auth": RateLimitPolicy("auth_other", 60, 60, False),
-    "/gps": RateLimitPolicy("gps_ip_ceiling", 600, 60, False),
-    "/tracking": RateLimitPolicy("tracking_ip_ceiling", 300, 60, False),
+    "/api/v1/gps": RateLimitPolicy("gps_ip_ceiling", 300, 60, False),
+    "/gps": RateLimitPolicy("gps_ip_ceiling", 300, 60, False),
+    "/api/technician": RateLimitPolicy("technician_api", 300, 60, False),
+    "/technicians": RateLimitPolicy("technician_api", 300, 60, False),
+    "/api/v1/jobs": RateLimitPolicy("technician_jobs_api", 300, 60, False),
+    "/jobs": RateLimitPolicy("technician_jobs_api", 300, 60, False),
+    "/tracking": RateLimitPolicy("tracking_ip_ceiling", 600, 60, False),
     "/socket.io": RateLimitPolicy("socket_io_ceiling", 600, 60, False),
+    "GET /*": RateLimitPolicy("read_api", 600, 60, False),
+    "HEAD /*": RateLimitPolicy("read_api", 600, 60, False),
 }
 
-DEFAULT_GENERAL_POLICY = RateLimitPolicy("general_api", 100, 60, False)
+DEFAULT_GENERAL_POLICY = RateLimitPolicy("general_api", 300, 60, False)
 
 DEFAULT_SKIP_PATHS = frozenset({"/", "/docs", "/openapi.json", "/redoc"})
 
@@ -117,11 +126,11 @@ def load_rate_limit_config(env: Optional[Mapping[str, str]] = None) -> RateLimit
     ---------------------
     RATE_LIMIT_ENABLED              true|false                       (default true)
     RATE_LIMIT_TRUSTED_PROXY_HOPS   int                              (default 0)
-    RATE_LIMIT_DEFAULT_MAX          int                              (default 100)
+    RATE_LIMIT_DEFAULT_MAX          int                              (default 300)
     RATE_LIMIT_DEFAULT_WINDOW       seconds                          (default 60)
-    RATE_LIMIT_POLICIES_JSON        per-prefix overrides, e.g.
+    RATE_LIMIT_POLICIES_JSON        route-prefix or METHOD /path overrides, e.g.
         {"/auth/login": {"max": 5, "window": 60, "fail_closed": true},
-         "/reports":    {"max": 30, "window": 60}}
+         "GET /api/reports": {"max": 600, "window": 60}}
 
     Invalid configuration raises ValueError at startup instead of silently
     weakening protection.
@@ -151,12 +160,35 @@ def load_rate_limit_config(env: Optional[Mapping[str, str]] = None) -> RateLimit
             raise ValueError("RATE_LIMIT_POLICIES_JSON must be a JSON object")
 
         for prefix, spec in overrides.items():
-            if not isinstance(prefix, str) or not prefix.startswith("/"):
+            parsed_method, parsed_path = _policy_rule(prefix) if isinstance(prefix, str) else (None, "")
+            if not isinstance(prefix, str) or (parsed_method is None and not prefix.startswith("/")):
                 raise ValueError(f"Invalid rate-limit prefix: {prefix!r}")
             if not isinstance(spec, dict):
                 raise ValueError(f"Policy for {prefix} must be an object")
-            prefix = prefix.rstrip("/") or "/"
+            prefix = (
+                f"{parsed_method} {parsed_path}"
+                if parsed_method is not None
+                else prefix.rstrip("/") or "/"
+            )
             base = policies.get(prefix)
+            if parsed_path.startswith("/auth"):
+                auth_bases = [
+                    (route, policy)
+                    for route, policy in DEFAULT_ROUTE_POLICIES.items()
+                    if route.startswith("/auth")
+                    and (parsed_path == route or parsed_path.startswith(route.rstrip("/") + "/"))
+                ]
+                auth_base = max(auth_bases, key=lambda item: len(item[0]))[1]
+                requested_max = int(spec.get("max", base.max_requests if base else -1))
+                requested_fail_closed = bool(
+                    spec.get("fail_closed", base.fail_closed if base else False)
+                )
+                if requested_max > auth_base.max_requests or (
+                    auth_base.fail_closed and not requested_fail_closed
+                ):
+                    raise ValueError(
+                        f"Authentication rate-limit override for {prefix} cannot be weaker than its default"
+                    )
             policies[prefix] = RateLimitPolicy(
                 name=spec.get("name") or (base.name if base else _slug(prefix)),
                 max_requests=int(spec.get("max", base.max_requests if base else -1)),
@@ -215,6 +247,53 @@ def build_key(policy: RateLimitPolicy, **identity: object) -> str:
     """
     segments = [f"{k}:{hash_identifier(str(v))}" for k, v in identity.items()]
     return f"rl:v2:{policy.name}:" + ":".join(segments)
+
+
+_HTTP_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
+_PARAMETER_COLLECTIONS = frozenset({
+    "jobs", "technicians", "users", "requests", "service-requests",
+    "customers", "organizations", "notifications", "history",
+})
+_STATIC_COLLECTION_SEGMENTS = frozenset({
+    "available", "all", "pending", "search", "history", "metrics",
+    "count", "status", "unread-count",
+})
+_UUID_PATH_SEGMENT = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+def normalize_route_path(path: str) -> str:
+    """Normalize equivalent route URLs while keeping endpoint identities distinct."""
+    parts = [part for part in str(path or "/").split("/") if part]
+    normalized: list[str] = []
+    for index, part in enumerate(parts):
+        previous = parts[index - 1].lower() if index else ""
+        if part.isdigit() or _UUID_PATH_SEGMENT.fullmatch(part):
+            normalized.append("{id}")
+        elif previous in _PARAMETER_COLLECTIONS and part.lower() not in _STATIC_COLLECTION_SEGMENTS:
+            normalized.append("{id}")
+        else:
+            normalized.append(part)
+    return "/" + "/".join(normalized) if normalized else "/"
+
+
+def _policy_rule(rule: str) -> tuple[str | None, str]:
+    """Split an optional HTTP method from a path-prefix policy rule."""
+    method, separator, path = rule.partition(" ")
+    if separator and method.upper() in _HTTP_METHODS and path.startswith("/"):
+        return method.upper(), path.rstrip("/") or "/"
+    return None, rule.rstrip("/") or "/"
+
+
+def _policy_path_matches(path: str, rule_path: str) -> bool:
+    if rule_path == "/*":
+        return True
+    if rule_path.endswith("/*"):
+        prefix = rule_path[:-2].rstrip("/")
+        return path == prefix or path.startswith(prefix + "/")
+    return path == rule_path or path.startswith(rule_path.rstrip("/") + "/")
 
 
 # ──────────────────────────────── Redis core ──────────────────────────────────
@@ -336,14 +415,25 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self.config = config or get_rate_limit_config()
         self._redis_factory = redis_factory or _default_redis_factory
-        # Longest prefix first -> longest match wins.
-        self._prefixes = sorted(self.config.route_policies, key=len, reverse=True)
+        # Longest route prefix wins; method-specific ties beat generic rules.
+        self._rules = sorted(
+            self.config.route_policies,
+            key=lambda rule: (
+                len(_policy_rule(rule)[1].replace("*", "")),
+                _policy_rule(rule)[0] is not None,
+            ),
+            reverse=True,
+        )
 
-    def policy_for(self, path: str) -> RateLimitPolicy:
-        for prefix in self._prefixes:
-            # Segment-aware: "/auth/login" must not match "/auth/login-help".
-            if path == prefix or path.startswith(prefix.rstrip("/") + "/"):
-                return self.config.route_policies[prefix]
+    def policy_for(self, path: str, method: str = "GET") -> RateLimitPolicy:
+        normalized_path = normalize_route_path(path)
+        normalized_method = method.upper()
+        for rule in self._rules:
+            rule_method, rule_path = _policy_rule(rule)
+            if rule_method is not None and rule_method != normalized_method:
+                continue
+            if _policy_path_matches(normalized_path, rule_path):
+                return self.config.route_policies[rule]
         return self.config.default_policy
 
     async def dispatch(self, request: Request, call_next):
@@ -358,9 +448,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         ):
             return await call_next(request)
 
-        policy = self.policy_for(path)
+        method = request.method.upper()
+        policy = self.policy_for(path, method)
         ip = client_ip(request, cfg.trusted_proxy_hops)
-        key = build_key(policy, ip=ip)
+        endpoint = f"{method}:{normalize_route_path(path)}"
+        key = build_key(policy, endpoint=endpoint, ip=ip)
 
         decision = await enforce(self._redis_factory, key, policy)
 
@@ -424,11 +516,24 @@ def rate_limit_dependency(
         user_id = getattr(request.state, "user_id", None)
 
         if user_id is not None:
-            key = build_key(policy, tenant=tenant_id or "none", user=user_id)
+            key = build_key(
+                policy,
+                endpoint=f"{request.method.upper()}:{normalize_route_path(request.url.path)}",
+                tenant=tenant_id or "none",
+                user=user_id,
+            )
         elif tenant_id is not None:
-            key = build_key(policy, tenant=tenant_id)
+            key = build_key(
+                policy,
+                endpoint=f"{request.method.upper()}:{normalize_route_path(request.url.path)}",
+                tenant=tenant_id,
+            )
         else:
-            key = build_key(policy, ip=client_ip(request, cfg.trusted_proxy_hops))
+            key = build_key(
+                policy,
+                endpoint=f"{request.method.upper()}:{normalize_route_path(request.url.path)}",
+                ip=client_ip(request, cfg.trusted_proxy_hops),
+            )
 
         decision = await enforce(redis_factory or _default_redis_factory, key, policy)
 
@@ -447,6 +552,29 @@ def rate_limit_dependency(
                 detail="Too many requests. Please try again later.",
                 headers={"Retry-After": str(decision.retry_after)},
             )
+
+    return _dependency
+
+
+def authenticated_rate_limit_dependency(
+    policy: RateLimitPolicy,
+    identity_dependency: Callable,
+    *,
+    config: Optional[RateLimitConfig] = None,
+    redis_factory: Optional[Callable[[], object]] = None,
+):
+    """Apply the shared limiter using an identity returned by verified auth."""
+    limiter = rate_limit_dependency(
+        policy, config=config, redis_factory=redis_factory
+    )
+
+    async def _dependency(
+        request: Request,
+        identity=Depends(identity_dependency),
+    ) -> None:
+        request.state.tenant_id = getattr(identity, "tenant_id", None)
+        request.state.user_id = getattr(identity, "user_id", None)
+        await limiter(request)
 
     return _dependency
 

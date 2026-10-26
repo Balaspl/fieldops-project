@@ -128,7 +128,31 @@ def _payload() -> ServiceRequestCreate:
 
 def test_service_request_creation_commits_one_canonical_provider_job(
     db_session,
+    monkeypatch,
 ):
+    from app.services.ai.FieldOpsAI.graph import intake_graph, planning_graph
+
+    candidate = {
+        "technician_id": 1,
+        "technician_name": "Provider Tech",
+        "organization_id": "provider-tenant",
+        "rank": 1,
+        "eligible": True,
+    }
+    monkeypatch.setattr(intake_graph, "invoke", lambda state: {"valid": False})
+    monkeypatch.setattr(
+        planning_graph,
+        "invoke",
+        lambda state: {
+            "planning_response": {
+                "action": "ranked_candidates",
+                "top_3": [candidate],
+                "all_ranked_technicians": [candidate],
+                "total_eligible_technicians": 1,
+            },
+            "all_ranked_technicians": [candidate],
+        },
+    )
     background_tasks = BackgroundTasks()
     response = asyncio.run(
         customer_portal.create_service_request(
@@ -171,6 +195,9 @@ def test_service_request_creation_commits_one_canonical_provider_job(
     )
     communication_task = background_tasks.tasks[0]
     assert communication_task.args == (job.id, "job_created", 1)
+    dispatch_task = background_tasks.tasks[1]
+    assert dispatch_task.func.__name__ == "start_automatic_dispatch"
+    assert dispatch_task.args == (job.id, [candidate])
 
     # A persisted request email cannot override the registered customer's
     # tenant-scoped account address used by lifecycle notification delivery.
@@ -267,6 +294,40 @@ def test_customer_job_is_visible_to_provider_dispatch_and_stays_unassigned(
 
     assert job.status == "CREATED"
     assert job.assigned_technician_id is None
+
+
+def test_service_request_without_planning_candidates_still_triggers_immediate_dispatch(
+    db_session,
+    monkeypatch,
+):
+    from app.services.ai.FieldOpsAI.graph import intake_graph, planning_graph
+
+    monkeypatch.setattr(intake_graph, "invoke", lambda state: {"valid": False})
+    monkeypatch.setattr(
+        planning_graph,
+        "invoke",
+        lambda state: {
+            "planning_response": {"action": "no_candidates", "top_3": [], "total_eligible_technicians": 0},
+            "all_ranked_technicians": [],
+        },
+    )
+    background_tasks = BackgroundTasks()
+    response = asyncio.run(
+        customer_portal.create_service_request(
+            _payload(),
+            _request(),
+            background_tasks,
+            current_user=_customer(),
+            db=db_session,
+        )
+    )
+
+    job = db_session.query(Job).filter_by(id=response["created_job"]["id"]).one()
+    assert job.status == "CREATED"
+    assert job.assigned_technician_id is None
+    dispatch_task = background_tasks.tasks[1]
+    assert dispatch_task.func.__name__ == "start_automatic_dispatch"
+    assert dispatch_task.args == (job.id, None)
 
 
 def test_service_request_creation_rolls_back_job_and_request_if_audit_fails(

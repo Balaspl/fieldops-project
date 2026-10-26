@@ -24,6 +24,7 @@ Important:
 from __future__ import annotations
 
 import logging
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -40,12 +41,23 @@ from app.services.ai.FieldOpsAI.agents.dispatcher_agent.dispatcher_agent import 
     DispatcherState,
 )
 from app.services.ai.FieldOpsAI.graph.planning_graph import planning_graph
-from app.services.ai.FieldOpsAI.services.planning_service import PlanningService
 
 from app.services.timer_service import TimerService
+from app.services.planning_output_log import write_planning_output
 
 
 logger = logging.getLogger(__name__)
+
+DISPATCHABLE_UNASSIGNED_STATUSES = frozenset({
+    "CREATED", "QUEUED", "UNASSIGNED",
+})
+OFFERABLE_JOB_STATUSES = DISPATCHABLE_UNASSIGNED_STATUSES | {
+    "REJECTED_BY_TECHNICIAN",
+}
+NON_DISPATCHABLE_STATUSES = frozenset({
+    "ASSIGNED", "ACCEPTED", "EN_ROUTE", "ON_SITE", "IN_PROGRESS",
+    "COMPLETED", "CLOSED", "CANCELLED", "CANCELED",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -70,8 +82,8 @@ def log_planning_top3(job_id, ranked, excluded=None):
 
     for i, t in enumerate(batch, start=1):
         print(f"Rank {i}:")
-        print(f"Technician: {t.get('technician_name')} (ID: {t.get('technician_id')})")
-        print(f"Organization: {t.get('organization_name')} (ID: {t.get('organization_id')})")
+        print(f"Technician ID: {t.get('technician_id')}")
+        print(f"Organization ID: {t.get('organization_id')}")
         print(f"Organization Distance: {t.get('organization_distance')} km")
         print(f"Technician Distance: {t.get('technician_distance')} km")
         print(f"Confidence: {t.get('confidence')}")
@@ -117,15 +129,17 @@ class DispatcherRuntime:
         self,
         job_id: int,
         initial_candidates: list[dict[str, Any]] | None = None,
+        dispatch_attempt_id: str | None = None,
     ) -> dict[str, Any]:
         """
         Start automatic dispatch for a real job.
 
-        initial_candidates should contain the COMPLETE ranked candidate
-        pool if the dispatcher must try later candidates before replanning.
-
-        The graph initially offers only the first three candidates.
+        Use the already-ranked Planning result when the caller has one. The
+        scheduled recovery path may omit it, in which case Planning is queried
+        once at dispatch time. Dispatcher does not re-evaluate eligibility.
         """
+
+        dispatch_attempt_id = dispatch_attempt_id or str(uuid.uuid4())
 
         with SessionLocal() as db:
             job = self._get_job(db, job_id)
@@ -151,65 +165,129 @@ class DispatcherRuntime:
                     ),
                 }
 
+            current_status = str(getattr(job, "status", "") or "").strip().upper()
+            if current_status not in DISPATCHABLE_UNASSIGNED_STATUSES:
+                logger.info(
+                    "dispatch_skipped job_id=%s status=%s outcome=not_unassigned",
+                    job_id,
+                    current_status or "unknown",
+                )
+                return {"job_id": job_id, "status": "NOT_UNASSIGNED", "candidates": []}
+
             job_state = self._job_to_state(job)
+            job_state["dispatch_attempt_id"] = dispatch_attempt_id
+            previous_dispatch_state = getattr(job, "dispatch_state", None) or {}
+            attempted_ids = [
+                int(value)
+                for value in previous_dispatch_state.get("attempted_technician_ids", [])
+                if str(value).isdigit()
+            ]
+            if previous_dispatch_state.get("dispatch_attempt_id"):
+                dispatch_attempt_id = str(previous_dispatch_state["dispatch_attempt_id"])
+                job_state["dispatch_attempt_id"] = dispatch_attempt_id
 
-        # --------------------------------------------------------------
-        # Reuse the existing Planning Agent result when supplied.
-        #
-        # IMPORTANT:
-        # To exhaust the original ranking before replanning, the caller
-        # must pass all_ranked_technicians, not only top_3.
-        # --------------------------------------------------------------
+        logger.info(
+            "dispatcher_started job_id=%s technician_id=none dispatch_attempt_id=%s outcome=started candidate_source=%s",
+            job_id,
+            dispatch_attempt_id,
+            "planning_handoff" if initial_candidates is not None else "planning_refresh",
+        )
 
-        if initial_candidates:
+        if initial_candidates is not None:
             all_candidates = self._normalize_candidates(
                 initial_candidates,
-                excluded_ids=set(),
+                excluded_ids=set(attempted_ids),
             )
-
-            logger.info(
-                "DISPATCHER USING EXISTING PLANNING RESULT | "
-                "job_id=%s | total_candidates=%s",
-                job_id,
-                len(all_candidates),
-            )
-
         else:
-            # Backward-compatible fallback for callers that do not
-            # supply an initial Planning Agent result.
+            logger.info("DISPATCHER REQUESTING INITIAL PLANNING | job_id=%s", job_id)
+            all_candidates = await self.request_planning(job_id, attempted_ids)
+
+        if all_candidates:
+            for candidate in all_candidates:
+                logger.info(
+                    "candidates_received job_id=%s technician_id=%s dispatch_attempt_id=%s rank=%s outcome=eligible_from_planning",
+                    job_id,
+                    candidate["technician_id"],
+                    dispatch_attempt_id,
+                    candidate.get("rank"),
+                )
+        else:
             logger.info(
-                "DISPATCHER REQUESTING INITIAL PLANNING | job_id=%s",
+                "candidates_received job_id=%s technician_id=none dispatch_attempt_id=%s outcome=empty",
                 job_id,
+                dispatch_attempt_id,
             )
 
-            all_candidates = await self.request_planning(
-                job_id,
-                [],
-            )
+        write_planning_output(
+            "DISPATCHER_CANDIDATES_RECEIVED",
+            job_id=job_id,
+            dispatch_attempt_id=dispatch_attempt_id,
+            candidate_count=len(all_candidates),
+            candidates=[
+                {
+                    "rank": candidate.get("rank"),
+                    "technician_id": candidate.get("technician_id"),
+                    "technician_name": candidate.get("technician_name"),
+                    "organization_id": candidate.get("organization_id"),
+                }
+                for candidate in all_candidates
+            ],
+        )
 
         if not all_candidates:
+            write_planning_output(
+                "DISPATCH_PENDING_NO_CANDIDATES",
+                job_id=job_id,
+                dispatch_attempt_id=dispatch_attempt_id,
+                attempted_technician_ids=attempted_ids,
+            )
+            print(
+                f"PLANNING ASSIGNMENT | Job ID: {job_id} | "
+                "Technician: none | Status: pending_no_candidates",
+                flush=True,
+            )
+            pending_state = {
+                "job_id": job_id,
+                "dispatch_attempt_id": dispatch_attempt_id,
+                "all_candidates": [],
+                "candidates": [],
+                "batch_number": int(previous_dispatch_state.get("batch_number", 0)) + 1,
+                "current_index": 0,
+                "current_technician_id": None,
+                "attempted_technician_ids": attempted_ids,
+                "rejected_technician_ids": previous_dispatch_state.get("rejected_technician_ids", []),
+                "batch_exhausted": True,
+                "offer_status": None,
+                "last_offer_outcome": "NO_CANDIDATES",
+                "pending_retry": True,
+                "next_action": "NO_ELIGIBLE_TECHNICIAN",
+            }
+            pending_status = self._mark_pending_for_dispatch_retry(job_id, pending_state)
             logger.warning(
-                "No available technicians for job=%s",
+                "dispatch_pending_no_candidates job_id=%s technician_id=none dispatch_attempt_id=%s next_state=%s retryable=true outcome=pending",
                 job_id,
+                dispatch_attempt_id,
+                pending_status,
             )
 
             return {
                 "job_id": job_id,
-                "status": "NO_TECHNICIANS_AVAILABLE",
+                "status": "PENDING_RETRY" if pending_status else "NOT_RETRYABLE",
                 "candidates": [],
             }
 
         # Preserve the complete pool separately from the active batch.
         state: DispatcherState = {
             "job_id": job_id,
+            "dispatch_attempt_id": dispatch_attempt_id,
             "job": job_state,
             "all_candidates": all_candidates,
-            "candidates": all_candidates[:3],
-            "batch_number": 1,
+            "candidates": all_candidates,
+            "batch_number": int(previous_dispatch_state.get("batch_number", 0)) + 1,
             "current_index": 0,
             "current_technician_id": None,
-            "attempted_technician_ids": [],
-            "rejected_technician_ids": [],
+            "attempted_technician_ids": attempted_ids,
+            "rejected_technician_ids": previous_dispatch_state.get("rejected_technician_ids", []),
             "event": None,
             "next_action": None,
             "assigned_technician_id": None,
@@ -225,17 +303,28 @@ class DispatcherRuntime:
             len(all_candidates),
             [
                 candidate["technician_id"]
-                for candidate in all_candidates[:3]
+                for candidate in all_candidates
             ],
         )
 
-        return await self.graph.start_dispatch(state)
+        result = await self.graph.start_dispatch(state)
+        self._persist_dispatch_state(job_id, result)
+        if result.get("error"):
+            logger.error(
+                "dispatch_failed job_id=%s technician_id=%s dispatch_attempt_id=%s outcome=failed reason=%s",
+                job_id,
+                result.get("current_technician_id"),
+                dispatch_attempt_id,
+                result.get("error"),
+            )
+        return result
 
     async def resume_dispatch(
         self,
         *,
         job_id: int,
         event: str,
+        technician_id: int | None = None,
     ) -> dict[str, Any]:
         """
         Resume a paused DispatcherGraph.
@@ -262,11 +351,38 @@ class DispatcherRuntime:
             job_id,
             event,
         )
+        with SessionLocal() as db:
+            job = self._get_job(db, job_id)
+            persisted = getattr(job, "dispatch_state", None) if job else None
+        if isinstance(persisted, dict) and persisted:
+            current_id = persisted.get("current_technician_id")
+            if technician_id is not None and current_id != int(technician_id):
+                logger.info(
+                    "Ignoring stale/duplicate dispatcher response job_id=%s technician_id=%s current_technician_id=%s outcome=ignored",
+                    job_id, technician_id, current_id,
+                )
+                return persisted
+            result = await self.graph.resume_from_persisted_state(persisted, event)
+        else:
+            result = await self.graph.resume_dispatch(job_id=job_id, event=event)
+        self._persist_dispatch_state(job_id, result)
+        if result.get("dispatch_exhausted"):
+            self._mark_dispatch_exhausted(job_id, result)
+        if result.get("pending_retry"):
+            self._mark_pending_for_dispatch_retry(job_id, result)
+        return result
 
-        return await self.graph.resume_dispatch(
-            job_id=job_id,
-            event=event,
-        )
+    @staticmethod
+    def _persist_dispatch_state(job_id: int, state: dict[str, Any]) -> None:
+        """Commit JSON-safe dispatch progress so worker restarts can recover."""
+        if not state:
+            return
+        payload = DispatcherGraph._persistable_state(state)
+        with SessionLocal() as db:
+            job = DispatcherRuntime._get_job(db, job_id)
+            if job is not None:
+                job.dispatch_state = payload
+                db.commit()
 
     # ------------------------------------------------------------------
     # Planning adapter
@@ -358,18 +474,15 @@ class DispatcherRuntime:
         for technician in recommendations:
             # Support dictionaries and Pydantic/model objects.
             if isinstance(technician, dict):
-                get_value = technician.get
+                candidate_data = technician
             else:
                 model_dump = getattr(technician, "model_dump", None)
                 if callable(model_dump):
-                    technician = model_dump()
-                    get_value = technician.get
+                    candidate_data = model_dump()
                 else:
-                    get_value = lambda key, default=None: getattr(
-                        technician, key, default
-                    )
+                    candidate_data = vars(technician) if hasattr(technician, "__dict__") else {}
 
-            technician_id = get_value("technician_id")
+            technician_id = candidate_data.get("technician_id")
 
             if technician_id is None:
                 logger.warning(
@@ -380,10 +493,8 @@ class DispatcherRuntime:
 
             raw_candidates.append(
                 {
+                    **candidate_data,
                     "technician_id": technician_id,
-                    "rank": get_value("rank"),
-                    "confidence": get_value("confidence", 0.0),
-                    "estimated_eta": get_value("estimated_eta", 0),
                 }
             )
 
@@ -398,7 +509,14 @@ class DispatcherRuntime:
             job_id,
             len(candidates),
             sorted(excluded),
-            [candidate["technician_id"] for candidate in candidates],
+            [
+                {
+                    "rank": candidate.get("rank"),
+                    "technician_name": candidate.get("technician_name") or "Unknown",
+                    "technician_id": candidate["technician_id"],
+                }
+                for candidate in candidates
+            ],
         )
 
         return candidates
@@ -518,7 +636,7 @@ class DispatcherRuntime:
         and rejection handlers before changing the assignment lifecycle.
         """
 
-        job_id = int(job_state["id"])
+        job_id = self._job_id_from_offer_state(job_state)
 
         logger.info(
             "=================================================="
@@ -537,6 +655,16 @@ class DispatcherRuntime:
                     f"Job {job_id} not found while offering"
                 )
 
+            current_status = str(getattr(job, "status", "") or "").strip().upper()
+            if current_status not in OFFERABLE_JOB_STATUSES:
+                raise RuntimeError(f"job_not_dispatchable:{getattr(job, 'status', None)}")
+            if getattr(job, "assigned_technician_id", None) is not None:
+                raise RuntimeError("job_already_assigned")
+
+            dispatch_state = job_state.get("_dispatch_state")
+            if isinstance(dispatch_state, dict):
+                job.dispatch_state = dispatch_state
+
             logger.info(
                 "INITIAL JOB STATE | status=%s | technician=%s",
                 getattr(job, "status", None),
@@ -553,6 +681,7 @@ class DispatcherRuntime:
                     models.Technician.technician_id
                     == technician_id,
                 )
+                .with_for_update()
                 .first()
             )
 
@@ -570,34 +699,14 @@ class DispatcherRuntime:
             )
 
             if technician is None:
-                raise ValueError(
-                    f"Technician {technician_id} not found "
+                raise RuntimeError(
+                    f"Planning returned unknown technician {technician_id} "
                     f"for job {job_id}"
                 )
 
-            logger.info(
-                "TECHNICIAN FOUND | id=%s | name=%s | status=%s",
-                technician_id,
-                getattr(technician, "name", None),
-                getattr(
-                    technician,
-                    "technician_status",
-                    None,
-                ),
-            )
+            if str(getattr(technician, "tenant_id", None)) != str(getattr(job, "tenant_id", None)):
+                raise RuntimeError("planning_candidate_tenant_mismatch")
 
-            # Keep the original availability-status check commented out,
-            # as in the supplied implementation.
-            #
-            # if (
-            #     getattr(technician, "technician_status", None)
-            #     != "AVAILABLE"
-            # ):
-            #     raise ValueError(
-            #         f"Technician {technician_id} is no longer available"
-            #     )
-
-           
             # ----------------------------------------------------------
             # Assign job using the existing behavior.
             # ----------------------------------------------------------
@@ -633,10 +742,11 @@ class DispatcherRuntime:
             # Notification
             # ----------------------------------------------------------
 
-            self._create_assignment_notification(
+            notification = self._create_assignment_notification(
                 db=db,
                 job=job,
                 technician=technician,
+                dispatch_attempt_id=str(job_state.get("dispatch_attempt_id") or ""),
             )
 
             # ----------------------------------------------------------
@@ -672,9 +782,26 @@ class DispatcherRuntime:
             try:
                 db.commit()
 
+                write_planning_output(
+                    "PLANNING_ASSIGNMENT_COMMITTED",
+                    job_id=job_id,
+                    technician_id=technician.technician_id,
+                    technician_name=technician.technician_name,
+                    status="ASSIGNED",
+                    dispatch_attempt_id=job_state.get("dispatch_attempt_id"),
+                )
+
+                print(
+                    f"PLANNING ASSIGNMENT | Job ID: {job_id} | "
+                    f"Technician: {technician.technician_name or 'Unknown'} "
+                    f"(ID: {technician.technician_id}) | Status: ASSIGNED",
+                    flush=True,
+                )
+
                 logger.info(
-                    "DB COMMIT SUCCESS | job=%s",
+                    "OFFER DB COMMIT SUCCESS | job_id=%s technician_id=%s",
                     job_id,
+                    technician_id,
                 )
 
             except Exception:
@@ -690,6 +817,8 @@ class DispatcherRuntime:
 
             try:
                 db.refresh(job)
+                if notification is not None:
+                    db.refresh(notification)
 
                 logger.info(
                     "DB REFRESH RESULT | "
@@ -761,14 +890,23 @@ class DispatcherRuntime:
                 )
 
             logger.info(
-                "ASSIGNMENT VERIFIED SUCCESSFULLY | "
-                "job=%s | technician=%s",
+                "offer_created job_id=%s technician_id=%s dispatch_attempt_id=%s notification_id=%s outcome=persisted",
                 job_id,
                 technician_id,
+                job_state.get("dispatch_attempt_id"),
+                getattr(notification, "id", None),
+            )
+
+            logger.info(
+                "offer_assignment_reservation_verified job_id=%s "
+                "technician_id=%s status=%s",
+                job_id,
+                technician_id,
+                getattr(fresh_job, "status", None),
             )
             logger.info(
-                "FINAL DISPATCH ASSIGNMENT | job_id=%s | "
-                "assigned_technician_id=%s | status=%s",
+                "OFFER RESERVATION PERSISTED | job_id=%s | "
+                "technician_id=%s | status=%s",
                 fresh_job.id,
                 fresh_job.assigned_technician_id,
                 fresh_job.status,
@@ -811,6 +949,46 @@ class DispatcherRuntime:
                 # The application needs another timeout mechanism if
                 # timer creation fails.
 
+        if notification is not None:
+            try:
+                from app.services.socket_manager import emit_notification
+
+                sent = await emit_notification(
+                    str(technician.tech_id or technician.technician_id),
+                    {
+                        "id": notification.id,
+                        "type": notification.type,
+                        "title": notification.title,
+                        "message": notification.body,
+                        "jobId": notification.job_id,
+                        "createdAt": notification.created_at.isoformat(),
+                        "status": notification.status,
+                        "tenant_id": str(notification.tenant_id),
+                        "notification_metadata": notification.notification_metadata,
+                    },
+                )
+                if sent:
+                    logger.info(
+                        "offer_sent job_id=%s technician_id=%s dispatch_attempt_id=%s channel=socket_notification outcome=sent",
+                        job_id,
+                        technician_id,
+                        job_state.get("dispatch_attempt_id"),
+                    )
+                else:
+                    logger.error(
+                        "dispatch_failed job_id=%s technician_id=%s dispatch_attempt_id=%s phase=notification_delivery outcome=failed",
+                        job_id,
+                        technician_id,
+                        job_state.get("dispatch_attempt_id"),
+                    )
+            except Exception:
+                logger.exception(
+                    "dispatch_failed job_id=%s technician_id=%s dispatch_attempt_id=%s phase=notification_delivery outcome=failed",
+                    job_id,
+                    technician_id,
+                    job_state.get("dispatch_attempt_id"),
+                )
+
         logger.info(
             "AUTOMATIC DISPATCH OFFER COMPLETE | "
             "job=%s | technician=%s",
@@ -823,12 +1001,34 @@ class DispatcherRuntime:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _job_id_from_offer_state(job_state: dict[str, Any]) -> int:
+        """Validate legacy Job-shaped and current graph-shaped offer payloads."""
+        if not isinstance(job_state, dict):
+            raise ValueError(f"Offer state must be a mapping, got {type(job_state).__name__}")
+        raw_id = job_state.get("id")
+        raw_job_id = job_state.get("job_id")
+        try:
+            normalized = int(raw_id if raw_id is not None else raw_job_id)
+            if raw_id is not None and raw_job_id is not None and int(raw_job_id) != normalized:
+                raise ValueError("id and job_id disagree")
+        except (TypeError, ValueError) as exc:
+            logger.error(
+                "Dispatcher offer rejected: missing/invalid job identifier keys=%s reason=%s",
+                sorted(job_state.keys()), str(exc),
+            )
+            raise ValueError(
+                f"Offer state requires a consistent id/job_id; available keys={sorted(job_state.keys())}"
+            ) from exc
+        return normalized
+
+    @staticmethod
     def _create_assignment_notification(
         *,
         db: Session,
         job: Any,
         technician: Any,
-    ) -> None:
+        dispatch_attempt_id: str = "",
+    ) -> Any | None:
         """
         Create the JOB_ASSIGNED notification expected by
         the existing technician portal.
@@ -873,7 +1073,7 @@ class DispatcherRuntime:
                 technician.technician_id,
             )
 
-            return
+            return None
 
         notification = models.InAppNotification(
             id=str(uuid.uuid4()),
@@ -884,6 +1084,7 @@ class DispatcherRuntime:
             recipient_role="technician",
             recipient_id=technician_recipient_id,
             group_key=assignment_group_key,
+            notification_metadata={"dispatch_attempt_id": dispatch_attempt_id},
             job_id=str(job.id),
             type="JOB_ASSIGNED",
             title="New Job Assigned",
@@ -909,6 +1110,7 @@ class DispatcherRuntime:
             job.id,
             technician.technician_id,
         )
+        return notification
 
     # ------------------------------------------------------------------
     # Helpers
@@ -926,8 +1128,52 @@ class DispatcherRuntime:
             .filter(
                 models.Job.id == job_id
             )
+            .with_for_update()
             .first()
         )
+
+    @classmethod
+    def _mark_pending_for_dispatch_retry(cls, job_id: int, dispatch_state: dict[str, Any] | None = None) -> bool:
+        """Persist an unassigned, nonterminal job in the recovery queue."""
+        with SessionLocal() as db:
+            job = cls._get_job(db, job_id)
+            if job is None:
+                return False
+            status = str(getattr(job, "status", "") or "").strip().upper()
+            if status not in DISPATCHABLE_UNASSIGNED_STATUSES:
+                return False
+            if getattr(job, "assigned_technician_id", None) is not None:
+                return False
+            job.status = "QUEUED"
+            if dispatch_state is not None:
+                job.dispatch_state = DispatcherGraph._persistable_state(dispatch_state)
+            db.commit()
+            return True
+
+    @classmethod
+    def _mark_dispatch_exhausted(cls, job_id: int, dispatch_state: dict[str, Any]) -> bool:
+        """Persist the final rejected status after every planned offer fails."""
+        with SessionLocal() as db:
+            job = cls._get_job(db, job_id)
+            if job is None:
+                return False
+            status = str(getattr(job, "status", "") or "").strip().upper()
+            if status in NON_DISPATCHABLE_STATUSES and status not in {
+                "REJECTED_BY_TECHNICIAN"
+            }:
+                return False
+            if getattr(job, "assigned_technician_id", None) is not None:
+                return False
+            job.status = "REJECTED_BY_TECHNICIAN"
+            job.assigned_technician_id = None
+            job.dispatch_state = DispatcherGraph._persistable_state(dispatch_state)
+            db.commit()
+            logger.info(
+                "dispatch_exhausted job_id=%s status=REJECTED_BY_TECHNICIAN attempted_technician_ids=%s",
+                job_id,
+                dispatch_state.get("attempted_technician_ids", []),
+            )
+            return True
 
     @staticmethod
     def _job_to_state(
@@ -995,22 +1241,10 @@ class DispatcherRuntime:
             or ""
         ).upper()
 
-        terminal_or_active_statuses = {
-            "ASSIGNED",
-            "ACCEPTED",
-            "EN_ROUTE",
-            "ON_SITE",
-            "IN_PROGRESS",
-            "ACTIVE",
-            "COMPLETED",
-            "CLOSED",
-            "CANCELLED",
-        }
-
         if assigned_technician_id is not None:
             return True
 
-        return status in terminal_or_active_statuses
+        return status in NON_DISPATCHABLE_STATUSES
     
 
 
@@ -1054,6 +1288,7 @@ async def start_automatic_dispatch(
     ranks 4 onward from the original planning result.
     """
 
+    dispatch_attempt_id = str(uuid.uuid4())
     try:
         logger.info(
             "🚀 AUTOMATIC DISPATCH START | "
@@ -1063,11 +1298,14 @@ async def start_automatic_dispatch(
         )
 
         runtime = get_dispatcher_runtime()
+        from app.services.distributed_lock_service import with_job_lock
 
-        result = await runtime.start_dispatch(
-            job_id,
-            initial_candidates=initial_candidates,
-        )
+        with with_job_lock(str(job_id)):
+            result = await runtime.start_dispatch(
+                job_id,
+                initial_candidates=initial_candidates,
+                dispatch_attempt_id=dispatch_attempt_id,
+            )
 
         logger.info(
             "🚀 AUTOMATIC DISPATCH FINISHED | "
@@ -1075,11 +1313,15 @@ async def start_automatic_dispatch(
             job_id,
             result,
         )
+        if result.get("status") == "SCHEDULED":
+            from app.worker import register_scheduled_dispatch
+
+            register_scheduled_dispatch(job_id, dispatch_attempt_id)
 
     except Exception:
         logger.exception(
-            "❌ AUTOMATIC DISPATCH FAILED | "
-            "job_id=%s",
+            "dispatch_failed job_id=%s technician_id=none dispatch_attempt_id=%s phase=dispatcher_start outcome=failed",
             job_id,
+            dispatch_attempt_id,
         )
 

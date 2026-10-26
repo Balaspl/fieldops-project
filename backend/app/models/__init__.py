@@ -54,11 +54,17 @@ from .user import User, RefreshToken  # noqa: F401
 from .organization import Organization  # noqa: F401
 from .enterprise_audit import EnterpriseAuditLog  # noqa: F401
 from .job_closure import JobClosure  # noqa: F401
+from .job_message import JobMessage  # noqa: F401
 
 from .payment_status import JobPaymentStatus  # noqa: F401
 
 from .customer_feedback import CustomerFeedback  # noqa: F401
 from .customer_support_request import CustomerSupportRequest  # noqa: F401
+from .customer_chat import (  # noqa: F401
+    CustomerChatConversation,
+    CustomerChatMessage,
+    CustomerSupportFAQ,
+)
 
 # Portal models
 from .technician_profile import TechnicianProfile  # noqa: F401

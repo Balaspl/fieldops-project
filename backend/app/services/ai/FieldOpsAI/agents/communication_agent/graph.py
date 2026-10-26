@@ -924,6 +924,7 @@ def dispatch(
                     enqueue_sms(
                         phone,
                         message["sms"],
+                        delivery_id=delivery_id,
                     )
 
                 elif channel == EMAIL:
@@ -974,11 +975,17 @@ def dispatch(
                     )
 
             except Exception as exc:
-                logger.error(
-                    "Communication Agent delivery enqueue failed",
+                logger.exception(
+                    "Communication Agent delivery enqueue failed event_id=%s",
+                    delivery_id,
                     extra={"channel": channel, "job_id": str(job.id),
                            "event_type": event.value, "delivery_id": delivery_id,
-                           "reason": type(exc).__name__},
+                           "event_id": str(delivery_id),
+                           "event_version": event_version,
+                           "tenant_id": recipient.tenant_id,
+                           "recipient_id": recipient.id,
+                           "reason": type(exc).__name__,
+                           "error": str(exc)[:400]},
                 )
 
                 try:

@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
-import { History, MapPin, Clock, CheckCircle } from "lucide-react";
+import { History, MapPin, Clock, CheckCircle, MessageSquare } from "lucide-react";
 import { getTechnicianJobHistory } from "../../services/technicianPortalService";
+import JobMessagePanel from "../../components/customer-tracking/JobMessagePanel";
 
 export default function TechnicianJobHistoryPage() {
   const [jobs, setJobs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [messageJobId, setMessageJobId] = useState<number | null>(null);
 
   useEffect(() => {
     getTechnicianJobHistory()
@@ -108,7 +110,7 @@ export default function TechnicianJobHistoryPage() {
                   alignItems: "center",
                   justifyContent: "center",
                   gap: "6px",
-                  background: "#059669",
+                  background: String(job.status).toUpperCase() === "CANCELLED" ? "#B91C1C" : "#059669",
                   color: "#FFFFFF",
                   border: "1px solid #047857",
                   borderRadius: "8px",
@@ -123,7 +125,7 @@ export default function TechnicianJobHistoryPage() {
                 }}
               >
                 <CheckCircle size={15} />
-                COMPLETED
+                {String(job.status || "COMPLETED").toUpperCase()}
               </span>
             </div>
 
@@ -173,9 +175,13 @@ export default function TechnicianJobHistoryPage() {
                 Customer: {job.customer_name}
               </div>
             )}
+            <button type="button" onClick={() => setMessageJobId(Number(job.id))} style={{ marginTop: "12px", padding: "9px 12px", border: 0, borderRadius: "8px", background: "#156B5B", color: "#FFFFFF", fontSize: "12px", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: "7px", cursor: "pointer" }}>
+              <MessageSquare size={15} /> View Messages
+            </button>
           </div>
         ))
       )}
+      {messageJobId !== null && <JobMessagePanel jobId={messageJobId} onClose={() => setMessageJobId(null)} />}
     </div>
   );
 }

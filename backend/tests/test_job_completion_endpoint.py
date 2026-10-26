@@ -781,7 +781,7 @@ def test_close_endpoint_returns_complete_response_contract():
     db.close()
 
 
-def test_close_endpoint_updates_technician_workload_and_status():
+def test_close_endpoint_updates_workload_without_changing_explicit_availability():
     db = TestingSessionLocal()
     tech, job = _create_tech_and_job(db)
     tech_id = tech.technician_id
@@ -810,7 +810,7 @@ def test_close_endpoint_updates_technician_workload_and_status():
         .one()
     )
 
-    assert updated_tech.technician_status == "AVAILABLE"
+    assert updated_tech.technician_status == "BUSY"
     assert updated_tech.current_jobs == 0
 
     db.close()

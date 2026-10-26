@@ -46,38 +46,15 @@ def validate_technician_for_assignment(
     """
     Comprehensive validation before assignment.
 
-    Checks:
-    - Technician availability/status
-    - Workload capacity
+    Checks workload capacity and required skill. Online/offline status does
+    not prevent a planned assignment.
     - Technician skill matches the job service type/required skill
 
     A technician who does not have the required skill is rejected.
     """
 
     # ------------------------------------------------------------------
-    # 1. Status Check
-    # ------------------------------------------------------------------
-    status_upper = (
-        technician.technician_status or ""
-    ).upper().strip()
-
-    if status_upper in ["OFFLINE", "BUSY"]:
-        logger.warning(
-            f"Assignment blocked: Technician "
-            f"{technician.technician_id} is "
-            f"{technician.technician_status}"
-        )
-
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "Technician is unavailable. "
-                "Busy or Offline technicians cannot be assigned jobs."
-            ),
-        )
-
-    # ------------------------------------------------------------------
-    # 2. Workload Check
+    # 1. Workload Check
     # ------------------------------------------------------------------
     is_valid, msg = validate_workload_constraints(
         technician
@@ -90,7 +67,7 @@ def validate_technician_for_assignment(
         )
 
     # ------------------------------------------------------------------
-    # 3. Skill Match Check
+    # 2. Skill Match Check
     # ------------------------------------------------------------------
     skill_matches = is_skill_matching(
         technician.technician_skill,
@@ -143,28 +120,15 @@ def get_workload_validation_status(
         technician.technician_status or ""
     ).upper().strip()
 
-    # Also check if status is OFFLINE/BUSY for the final can_assign flag.
-    final_can_assign = (
-        can_assign
-        and status_upper == "AVAILABLE"
-    )
-
-    if status_upper == "OFFLINE":
-        msg = "Technician is offline"
-
-    elif status_upper == "BUSY" and can_assign:
-        msg = "Technician is currently unavailable"
-
-    elif not can_assign:
+    if not can_assign:
         msg = "Maximum workload reached"
-
-    elif final_can_assign:
+    else:
         msg = "Assignment allowed"
 
     return {
         "technician": technician.technician_name,
         "current_jobs": technician.current_jobs,
         "max_jobs": technician.max_jobs,
-        "can_assign": final_can_assign,
+        "can_assign": can_assign,
         "message": msg,
     }

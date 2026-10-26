@@ -35,7 +35,9 @@ from datetime import datetime, timezone, date, timedelta
 
 from io import BytesIO
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
+
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status, Query
 
 from fastapi.responses import StreamingResponse
 
@@ -537,7 +539,7 @@ async def create_technician_profile(
 
                 phone_number=profile.mobile_number,
 
-                technician_status="AVAILABLE",
+                technician_status="OFFLINE",
 
                 current_jobs=0,
 
@@ -735,7 +737,7 @@ async def update_technician_profile(
 
                 phone_number=profile.mobile_number,
 
-                technician_status="AVAILABLE",
+                technician_status="OFFLINE",
 
                 current_jobs=0,
 
@@ -987,13 +989,13 @@ async def get_job_history(
 
 ):
 
-    """List completed/closed jobs for this technician."""
+    """List terminal jobs for this technician, including cancelled history."""
 
     query = _get_assigned_jobs_query(db, current_user.user_id, current_user.tenant_id)
 
     query = query.filter(
 
-        func.lower(Job.status).in_(["completed", "closed"])
+        func.lower(Job.status).in_(["completed", "closed", "cancelled"])
 
     )
 
@@ -1318,6 +1320,22 @@ async def accept_job(
 
     )
 
+    offer_notification = (
+        db.query(InAppNotification)
+        .filter(
+            InAppNotification.tenant_id == current_user.tenant_id,
+            InAppNotification.job_id == str(job_id),
+            InAppNotification.recipient_id == str(tech.tech_id or tech.technician_id),
+            InAppNotification.type == "JOB_ASSIGNED",
+        )
+        .order_by(InAppNotification.created_at.desc())
+        .first()
+    )
+    offer_metadata = getattr(offer_notification, "notification_metadata", None) or {}
+    dispatch_attempt_id = offer_metadata.get("dispatch_attempt_id") if isinstance(offer_metadata, dict) else None
+
+
+
     # ---------------------------------------------------------
 
     # IMPORTANT:
@@ -1329,6 +1347,16 @@ async def accept_job(
     # ---------------------------------------------------------
 
     db.commit()
+
+    logger.info(
+        "assignment_committed job_id=%s technician_id=%s dispatch_attempt_id=%s status=%s outcome=committed",
+        job_id,
+        tech.technician_id,
+        dispatch_attempt_id,
+        job.status,
+    )
+
+
 
     # ---------------------------------------------------------
 
@@ -1389,6 +1417,7 @@ async def accept_job(
             job_id=job_id,
 
             event="TECHNICIAN_ACCEPTED",
+            technician_id=tech.technician_id,
 
         )
 
@@ -1526,7 +1555,9 @@ async def reject_job(
         # -----------------------------------------------------
         # 3. Persist the rejection
         # -----------------------------------------------------
-        job.status = "REJECTED_BY_TECHNICIAN"
+        # This is one offer's rejection. Keep the job retryable while the
+        # remaining technicians from Planning receive their offers.
+        job.status = "QUEUED"
         job.rejection_reason = data.reason
         job.rejected_at = rejected_at
         job.rejected_by_tech_id = technician_recipient_id
@@ -1597,7 +1628,8 @@ async def reject_job(
                 "assigned_technician_id": old_technician_id,
             },
             new_value={
-                "status": "REJECTED_BY_TECHNICIAN",
+                "status": "QUEUED",
+                "offer_outcome": "REJECTED_BY_TECHNICIAN",
                 "rejection_reason": data.reason,
                 "technician_tenant_id": tech.tenant_id,
             },
@@ -1659,6 +1691,7 @@ async def reject_job(
         await runtime.resume_dispatch(
             job_id=job_id,
             event="TECHNICIAN_REJECTED",
+            technician_id=tech.technician_id,
         )
 
         logger.info(
@@ -1681,7 +1714,8 @@ async def reject_job(
     return {
         "message": "Job rejected",
         "job_id": job_id,
-        "status": "REJECTED_BY_TECHNICIAN",
+        "status": "QUEUED",
+        "offer_outcome": "REJECTED_BY_TECHNICIAN",
         "rejection_reason": data.reason,
     }
 
@@ -2877,6 +2911,8 @@ async def update_my_technician_status(
 
     data: TechnicianAvailabilityUpdate,
 
+    background_tasks: BackgroundTasks = None,
+
     current_user: AuthenticatedUser = Depends(
 
         require_permission(Permission.TECHNICIANS_VIEW_OWN)
@@ -2884,6 +2920,7 @@ async def update_my_technician_status(
     ),
 
     db: Session = Depends(get_db),
+    redis_client=Depends(get_redis_client),
 
 ):
 
@@ -2925,7 +2962,42 @@ async def update_my_technician_status(
 
         )
 
-    tech.technician_status = data.technician_status
+
+
+    tech = db.query(Technician).filter(
+        Technician.technician_id == tech.technician_id,
+        Technician.tenant_id == current_user.tenant_id,
+    ).with_for_update().first()
+
+    requested = str(data.technician_status or "").strip().upper()
+    if requested not in {"AVAILABLE", "OFFLINE"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Technician availability must be Available or Offline",
+        )
+    if requested == "AVAILABLE":
+        if (tech.current_jobs or 0) >= (tech.max_jobs or 0):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="No assignment capacity is available",
+            )
+        gps_key = f"gps:availability:{current_user.tenant_id}:{current_user.user_id}"
+        try:
+            if not redis_client or not redis_client.exists(gps_key):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A current GPS location is required to go online",
+                )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.warning("Could not verify technician GPS before online transition: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Availability is temporarily unavailable",
+            )
+
+    tech.technician_status = requested
 
     db.commit()
 

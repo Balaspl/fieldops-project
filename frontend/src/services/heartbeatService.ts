@@ -10,6 +10,7 @@
 import api from "./api";
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+export const HEARTBEAT_INTERVAL_MS = 35_000;
 
 export interface HeartbeatPayload {
   last_lat?: number | null;
@@ -52,12 +53,13 @@ export const sendHeartbeat = async (
 };
 
 /**
- * Start a recurring heartbeat loop every 30 seconds.
+ * Start a recurring heartbeat loop every 35 seconds. The gap exceeds the
+ * backend's 25-second anti-burst TTL to tolerate timer and network jitter.
  * Call stopHeartbeatLoop() to cancel on logout/unmount.
  */
 export const startHeartbeatLoop = (
   techId: string,
-  intervalMs = 30000,
+  intervalMs = HEARTBEAT_INTERVAL_MS,
   getLocation?: () => HeartbeatPayload
 ): void => {
   if (heartbeatTimer) {

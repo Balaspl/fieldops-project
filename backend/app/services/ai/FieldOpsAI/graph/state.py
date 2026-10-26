@@ -92,6 +92,9 @@ class PlanningGraphState(TypedDict, total=False):
     customer_coordinates: Optional[tuple[float, float]]
     eligible_organizations: List[Dict[str, Any]]
     all_eligible_technicians: List[TopTechnicianRecommendation]
+    all_ranked_technicians: List[TopTechnicianRecommendation]
+    excluded_candidates: List[Dict[str, Any]]
+    excluded_technician_ids: List[int]
 
     # Planning output
     job_id: Optional[str | int]

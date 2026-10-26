@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   sendTechnicianAvailabilityLocation,
 } from "../../services/gpsService";
+import { GPS_AVAILABILITY_MAX_ACCURACY_METERS } from "../../services/geolocationService";
 
 interface TechnicianAvailabilityLocationProps {
   technicianId: string;
@@ -212,12 +213,13 @@ const TechnicianAvailabilityLocation = ({
        * location readings.
        */
       if (
-        accuracy != null &&
-        accuracy > 100
+        !Number.isFinite(accuracy) ||
+        accuracy <= 0 ||
+        accuracy > GPS_AVAILABILITY_MAX_ACCURACY_METERS
       ) {
         console.warn(
           "[TechnicianAvailabilityLocation] GPS accuracy too low:",
-          accuracy,
+          { accuracyMeters: accuracy, thresholdMeters: GPS_AVAILABILITY_MAX_ACCURACY_METERS },
         );
 
         return;

@@ -31,6 +31,7 @@ provider:
       email: 500
       push: 200
       portal: 200
+      customer_support: 1200
       sentiment: 10
       general: 4096
 
@@ -112,6 +113,9 @@ agents:
     timeout_seconds: 5.0
   closure: {}
   intake: {}
+  customer_support:
+    timeout_seconds: 25.0
+    max_retries: 1
 
 # Communication copy is sent to customer portals, so keep its generation
 # setting outside the strict AgentConfig fields while retaining validation in

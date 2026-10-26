@@ -9,11 +9,25 @@ from app.services.ai.FieldOpsAI.runtime.orchestrator import (
     SubTask,
     FinalResult,
     ResolvedResult,
+    estimate_chat_input_tokens,
 )
 from app.services.ai.FieldOpsAI.schemas.ai_task import AITask
 from app.services.ai.FieldOpsAI.runtime.engine import (
     TaskStatus,
 )
+
+
+def test_chat_token_estimator_reserves_serialized_roles_and_bounded_margin(monkeypatch):
+    import app.services.ai.FieldOpsAI.runtime.orchestrator as orchestrator_module
+    monkeypatch.setattr(orchestrator_module, "count_tokens", lambda text, _model: len(text) // 4)
+    messages = [
+        {"role": "system", "content": "s" * 800},
+        {"role": "user", "content": '{"job_id":"158","tenant_id":"t","history":"' + "h" * 1200 + '"}'},
+    ]
+    estimate = estimate_chat_input_tokens(messages, "llama3")
+    base = len(__import__("json").dumps(messages, ensure_ascii=False, separators=(",", ":"))) // 4 + 8
+    assert estimate >= base
+    assert estimate <= int(base * 1.21) + 16
 
 
 @pytest.fixture

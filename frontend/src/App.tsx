@@ -56,6 +56,7 @@ import { ToastProvider, useToast } from "./hooks/useToast";
 import LoadingSpinner from "./components/ui/LoadingSpinner";
 import TechnicianLocationTracker from "./components/technician/TechnicianLocationTracker";
 import TechnicianAvailabilityLocation from "./components/technician/TechnicianAvailabilityLocation";
+import CustomerSupportWidget from "./components/customer/CustomerSupportWidget";
 
 // Lazy load page components
 const LoginPage = lazy(() => import("./pages/LoginPage"));
@@ -951,6 +952,12 @@ function AppInner() {
       return;
     }
 
+    // Availability is explicit; login and page visibility never start it.
+    if ((technicianAvailability || "").toLowerCase() !== "available") {
+      stopHeartbeatLoop();
+      return;
+    }
+
     const technicianId = String(user.id);
 
     console.log(
@@ -958,10 +965,7 @@ function AppInner() {
       technicianId,
     );
 
-    startHeartbeatLoop(
-      technicianId,
-      450000,
-    );
+    startHeartbeatLoop(technicianId);
 
     return () => {
       console.log(
@@ -974,6 +978,7 @@ function AppInner() {
   }, [
     isTechnician,
     user?.id,
+    technicianAvailability,
   ]);
 
   // Track socket notification IDs to prevent duplicate toasts on reconnects.
@@ -2830,6 +2835,15 @@ function AppInner() {
       </div>
       {/* End Main Body Layout */}
       </div>
+
+      {isCustomer && user?.id && (
+        <CustomerSupportWidget
+          customerId={String(user.id)}
+          onSupportClick={() => handleTabChange("cust_support")}
+          onServiceRequestsClick={() => handleTabChange("cust_requests")}
+          onTrackingClick={() => handleTabChange("cust_tracking")}
+        />
+      )}
 
       <NotificationDrawer
         isOpen={

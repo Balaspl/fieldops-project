@@ -21,6 +21,7 @@ import {
   Download,
   ExternalLink,
   ShieldCheck,
+  MessageSquare,
 } from "lucide-react";
 
 import {
@@ -37,6 +38,7 @@ import { OlaMaps } from "olamaps-web-sdk";
 import AnimatedJobProgress from "../../components/customer-tracking/AnimatedJobProgress";
 import JobLiveTrackingMap from "../../components/customer-tracking/JobLiveTrackingMap";
 import CustomerNewRequestMarketplace from "../../components/customer/CustomerNewRequestMarketplace";
+import JobMessagePanel from "../../components/customer-tracking/JobMessagePanel";
 import { useTrackingStore } from "../../store/trackingStore";
 
 const OLA_STYLE =
@@ -83,6 +85,7 @@ const badge = (status: string) => {
     "IN PROGRESS": { bg: "#F5F3FF", color: "#7C3AED", border: "#DDD6FE" },
     COMPLETED: { bg: "#ECFDF5", color: "#059669", border: "#A7F3D0" },
     CANCELLED: { bg: "#FEF2F2", color: "#DC2626", border: "#FECACA" },
+    REJECTED: { bg: "#FFF1F2", color: "#BE123C", border: "#FECDD3" },
   };
 
   const style = colors[displayStatus] || { bg: "#F1F5F9", color: "#64748B", border: "#E2E8F0" };
@@ -114,6 +117,7 @@ export default function CustomerServiceRequestsPage({
 }: CustomerServiceRequestsPageProps) {
   const [requests, setRequests] = useState<any[]>([]);
   const [activeCardFilter, setActiveCardFilter] = useState<string>("ALL");
+  const [chatRequest, setChatRequest] = useState<any | null>(null);
 
   const normalizeStatus = (status: any) => {
     if (!status) return "";
@@ -2355,6 +2359,28 @@ export default function CustomerServiceRequestsPage({
                     borderTop: "1px solid #F1F5F9",
                   }}
                 >
+                  {sr.linked_job_id && ["ACCEPTED", "EN_ROUTE", "ON_SITE", "IN_PROGRESS"].includes(rawStatus) && (
+                    <button
+                      type="button"
+                      onClick={() => setChatRequest(sr)}
+                      style={{
+                        border: "1px solid #DDD6FE",
+                        background: "#F5F3FF",
+                        borderRadius: "8px",
+                        padding: "7px 12px",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                        color: "#7C3AED",
+                        cursor: "pointer",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "6px",
+                      }}
+                    >
+                      <MessageSquare size={13} />
+                      Chat
+                    </button>
+                  )}
                   {canCancel && (
                     <button
                       type="button"
@@ -2431,6 +2457,15 @@ export default function CustomerServiceRequestsPage({
             );
           })}
         </div>
+      )}
+
+      {chatRequest?.linked_job_id && (
+        <JobMessagePanel
+          key={Number(chatRequest.linked_job_id)}
+          jobId={Number(chatRequest.linked_job_id)}
+          initialTechnicianName={chatRequest.assigned_technician_name}
+          onClose={() => setChatRequest(null)}
+        />
       )}
 
       {/* Edit/Create Modal */}

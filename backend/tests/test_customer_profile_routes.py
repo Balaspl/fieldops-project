@@ -1298,6 +1298,42 @@ def test_list_service_requests_without_status_filter():
     assert sr_two.status == "UNASSIGNED"
 
 
+def test_queued_retry_is_shown_as_unassigned_not_cancelled():
+    request = make_service_request(sr_id=3, status="UNASSIGNED")
+    db = FakeDB(
+        {ServiceRequest: FakeQuery(all_result=[(request, "QUEUED")])},
+    )
+
+    result = asyncio.run(
+        customer_portal.list_service_requests(
+            status_filter=None,
+            current_user=customer(),
+            db=db,
+        )
+    )
+
+    assert result == [request]
+    assert request.status == "UNASSIGNED"
+
+
+def test_exhausted_dispatch_is_shown_as_rejected():
+    request = make_service_request(sr_id=4, status="UNASSIGNED")
+    db = FakeDB(
+        {ServiceRequest: FakeQuery(all_result=[(request, "REJECTED_BY_TECHNICIAN")])},
+    )
+
+    result = asyncio.run(
+        customer_portal.list_service_requests(
+            status_filter=None,
+            current_user=customer(),
+            db=db,
+        )
+    )
+
+    assert result == [request]
+    assert request.status == "REJECTED_BY_TECHNICIAN"
+
+
 # ============================================================
 # CREATE SERVICE REQUEST
 # ============================================================

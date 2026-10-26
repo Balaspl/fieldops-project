@@ -269,19 +269,6 @@ async def force_assign(
 
     recipient_tech_id = tech.tech_id
 
-    technician_status = (
-        tech.technician_status or ""
-    ).upper().strip()
-
-    if technician_status in {"OFFLINE", "BUSY"}:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "Technician is unavailable. "
-                "Busy or offline technicians cannot be assigned jobs."
-            ),
-        )
-
     escalation = get_active_escalation(
         db,
         job_id,
