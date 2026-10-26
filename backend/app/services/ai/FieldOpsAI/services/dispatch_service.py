@@ -197,7 +197,6 @@ class DispatchService:
             self.assignment_repository.mark_accepted(current_assignment)
             self.job_repository.assign_technician(job_id, current_assignment.technician_id)
             self.job_repository.update_status(job_id, "ASSIGNED")
-            self.technician_repository.update_status(current_assignment.technician_id, "BUSY")
             self.technician_repository.increment_jobs(current_assignment.technician_id)
             self.assignment_repository.save()
         elif decision.action == "assign_next_candidate":
@@ -361,11 +360,6 @@ class DispatchService:
         self.job_repository.update_status(
             job_id,
             "ASSIGNED",
-        )
-
-        self.technician_repository.update_status(
-            assignment.technician_id,
-            "BUSY",
         )
 
         self.technician_repository.increment_jobs(

@@ -12,6 +12,7 @@ WebSocket stream never exposes a GPS fix that later rolls back.
 """
 
 import json
+import math
 import os
 import time
 import uuid
@@ -26,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from .. import models, schemas
 from ..auth.dependencies import AuthenticatedUser, get_current_user
-from ..auth.rbac import Permission
+from ..auth.rbac import Permission, UserRole
 from ..database import get_db
 from ..logger import logger
 from ..redis_client import get_redis_client
@@ -37,7 +38,7 @@ from app.services.ai.FieldOpsAI.schemas.agent_messages import (
     GPSLocationEventMessage,
 )
 from ..utils import as_utc, iso_utc, parse_iso_utc
-from ..middleware.rate_limit import RateLimitPolicy, rate_limit_dependency
+from ..middleware.rate_limit import RateLimitPolicy, authenticated_rate_limit_dependency
 from .dispatch import verify_jwt_token
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -52,7 +53,7 @@ ACTIVE_STATUSES = {"ASSIGNED", "EN_ROUTE", "ON_SITE", "IN_PROGRESS", "ACTIVE"}
 class TechnicianAvailabilityLocationRequest(BaseModel):
     latitude: float
     longitude: float
-    accuracy: Optional[float] = None
+    accuracy: float
     altitude: Optional[float] = None
     timestamp: datetime
 
@@ -66,16 +67,16 @@ router = APIRouter(
 # Centralized post-authentication API abuse limits.
 # These are abuse ceilings; the existing GPS 30s/5s and batch 5s
 # business throttles below are intentionally preserved unchanged.
-GPS_PING_RATE_LIMIT = rate_limit_dependency(
-    RateLimitPolicy("gps_ping", 60, 60, False)
+GPS_PING_RATE_LIMIT = authenticated_rate_limit_dependency(
+    RateLimitPolicy("gps_ping", 300, 60, False), get_current_user
 )
 
-GPS_BATCH_RATE_LIMIT = rate_limit_dependency(
-    RateLimitPolicy("gps_batch", 12, 60, False)
+GPS_BATCH_RATE_LIMIT = authenticated_rate_limit_dependency(
+    RateLimitPolicy("gps_batch", 300, 60, False), get_current_user
 )
 
-GPS_AVAILABILITY_RATE_LIMIT = rate_limit_dependency(
-    RateLimitPolicy("gps_availability", 30, 60, False)
+GPS_AVAILABILITY_RATE_LIMIT = authenticated_rate_limit_dependency(
+    RateLimitPolicy("gps_availability", 300, 60, False), get_current_user
 )
 
 
@@ -627,61 +628,6 @@ def _skipped(
     )
 
 
-def check_batch_sliding_window_rate_limit(
-    redis_client,
-    technician_id: str,
-    tenant_id: str,
-) -> bool:
-    """
-    Max 1 batch request per 5 seconds per technician
-    using a Redis sliding window.
-    """
-    now = time.time()
-    window = 5
-    limit = 1
-
-    key = (
-        f"rate_limit:gps_batch:"
-        f"{tenant_id}:{technician_id}"
-    )
-
-    try:
-        redis_client.zremrangebyscore(
-            key,
-            0,
-            now - window,
-        )
-
-        count = redis_client.zcard(key)
-
-        if count >= limit:
-            return False
-
-        member = (
-            f"{now}:{uuid.uuid4().hex}"
-        )
-
-        redis_client.zadd(
-            key,
-            {member: now},
-        )
-
-        redis_client.expire(
-            key,
-            10,
-        )
-
-        return True
-
-    except Exception as e:
-        logger.warning(
-            "Redis rate limiter connection issue "
-            f"for batch: {e}. Falling back to allowing request."
-        )
-
-        return True
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # History
 # ─────────────────────────────────────────────────────────────────────────────
@@ -830,7 +776,6 @@ def get_gps_history(
     "/ping",
     status_code=status.HTTP_201_CREATED,
     response_model=schemas.GPSPingResponse,
-    dependencies=[Depends(GPS_PING_RATE_LIMIT)],
 )
 async def gps_ping(
     request: Request,
@@ -849,6 +794,7 @@ async def gps_ping(
     current_user: AuthenticatedUser = Depends(
         get_current_user
     ),
+    _rate_limit: None = Depends(GPS_PING_RATE_LIMIT),
 ):
     """
     Receive one technician GPS position and fan it out to live customers.
@@ -1544,7 +1490,6 @@ async def gps_ping(
 @router.post(
     "/batch",
     status_code=207,
-    dependencies=[Depends(GPS_BATCH_RATE_LIMIT)],
 )
 async def gps_batch(
     request: Request,
@@ -1561,6 +1506,7 @@ async def gps_batch(
     current_user: AuthenticatedUser = Depends(
         get_current_user
     ),
+    _rate_limit: None = Depends(GPS_BATCH_RATE_LIMIT),
 ):
     if current_user.tenant_id != x_tenant_id:
         raise HTTPException(
@@ -1749,45 +1695,6 @@ async def gps_batch(
             pass
 
         return msg
-
-    # Rate limit: max 1 batch request per 5 seconds per technician
-    tech_ids = set()
-
-    for ping in pings:
-        if (
-            isinstance(
-                ping,
-                dict,
-            )
-            and "technician_id" in ping
-        ):
-            tech_ids.add(
-                ping["technician_id"]
-            )
-
-    for tech_id in tech_ids:
-        if (
-            tech_id
-            and not check_batch_sliding_window_rate_limit(
-                redis_client,
-                tech_id,
-                x_tenant_id,
-            )
-        ):
-            logger.warning(
-                (
-                    "Rate limit exceeded for "
-                    f"technician: {tech_id}"
-                ),
-                extra=log_extra,
-            )
-
-            raise HTTPException(
-                status_code=(
-                    status.HTTP_429_TOO_MANY_REQUESTS
-                ),
-                detail="Too Many Requests",
-            )
 
     errors = []
     validated_pings = []
@@ -2458,7 +2365,6 @@ async def gps_batch(
 @router.post(
     "/availability",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(GPS_AVAILABILITY_RATE_LIMIT)],
 )
 async def update_technician_availability_location(
     payload: TechnicianAvailabilityLocationRequest,
@@ -2472,6 +2378,8 @@ async def update_technician_availability_location(
     current_user: AuthenticatedUser = Depends(
         get_current_user
     ),
+    _rate_limit: None = Depends(GPS_AVAILABILITY_RATE_LIMIT),
+    db: Session = Depends(get_db),
 ):
     """Store the technician's latest location before job assignment."""
 
@@ -2498,11 +2406,60 @@ async def update_technician_availability_location(
             ),
         )
 
+    # Reuse the portal's tenant-scoped mapping, which resolves a technician
+    # through tech_id/technician_id and the established profile/user mapping.
+    from .technician_portal import _get_tech_for_user
+
+    technician = _get_tech_for_user(
+        db,
+        str(current_user.user_id),
+        str(current_user.tenant_id),
+    )
+    if not technician:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Technician GPS access denied",
+        )
+
+    _enforce_gps_actor(
+        current_user,
+        str(x_tenant_id),
+        technician,
+    )
+
+    now = datetime.now(timezone.utc)
+    reported_at = payload.timestamp
+    if reported_at.tzinfo is None:
+        reported_at = reported_at.replace(tzinfo=timezone.utc)
+    age_seconds = (now - reported_at.astimezone(timezone.utc)).total_seconds()
+    # Keep this aligned with the frontend VITE_GPS_AVAILABILITY_MAX_ACCURACY_METERS.
+    # 150 m is a configurable starting value; dispatch eligibility filters
+    # remain independently enforced by the dispatch services.
+    max_accuracy = float(os.getenv("GPS_AVAILABILITY_MAX_ACCURACY_METERS", "150"))
+    logger.info(
+        "GPS availability location validation",
+        extra={
+            "event": "gps_availability_validation",
+            "accuracy_meters": payload.accuracy,
+            "coordinates_available": payload.latitude is not None and payload.longitude is not None,
+            "timestamp": payload.timestamp.isoformat(),
+            "age_seconds": round(age_seconds, 3),
+            "threshold_meters": max_accuracy,
+        },
+    )
+    if age_seconds < -30 or age_seconds > 120:
+        logger.warning("GPS availability location rejected", extra={"event": "gps_availability_rejected", "reason": "stale_timestamp", "age_seconds": round(age_seconds, 3)})
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="GPS timestamp must be current (within the last 120 seconds)",
+        )
+
     if not (
         -90
         <= payload.latitude
         <= 90
     ):
+        logger.warning("GPS availability location rejected", extra={"event": "gps_availability_rejected", "reason": "invalid_latitude"})
         raise HTTPException(
             status_code=(
                 status.HTTP_422_UNPROCESSABLE_ENTITY
@@ -2515,6 +2472,7 @@ async def update_technician_availability_location(
         <= payload.longitude
         <= 180
     ):
+        logger.warning("GPS availability location rejected", extra={"event": "gps_availability_rejected", "reason": "invalid_longitude"})
         raise HTTPException(
             status_code=(
                 status.HTTP_422_UNPROCESSABLE_ENTITY
@@ -2522,18 +2480,15 @@ async def update_technician_availability_location(
             detail="Invalid longitude",
         )
 
-    max_accuracy = float(
-        os.getenv(
-            "GPS_MAX_ACCURACY_METERS",
-            "100",
+    if not math.isfinite(payload.accuracy) or payload.accuracy <= 0:
+        logger.warning("GPS availability location rejected", extra={"event": "gps_availability_rejected", "reason": "invalid_accuracy"})
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="GPS accuracy must be a positive value in meters",
         )
-    )
 
-    if (
-        payload.accuracy is not None
-        and payload.accuracy
-        > max_accuracy
-    ):
+    if payload.accuracy > max_accuracy:
+        logger.warning("GPS availability location rejected", extra={"event": "gps_availability_rejected", "reason": "poor_accuracy", "accuracy_meters": payload.accuracy, "threshold_meters": max_accuracy})
         raise HTTPException(
             status_code=(
                 status.HTTP_422_UNPROCESSABLE_ENTITY
@@ -2554,12 +2509,6 @@ async def update_technician_availability_location(
         current_user.tenant_id
     )
 
-    redis_key = (
-        f"gps:availability:"
-        f"{tenant_id}:"
-        f"{technician_id}"
-    )
-
     location_data = {
         "technician_id": technician_id,
         "tenant_id": tenant_id,
@@ -2572,13 +2521,34 @@ async def update_technician_availability_location(
         ),
     }
 
-    redis_client.setex(
-        redis_key,
-        120,
-        json.dumps(
-            location_data
-        ),
-    )
+    cache_value = json.dumps(location_data)
+    cache_identities = {
+        technician_id,
+        str(technician.technician_id),
+    }
+    if technician.tech_id:
+        cache_identities.add(str(technician.tech_id))
+    try:
+        cache_results = [
+            redis_client.setex(
+                f"gps:availability:{tenant_id}:{identity}",
+                120,
+                cache_value,
+            )
+            for identity in cache_identities
+        ]
+    except Exception:
+        cache_results = []
+    if not cache_results or not all(result is not False and result is not None for result in cache_results):
+        logger.error(
+            "GPS availability location cache write failed",
+            extra={"event": "gps_availability_cache_failed", "tenant_id": tenant_id},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Location could not be stored; retry shortly",
+            headers={"Retry-After": "5"},
+        )
 
     return {
         "status": "stored",

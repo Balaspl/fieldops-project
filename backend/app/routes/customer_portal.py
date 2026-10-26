@@ -45,9 +45,7 @@ from ..models import (
     
 )
 from ..models.customer_profile import CustomerProfileModel
-from app.services.ai.FieldOpsAI.agents.dispatcher_agent.dispatcher_runtime import (
-    start_automatic_dispatch,
-)
+from app.services.dispatch_scheduling import DEFAULT_VISIT_TIME, DEFAULT_TIMEZONE
 from ..models.technician_profile import TechnicianProfile
 from ..models.user import User
 from ..portal_schemas import (
@@ -573,8 +571,8 @@ async def list_service_requests(
         if status_filter.lower() == "cancelled":
             query = query.filter(
                 or_(
-                    func.lower(ServiceRequest.status).in_(["cancelled", "queued", "rejected_by_technician"]),
-                    func.lower(Job.status).in_(["cancelled", "queued", "rejected_by_technician"]),
+                    func.lower(ServiceRequest.status).in_(["cancelled", "canceled"]),
+                    func.lower(Job.status).in_(["cancelled", "canceled"]),
                 )
             )
         else:
@@ -589,10 +587,12 @@ async def list_service_requests(
         sr_status_str = str(service_request.status or "").strip().upper()
         job_status_str = str(linked_job_status or "").strip().upper()
 
-        if sr_status_str == "CANCELLED" or job_status_str == "CANCELLED":
+        if sr_status_str in {"CANCELLED", "CANCELED"} or job_status_str in {"CANCELLED", "CANCELED"}:
             service_request.status = "CANCELLED"
-        elif job_status_str in ["QUEUED", "REJECTED_BY_TECHNICIAN"] or sr_status_str in ["QUEUED", "REJECTED_BY_TECHNICIAN"]:
-            service_request.status = "CANCELLED"
+        elif job_status_str == "REJECTED_BY_TECHNICIAN" or sr_status_str == "REJECTED_BY_TECHNICIAN":
+            service_request.status = "REJECTED_BY_TECHNICIAN"
+        elif job_status_str == "QUEUED" or sr_status_str == "QUEUED":
+            service_request.status = "UNASSIGNED"
         elif job_status_str in ["COMPLETED", "CLOSED"] or sr_status_str in ["COMPLETED", "CLOSED"]:
             service_request.status = job_status_str or sr_status_str
         elif job_status_str:
@@ -696,11 +696,6 @@ async def create_service_request(
     # Automated Intake & Planning Agent Workflow (LangGraph)
     # ──────────────────────────────────────────────
     from ..services.ai.FieldOpsAI.graph import intake_graph, planning_graph
-    from ..services.ai.FieldOpsAI.graph.workflow import (
-        log_intake_io,
-        log_planning_io,
-        log_planning_top_3,
-    )
 
     category_val = getattr(data, "category", None) or data.title
     issue_val = getattr(data, "issue", None)
@@ -763,7 +758,6 @@ async def create_service_request(
     job_req["job_id"] = real_job_id
     workflow_input["job_id"] = real_job_id
 
-    log_intake_io(workflow_input, {"valid": True, "job_requirement": job_req})
 
     # Step 3: Run Planning Agent with exact real job_id
     planning_input = {
@@ -776,8 +770,23 @@ async def create_service_request(
     top_3 = planning_res.get("top_3") or []
     total_eligible = planning_res.get("total_eligible_technicians", len(top_3))
 
-    log_planning_io(job_req, planning_res)
-    log_planning_top_3(top_3, job_id=real_job_id, total_eligible_technicians=total_eligible)
+    logger.info(
+        "job_planning_completed job_id=%s eligible_technician_count=%s recommended_technicians=%s",
+        real_job_id,
+        total_eligible,
+        [
+            {
+                "rank": candidate.get("rank"),
+                "technician_name": candidate.get("technician_name") or "Unknown",
+                "technician_id": candidate.get("technician_id"),
+            }
+            for candidate in (
+                planning_res.get("all_ranked_technicians")
+                or planning_state.get("all_ranked_technicians")
+                or top_3
+            )
+        ],
+    )
 
     req_skill = job_req.get("required_skill") or map_service_type_to_skill(data.service_type)
     customer_address = job_req.get("location") or data.location
@@ -793,13 +802,15 @@ async def create_service_request(
     if top_3:
         selected_tenant_id = top_3[0]["organization_id"]
     else:
-        # Fallback to nearest capable organization if no technicians with workload < 5
+        # Keep ownership in the nearest active organization when no eligible
+        # technicians are available; the scheduler will retry at dispatch time.
         organizations = (
             db.query(Organization)
             .filter(
                 Organization.site_latitude.isnot(None),
                 Organization.site_longitude.isnot(None),
                 Organization.deleted_at.is_(None),
+                Organization.status == "ACTIVE",
             )
             .all()
         )
@@ -834,6 +845,10 @@ async def create_service_request(
     # This is intentional.
     # ──────────────────────────────────────────────
 
+    selected_organization = db.query(Organization).filter(Organization.id == selected_tenant_id).first()
+    selected_settings = getattr(selected_organization, "settings", None) or {}
+    selected_timezone = selected_settings.get("timezone", DEFAULT_TIMEZONE) if isinstance(selected_settings, dict) else DEFAULT_TIMEZONE
+
     new_job = Job(
         id=real_job_id,
         tenant_id=selected_tenant_id,
@@ -855,6 +870,8 @@ async def create_service_request(
                 timezone.utc
             ).date()
         ),
+        preferred_service_time=DEFAULT_VISIT_TIME,
+        preferred_service_timezone=selected_timezone or DEFAULT_TIMEZONE,
         required_skill=req_skill,
         status="CREATED",
         customer_id=str(
@@ -935,6 +952,7 @@ async def create_service_request(
         # Publish the existing Communication Agent event only after the job,
         # service request, and audit record commit successfully.
         from .jobs import _dispatch_communication_event
+        from .jobs import start_automatic_dispatch
         from ..services.ai.FieldOpsAI.agents.communication_agent.events import JobEvent
 
         background_tasks.add_task(
@@ -943,25 +961,33 @@ async def create_service_request(
             JobEvent.JOB_CREATED.value,
             1,
         )
+        ranked_candidates = (
+            planning_res.get("all_ranked_technicians")
+            or planning_state.get("all_ranked_technicians")
+            or top_3
+        )
+        dispatch_candidates = (
+            ranked_candidates
+            if planning_res.get("action") == "ranked_candidates" and ranked_candidates
+            else None
+        )
+        background_tasks.add_task(
+            start_automatic_dispatch,
+            int(new_job.id),
+            dispatch_candidates,
+        )
+        logger.info(
+            "dispatch_handoff_queued job_id=%s candidate_count=%s planning_refresh=%s",
+            new_job.id,
+            len(dispatch_candidates or []),
+            dispatch_candidates is None,
+        )
         logger.info(
         "🔥 CUSTOMER SERVICE REQUEST COMMITTED | job_id=%s | status=%s",
         new_job.id,
         new_job.status,)
 
-        if (
-            (new_job.status or "").upper() in {"CREATED", "QUEUED", "ACTIVE"}
-            and new_job.assigned_technician_id is None
-        ):
-            background_tasks.add_task(
-                start_automatic_dispatch,
-                new_job.id,
-                top_3,
-            )
-
-        logger.info(
-            "🚀 Automatic Dispatcher queued from customer portal | job_id=%s",
-            new_job.id,
-        )
+        logger.info("Customer job persisted for immediate dispatch | job_id=%s", new_job.id)
 
     except Exception:
         db.rollback()
@@ -1745,8 +1771,8 @@ async def track_customer_jobs(
 
     for job in jobs:
         effective_job_status = job.status
-        if str(effective_job_status or "").upper() in {"QUEUED", "REJECTED_BY_TECHNICIAN"}:
-            effective_job_status = "CANCELLED"
+        if str(effective_job_status or "").upper() == "QUEUED":
+            effective_job_status = "UNASSIGNED"
 
         tech_name = None
         tech_photo = None
@@ -1902,8 +1928,8 @@ async def get_customer_job_detail(
     # ──────────────────────────────────────────────
 
     effective_job_status = job.status
-    if str(effective_job_status or "").upper() in {"QUEUED", "REJECTED_BY_TECHNICIAN"}:
-        effective_job_status = "CANCELLED"
+    if str(effective_job_status or "").upper() == "QUEUED":
+        effective_job_status = "UNASSIGNED"
 
     tech_name = None
     tech_photo = None
@@ -2210,22 +2236,10 @@ async def get_service_history(
             ServiceRequest.tenant_id == current_user.tenant_id,
             or_(
                 func.lower(ServiceRequest.status).in_(
-                    [
-                        "completed",
-                        "closed",
-                        "cancelled",
-                        "queued",
-                        "rejected_by_technician",
-                    ]
+                    ["completed", "closed", "cancelled", "canceled"]
                 ),
                 func.lower(Job.status).in_(
-                    [
-                        "completed",
-                        "closed",
-                        "cancelled",
-                        "queued",
-                        "rejected_by_technician",
-                    ]
+                    ["completed", "closed", "cancelled", "canceled"]
                 ),
             ),
         )
@@ -2260,11 +2274,12 @@ async def get_service_history(
         sr_status_str = str(sr.status or "").strip().upper()
         job_status_str = str(getattr(job, "status", "") or "").strip().upper()
 
-        if (
-            sr_status_str in ["CANCELLED", "QUEUED", "REJECTED_BY_TECHNICIAN"]
-            or job_status_str in ["CANCELLED", "QUEUED", "REJECTED_BY_TECHNICIAN"]
-        ):
+        if sr_status_str in ["CANCELLED", "CANCELED"] or job_status_str in ["CANCELLED", "CANCELED"]:
             sr.status = "CANCELLED"
+        elif sr_status_str == "REJECTED_BY_TECHNICIAN" or job_status_str == "REJECTED_BY_TECHNICIAN":
+            sr.status = "REJECTED_BY_TECHNICIAN"
+        elif sr_status_str == "QUEUED" or job_status_str == "QUEUED":
+            sr.status = "UNASSIGNED"
         elif job_status_str in ["COMPLETED", "CLOSED"] or sr_status_str in ["COMPLETED", "CLOSED"]:
             sr.status = "COMPLETED"
         elif job and job.status:

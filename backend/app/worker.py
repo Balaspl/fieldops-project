@@ -1,18 +1,20 @@
 from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime, timezone, timedelta
-from sqlalchemy import func
+from sqlalchemy import func, or_
 import asyncio
+import uuid
 from .services.ai.FieldOpsAI.agents.dispatcher_agent.dispatcher_runtime import (
     get_dispatcher_runtime,
 )
 
 from .database import SessionLocal
-from .models import Technician, AuditEvent, DispatcherNotification, InAppNotification, Job, SLAEscalation
+from .models import Technician, DispatcherNotification, InAppNotification, Job, SLAEscalation
 from .redis_client import get_redis_client
 from .logger import logger
 from .services.timer_service import TimerService
 from .services.dispatch_agent import DispatchAgent
 from .services.distributed_lock_service import with_job_lock
+from .services.dispatch_scheduling import dispatch_due_at
 from .services.re_dispatch_trigger import ReDispatchTriggerService
 from .services.re_dispatch_queue import ReDispatchQueueService
 from .services.sla_escalation_service import SLAEscalationService
@@ -21,108 +23,8 @@ from fastapi import HTTPException
 scheduler = BackgroundScheduler()
 
 def check_technician_heartbeats():
-    db = SessionLocal()
-    redis_client = get_redis_client()
-    
-    try:
-        now = datetime.now(timezone.utc)
-        threshold = now - timedelta(seconds=120)
-        
-        # Determine if we are running against SQLite or PostgreSQL
-        # SQLite doesn't handle timezone-aware datetime comparison in the same way.
-        # We can detect engine and adjust threshold if needed.
-        bind_engine = db.get_bind()
-        is_sqlite = bind_engine.url.drivername.startswith("sqlite")
-        
-        query_threshold = threshold
-        if is_sqlite:
-            # SQLite stores datetime as naive text/int usually, so make threshold naive
-            query_threshold = threshold.replace(tzinfo=None)
-
-        # Query technicians with last_ping > 120s old and status in AVAILABLE or BUSY
-        # Note: we compare last_ping < query_threshold
-        techs = db.query(Technician).filter(
-            Technician.last_ping < query_threshold,
-            func.upper(Technician.technician_status).in_(['AVAILABLE', 'BUSY'])
-        ).all()
-        
-        offline_count = 0
-        
-        for tech in techs:
-            old_status = tech.technician_status
-            
-            # Handle edge case: technician has active jobs (BUSY preserved)
-            if tech.current_jobs > 0:
-                if old_status.upper() == 'BUSY':
-                    new_status = 'BUSY'
-                    message = f"Technician {tech.technician_name} (ID: {tech.tech_id}) missed heartbeat but has active jobs. Status preserved as BUSY."
-                    notification = DispatcherNotification(
-                        tech_id=tech.tech_id,
-                        tenant_id=tech.tenant_id or "unknown",
-                        message=message
-                    )
-                    db.add(notification)
-                    logger.warning(message, extra={"tech_id": tech.tech_id, "tenant_id": tech.tenant_id})
-                else:
-                    # If AVAILABLE but has active jobs (abnormal state), we update to OFFLINE and notify
-                    tech.technician_status = 'OFFLINE'
-                    new_status = 'OFFLINE'
-                    message = f"Technician {tech.technician_name} (ID: {tech.tech_id}) has active jobs but went OFFLINE due to missing heartbeat."
-                    notification = DispatcherNotification(
-                        tech_id=tech.tech_id,
-                        tenant_id=tech.tenant_id or "unknown",
-                        message=message
-                    )
-                    db.add(notification)
-                    logger.warning(message, extra={"tech_id": tech.tech_id, "tenant_id": tech.tenant_id})
-                    offline_count += 1
-            else:
-                # No active jobs: update to OFFLINE
-                tech.technician_status = 'OFFLINE'
-                new_status = 'OFFLINE'
-                offline_count += 1
-                
-            if new_status != old_status:
-                # Add audit log entry (immutable)
-                audit = AuditEvent(
-                    tech_id=tech.tech_id,
-                    tenant_id=tech.tenant_id or "unknown",
-                    event_type="STATUS_CHANGE",
-                    old_status=old_status,
-                    new_status=new_status
-                )
-                db.add(audit)
-                
-                # Invalidate Redis cache on status change to OFFLINE
-                if redis_client and new_status == 'OFFLINE':
-                    cache_key = f"tech:availability:{tech.tenant_id}:{tech.tech_id}"
-                    redis_client.delete(cache_key)
-            
-            # Save progress for this technician
-            db.commit()
-            
-        # Add metrics: OFFLINE events per hour
-        if offline_count > 0 and redis_client:
-            hour_str = now.strftime("%Y-%m-%d-%H")
-            metric_key = f"metrics:offline_events:{hour_str}"
-            try:
-                redis_client.incr(metric_key, offline_count)
-                redis_client.expire(metric_key, 7200) # 2 hours TTL
-            except Exception as e:
-                logger.error(f"Failed to update metrics: {e}")
-                
-        # Alerting for mass OFFLINE events
-        if offline_count >= 5:
-            logger.critical(
-                f"ALERT: Mass OFFLINE event detected! {offline_count} technicians marked OFFLINE in a single run.",
-                extra={"offline_count": offline_count}
-            )
-            
-    except Exception as e:
-        logger.error(f"Error in background heartbeat check job: {e}")
-        db.rollback()
-    finally:
-        db.close()
+    """Deprecated: heartbeat freshness no longer changes explicit availability."""
+    return 0
 
 def cleanup_old_notifications():
     db = SessionLocal()
@@ -434,6 +336,7 @@ def checkment_timers():
                                 runtime.resume_dispatch(
                                     job_id=int(job.id),
                                     event="TECHNICIAN_TIMEOUT",
+                                    technician_id=int(current_tech.technician_id) if current_tech is not None else None,
                                 )
                             )
 
@@ -716,9 +619,145 @@ def process_transactional_email_outbox_job():
     finally:
         db.close()
 
+
+def dispatch_pending_jobs(tenant_id: str | None = None):
+    """Deprecated: broad pending-job sweeps are disabled; dispatch is job-scoped."""
+    logger.info(
+        "pending_dispatch_sweep_skipped tenant_id=%s reason=job_scoped_dispatch",
+        str(tenant_id) if tenant_id is not None else "all",
+    )
+
+
+def dispatch_due_pending_jobs():
+    """Deprecated: periodic scans must not dispatch unrelated existing jobs."""
+    return None
+
+
+def dispatch_pending_jobs_for_tenant(tenant_id: str):
+    """Availability changes do not trigger assignment of pre-existing jobs."""
+    logger.info(
+        "availability_dispatch_retry_skipped tenant_id=%s reason=job_scoped_dispatch",
+        str(tenant_id),
+    )
+
+
+def _run_registered_dispatch(job_id: int, dispatch_attempt_id: str):
+    """Execute an explicitly registered per-job date trigger."""
+    try:
+        with with_job_lock(str(job_id)):
+            asyncio.run(
+                get_dispatcher_runtime().start_dispatch(
+                    int(job_id),
+                    dispatch_attempt_id=dispatch_attempt_id,
+                )
+            )
+    except HTTPException as exc:
+        if exc.status_code != 409:
+            logger.exception(
+                "dispatch_failed job_id=%s technician_id=none dispatch_attempt_id=%s phase=scheduled_trigger outcome=failed",
+                job_id,
+                dispatch_attempt_id,
+            )
+    except Exception:
+        logger.exception(
+            "dispatch_failed job_id=%s technician_id=none dispatch_attempt_id=%s phase=scheduled_trigger outcome=failed",
+            job_id,
+            dispatch_attempt_id,
+        )
+
+
+def register_scheduled_dispatch(job_id: int, dispatch_attempt_id: str):
+    """Register the exact one-hour-before-visit date trigger for a committed job."""
+    with SessionLocal() as db:
+        job = db.query(Job).filter(Job.id == int(job_id)).first()
+        if job is None:
+            raise ValueError(f"Job {job_id} not found while scheduling dispatch")
+        if (
+            str(job.status or "").strip().upper() not in {
+                "CREATED", "QUEUED", "UNASSIGNED"
+            }
+            or job.assigned_technician_id is not None
+        ):
+            logger.info(
+                "dispatch_schedule_skipped job_id=%s status=%s outcome=not_unassigned",
+                job_id,
+                job.status,
+            )
+            return None
+        organization = None
+        if job.tenant_id:
+            from .models import Organization
+            organization = db.query(Organization).filter(Organization.id == job.tenant_id).first()
+        settings = getattr(organization, "settings", None) or {}
+        timezone_name = getattr(job, "preferred_service_timezone", None) or (
+            settings.get("timezone") if isinstance(settings, dict) else None
+        )
+        due_at = dispatch_due_at(
+            job.preferred_service_date,
+            timezone_name,
+            getattr(job, "preferred_service_time", None),
+        )
+
+    schedule_job_id = f"dispatch_due_job_{int(job_id)}"
+    scheduler.add_job(
+        _run_registered_dispatch,
+        trigger="date",
+        run_date=due_at,
+        args=[int(job_id), dispatch_attempt_id],
+        id=schedule_job_id,
+        replace_existing=True,
+        misfire_grace_time=24 * 60 * 60,
+    )
+    logger.info(
+        "dispatch_scheduled job_id=%s technician_id=none dispatch_attempt_id=%s dispatch_due_at=%s schedule_job_id=%s outcome=registered",
+        job_id,
+        dispatch_attempt_id,
+        due_at.isoformat(),
+        schedule_job_id,
+    )
+    return due_at
+
+
+def register_pending_scheduled_dispatches():
+    """Rebuild in-memory date triggers after process start/restart."""
+    db = SessionLocal()
+    try:
+        pending_ids = [
+            row.id
+            for row in db.query(Job.id)
+            .filter(
+                func.upper(func.trim(Job.status)).in_(
+                    ["CREATED", "QUEUED", "UNASSIGNED"]
+                ),
+                Job.assigned_technician_id.is_(None),
+            )
+            .order_by(Job.id.asc())
+            .all()
+        ]
+    finally:
+        db.close()
+
+    registered = 0
+    for job_id in pending_ids:
+        attempt_id = str(uuid.uuid4())
+        try:
+            register_scheduled_dispatch(int(job_id), attempt_id)
+            registered += 1
+        except Exception:
+            logger.exception(
+                "dispatch_failed job_id=%s technician_id=none dispatch_attempt_id=%s phase=scheduler_recovery_registration outcome=failed",
+                job_id,
+                attempt_id,
+            )
+
+    logger.info(
+        "pending_dispatch_schedules_recovered count=%s outcome=complete",
+        registered,
+    )
+
+
 def start_scheduler():
     if not scheduler.running:
-        scheduler.add_job(check_technician_heartbeats, 'interval', seconds=60, id='heartbeat_checker')
         scheduler.add_job(cleanup_old_notifications, 'cron', hour=0, minute=0, id='notification_cleanup')
         scheduler.add_job(checkment_timers, 'interval', seconds=5, id='timer_checker')
         scheduler.add_job(check_sla_escalations, 'interval', seconds=10, id='sla_escalation_checker')

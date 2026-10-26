@@ -1992,6 +1992,21 @@ async def logout(
     - SSO cookies are cleared.
     """
 
+    # Preserve the explicit availability choice across logout. The technician
+    # row is resolved from the authenticated identity and tenant context.
+    if str(getattr(current_user.role, "value", current_user.role)).lower() == "technician":
+        from ..models import Technician
+
+        numeric_user_id = int(current_user.user_id) if str(current_user.user_id).isdigit() else -1
+        technician = db.query(Technician).filter(
+            Technician.tenant_id == current_user.tenant_id,
+            (Technician.tech_id == str(current_user.user_id))
+            | (Technician.technician_id == numeric_user_id),
+        ).first()
+        if technician:
+            technician.technician_status = "OFFLINE"
+            db.commit()
+
     # ---------------------------------------------------------
     # Blacklist current access token
     # ---------------------------------------------------------

@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Literal, Optional, Union
 import re
 from pydantic import BaseModel, field_validator, ConfigDict, Field
@@ -39,6 +39,8 @@ class JobCreate(BaseModel):
     contact_number: str
     customer_email: Optional[str] = None
     preferred_service_date: date
+    preferred_service_time: Optional[time] = None
+    preferred_service_timezone: Optional[str] = None
     required_skill: Optional[str] = None
     status: str = "active"
     tenant_id: Optional[str] = None
@@ -109,6 +111,8 @@ class JobResponse(BaseModel):
     service_type: Optional[str] = None
     contact_number: Optional[str] = None
     preferred_service_date: Optional[date] = None
+    preferred_service_time: Optional[time] = None
+    preferred_service_timezone: Optional[str] = None
     status: Optional[str] = None
     required_skill: Optional[str] = None
     assigned_technician_id: Optional[int] = None

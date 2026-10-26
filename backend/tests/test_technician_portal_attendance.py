@@ -2,7 +2,7 @@ import asyncio
 import inspect
 
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 from fastapi.params import Depends
 
 from app.auth.dependencies import AuthenticatedUser
@@ -276,6 +276,39 @@ def test_attendance_update_changes_backend_technician_status():
     assert technician.technician_status == "Busy"
     assert db.commit_count == 1
     assert db.refresh_count == 1
+
+
+def test_go_online_requires_validated_availability_location_and_persists_status():
+    profile = make_profile(completed=True)
+    technician = make_technician(status="Offline")
+    db = FakeDB(profile=profile, technician=technician)
+    user = make_user()
+    gps_key = "gps:availability:tenant-1:tech-user-1"
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(update_my_technician_status(
+            data=TechnicianAvailabilityUpdate(technician_status="Available"),
+            current_user=user,
+            db=db,
+            redis_client=type("Redis", (), {"exists": lambda _self, key: False})(),
+        ))
+    assert exc_info.value.status_code == 409
+    assert technician.technician_status == "Offline"
+    assert db.commit_count == 0
+
+    redis_client = type("Redis", (), {"exists": lambda _self, key: key == gps_key})()
+    background_tasks = BackgroundTasks()
+    response = asyncio.run(update_my_technician_status(
+        data=TechnicianAvailabilityUpdate(technician_status="Available"),
+        background_tasks=background_tasks,
+        current_user=user,
+        db=db,
+        redis_client=redis_client,
+    ))
+    assert response["technician_status"] == "AVAILABLE"
+    assert technician.technician_status == "AVAILABLE"
+    assert db.commit_count == 1
+    assert background_tasks.tasks == []
 
 
 # ============================================================
@@ -814,7 +847,8 @@ def test_reject_job_paths(patch_tp):
     t = tech(current_jobs=2, tech_id=None)
     j = job()
     result = asyncio.run(tp.reject_job(job_id=1, data=data, request=req("POST", "/reject"), current_user=u(), db=DB(Q(first=t), Q(first=j), Q())))
-    assert result["status"] == "REJECTED_BY_TECHNICIAN"
+    assert result["status"] == "QUEUED"
+    assert result["offer_outcome"] == "REJECTED_BY_TECHNICIAN"
     assert t.current_jobs == 2
     assert j.assigned_technician_id is None
 

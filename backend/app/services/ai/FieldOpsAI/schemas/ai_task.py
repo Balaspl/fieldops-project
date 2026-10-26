@@ -10,3 +10,4 @@ class AITask(str, Enum):
     SENTIMENT = "sentiment"
     INTENT = "intent"
     INTAKE = "intake"
+    CUSTOMER_SUPPORT = "customer_support"

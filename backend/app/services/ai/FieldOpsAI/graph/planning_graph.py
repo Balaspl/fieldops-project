@@ -25,6 +25,9 @@ from langgraph.graph import StateGraph, START, END
 from app.database import SessionLocal
 from app.models import Organization, Technician
 from app.services.ola_map_client import haversine_distance
+from app.redis_client import get_redis_client
+from app.services.dispatch_eligibility import evaluate_technician_dispatch_eligibility
+from app.services.planning_output_log import write_planning_output
 from app.services.ai.FieldOpsAI.graph.state import PlanningGraphState
 
 
@@ -307,6 +310,7 @@ def find_nearest_organizations_node(
                 Organization.site_latitude.isnot(None),
                 Organization.site_longitude.isnot(None),
                 Organization.deleted_at.is_(None),
+                Organization.status == "ACTIVE",
                 Technician.technician_skill.isnot(None),
             )
             .all()
@@ -326,6 +330,7 @@ def find_nearest_organizations_node(
                 Organization.site_latitude.isnot(None),
                 Organization.site_longitude.isnot(None),
                 Organization.deleted_at.is_(None),
+                Organization.status == "ACTIVE",
             )
             .all()
             if candidate_org_ids
@@ -447,9 +452,8 @@ def find_and_rank_technicians_node(
     - Required skill must match.
     - Previously attempted technician IDs are excluded.
 
-    Intentionally NOT used as eligibility filters:
-    - AVAILABLE / BUSY / OFFLINE status.
-    - current_jobs workload.
+    Dispatch eligibility comes from the authoritative technician row,
+    skill, workload capacity, and a usable saved or cached location.
     """
 
     job_req = state.get("job_requirement") or {}
@@ -490,14 +494,15 @@ def find_and_rank_technicians_node(
 
         logger.info(
             "PLANNING FILTERS | job_id=%s | skill=%s | "
-            "status_filter=DISABLED | workload_filter=DISABLED | "
-            "excluded_ids=%s | organizations=%s",
+            "presence_status_filter=DISABLED | excluded_ids=%s | organizations=%s",
             state.get("job_id"),
             required_skill,
             sorted(excluded_ids),
             len(organizations),
         )
 
+        excluded_reasons: list[Dict[str, Any]] = []
+        redis_client = get_redis_client()
         for org in organizations:
             org_id = org["id"]
             org_name = org["name"]
@@ -525,6 +530,11 @@ def find_and_rank_technicians_node(
 
                 if technician_id in excluded_ids:
                     excluded_count += 1
+                    excluded_reasons.append({
+                        "technician_id": technician_id,
+                        "eligible": False,
+                        "exclusion_reason": "already_attempted_in_dispatch_cycle",
+                    })
                     continue
 
                 match_lvl = check_skill_match_level(
@@ -536,6 +546,42 @@ def find_and_rank_technicians_node(
                 )
                 if match_lvl < min_level_needed:
                     skill_rejected_count += 1
+                    excluded_reasons.append({
+                        "technician_id": technician_id,
+                        "eligible": False,
+                        "exclusion_reason": "required_skill_mismatch",
+                    })
+                    continue
+
+                eligibility = evaluate_technician_dispatch_eligibility(
+                    tech,
+                    # Cross-organization dispatch is supported. The
+                    # planner's organization join establishes the candidate
+                    # tenant; runtime revalidates that identity before offer.
+                    job_tenant_id=None,
+                    redis_client=redis_client,
+                    fallback_location=(
+                        float(org["site_latitude"]),
+                        float(org["site_longitude"]),
+                    ),
+                )
+                logger.info(
+                    "planning_candidate_eligibility job_id=%s technician_id=%s availability=%s heartbeat_age_seconds=%s location_age_seconds=%s location_accuracy_meters=%s eligible=%s exclusion_reason=%s",
+                    state.get("job_id"), technician_id,
+                    eligibility["availability"], eligibility["heartbeat_age_seconds"],
+                    eligibility["location_age_seconds"], eligibility["accuracy_meters"],
+                    eligibility["eligible"], eligibility["reason"],
+                )
+                if not eligibility["eligible"]:
+                    excluded_reasons.append({
+                        "technician_id": technician_id,
+                        "eligible": False,
+                        "exclusion_reason": eligibility["reason"],
+                        "availability": eligibility["availability"],
+                        "heartbeat_age_seconds": eligibility["heartbeat_age_seconds"],
+                        "location_age_seconds": eligibility["location_age_seconds"],
+                        "location_accuracy_meters": eligibility["accuracy_meters"],
+                    })
                     continue
 
                 workload = (
@@ -544,55 +590,15 @@ def find_and_rank_technicians_node(
                     else 0
                 )
 
-                # Resolve technician GPS coordinates.
-                tech_lat = tech.latitude
-                tech_lng = tech.longitude
-
-                if (
-                    (tech_lat is None or tech_lng is None)
-                    and tech.technician_location
-                ):
-                    location_parts = (
-                        tech.technician_location.split(",")
+                # Rank from the best available coordinate. Offline technicians
+                # may rely on their saved location rather than a live GPS fix.
+                tech_lat, tech_lng = eligibility["location_coordinates"]
+                distance = float(
+                    haversine_distance(
+                        customer_coords[0], customer_coords[1],
+                        tech_lat, tech_lng,
                     )
-
-                    if len(location_parts) == 2:
-                        try:
-                            tech_lat = float(
-                                location_parts[0].strip()
-                            )
-                            tech_lng = float(
-                                location_parts[1].strip()
-                            )
-                        except (TypeError, ValueError):
-                            tech_lat = None
-                            tech_lng = None
-
-                # Fall back to the organization's coordinates
-                # when technician GPS coordinates are missing.
-                if tech_lat is not None and tech_lng is not None:
-                    try:
-                        tech_lat = float(tech_lat)
-                        tech_lng = float(tech_lng)
-
-                        if not (
-                            -90 <= tech_lat <= 90
-                            and -180 <= tech_lng <= 180
-                        ):
-                            raise ValueError("Invalid GPS coordinates")
-
-                        distance = float(
-                            haversine_distance(
-                                customer_coords[0],
-                                customer_coords[1],
-                                tech_lat,
-                                tech_lng,
-                            )
-                        )
-                    except (TypeError, ValueError):
-                        distance = org_distance
-                else:
-                    distance = org_distance
+                )
 
                 distance = max(0.0, distance)
 
@@ -619,6 +625,12 @@ def find_and_rank_technicians_node(
                         "workload": workload,
                         "technician_skill": tech.technician_skill,
                         "match_level": match_lvl,
+                        "eligible": True,
+                        "exclusion_reason": None,
+                        "availability": eligibility["availability"],
+                        "heartbeat_age_seconds": eligibility["heartbeat_age_seconds"],
+                        "location_age_seconds": eligibility["location_age_seconds"],
+                        "location_accuracy_meters": eligibility["accuracy_meters"],
                     }
                 )
 
@@ -658,11 +670,31 @@ def find_and_rank_technicians_node(
                 for tech in all_ranked
             ],
         )
+        write_planning_output(
+            "PLANNING_RANKING_COMPLETE",
+            job_id=state.get("job_id"),
+            eligible_count=len(all_ranked),
+            candidates=[
+                {
+                    "rank": tech.get("rank"),
+                    "technician_id": tech.get("technician_id"),
+                    "technician_name": tech.get("technician_name"),
+                    "organization_id": tech.get("organization_id"),
+                    "organization_name": tech.get("organization_name"),
+                    "technician_distance_km": tech.get("technician_distance"),
+                    "workload": tech.get("workload"),
+                    "skill": tech.get("technician_skill"),
+                }
+                for tech in all_ranked
+            ],
+            exclusions=excluded_reasons,
+        )
 
         return {
             "all_eligible_technicians": all_ranked,
             "all_ranked_technicians": all_ranked,
             "total_eligible_technicians": len(all_ranked),
+            "excluded_candidates": excluded_reasons,
         }
 
     finally:
@@ -721,12 +753,25 @@ def build_planning_response_node(
         "total_eligible_technicians",
         len(all_ranked),
     )
+    excluded_candidates = state.get("excluded_candidates") or []
+    if not all_ranked and not excluded_candidates:
+        excluded_candidates = [{
+            "technician_id": None,
+            "eligible": False,
+            "exclusion_reason": "no_matching_eligible_technician",
+        }]
 
     response = {
         "job_id": job_id,
+        "action": "manual_review" if not all_ranked else "ranked_candidates",
+        "reason": (
+            None if all_ranked
+            else "No technician met the current skill, organization, workload, and location requirements."
+        ),
         "total_eligible_technicians": total_count,
         "top_3": top_3,
         "all_ranked_technicians": all_ranked,
+        "excluded_candidates": excluded_candidates,
     }
 
     return {
@@ -736,6 +781,7 @@ def build_planning_response_node(
         "all_eligible_technicians": all_ranked,
         "all_ranked_technicians": all_ranked,
         "all_candidates": all_ranked,
+        "excluded_candidates": excluded_candidates,
         "total_eligible_technicians": total_count,
         "planning_response": response,
     }

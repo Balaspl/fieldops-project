@@ -94,6 +94,7 @@ class TokenBudgetConfig(BaseModel):
             "email": 500,
             "push": 200,
             "portal": 200,
+            "customer_support": 1200,
             "sentiment": 10,
             "general": 4096,
         }
@@ -110,7 +111,7 @@ class TokenBudgetConfig(BaseModel):
     @field_validator("per_request")
     @classmethod
     def validate_per_request(cls, v: Dict[str, int]) -> Dict[str, int]:
-        allowed_categories = {"sms", "email", "push", "portal", "sentiment", "general"}
+        allowed_categories = {"sms", "email", "push", "portal", "customer_support", "sentiment", "general"}
         for category, limit in v.items():
             if category not in allowed_categories:
                 raise ValueError(f"Unsupported request category: '{category}'")

@@ -38,6 +38,12 @@ class RecommendedTechnician(BaseModel):
         ge=0,
         description="Estimated arrival time in minutes.",
     )
+    eligible: bool = Field(default=True)
+    exclusion_reason: Optional[str] = None
+    availability: Optional[str] = None
+    heartbeat_age_seconds: Optional[float] = None
+    location_age_seconds: Optional[float] = None
+    location_accuracy_meters: Optional[float] = None
 
 
 class PlanningDecision(BaseModel):
@@ -65,6 +71,7 @@ class PlanningDecision(BaseModel):
             "The first three technicians from the complete ranked pool."
         ),
     )
+    top_3: List[RecommendedTechnician] = Field(default_factory=list, max_length=3)
 
     # Complete pool: includes the first three and all remaining candidates.
     all_ranked_technicians: List[RecommendedTechnician] = Field(
@@ -74,6 +81,7 @@ class PlanningDecision(BaseModel):
             "including the first three recommendations."
         ),
     )
+    excluded_candidates: List[Dict[str, Any]] = Field(default_factory=list)
 
     priority: Literal[
         "LOW",

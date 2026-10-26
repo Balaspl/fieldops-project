@@ -14,15 +14,21 @@ class DispatcherState(TypedDict, total=False):
     # Job
     job_id: int
     job: dict[str, Any]
+    dispatch_attempt_id: str
 
-    # Complete ranked pool for the current dispatch
+    # Current complete Planning batch and its position
     all_candidates: list[dict[str, Any]]
 
-    # Current batch of up to three candidates
+    # Active Planning batch
     candidates: list[dict[str, Any]]
     batch_number: int
     current_index: int
     current_technician_id: int | None
+    batch_exhausted: bool
+    offer_status: str | None
+    last_offer_outcome: str | None
+    pending_retry: bool
+    dispatch_exhausted: bool
 
     # Technician history across all batches
     attempted_technician_ids: list[int]

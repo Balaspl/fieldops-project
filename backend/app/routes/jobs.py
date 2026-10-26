@@ -21,6 +21,7 @@ from app.models import (
 from app.services.ai.FieldOpsAI.agents.dispatcher_agent.dispatcher_runtime import (
     get_dispatcher_runtime,
 )
+from app.services.dispatch_scheduling import DEFAULT_VISIT_TIME, DEFAULT_TIMEZONE
 from app.schemas import (
     JobCreate, JobResponse, PlanResponse, RankedTechnician, DisqualifiedTechnician, ScoringWeights,
     JobClosureCreate, JobClosureResponse
@@ -285,34 +286,42 @@ async def start_automatic_dispatch(
     Start Dispatcher automatically after a job has been
     successfully committed to the database.
 
-    initial_candidates contains the Top-3 already produced
-    by the Planning Agent during job creation.
+    initial_candidates contains the complete ranked list already produced
+    by Planning. The runtime applies its normal scheduled-dispatch gate.
     """
 
+    dispatch_attempt_id = str(uuid.uuid4())
     try:
         logger.info(
-            "🚀 AUTOMATIC DISPATCH START | job_id=%s | initial_candidates=%s",
+            "dispatcher_start_requested job_id=%s technician_id=none dispatch_attempt_id=%s candidate_count=%s outcome=requested",
             job_id,
-            initial_candidates,
+            dispatch_attempt_id,
+            len(initial_candidates or []),
         )
 
-        runtime = get_dispatcher_runtime()
-
-        result = await runtime.start_dispatch(
-            job_id,
-            initial_candidates=initial_candidates,
-        )
+        with with_job_lock(str(job_id)):
+            runtime = get_dispatcher_runtime()
+            result = await runtime.start_dispatch(
+                job_id,
+                initial_candidates=initial_candidates,
+                dispatch_attempt_id=dispatch_attempt_id,
+            )
 
         logger.info(
             "🚀 AUTOMATIC DISPATCH FINISHED | job_id=%s | result=%s",
             job_id,
             result,
         )
+        if result.get("status") == "SCHEDULED":
+            from app.worker import register_scheduled_dispatch
+
+            register_scheduled_dispatch(job_id, dispatch_attempt_id)
 
     except Exception:
         logger.exception(
-            "❌ AUTOMATIC DISPATCH FAILED | job_id=%s",
+            "dispatch_failed job_id=%s technician_id=none dispatch_attempt_id=%s phase=dispatcher_start outcome=failed",
             job_id,
+            dispatch_attempt_id,
         )
 
 @router.get("/service-types", response_model=list[str])
@@ -359,6 +368,14 @@ def create_job(
         else:
             effective_tenant = tenant_id
 
+        timezone_name = job.preferred_service_timezone
+        if not timezone_name and effective_tenant:
+            from app.models import Organization
+            organization = db.query(Organization).filter(Organization.id == effective_tenant).first()
+            settings = getattr(organization, "settings", None) or {}
+            if isinstance(settings, dict):
+                timezone_name = settings.get("timezone")
+
         new_job = Job(
             customer_name=job.customer_name,
             location=job.location,
@@ -368,6 +385,8 @@ def create_job(
             contact_number=job.contact_number,
             customer_email=job.customer_email,
             preferred_service_date=job.preferred_service_date,
+            preferred_service_time=job.preferred_service_time or DEFAULT_VISIT_TIME,
+            preferred_service_timezone=timezone_name or DEFAULT_TIMEZONE,
             status=job.status,
             required_skill=req_skill,
             tenant_id=effective_tenant,
@@ -395,29 +414,8 @@ def create_job(
                 JobEvent.JOB_CREATED.value,
                 1,
             )
-        # Start automatic Dispatcher only after the job
-# has been successfully committed.
-        logger.warning(
-        "🔥 AUTO DISPATCH CHECK | job_id=%s | status=%s | assigned_technician_id=%s | background_tasks=%s",
-        new_job.id,
-        new_job.status,
-        new_job.assigned_technician_id,
-        background_tasks,
-    )
-        if (
-            background_tasks is not None
-            and (new_job.status or "").upper() in {"CREATED", "QUEUED", "ACTIVE"}
-            and new_job.assigned_technician_id is None
-        ):
-            background_tasks.add_task(
-                start_automatic_dispatch,
-                new_job.id,
-            )
-
-            logger.info(
-                "🚀 Automatic Dispatcher queued | job_id=%s",
-                new_job.id,
-            )
+        # Intake persists and validates the job. The periodic dispatch
+        # scheduler starts offers one hour before the requested visit.
         # Publish SLA_CREATED only after the authoritative job commit succeeds.
         if new_job.sla_deadline is not None and request is not None and background_tasks is not None:
             kafka_producer = getattr(request.app.state, "kafka_producer", None)
@@ -855,6 +853,8 @@ def update_job(
     existing_job.service_type = job.service_type
     existing_job.contact_number = job.contact_number
     existing_job.preferred_service_date = job.preferred_service_date
+    existing_job.preferred_service_time = job.preferred_service_time or existing_job.preferred_service_time or DEFAULT_VISIT_TIME
+    existing_job.preferred_service_timezone = job.preferred_service_timezone or existing_job.preferred_service_timezone or DEFAULT_TIMEZONE
     existing_job.status = job.status
     existing_job.required_skill = req_skill
     existing_job.tenant_id = current_user.tenant_id
@@ -984,8 +984,7 @@ async def plan_job_assignment(
         
         
     technicians = db.query(Technician).filter(
-        (Technician.tenant_id == effective_tenant_id),
-        func.lower(Technician.technician_status).in_(["available", "assigned"])
+        Technician.tenant_id == effective_tenant_id,
     ).all()
     
     if not technicians:
@@ -1421,8 +1420,7 @@ def accept_job(
         if hasattr(job, "accepted_at"):
             job.accepted_at = now
 
-        # Technician is NOT EN_ROUTE yet.
-        technician.technician_status = "AVAILABLE"
+        # Job acceptance does not change the technician's explicit availability.
 
         # -----------------------------------------------------
         # 12. Audit event
@@ -1639,7 +1637,6 @@ def reject_job(
 
     old_status = job.status
 
-    tech.technician_status = "AVAILABLE"
     tech.current_jobs = max(
         (tech.current_jobs or 0) - 1,
         0,
@@ -1978,19 +1975,6 @@ async def assign_job(
             )
 
         recipient_tech_id = tech.tech_id
-
-        technician_status = (
-            tech.technician_status or ""
-        ).upper().strip()
-
-        if technician_status in {"OFFLINE", "BUSY"}:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Technician is unavailable. Busy or offline "
-                    "technicians cannot be assigned jobs."
-                ),
-            )
 
         if (
             not req.skip_skill_check

@@ -14,7 +14,7 @@ from app.services.ai.FieldOpsAI.schemas.agent_messages import MessageType
 from sqlalchemy.orm import sessionmaker
 from app.celery_app import celery_app
 from app.auth.dependencies import get_current_user, AuthenticatedUser
-from app.auth.rbac import UserRole
+from app.auth.rbac import Permission, ROLE_PERMISSIONS, UserRole
 
 # Force celery tasks to run synchronously in tests
 celery_app.conf.update(task_always_eager=True)
@@ -71,6 +71,7 @@ class MockRedis:
             raise Exception("Redis Connection Error")
         self.data[key] = str(value)
         self.ttls[key] = time.time() + seconds
+        return True
 
     def ttl(self, key):
         if self.fail:
@@ -83,6 +84,16 @@ class MockRedis:
             return -1
         remaining = int(expiration - time.time())
         return remaining if remaining > 0 else 0
+
+    def pttl(self, key):
+        ttl = self.ttl(key)
+        return ttl * 1000 if ttl >= 0 else ttl
+
+    def expire(self, key, seconds):
+        if key not in self.data:
+            return False
+        self.ttls[key] = time.time() + seconds
+        return True
 
     def delete(self, key):
         if self.fail:
@@ -775,3 +786,215 @@ def test_celery_task_retries_and_dlq(setup_db):
         tasks_module.execute_job_gps_purge_sync = original_execute
         purge_job_gps_data.retry = original_retry
         purge_job_gps_data.request.retries = 0
+
+
+def _availability_payload():
+    return {
+        "latitude": 37.5,
+        "longitude": -122.2,
+        "accuracy": 25,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _technician_user(user_id="tech-user-1", tenant_id="tenant-1"):
+    user = AuthenticatedUser(
+        user_id,
+        tenant_id,
+        UserRole.TECHNICIAN,
+        "test-session",
+    )
+    app.dependency_overrides[get_current_user] = lambda: user
+    return user
+
+
+def test_technician_can_store_own_availability_location(setup_db):
+    db = setup_db
+    db.add(Technician(
+        tech_id="tech-user-1",
+        technician_name="Tech One",
+        technician_skill="HVAC",
+        technician_location="San Jose",
+        tenant_id="tenant-1",
+    ))
+    db.commit()
+    user = _technician_user()
+
+    assert user.has_permission(Permission.GPS_TRACK_OWN)
+    response = client.post(
+        "/api/v1/gps/availability",
+        headers={"X-Tenant-ID": "tenant-1"},
+        json=_availability_payload(),
+    )
+
+    assert response.status_code == 200, response.json()
+    key = "gps:availability:tenant-1:tech-user-1"
+    assert mock_redis.exists(key)
+    stored = json.loads(mock_redis.get(key))
+    assert stored["tenant_id"] == "tenant-1"
+    assert stored["technician_id"] == user.user_id
+    assert mock_redis.ttl(key) > 0
+    row_id = db.query(Technician).filter(Technician.tech_id == user.user_id).first().technician_id
+    assert mock_redis.exists(f"gps:availability:tenant-1:{row_id}")
+    assert mock_redis.exists("dispatch:availability_changed")
+
+
+def test_heartbeat_allows_requests_within_configured_rate_limit(setup_db):
+    db = setup_db
+    db.add(Technician(
+        tech_id="tech-user-1",
+        technician_name="Tech One",
+        technician_skill="HVAC",
+        technician_location="San Jose",
+        tenant_id="tenant-1",
+    ))
+    db.commit()
+    _technician_user()
+
+    first = client.post("/technicians/tech-user-1/heartbeat", json={})
+    second = client.post("/technicians/tech-user-1/heartbeat", json={})
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+
+
+def test_availability_accuracy_boundaries_use_configured_meter_threshold(setup_db, monkeypatch):
+    db = setup_db
+    db.add(Technician(
+        tech_id="tech-user-1",
+        technician_name="Tech One",
+        technician_skill="HVAC",
+        technician_location="San Jose",
+        tenant_id="tenant-1",
+    ))
+    db.commit()
+    _technician_user()
+    monkeypatch.setenv("GPS_AVAILABILITY_MAX_ACCURACY_METERS", "150")
+
+    for accuracy in (100, 119, 128, 150):
+        valid = _availability_payload()
+        valid["accuracy"] = accuracy
+        response = client.post("/api/v1/gps/availability", headers={"X-Tenant-ID": "tenant-1"}, json=valid)
+        assert response.status_code == 200, response.json()
+        assert json.loads(mock_redis.get("gps:availability:tenant-1:tech-user-1"))["accuracy"] == accuracy
+
+    over_limit = _availability_payload()
+    over_limit["accuracy"] = 151
+    response = client.post("/api/v1/gps/availability", headers={"X-Tenant-ID": "tenant-1"}, json=over_limit)
+    assert response.status_code == 422
+    assert response.json()["detail"] == "GPS accuracy 151.0m exceeds allowed 150m"
+
+    missing = _availability_payload()
+    missing.pop("accuracy")
+    response = client.post("/api/v1/gps/availability", headers={"X-Tenant-ID": "tenant-1"}, json=missing)
+    assert response.status_code == 422
+
+
+def test_availability_cache_write_failure_is_not_reported_as_success(setup_db, monkeypatch):
+    db = setup_db
+    db.add(Technician(
+        tech_id="tech-user-1",
+        technician_name="Tech One",
+        technician_skill="HVAC",
+        technician_location="San Jose",
+        tenant_id="tenant-1",
+    ))
+    db.commit()
+    _technician_user()
+    monkeypatch.setattr(mock_redis, "setex", lambda *args, **kwargs: False)
+
+    response = client.post(
+        "/api/v1/gps/availability",
+        headers={"X-Tenant-ID": "tenant-1"},
+        json=_availability_payload(),
+    )
+
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "5"
+
+
+def test_availability_location_rejects_stale_timestamp(setup_db):
+    from datetime import timedelta
+
+    db = setup_db
+    db.add(Technician(
+        tech_id="tech-user-1",
+        technician_name="Tech One",
+        technician_skill="HVAC",
+        technician_location="San Jose",
+        tenant_id="tenant-1",
+    ))
+    db.commit()
+    _technician_user()
+    payload = _availability_payload()
+    payload["timestamp"] = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    response = client.post("/api/v1/gps/availability", headers={"X-Tenant-ID": "tenant-1"}, json=payload)
+    assert response.status_code == 422
+    assert "timestamp" in response.json()["detail"].lower()
+
+
+def test_technician_availability_location_requires_own_gps_permission(setup_db, monkeypatch):
+    db = setup_db
+    db.add(Technician(
+        tech_id="tech-user-1",
+        technician_name="Tech One",
+        technician_skill="HVAC",
+        technician_location="San Jose",
+        tenant_id="tenant-1",
+    ))
+    db.commit()
+    _technician_user()
+    monkeypatch.setitem(ROLE_PERMISSIONS, UserRole.TECHNICIAN, set())
+
+    response = client.post(
+        "/api/v1/gps/availability",
+        headers={"X-Tenant-ID": "tenant-1"},
+        json=_availability_payload(),
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Insufficient permissions"
+
+
+def test_technician_availability_location_rejects_tenant_header_mismatch(setup_db):
+    db = setup_db
+    db.add(Technician(
+        tech_id="tech-user-1",
+        technician_name="Tech One",
+        technician_skill="HVAC",
+        technician_location="San Jose",
+        tenant_id="tenant-1",
+    ))
+    db.commit()
+    _technician_user()
+
+    response = client.post(
+        "/api/v1/gps/availability",
+        headers={"X-Tenant-ID": "tenant-other"},
+        json=_availability_payload(),
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Tenant access denied"
+
+
+def test_technician_cannot_store_location_for_mismatched_identity(setup_db):
+    db = setup_db
+    db.add(Technician(
+        tech_id="different-tech-user",
+        technician_name="Different Tech",
+        technician_skill="HVAC",
+        technician_location="San Jose",
+        tenant_id="tenant-1",
+    ))
+    db.commit()
+    _technician_user("tech-user-1")
+
+    response = client.post(
+        "/api/v1/gps/availability",
+        headers={"X-Tenant-ID": "tenant-1"},
+        json=_availability_payload(),
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Technician GPS access denied"

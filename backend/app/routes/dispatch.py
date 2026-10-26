@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from datetime import datetime, timezone
+from ..middleware.rate_limit import RateLimitPolicy, authenticated_rate_limit_dependency
 
 from typing import Optional
 
@@ -47,6 +48,8 @@ from ..auth.dependencies import (
 
     AuthenticatedUser,
 
+    get_current_user,
+
     require_role,
 
     require_permission,
@@ -77,6 +80,11 @@ router = APIRouter(
 
     tags=["Dispatch"],
 
+)
+
+HEARTBEAT_RATE_LIMIT = authenticated_rate_limit_dependency(
+    RateLimitPolicy("technician_heartbeat", 300, 60, False),
+    get_current_user,
 )
 
 
@@ -177,6 +185,8 @@ def technician_heartbeat(
 
     ),
 
+    _rate_limit: None = Depends(HEARTBEAT_RATE_LIMIT),
+
     db: Session = Depends(get_db),
 
     redis_client=Depends(get_redis_client),
@@ -222,103 +232,6 @@ def technician_heartbeat(
                 status_code=status.HTTP_400_BAD_REQUEST,
 
                 detail="Invalid tech ID",
-
-            )
-
-
-
-        # Rate limiting
-
-
-        rate_limit_key = f"rate_limit:{tenant_id}:{id}"
-
-
-
-        logger.warning(
-
-            "HEARTBEAT RATE LIMIT CHECK | key=%s | exists=%s | ttl=%s",
-
-            rate_limit_key,
-
-            redis_client.exists(rate_limit_key),
-
-            redis_client.ttl(rate_limit_key),
-
-            extra=log_extra,
-
-        )
-
-
-
-        try:
-
-            allowed = redis_client.set(
-
-                rate_limit_key,
-
-                "1",
-
-                ex=30,
-
-                nx=True,
-
-            )
-
-
-
-            logger.warning(
-
-                "HEARTBEAT RATE LIMIT RESULT | key=%s | allowed=%s | ttl=%s",
-
-                rate_limit_key,
-
-                allowed,
-
-                redis_client.ttl(rate_limit_key),
-
-                extra=log_extra,
-
-            )
-
-
-
-            if not allowed:
-
-                logger.warning(
-
-                    "HEARTBEAT RATE LIMIT EXCEEDED | key=%s",
-
-                    rate_limit_key,
-
-                    extra=log_extra,
-
-                )
-
-
-
-                raise HTTPException(
-
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-
-                    detail="Too Many Requests",
-
-                )
-
-
-
-        except Exception as e:
-
-            if isinstance(e, HTTPException):
-
-                raise
-
-
-
-            logger.warning(
-
-                f"Redis error checking rate limit: {e}",
-
-                extra=log_extra,
 
             )
 
@@ -370,10 +283,21 @@ def technician_heartbeat(
                 "Technician not found",
                 extra=log_extra,
             )
-
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Technician not found",
+            )
+
+        # A technician may only heartbeat their own row. SUPER_ADMIN is
+        # retained for operational diagnostics and uses tenant-scoped lookup.
+        if (
+            str(current_user.role).lower() == "technician"
+            and str(tech.tech_id or tech.technician_id) != str(current_user.user_id)
+            and str(tech.technician_id) != str(current_user.user_id)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Technician heartbeat access denied",
             )
 
         # Update database
@@ -429,8 +353,6 @@ def technician_heartbeat(
                 json.dumps(cache_data),
 
             )
-
-
 
         except Exception as e:
 

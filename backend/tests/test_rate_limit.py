@@ -43,6 +43,7 @@ from app.middleware.rate_limit import (
     build_key,
     consume,
     load_rate_limit_config,
+    normalize_route_path,
     rate_limit_dependency,
     status_router,
 )
@@ -774,6 +775,8 @@ def test_existing_auth_limits_unchanged():
         "/auth/login": (10, 60, True),
         "/auth/register": (5, 60, True),
         "/auth/forgot-password": (3, 300, True),
+        "/auth/reset-password": (3, 300, True),
+        "/auth/change-password": (10, 60, True),
         "/auth/refresh": (20, 60, True),
         "/auth/sso/login": (20, 60, True),
         "/auth/sso/callback": (30, 60, True),
@@ -801,8 +804,46 @@ def test_existing_auth_limits_unchanged():
         load_rate_limit_config({})
         .default_policy
         .max_requests
-        == 100
+        == 300
     )
+
+
+def test_default_endpoint_policies_are_method_and_route_specific():
+    config = load_rate_limit_config({})
+    middleware = RateLimitMiddleware(
+        FastAPI(), config=config, redis_factory=lambda: FakeRedis()
+    )
+
+    assert middleware.policy_for("/api/dashboard", "GET").max_requests == 600
+    assert middleware.policy_for("/api/dashboard", "POST").max_requests == 300
+    assert middleware.policy_for("/api/v1/gps/ping", "POST").max_requests == 300
+    assert middleware.policy_for("/technicians/123/heartbeat", "POST").max_requests == 300
+    assert middleware.policy_for("/api/technician/jobs/123/", "GET").max_requests == 300
+    assert normalize_route_path("/api/technician/jobs/123/") == "/api/technician/jobs/{id}"
+
+
+def test_default_read_policy_allows_more_than_one_hundred_requests():
+    redis = FakeRedis()
+    app = FastAPI()
+    app.add_middleware(
+        RateLimitMiddleware,
+        config=load_rate_limit_config({}),
+        redis_factory=lambda: redis,
+    )
+
+    @app.get("/api/dashboard")
+    def dashboard():
+        return {"ok": True}
+
+    @app.get("/api/reports")
+    def reports():
+        return {"ok": True}
+
+    client = TestClient(app)
+    assert all(client.get("/api/dashboard").status_code == 200 for _ in range(600))
+    assert all(client.get("/api/reports").status_code == 200 for _ in range(600))
+    assert client.get("/api/dashboard").status_code == 429
+    assert client.get("/api/reports").status_code == 429
 
 
 # ============================================================================
@@ -853,6 +894,22 @@ def test_env_overrides_and_validation():
             {
                 "RATE_LIMIT_POLICIES_JSON":
                     '{"/new": {"max": 5}}'
+            }
+        )
+
+    with pytest.raises(ValueError):
+        load_rate_limit_config(
+            {
+                "RATE_LIMIT_POLICIES_JSON":
+                    '{"/auth/login": {"max": 11, "window": 60}}'
+            }
+        )
+
+    with pytest.raises(ValueError):
+        load_rate_limit_config(
+            {
+                "RATE_LIMIT_POLICIES_JSON":
+                    '{"/auth/login": {"max": 5, "window": 60, "fail_closed": false}}'
             }
         )
 

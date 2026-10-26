@@ -52,6 +52,8 @@ from .routes import (
 from .routes import auth as auth_routes
 from .routes.organizations import org_router, platform_router
 from .routes import sentiment_escalations
+from .routes import customer_chat
+from .routes import job_messaging
 from . import models
 from .services.justification_validator import JustificationValidationError
 from .worker import start_scheduler, stop_scheduler
@@ -536,6 +538,9 @@ from .routes import technician_portal, customer_portal
 
 app.include_router(technician_portal.router)
 app.include_router(customer_portal.router)
+app.include_router(customer_chat.router)
+app.include_router(job_messaging.router)
+app.include_router(customer_chat.faq_router)
 app.include_router(customer_confirmation.router)
 from .services.socket_manager import sio_app
 app.include_router(admin_customer_support.router)

@@ -38,6 +38,8 @@ import {
 
   Navigation,
 
+  MessageSquare,
+
 } from "lucide-react";
 
 import {
@@ -59,6 +61,8 @@ import { JobClosureModal } from "../../components/jobs/JobClosureModal";
 import CustomerSignatureModal from "../../components/jobs/CustomerSignatureModal";
 
 import JobLiveTrackingMap from "../../components/customer-tracking/JobLiveTrackingMap";
+
+import JobMessagePanel from "../../components/customer-tracking/JobMessagePanel";
 
 const s = {
 
@@ -541,6 +545,8 @@ export default function TechnicianJobsPage() {
   const [liveJob, setLiveJob] = useState<any | null>(null);
 
   const [assignedPopupJob, setAssignedPopupJob] = useState<any | null>(null);
+
+  const [messageJobId, setMessageJobId] = useState<number | null>(null);
 
   const assignedPopupJobIdRef = useRef<number | null>(null);
 
@@ -1661,6 +1667,13 @@ useEffect(() => {
 
                 >
 
+                  <button
+                    type="button"
+                    onClick={() => setMessageJobId(Number(job.id))}
+                    style={{ height: "38px", padding: "0 11px", border: "1px solid #156B5B", borderRadius: "8px", background: "#FFFFFF", color: "#156B5B", fontSize: "12px", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: "6px", cursor: "pointer" }}
+                  >
+                    <MessageSquare size={15} /> Message Customer
+                  </button>
                   {getActions(job)}
 
                 </div>
@@ -1990,6 +2003,14 @@ useEffect(() => {
               </div>
 
             </div>
+
+            <button
+              type="button"
+              onClick={() => setMessageJobId(Number(assignedPopupJob.id))}
+              style={{ width: "100%", marginBottom: "14px", padding: "10px 12px", border: 0, borderRadius: "9px", background: "#156B5B", color: "#FFFFFF", fontSize: "13px", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", cursor: "pointer" }}
+            >
+              <MessageSquare size={16} /> Message Customer
+            </button>
 
             <div
 
@@ -2523,6 +2544,13 @@ useEffect(() => {
 
         </div>
 
+      )}
+
+      {messageJobId !== null && (
+        <JobMessagePanel
+          jobId={messageJobId}
+          onClose={() => setMessageJobId(null)}
+        />
       )}
 
     </div>
