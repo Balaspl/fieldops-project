@@ -20,6 +20,10 @@ import { useAuthStore } from "../../src/auth/authStore";
 export default function MfaScreen() {
   const router = useRouter();
   const restoreSession = useAuthStore((state) => state.restoreSession);
+  const mfaChallenge = useAuthStore((state) => state.mfaChallenge);
+  const clearMfaChallenge = useAuthStore(
+    (state) => state.clearMfaChallenge
+  );
 
   const [code, setCode] = useState("");
   const [recoveryCode, setRecoveryCode] = useState("");
@@ -41,13 +45,24 @@ export default function MfaScreen() {
       return;
     }
 
+    if (!mfaChallenge?.trim()) {
+      setError("Your MFA session has expired. Please sign in again.");
+      return;
+    }
+
     setIsSubmitting(true);
     setError(null);
 
     try {
       const result = useRecoveryCode
-        ? await verifyMfaRecovery({ recovery_code: value })
-        : await verifyMfa({ code: value });
+        ? await verifyMfaRecovery({
+            challenge: mfaChallenge,
+            recovery_code: value
+          })
+        : await verifyMfa({
+            challenge: mfaChallenge,
+            code: value
+          });
 
       if (!result.access_token) {
         throw new Error(
@@ -151,7 +166,10 @@ export default function MfaScreen() {
         <Pressable
           accessibilityRole="button"
           disabled={isSubmitting}
-          onPress={() => router.replace("/(auth)/login")}
+          onPress={() => {
+            clearMfaChallenge();
+            router.replace("/(auth)/login");
+          }}
           style={styles.secondaryButton}
         >
           <Text style={styles.secondaryButtonText}>Back to sign in</Text>

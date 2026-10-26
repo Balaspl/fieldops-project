@@ -132,33 +132,117 @@ def haversine_km(
 
 
 def geocode_customer_location(address: str):
-    """Convert a customer-entered address into coordinates using Ola Maps.
+    """Geocode an address with Ola Maps, then Photon.
 
-    The customer can still submit exact GPS coordinates; this helper is for
-    legacy/address-only flows and keeps Photon only as a last-resort fallback.
+    Return None when neither provider can resolve the address.
     """
     ola_api_key = os.getenv("OLA_MAPS_API_KEY", "").strip()
+
     if ola_api_key:
         try:
             response = requests.get(
                 "https://api.olamaps.io/places/v1/geocode",
-                params={"address": address, "api_key": ola_api_key},
+                params={
+                    "address": address,
+                    "api_key": ola_api_key,
+                },
                 timeout=1.5,
             )
             response.raise_for_status()
-            results = response.json().get("geocodingResults", [])
-            if results:
-                location = results[0].get("geometry", {}).get("location", {})
-                if location.get("lat") is not None and location.get("lng") is not None:
-                    return {
-                        "longitude": float(location["lng"]),
-                        "latitude": float(location["lat"]),
-                    }
-        except (requests.RequestException, ValueError, KeyError, TypeError):
-            logger.exception("Ola Maps geocoding failed for customer location: %s", address)
 
-    # Fast default fallback (Chennai Central) prevents long HTTP timeouts during submit
-    return {"longitude": 80.2282, "latitude": 13.0495}
+            payload = response.json()
+            results = (
+                payload.get("geocodingResults", [])
+                if isinstance(payload, dict)
+                else []
+            )
+
+            if isinstance(results, list) and results:
+                result = results[0]
+
+                if isinstance(result, dict):
+                    geometry = result.get("geometry") or {}
+                    location = (
+                        geometry.get("location") or {}
+                        if isinstance(geometry, dict)
+                        else {}
+                    )
+
+                    latitude = location.get("lat")
+                    longitude = location.get("lng")
+
+                    if latitude is not None and longitude is not None:
+                        return {
+                            "longitude": float(longitude),
+                            "latitude": float(latitude),
+                        }
+
+        except (
+            requests.RequestException,
+            ValueError,
+            TypeError,
+            KeyError,
+        ):
+            logger.warning(
+                "Ola Maps geocoding failed; trying Photon."
+            )
+
+    # Fallback provider: Photon
+    try:
+        response = requests.get(
+            "https://photon.komoot.io/api/",
+            params={
+                "q": address,
+                "limit": 1,
+            },
+            timeout=1.5,
+        )
+        response.raise_for_status()
+
+        payload = response.json()
+        features = (
+            payload.get("features", [])
+            if isinstance(payload, dict)
+            else []
+        )
+
+        if not isinstance(features, list) or not features:
+            return None
+
+        feature = features[0]
+        if not isinstance(feature, dict):
+            return None
+
+        geometry = feature.get("geometry") or {}
+        if not isinstance(geometry, dict):
+            return None
+
+        coordinates = geometry.get("coordinates")
+
+        if (
+            not isinstance(coordinates, (list, tuple))
+            or len(coordinates) < 2
+            or coordinates[0] is None
+            or coordinates[1] is None
+        ):
+            return None
+
+        longitude = float(coordinates[0])
+        latitude = float(coordinates[1])
+
+        return {
+            "longitude": longitude,
+            "latitude": latitude,
+        }
+
+    except (
+        requests.RequestException,
+        ValueError,
+        TypeError,
+        KeyError,
+    ):
+        logger.warning("Photon geocoding failed.")
+        return None
 
 
 def _latest_technician_ping(db: Session, job_id: int):
@@ -558,10 +642,16 @@ async def create_service_request(
     """
 
     from ..utils import (
-    is_skill_matching,
-    map_service_type_to_skill,
-)
+        is_skill_matching,
+        map_service_type_to_skill,
+    )
 
+    # Validate required customer location before starting AI planning.
+    if not isinstance(data.location, str) or not data.location.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Location is required",
+        )
     # ──────────────────────────────────────────────
     # Customer details
     # ──────────────────────────────────────────────

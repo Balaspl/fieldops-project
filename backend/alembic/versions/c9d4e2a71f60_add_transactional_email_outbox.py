@@ -1,3 +1,4 @@
+
 """Add durable independent transactional email outbox."""
 
 from alembic import op
@@ -13,6 +14,7 @@ depends_on = None
 SCHEMA = "public"
 TABLE = "transactional_email_outbox"
 INDEX = "ix_transactional_email_due"
+IDEMPOTENCY_CONSTRAINT = "uq_transactional_email_idempotency"
 
 
 def _inspector():
@@ -33,70 +35,7 @@ def _column_names():
     }
 
 
-def upgrade() -> None:
-    if not _table_exists():
-        op.create_table(
-            TABLE,
-            sa.Column("id", sa.Integer(), primary_key=True),
-            sa.Column("tenant_id", sa.String(length=50), nullable=False),
-            sa.Column("job_id", sa.Integer(), nullable=False),
-            sa.Column("customer_id", sa.String(length=50), nullable=True),
-            sa.Column("recipient_email", sa.String(length=320), nullable=True),
-            sa.Column("event_type", sa.String(length=40), nullable=False),
-            sa.Column("event_version", sa.Integer(), nullable=False),
-            sa.Column("idempotency_key", sa.String(length=180), nullable=False),
-            sa.Column(
-                "status",
-                sa.String(length=24),
-                server_default=sa.text("'pending'"),
-                nullable=False,
-            ),
-            sa.Column(
-                "attempts",
-                sa.Integer(),
-                server_default=sa.text("0"),
-                nullable=False,
-            ),
-            sa.Column(
-                "next_attempt_at",
-                sa.DateTime(timezone=True),
-                server_default=sa.func.now(),
-                nullable=False,
-            ),
-            sa.Column("last_error", sa.Text(), nullable=True),
-            sa.Column("smtp_status", sa.Integer(), nullable=True),
-            sa.Column("provider_message_id", sa.String(length=255), nullable=True),
-            sa.Column(
-                "created_at",
-                sa.DateTime(timezone=True),
-                server_default=sa.func.now(),
-                nullable=False,
-            ),
-            sa.Column(
-                "updated_at",
-                sa.DateTime(timezone=True),
-                server_default=sa.func.now(),
-                nullable=False,
-            ),
-            sa.Column("sent_at", sa.DateTime(timezone=True), nullable=True),
-            sa.ForeignKeyConstraint(
-                ["tenant_id"],
-                ["organizations.id"],
-                ondelete="RESTRICT",
-            ),
-            sa.ForeignKeyConstraint(
-                ["job_id"],
-                ["jobs.id"],
-                ondelete="CASCADE",
-            ),
-            sa.UniqueConstraint(
-                "idempotency_key",
-                name="uq_transactional_email_idempotency",
-            ),
-            schema=SCHEMA,
-        )
-
-    # Never silently accept an incompatible pre-existing table.
+def _ensure_required_columns():
     required_columns = {
         "id",
         "tenant_id",
@@ -125,8 +64,8 @@ def upgrade() -> None:
             f"{sorted(missing)}. Reconcile its schema before continuing."
         )
 
-    # Verify that the idempotency constraint already exists before
-    # proceeding with the index creation. Do not delete existing rows.
+
+def _ensure_idempotency_constraint():
     inspector = _inspector()
 
     unique_constraints = {
@@ -135,6 +74,7 @@ def upgrade() -> None:
             TABLE, schema=SCHEMA
         )
     }
+
     unique_indexes = {
         index.get("name")
         for index in inspector.get_indexes(TABLE, schema=SCHEMA)
@@ -142,39 +82,46 @@ def upgrade() -> None:
     }
 
     if (
-        "uq_transactional_email_idempotency" not in unique_constraints
-        and "uq_transactional_email_idempotency" not in unique_indexes
+        IDEMPOTENCY_CONSTRAINT in unique_constraints
+        or IDEMPOTENCY_CONSTRAINT in unique_indexes
     ):
-        duplicate_keys = op.get_bind().execute(
-            sa.text("""
-                SELECT idempotency_key
-                FROM public.transactional_email_outbox
-                GROUP BY idempotency_key
-                HAVING COUNT(*) > 1
-                LIMIT 1
-            """)
-        ).first()
+        return
 
-        if duplicate_keys:
-            raise RuntimeError(
-                "Cannot add the idempotency uniqueness constraint: "
-                "duplicate idempotency_key values exist. Resolve them "
-                "before continuing."
-            )
+    # Do not create a uniqueness constraint over duplicate keys.
+    duplicate = op.get_bind().execute(
+        sa.text(
+            """
+            SELECT idempotency_key
+            FROM public.transactional_email_outbox
+            GROUP BY idempotency_key
+            HAVING COUNT(*) > 1
+            LIMIT 1
+            """
+        )
+    ).first()
 
-        op.create_unique_constraint(
-            "uq_transactional_email_idempotency",
-            TABLE,
-            ["idempotency_key"],
-            schema=SCHEMA,
+    if duplicate:
+        raise RuntimeError(
+            "Cannot add the transactional email idempotency constraint: "
+            "duplicate idempotency_key values exist. Resolve the duplicates "
+            "before continuing."
         )
 
-    indexes = {
+    op.create_unique_constraint(
+        IDEMPOTENCY_CONSTRAINT,
+        TABLE,
+        ["idempotency_key"],
+        schema=SCHEMA,
+    )
+
+
+def _ensure_due_index():
+    existing_indexes = {
         index["name"]
         for index in _inspector().get_indexes(TABLE, schema=SCHEMA)
     }
 
-    if INDEX not in indexes:
+    if INDEX not in existing_indexes:
         op.create_index(
             INDEX,
             TABLE,
@@ -183,11 +130,103 @@ def upgrade() -> None:
         )
 
 
+def upgrade() -> None:
+    # Create the outbox only if it does not already exist.
+    # Never drop or recreate an existing table or its queued email records.
+    if not _table_exists():
+        op.create_table(
+            TABLE,
+            sa.Column("id", sa.Integer(), primary_key=True),
+            sa.Column("tenant_id", sa.String(length=50), nullable=False),
+            sa.Column("job_id", sa.Integer(), nullable=False),
+            sa.Column("customer_id", sa.String(length=50), nullable=True),
+            sa.Column(
+                "recipient_email",
+                sa.String(length=320),
+                nullable=True,
+            ),
+            sa.Column("event_type", sa.String(length=40), nullable=False),
+            sa.Column("event_version", sa.Integer(), nullable=False),
+            sa.Column(
+                "idempotency_key",
+                sa.String(length=180),
+                nullable=False,
+            ),
+            sa.Column(
+                "status",
+                sa.String(length=24),
+                server_default=sa.text("'pending'"),
+                nullable=False,
+            ),
+            sa.Column(
+                "attempts",
+                sa.Integer(),
+                server_default=sa.text("0"),
+                nullable=False,
+            ),
+            sa.Column(
+                "next_attempt_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
+            sa.Column("last_error", sa.Text(), nullable=True),
+            sa.Column("smtp_status", sa.Integer(), nullable=True),
+            sa.Column(
+                "provider_message_id",
+                sa.String(length=255),
+                nullable=True,
+            ),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
+            sa.Column(
+                "sent_at",
+                sa.DateTime(timezone=True),
+                nullable=True,
+            ),
+            sa.ForeignKeyConstraint(
+                ["tenant_id"],
+                ["organizations.id"],
+                ondelete="RESTRICT",
+            ),
+            sa.ForeignKeyConstraint(
+                ["job_id"],
+                ["jobs.id"],
+                ondelete="CASCADE",
+            ),
+            sa.UniqueConstraint(
+                "idempotency_key",
+                name=IDEMPOTENCY_CONSTRAINT,
+            ),
+            schema=SCHEMA,
+        )
+
+    # Validate the table whether it was newly created or already existed.
+    _ensure_required_columns()
+
+    # Ensure idempotency protection without deleting existing records.
+    _ensure_idempotency_constraint()
+
+    # Create the index used to find pending and due email deliveries.
+    _ensure_due_index()
+
+
 def downgrade() -> None:
-    # This migration may have adopted a table that existed before it ran.
-    # Refuse to drop it automatically, protecting queued email records.
+    # This migration may have adopted an existing table.
+    # Do not automatically delete queued email records or schema objects.
     raise RuntimeError(
         "Automatic downgrade is disabled to protect transactional email "
         "records. Use a reviewed rollback migration after verifying that "
-        "the table was created exclusively by this revision."
+        "the table was created exclusively by this revision and backing "
+        "up any data that must be retained."
     )

@@ -25,7 +25,12 @@ from fastapi import (
 from sqlalchemy.orm import Session
 
 from .dispatch import verify_jwt_token
-
+from .technician_portal import _get_tech_for_user
+from ..auth.dependencies import (
+    AuthenticatedUser,
+    require_role,
+)
+from ..auth.rbac import UserRole
 from ..context import correlation_id_ctx
 from ..database import get_db
 from ..logger import logger
@@ -407,9 +412,7 @@ async def _generate_safe_technician_content(
 # ==========================================================
 
 
-@router.post(
-    "/technicians/{id}/fcm-token"
-)
+@router.post("/technicians/{id}/fcm-token")
 def register_fcm_token(
     id: str,
     payload: FCMTokenRegistration,
@@ -418,91 +421,109 @@ def register_fcm_token(
         ...,
         alias="X-Tenant-ID",
     ),
-    authorization: str = Depends(
-        verify_jwt_token
+    current_user: AuthenticatedUser = Depends(
+        require_role(UserRole.TECHNICIAN)
     ),
-    db: Session = Depends(
-        get_db
-    ),
+    db: Session = Depends(get_db),
 ):
-    _ = authorization
-
     correlation_id = request.headers.get(
         "X-Correlation-ID",
-        str(
-            uuid.uuid4()
-        ),
+        str(uuid.uuid4()),
     )
+
+    tenant_id = current_user.tenant_id
 
     log_extra = {
         "correlation_id": correlation_id,
-        "tenant_id": x_tenant_id,
+        "tenant_id": tenant_id,
         "tech_id": id,
+        "user_id": current_user.user_id,
     }
 
+    # Keep the existing UUID-based route contract.
     try:
-        uuid.UUID(
-            id,
-            version=4,
-        )
-
-    except ValueError as exc:
+        technician_id = str(uuid.UUID(id))
+    except (ValueError, TypeError, AttributeError) as exc:
         logger.warning(
             "Invalid technician ID format.",
             extra=log_extra,
         )
-
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Invalid technician ID format "
-                "(must be UUID)."
-            ),
+            detail="Invalid technician ID format (must be UUID).",
         ) from exc
 
-    technician = (
-        db.query(Technician)
-        .filter(
-            Technician.tech_id == id
-        )
-        .first()
-    )
-
-    if technician is None:
-        logger.error(
-            "Technician not found.",
+    # The signed identity is authoritative; the header is only
+    # accepted when it matches that authenticated tenant.
+    if not tenant_id or x_tenant_id != tenant_id:
+        logger.warning(
+            "Push token registration tenant mismatch.",
             extra=log_extra,
         )
-
-        raise HTTPException(
-            status_code=404,
-            detail="Technician not found.",
-        )
-
-    if (
-        technician.tenant_id
-        and technician.tenant_id
-        != x_tenant_id
-    ):
-        logger.error(
-            "Access denied for tenant.",
-            extra=log_extra,
-        )
-
         raise HTTPException(
             status_code=403,
             detail="Access denied.",
         )
 
-    technician.fcm_token = (
-        payload.token
+    # Resolve the authenticated user's technician record through
+    # the project's existing tenant-scoped mapping.
+    technician = _get_tech_for_user(
+        db,
+        current_user.user_id,
+        tenant_id,
     )
 
-    technician.device_type = (
-        payload.device_type
-    )
+    if technician is None:
+        logger.warning(
+            "Technician not found for token registration.",
+            extra=log_extra,
+        )
+        raise HTTPException(
+            status_code=404,
+            detail="Technician not found.",
+        )
 
-    db.commit()
+    # The URL must identify the technician resolved for this caller.
+    try:
+        resolved_technician_id = str(
+            uuid.UUID(str(technician.tech_id))
+        )
+    except (ValueError, TypeError, AttributeError):
+        logger.error(
+            "Resolved technician has an invalid ID format.",
+            extra=log_extra,
+        )
+        raise HTTPException(
+            status_code=404,
+            detail="Technician not found.",
+        )
+
+    if resolved_technician_id != technician_id:
+        logger.warning(
+            "Push token registration technician mismatch.",
+            extra=log_extra,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied.",
+        )
+
+    # Never include the device token in application logs.
+    technician.fcm_token = payload.token
+    technician.device_type = payload.device_type
+
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception(
+            "Failed to register technician push token.",
+            extra=log_extra,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to register device token.",
+        ) from exc
 
     logger.info(
         "Registered technician FCM token.",
@@ -511,7 +532,7 @@ def register_fcm_token(
 
     return {
         "status": "registered",
-        "tech_id": id,
+        "tech_id": technician_id,
     }
 
 

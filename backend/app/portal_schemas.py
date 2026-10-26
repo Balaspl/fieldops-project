@@ -232,9 +232,13 @@ class ServiceRequestCreate(BaseModel):
     @field_validator("priority")
     @classmethod
     def validate_priority(cls, v):
-        valid = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
+        valid = {"LOW", "MEDIUM", "HIGH", "CRITICAL", "URGENT"}
+
         if v.upper() not in valid:
-            raise ValueError(f"Priority must be one of {valid}")
+            raise ValueError(
+                "Priority must be LOW, MEDIUM, HIGH, CRITICAL or URGENT"
+            )
+
         return v.upper()
 
 
@@ -285,15 +289,13 @@ class ServiceRequestUpdate(BaseModel):
         if v is None:
             return v
 
-        valid = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
-
+        valid = {"LOW", "MEDIUM", "HIGH", "CRITICAL", "URGENT"}
         value = v.upper()
 
         if value not in valid:
             raise ValueError(
-                "Priority must be LOW, MEDIUM, HIGH or CRITICAL"
+                "Priority must be LOW, MEDIUM, HIGH, CRITICAL or URGENT"
             )
-
         return value
 
     @field_validator("preferred_visit_date")

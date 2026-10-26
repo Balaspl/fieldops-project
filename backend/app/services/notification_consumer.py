@@ -25,7 +25,6 @@ from app.services.kafka.consumer import KafkaConsumerManager
 from app.services.notification_services import (
     JobStatusEvent,
     NotificationRouter,
-    SendGridService,
 )
 from app.services.ai.FieldOpsAI.schemas.agent_messages import (
     MessageEnvelope,

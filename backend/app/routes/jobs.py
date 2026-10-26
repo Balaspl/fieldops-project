@@ -4472,7 +4472,6 @@ def get_customer_signature_endpoint(
             db.query(CustomerSignature)
             .filter(
                 CustomerSignature.job_id == job.id,
-                CustomerSignature.tenant_id == current_user.tenant_id,
             )
             .first()
         )

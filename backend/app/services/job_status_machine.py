@@ -16,6 +16,21 @@ class JobStatus(str, Enum):
     CANCELLED = "CANCELLED"
     CLOSED = "CLOSED"
 
+    @classmethod
+    def _missing_(cls, value):
+        if isinstance(value, str):
+            normalized = (
+                value.strip()
+                .upper()
+                .replace("-", "_")
+                .replace(" ", "_")
+            )
+
+            if normalized in {"IN_PROGRESS", "INPROGRESS"}:
+                return cls.ON_SITE
+
+        return None
+
 
 @dataclass
 class TransitionRule:

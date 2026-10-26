@@ -280,6 +280,10 @@ class MockQuery:
     def __init__(self, items):
         self._items = list(items)
 
+    def join(self, *args, **kwargs):
+        """Support SQLAlchemy join chaining in planning tests."""
+        return self
+
     def filter(self, *args, **kwargs):
         res = list(self._items)
         for arg in args:

@@ -2483,12 +2483,13 @@ async def update_technician_availability_location(
             detail="Tenant access denied",
         )
 
-    if (
-        str(
-            current_user.role
-        ).lower()
-        != "technician"
-    ):
+    role_value = getattr(
+        current_user.role,
+        "value",
+        current_user.role,
+    )
+
+    if str(role_value).lower() != "technician":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(

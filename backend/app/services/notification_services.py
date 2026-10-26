@@ -1606,6 +1606,7 @@ class NotificationRouter:
             delivery_result = await self.fcm(
                 db,
                 event.job_id,
+                event.tenant_id,
                 event.job_title,
                 event.job_location,
                 [

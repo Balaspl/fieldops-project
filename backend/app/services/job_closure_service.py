@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from ..models import Job, Technician, AuditEvent, ServiceRequest
 from ..models.job_closure import JobClosure
+from ..models.customer_signature import CustomerSignature
 from ..repositories.completion_document_repository import (
     CompletionDocumentRepository,
 )
@@ -280,6 +281,21 @@ def close_job(
         )
 
         db.add(closure_record)
+        db.flush()
+
+        # Save the customer signature in the same transaction as
+        # the job closure. If signature persistence fails, the
+        # closure and job status transition will roll back together.
+        customer_signature = CustomerSignature(
+            job_id=job.id,
+            job_closure_id=closure_record.id,
+            tenant_id=tenant_id,
+            signature_data=closure_data.signature_data,
+            captured_by=technician_identifier,
+            signed_at=datetime.now(timezone.utc),
+        )
+
+        db.add(customer_signature)
         db.flush()
 
         # -----------------------------------------------------------

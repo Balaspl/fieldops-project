@@ -1,16 +1,11 @@
 """
-
 Technician Portal API routes.
-
-
 
 All endpoints are scoped to the authenticated technician.
 
 Technicians can only access their own profile, their own assigned jobs,
 
 and their own notifications.
-
-
 
 Cross-tenant jobs:
 
@@ -30,8 +25,6 @@ Cross-tenant jobs:
 
 """
 
-
-
 import uuid
 
 import logging
@@ -42,8 +35,6 @@ from datetime import datetime, timezone, date, timedelta
 
 from io import BytesIO
 
-
-
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 
 from fastapi.responses import StreamingResponse
@@ -53,8 +44,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from typing import Optional
-
-
 
 from ..database import get_db
 
@@ -76,44 +65,22 @@ from ..models_legacy import(
     RedispatchAttempt,
 )
 
-
-
 from app.services.ai.FieldOpsAI.agents.dispatcher_agent.dispatcher_runtime import (
-
     get_dispatcher_runtime,
-
 )
 
-
-
 import asyncio
-
-
-
-
-
 from app.services.timer_service import TimerService
-
 from app.redis_client import get_redis_client
 
-
-
 from ..models.user import User
-
 from ..models import ServiceRequest
-
 from ..models.job_closure import JobClosure
-
 from ..models.customer_signature import CustomerSignature
-
 from ..portal_schemas import (
-
     TechnicianProfileCreate, TechnicianProfileUpdate, TechnicianProfileResponse,
-
     TechnicianJobResponse, TechnicianJobRejectRequest, TechnicianJobCompleteRequest,
-
     TechnicianDashboardResponse, ChangePasswordRequest,
-
 )
 
 from ..schemas import TechnicianAvailabilityUpdate, JobExpenseCreate, JobExpenseResponse
@@ -122,17 +89,15 @@ from ..services.job_expense_service import create_job_expense
 
 from ..services.enterprise_audit import audit_log, AuditAction
 
-
+from ..services.customer_notification_services import (
+    create_customer_job_status_notification,
+)
 
 logger = logging.getLogger(__name__)
-
-
 
 # Keep this aligned with the acceptance window in routes/jobs.py.
 
 ACCEPTANCE_WINDOW_SECONDS = 600
-
-
 
 router = APIRouter(
 
@@ -142,8 +107,6 @@ router = APIRouter(
 
 )
 
-
-
 def _json_safe(value):
 
     if isinstance(value, (date, datetime)):
@@ -151,8 +114,6 @@ def _json_safe(value):
         return value.isoformat()
 
     return value
-
-
 
 def _get_tech_for_user(
 
@@ -166,8 +127,6 @@ def _get_tech_for_user(
 
     """Find the technician record belonging to this user and organization."""
 
-
-
     logger.warning(
 
         "TECH LOOKUP: user_id=%s tenant_id=%s",
@@ -178,21 +137,15 @@ def _get_tech_for_user(
 
     )
 
-
-
     query = db.query(Technician).filter(
 
         Technician.tenant_id == tenant_id
 
     )
 
-
-
     # 1. Direct match by tech_id or integer technician_id
 
     numeric_user_id = int(user_id) if str(user_id).isdigit() else -1
-
-
 
     tech = query.filter(
 
@@ -202,13 +155,9 @@ def _get_tech_for_user(
 
     ).first()
 
-
-
     if tech:
 
         return tech
-
-
 
     # 2. Find tenant-scoped profile and user
 
@@ -220,11 +169,7 @@ def _get_tech_for_user(
 
     ).first()
 
-
-
     user = db.query(User).filter(User.id == str(user_id), User.tenant_id == tenant_id,).first()
-
-
 
     target_name = (
 
@@ -236,8 +181,6 @@ def _get_tech_for_user(
 
     )
 
-
-
     target_phone = (
 
         profile.mobile_number
@@ -247,8 +190,6 @@ def _get_tech_for_user(
         else user.phone_number if user else None
 
     )
-
-
 
     # query is already restricted by Technician.tenant_id
 
@@ -262,13 +203,9 @@ def _get_tech_for_user(
 
         ).first()
 
-
-
         if tech_by_name:
 
             tech_by_name.tech_id = str(user_id)
-
-
 
             try:
 
@@ -280,11 +217,7 @@ def _get_tech_for_user(
 
                 raise
 
-
-
             return tech_by_name
-
-
 
     if target_phone:
 
@@ -294,13 +227,9 @@ def _get_tech_for_user(
 
         ).first()
 
-
-
         if tech_by_phone:
 
             tech_by_phone.tech_id = str(user_id)
-
-
 
             try:
 
@@ -312,15 +241,9 @@ def _get_tech_for_user(
 
                 raise
 
-
-
             return tech_by_phone
 
     return None
-
-
-
-
 
 def _get_my_job(
 
@@ -335,8 +258,6 @@ def _get_my_job(
     """
 
     Return the job only if it is assigned to this technician.
-
-
 
     Deliberately NOT scoped by Job.tenant_id: a job may belong to one
 
@@ -364,10 +285,6 @@ def _get_my_job(
 
     )
 
-
-
-
-
 def _get_notification_recipient_ids(
 
     user_id: str,
@@ -378,35 +295,23 @@ def _get_notification_recipient_ids(
 
     """Return every valid notification recipient ID for this technician."""
 
-
-
     recipient_ids = {str(user_id)}
-
-
 
     if tech:
 
         recipient_ids.add(str(tech.technician_id))
 
-
-
         if tech.tech_id:
 
             recipient_ids.add(str(tech.tech_id))
 
-
-
     return list(recipient_ids)
-
-
 
 # ──────────────────────────────────────────────────
 
 # Profile Endpoints
 
 # ──────────────────────────────────────────────────
-
-
 
 @router.get("/profile", response_model=TechnicianProfileResponse)
 
@@ -428,11 +333,7 @@ async def get_technician_profile(
 
     ).first()
 
-
-
     user = db.query(User).filter(User.id == current_user.user_id, User.tenant_id == current_user.tenant_id,).first()
-
-
 
     if not profile:
 
@@ -460,8 +361,6 @@ async def get_technician_profile(
 
         )
 
-
-
     # Calculate age
 
     age = None
@@ -475,8 +374,6 @@ async def get_technician_profile(
             (today.month, today.day) < (profile.date_of_birth.month, profile.date_of_birth.day)
 
         )
-
-
 
     return TechnicianProfileResponse(
 
@@ -524,10 +421,6 @@ async def get_technician_profile(
 
     )
 
-
-
-
-
 @router.post("/profile", response_model=TechnicianProfileResponse, status_code=201)
 
 async def create_technician_profile(
@@ -552,8 +445,6 @@ async def create_technician_profile(
 
     ).first()
 
-
-
     if existing:
 
         raise HTTPException(
@@ -563,8 +454,6 @@ async def create_technician_profile(
             detail="Profile already exists. Use PUT to update.",
 
         )
-
-
 
     profile = TechnicianProfile(
 
@@ -604,11 +493,7 @@ async def create_technician_profile(
 
     )
 
-
-
     db.add(profile)
-
-
 
     # Sync to main technicians table for main app visibility
 
@@ -635,8 +520,6 @@ async def create_technician_profile(
             ),
 
         ).first()
-
-
 
         if not tech:
 
@@ -682,8 +565,6 @@ async def create_technician_profile(
 
         logger.warning(f"Could not auto-sync technician record: {sync_err}")
 
-
-
     audit_log(
 
         db,
@@ -706,17 +587,11 @@ async def create_technician_profile(
 
     )
 
-
-
     db.commit()
 
     db.refresh(profile)
 
-
-
     user = db.query(User).filter(User.id == current_user.user_id, User.tenant_id == current_user.tenant_id,).first()
-
-
 
     age = None
 
@@ -729,8 +604,6 @@ async def create_technician_profile(
             (today.month, today.day) < (profile.date_of_birth.month, profile.date_of_birth.day)
 
         )
-
-
 
     return TechnicianProfileResponse(
 
@@ -778,10 +651,6 @@ async def create_technician_profile(
 
     )
 
-
-
-
-
 @router.put("/profile", response_model=TechnicianProfileResponse)
 
 async def update_technician_profile(
@@ -806,13 +675,9 @@ async def update_technician_profile(
 
     ).first()
 
-
-
     if not profile:
 
         raise HTTPException(status_code=404, detail="Profile not found. Create it first.")
-
-
 
     update_data = data.model_dump(exclude_unset=True)
 
@@ -826,11 +691,7 @@ async def update_technician_profile(
 
             setattr(profile, key, value)
 
-
-
     profile.profile_completed = True
-
-
 
     # Sync to main technicians table for main app visibility
 
@@ -857,8 +718,6 @@ async def update_technician_profile(
             ),
 
         ).first()
-
-
 
         if not tech:
 
@@ -902,8 +761,6 @@ async def update_technician_profile(
 
         logger.warning(f"Could not auto-sync technician record on update: {sync_err}")
 
-
-
     audit_log(
 
         db,
@@ -928,13 +785,9 @@ async def update_technician_profile(
 
     )
 
-
-
     db.commit()
 
     db.refresh(profile)
-
-
 
     user = db.query(User).filter(User.id == current_user.user_id, User.tenant_id == current_user.tenant_id,).first()
 
@@ -949,8 +802,6 @@ async def update_technician_profile(
             (today.month, today.day) < (profile.date_of_birth.month, profile.date_of_birth.day)
 
         )
-
-
 
     return TechnicianProfileResponse(
 
@@ -998,17 +849,11 @@ async def update_technician_profile(
 
     )
 
-
-
-
-
 # ──────────────────────────────────────────────────
 
 # Change Password
 
 # ──────────────────────────────────────────────────
-
-
 
 @router.post("/change-password")
 
@@ -1032,17 +877,11 @@ async def change_password(
 
         raise HTTPException(status_code=404, detail="User not found")
 
-
-
     if not verify_password(data.current_password, user.password_hash):
 
         raise HTTPException(status_code=400, detail="Current password is incorrect")
 
-
-
     user.password_hash = hash_password(data.new_password)
-
-
 
     audit_log(
 
@@ -1064,23 +903,15 @@ async def change_password(
 
     )
 
-
-
     db.commit()
 
     return {"message": "Password changed successfully"}
-
-
-
-
 
 # ──────────────────────────────────────────────────
 
 # Job Endpoints
 
 # ──────────────────────────────────────────────────
-
-
 
 def _get_assigned_jobs_query(
 
@@ -1094,8 +925,6 @@ def _get_assigned_jobs_query(
 
     """Base query for jobs assigned to this technician (any job tenant)."""
 
-
-
     tech = _get_tech_for_user(
 
         db,
@@ -1106,23 +935,15 @@ def _get_assigned_jobs_query(
 
     )
 
-
-
     if not tech:
 
         return db.query(Job).filter(Job.id < 0)
-
-
 
     return db.query(Job).filter(
 
         Job.assigned_technician_id == tech.technician_id,
 
     )
-
-
-
-
 
 @router.get("/jobs", response_model=list[TechnicianJobResponse])
 
@@ -1140,8 +961,6 @@ async def get_assigned_jobs(
 
     query = _get_assigned_jobs_query(db, current_user.user_id, current_user.tenant_id)
 
-
-
     # Exclude rejected and completed for active view
 
     if status_filter:
@@ -1156,13 +975,7 @@ async def get_assigned_jobs(
 
         )
 
-
-
     return query.order_by(Job.created_at.desc()).all()
-
-
-
-
 
 @router.get("/jobs/history", response_model=list[TechnicianJobResponse])
 
@@ -1186,10 +999,6 @@ async def get_job_history(
 
     return query.order_by(Job.completed_at.desc()).all()
 
-
-
-
-
 @router.get("/jobs/{job_id}", response_model=TechnicianJobResponse)
 
 async def get_job_detail(
@@ -1210,23 +1019,13 @@ async def get_job_detail(
 
         raise HTTPException(status_code=403, detail="Technician record not found")
 
-
-
     job = _get_my_job(db, job_id, tech)
-
-
 
     if not job:
 
         raise HTTPException(status_code=403, detail="Job not found or not assigned to you")
 
-
-
     return job
-
-
-
-
 
 @router.post(
 
@@ -1256,8 +1055,6 @@ async def submit_job_expense(
 
     """Submit an expense for a job assigned to the authenticated technician.
 
-
-
     NOTE: create_job_expense receives the technician's tenant. If that service
 
     loads the job with a tenant filter, it must also be updated for cross-tenant
@@ -1276,8 +1073,6 @@ async def submit_job_expense(
 
     )
 
-
-
     if not tech:
 
         raise HTTPException(
@@ -1287,8 +1082,6 @@ async def submit_job_expense(
             detail="Technician record not found",
 
         )
-
-
 
     return create_job_expense(
 
@@ -1303,10 +1096,6 @@ async def submit_job_expense(
         tenant_id=str(current_user.tenant_id),
 
     )
-
-
-
-
 
 @router.post("/jobs/{job_id}/accept")
 
@@ -1328,8 +1117,6 @@ async def accept_job(
 
     """Accept an assigned job without starting the journey."""
 
-
-
     tech = _get_tech_for_user(
 
         db,
@@ -1339,8 +1126,6 @@ async def accept_job(
         current_user.tenant_id,
 
     )
-
-
 
     if not tech:
 
@@ -1352,25 +1137,52 @@ async def accept_job(
 
         )
 
-
-
-    # Not tenant-scoped: the job may belong to another organization.
-
-    job = _get_my_job(db, job_id, tech)
-
-
+    # Keep assignment-based authorization for cross-tenant jobs.
+    # Lock the row to prevent concurrent duplicate acceptance.
+    job = (
+        db.query(Job)
+        .filter(
+            Job.id == job_id,
+            Job.assigned_technician_id == tech.technician_id,
+        )
+        .with_for_update()
+        .first()
+    )
 
     if not job:
-
         raise HTTPException(
-
-            status_code=403,
-
+            status_code=status.HTTP_403_FORBIDDEN,
             detail="Job not found or not assigned to you",
-
         )
 
+    current_status = (
+        (job.status or "")
+        .strip()
+        .upper()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
 
+    # An accepted retry must not increment workload or resume dispatch again.
+    if current_status == "ACCEPTED":
+        return {
+            "message": "Job already accepted",
+            "job_id": job_id,
+            "status": "ACCEPTED",
+        }
+
+    if current_status not in {
+        "ASSIGNED",
+        "AWAITING_ACCEPTANCE",
+        "ACTIVE",
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Job must be awaiting acceptance before it can be accepted. "
+                f"Current status: {job.status}"
+            ),
+        )
 
     # Idempotency: repeated clicks / retries must not double-count workload
 
@@ -1388,27 +1200,19 @@ async def accept_job(
 
         }
 
-
-
     # ---------------------------------------------------------
 
     # Accept the job
 
     # ---------------------------------------------------------
 
-
-
     job.status = "ACCEPTED"
-
-
 
     # Acceptance is the point at which this job starts counting
 
     # toward technician workload.
 
     from ..workload_utils import update_workload_count
-
-
 
     update_workload_count(
 
@@ -1420,8 +1224,6 @@ async def accept_job(
 
     )
 
-
-
     # ---------------------------------------------------------
 
     # Keep ServiceRequest status synchronized
@@ -1431,8 +1233,6 @@ async def accept_job(
     # customer's tenant, which can differ from the technician's)
 
     # ---------------------------------------------------------
-
-
 
     service_request = (
 
@@ -1448,8 +1248,6 @@ async def accept_job(
 
     )
 
-
-
     if service_request:
 
         service_request.status = "ACCEPTED"
@@ -1460,8 +1258,6 @@ async def accept_job(
 
     # ---------------------------------------------------------
 
-
-
     recipient_ids = _get_notification_recipient_ids(
 
         current_user.user_id,
@@ -1469,8 +1265,6 @@ async def accept_job(
         tech,
 
     )
-
-
 
     db.query(InAppNotification).filter(
 
@@ -1496,15 +1290,11 @@ async def accept_job(
 
     )
 
-
-
     # ---------------------------------------------------------
 
     # Audit
 
     # ---------------------------------------------------------
-
-
 
     audit_log(
 
@@ -1528,8 +1318,6 @@ async def accept_job(
 
     )
 
-
-
     # ---------------------------------------------------------
 
     # IMPORTANT:
@@ -1540,11 +1328,7 @@ async def accept_job(
 
     # ---------------------------------------------------------
 
-
-
     db.commit()
-
-
 
     # ---------------------------------------------------------
 
@@ -1552,13 +1336,9 @@ async def accept_job(
 
     # ---------------------------------------------------------
 
-
-
     try:
 
         redis_client = get_redis_client()
-
-
 
         if redis_client:
 
@@ -1570,15 +1350,11 @@ async def accept_job(
 
             )
 
-
-
             # Clean warning keys if they exist.
 
             redis_client.delete(f"job:timer_warning:{job_id}")
 
             redis_client.delete(f"job:timer_warned:{job_id}")
-
-
 
     except Exception as timer_error:
 
@@ -1598,21 +1374,15 @@ async def accept_job(
 
         )
 
-
-
     # ---------------------------------------------------------
 
     # Resume LangGraph
 
     # ---------------------------------------------------------
 
-
-
     try:
 
         runtime = get_dispatcher_runtime()
-
-
 
         await runtime.resume_dispatch(
 
@@ -1621,8 +1391,6 @@ async def accept_job(
             event="TECHNICIAN_ACCEPTED",
 
         )
-
-
 
         logger.info(
 
@@ -1635,8 +1403,6 @@ async def accept_job(
             tech.technician_id,
 
         )
-
-
 
     except Exception:
 
@@ -1658,8 +1424,6 @@ async def accept_job(
 
         )
 
-
-
     return {
 
         "message": "Job accepted",
@@ -1669,9 +1433,6 @@ async def accept_job(
         "status": "ACCEPTED",
 
     }
-
-
-
 
 @router.post("/jobs/{job_id}/reject")
 async def reject_job(
@@ -1720,6 +1481,27 @@ async def reject_job(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Job not found or not assigned to you",
+        )
+
+    current_status = (
+        (job.status or "")
+        .strip()
+        .upper()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
+
+    if current_status not in {
+        "ASSIGNED",
+        "AWAITING_ACCEPTANCE",
+        "ACTIVE",
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Job can only be rejected before acceptance. "
+                f"Current status: {job.status}"
+            ),
         )
 
     # Prevent duplicate rejection processing.
@@ -1903,90 +1685,111 @@ async def reject_job(
         "rejection_reason": data.reason,
     }
 
-
-
-
 @router.post("/jobs/{job_id}/start")
-
 async def start_job(
-
     job_id: int,
-
     request: Request,
-
-    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_STATUS_UPDATE)),
-
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.JOBS_STATUS_UPDATE)
+    ),
     db: Session = Depends(get_db),
-
 ):
+    """Start travel for an accepted job assigned to this technician."""
 
-    """Start working on a job."""
-
-    tech = _get_tech_for_user(db, current_user.user_id, current_user.tenant_id)
+    tech = _get_tech_for_user(
+        db,
+        current_user.user_id,
+        current_user.tenant_id,
+    )
 
     if not tech:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Technician record not found",
+        )
 
-        raise HTTPException(status_code=403, detail="Technician record not found")
-
-
-
-    job = _get_my_job(db, job_id, tech)
+    # Lock the assigned job while validating and applying the transition.
+    # Authorization remains based on assignment, including cross-tenant jobs.
+    job = (
+        db.query(Job)
+        .filter(
+            Job.id == job_id,
+            Job.assigned_technician_id == tech.technician_id,
+        )
+        .with_for_update()
+        .first()
+    )
 
     if not job:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Job not found or not assigned to you",
+        )
 
-        raise HTTPException(status_code=403, detail="Job not found or not assigned to you")
+    current_status = (
+        (job.status or "")
+        .strip()
+        .upper()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
 
+    # An idempotent retry must not repeat notifications or audit events.
+    if current_status == "EN_ROUTE":
+        return {
+            "message": "Job is already en-route",
+            "job_id": job_id,
+            "status": "EN_ROUTE",
+        }
 
+    if current_status != "ACCEPTED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Job must be ACCEPTED before starting travel. "
+                f"Current status: {job.status}"
+            ),
+        )
 
     old_status = job.status
-
     job.status = "EN_ROUTE"
 
+    create_customer_job_status_notification(
+        db=db,
+        job=job,
+        new_status="EN_ROUTE",
+    )
 
-
-    # Keep the customer's service request status in sync.
-
-    # The ServiceRequest belongs to the customer's tenant, which can differ
-
-    # from the job's tenant, so match on linked_job_id only.
-
-    service_request = db.query(ServiceRequest).filter(
-
-        ServiceRequest.linked_job_id == job.id,
-
-    ).first()
-
-
+    # Keep the linked customer service request synchronized.
+    service_request = (
+        db.query(ServiceRequest)
+        .filter(ServiceRequest.linked_job_id == job.id)
+        .first()
+    )
 
     if service_request:
-
         service_request.status = "EN_ROUTE"
 
-
-
-
-
     audit_log(
-
-        db, action=AuditAction.JOB_STARTED,
-
-        tenant_id=current_user.tenant_id, user_id=current_user.user_id,
-
-        role=current_user.role.value, entity_type="job", entity_id=str(job_id),
-
-        old_value={"status": old_status}, new_value={"status": "EN_ROUTE"},
-
+        db,
+        action=AuditAction.JOB_STARTED,
+        tenant_id=current_user.tenant_id,
+        user_id=current_user.user_id,
+        role=current_user.role.value,
+        entity_type="job",
+        entity_id=str(job_id),
+        old_value={"status": old_status},
+        new_value={"status": "EN_ROUTE"},
         request=request,
-
     )
 
     db.commit()
 
-    return {"message": "Job started and en-route", "job_id": job_id, "status": "EN_ROUTE"}
-
-
-
-
+    return {
+        "message": "Job started and en-route",
+        "job_id": job_id,
+        "status": "EN_ROUTE",
+    }
 
 @router.post("/jobs/{job_id}/on-site")
 
@@ -2004,8 +1807,6 @@ async def on_site_job(
 
     """Mark an en-route job as on-site.
 
-
-
     The persisted job state becomes ON_SITE. The technician portal displays
 
     this stage as "In Progress" and exposes the Complete action.
@@ -2018,42 +1819,57 @@ async def on_site_job(
 
         raise HTTPException(status_code=403, detail="Technician record not found")
 
-
-
-    job = _get_my_job(db, job_id, tech)
-
-
+    # Lock the assigned job while checking its current state.
+    # Assignment authorization supports cross-tenant jobs.
+    job = (
+        db.query(Job)
+        .filter(
+            Job.id == job_id,
+            Job.assigned_technician_id == tech.technician_id,
+        )
+        .with_for_update()
+        .first()
+    )
 
     if not job:
-
-        raise HTTPException(status_code=403, detail="Job not found or not assigned to you")
-
-
-
-    if job.status != "EN_ROUTE":
-
         raise HTTPException(
-
-            status_code=400,
-
-            detail=f"Job must be EN_ROUTE before going on-site. Current status: {job.status}",
-
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Job not found or not assigned to you",
         )
 
+    current_status = (
+        (job.status or "")
+        .strip()
+        .upper()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
 
+    # Repeated requests must not create duplicate notifications or audit events.
+    if current_status == "IN_PROGRESS":
+        return {
+            "message": "Technician is already on site",
+            "job_id": job_id,
+            "status": "IN_PROGRESS",
+        }
+
+    if current_status != "EN_ROUTE":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Job must be EN_ROUTE before going on-site. "
+                f"Current status: {job.status}"
+            ),
+        )
 
     old_status = job.status
 
     job.status = "IN_PROGRESS"
 
-
-
     transition_time = datetime.now(timezone.utc)
     job.on_site_at = job.on_site_at or transition_time
 
     job.on_site_by = current_user.user_id
-
-
 
     service_request = db.query(ServiceRequest).filter(
 
@@ -2061,13 +1877,9 @@ async def on_site_job(
 
     ).first()
 
-
-
     if service_request:
 
         service_request.status = "IN_PROGRESS"
-
-
 
     audit_log(
 
@@ -2093,13 +1905,9 @@ async def on_site_job(
 
     )
 
-
-
     db.commit()
 
     db.refresh(job)
-
-
 
     return {
 
@@ -2111,129 +1919,184 @@ async def on_site_job(
 
     }
 
-
-
-
-
 @router.post("/jobs/{job_id}/pause")
-
 async def pause_job(
-
     job_id: int,
-
     request: Request,
-
-    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_STATUS_UPDATE)),
-
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.JOBS_STATUS_UPDATE)
+    ),
     db: Session = Depends(get_db),
-
 ):
+    """Pause a job that is currently in progress."""
 
-    """Pause a job in progress."""
-
-    tech = _get_tech_for_user(db, current_user.user_id, current_user.tenant_id)
+    tech = _get_tech_for_user(
+        db,
+        current_user.user_id,
+        current_user.tenant_id,
+    )
 
     if not tech:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Technician record not found",
+        )
 
-        raise HTTPException(status_code=403, detail="Technician record not found")
-
-
-
-    job = _get_my_job(db, job_id, tech)
+    # Lock the assigned job while validating the transition.
+    job = (
+        db.query(Job)
+        .filter(
+            Job.id == job_id,
+            Job.assigned_technician_id == tech.technician_id,
+        )
+        .with_for_update()
+        .first()
+    )
 
     if not job:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Job not found or not assigned to you",
+        )
 
-        raise HTTPException(status_code=403, detail="Job not found or not assigned to you")
+    current_status = (
+        (job.status or "")
+        .strip()
+        .upper()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
 
+    # Idempotent retry: do not create another audit event.
+    if current_status == "PAUSED":
+        return {
+            "message": "Job is already paused",
+            "job_id": job_id,
+            "status": "PAUSED",
+        }
 
+    if current_status != "IN_PROGRESS":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Job must be IN_PROGRESS before it can be paused. "
+                f"Current status: {job.status}"
+            ),
+        )
 
     old_status = job.status
-
     job.status = "PAUSED"
 
-
-
     audit_log(
-
-        db, action=AuditAction.JOB_PAUSED,
-
-        tenant_id=current_user.tenant_id, user_id=current_user.user_id,
-
-        role=current_user.role.value, entity_type="job", entity_id=str(job_id),
-
-        old_value={"status": old_status}, new_value={"status": "PAUSED"},
-
+        db,
+        action=AuditAction.JOB_PAUSED,
+        tenant_id=current_user.tenant_id,
+        user_id=current_user.user_id,
+        role=current_user.role.value,
+        entity_type="job",
+        entity_id=str(job_id),
+        old_value={"status": old_status},
+        new_value={"status": "PAUSED"},
         request=request,
-
     )
 
     db.commit()
 
-    return {"message": "Job paused", "job_id": job_id, "status": "PAUSED"}
-
-
-
-
+    return {
+        "message": "Job paused",
+        "job_id": job_id,
+        "status": "PAUSED",
+    }
 
 @router.post("/jobs/{job_id}/resume")
-
 async def resume_job(
-
     job_id: int,
-
     request: Request,
-
-    current_user: AuthenticatedUser = Depends(require_permission(Permission.JOBS_STATUS_UPDATE)),
-
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.JOBS_STATUS_UPDATE)
+    ),
     db: Session = Depends(get_db),
-
 ):
+    """Resume a paused job assigned to this technician."""
 
-    """Resume a paused job."""
-
-    tech = _get_tech_for_user(db, current_user.user_id, current_user.tenant_id)
+    tech = _get_tech_for_user(
+        db,
+        current_user.user_id,
+        current_user.tenant_id,
+    )
 
     if not tech:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Technician record not found",
+        )
 
-        raise HTTPException(status_code=403, detail="Technician record not found")
-
-
-
-    job = _get_my_job(db, job_id, tech)
+    # Preserve assignment authorization, including cross-tenant jobs.
+    # Lock the row while checking and applying the transition.
+    job = (
+        db.query(Job)
+        .filter(
+            Job.id == job_id,
+            Job.assigned_technician_id == tech.technician_id,
+        )
+        .with_for_update()
+        .first()
+    )
 
     if not job:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Job not found or not assigned to you",
+        )
 
-        raise HTTPException(status_code=403, detail="Job not found or not assigned to you")
+    current_status = (
+        (job.status or "")
+        .strip()
+        .upper()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
 
+    # An identical retry must not create another audit event.
+    if current_status == "IN_PROGRESS":
+        return {
+            "message": "Job is already in progress",
+            "job_id": job_id,
+            "status": "IN_PROGRESS",
+        }
 
+    if current_status != "PAUSED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Job must be PAUSED before it can be resumed. "
+                f"Current status: {job.status}"
+            ),
+        )
 
     old_status = job.status
-
     job.status = "IN_PROGRESS"
 
-
-
     audit_log(
-
-        db, action=AuditAction.JOB_RESUMED,
-
-        tenant_id=current_user.tenant_id, user_id=current_user.user_id,
-
-        role=current_user.role.value, entity_type="job", entity_id=str(job_id),
-
-        old_value={"status": old_status}, new_value={"status": "IN_PROGRESS"},
-
+        db,
+        action=AuditAction.JOB_RESUMED,
+        tenant_id=current_user.tenant_id,
+        user_id=current_user.user_id,
+        role=current_user.role.value,
+        entity_type="job",
+        entity_id=str(job_id),
+        old_value={"status": old_status},
+        new_value={"status": "IN_PROGRESS"},
         request=request,
-
     )
 
     db.commit()
 
-    return {"message": "Job resumed", "job_id": job_id, "status": "IN_PROGRESS"}
-
-
-
-
+    return {
+        "message": "Job resumed",
+        "job_id": job_id,
+        "status": "IN_PROGRESS",
+    }
 
 @router.post("/jobs/{job_id}/complete")
 
@@ -2259,21 +2122,52 @@ async def complete_job(
 
         raise HTTPException(status_code=403, detail="Technician record not found")
 
-
-
-    job = _get_my_job(db, job_id, tech)
+    # Lock the assigned job while validating and applying completion.
+    # Assignment authorization is preserved for cross-tenant jobs.
+    job = (
+        db.query(Job)
+        .filter(
+            Job.id == job_id,
+            Job.assigned_technician_id == tech.technician_id,
+        )
+        .with_for_update()
+        .first()
+    )
 
     if not job:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Job not found or not assigned to you",
+        )
 
-        raise HTTPException(status_code=403, detail="Job not found or not assigned to you")
+    current_status = (
+        (job.status or "")
+        .strip()
+        .upper()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
 
+    # Make retries safe: do not create another closure or audit event.
+    if current_status == "COMPLETED":
+        return {
+            "message": "Job is already completed",
+            "job_id": job_id,
+            "status": "COMPLETED",
+        }
 
+    if current_status != "IN_PROGRESS":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Job must be IN_PROGRESS before it can be completed. "
+                f"Current status: {job.status}"
+            ),
+        )
 
     old_status = job.status
 
     job.status = "COMPLETED"
-
-
 
     # Keep the customer's service request status in sync.
 
@@ -2289,11 +2183,7 @@ async def complete_job(
 
     )
 
-
-
     customer_tenant_id = getattr(job, "customer_tenant_id", None)
-
-
 
     if customer_tenant_id:
 
@@ -2311,17 +2201,11 @@ async def complete_job(
 
         )
 
-
-
     service_request = service_request_query.first()
-
-
 
     if service_request:
 
         service_request.status = "COMPLETED"
-
-
 
     job.completed_at = datetime.now(timezone.utc)
 
@@ -2330,8 +2214,6 @@ async def complete_job(
     if data.completion_notes:
 
         job.work_report = data.completion_notes
-
-
 
     # The fallback completion route receives labour/material costs in the
 
@@ -2349,15 +2231,11 @@ async def complete_job(
 
         request_payload = {}
 
-
-
     labour_cost = round(float(request_payload.get("labour_cost") or 0), 2)
 
     material_cost = round(float(request_payload.get("material_cost") or 0), 2)
 
     subtotal = round(labour_cost + material_cost, 2)
-
-
 
     # The Billing Report is backed by JobClosure records. The compatibility
 
@@ -2380,8 +2258,6 @@ async def complete_job(
         .first()
 
     )
-
-
 
     if not existing_closure:
 
@@ -2412,18 +2288,51 @@ async def complete_job(
         db.flush()
 
     else:
-
         closure_record = existing_closure
 
+    # Persist the customer signature in the same transaction as the closure.
+    # Older callers that omit the optional signature remain compatible.
+    signature_data = request_payload.get("signature_data")
 
-    # The compatibility completion endpoint is used by the closure flow when
-    # the primary /jobs/{id}/close route is unavailable. Keep invoice delivery
-    # in this same transaction as the completed job and persisted closure.
+    if signature_data is not None:
+        if (
+            not isinstance(signature_data, str)
+            or not signature_data.strip()
+            or len(signature_data) > 2_000_000
+            or not signature_data.strip().startswith(
+                (
+                    "data:image/png;base64,",
+                    "data:image/jpeg;base64,",
+                )
+            )
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid customer signature data",
+            )
+
+        existing_signature = (
+            db.query(CustomerSignature)
+            .filter(CustomerSignature.job_id == job.id)
+            .first()
+        )
+
+        if existing_signature is None:
+            customer_signature = CustomerSignature(
+                job_id=job.id,
+                job_closure_id=closure_record.id,
+                tenant_id=str(job.tenant_id),
+                signature_data=signature_data.strip(),
+                captured_by=str(tech.tech_id),
+                signed_at=datetime.now(timezone.utc),
+            )
+
+            db.add(customer_signature)
+            db.flush()
+
+    # Keep invoice delivery in the same transaction as the completed job.
     from ..services.email.transactional_outbox import persist_invoice_email
-
     persist_invoice_email(db, job, closure_record)
-
-
 
     audit_log(
 
@@ -2445,17 +2354,11 @@ async def complete_job(
 
     return {"message": "Job completed", "job_id": job_id, "status": "COMPLETED"}
 
-
-
-
-
 # ──────────────────────────────────────────────────
 
 # Notifications
 
 # ──────────────────────────────────────────────────
-
-
 
 @router.get("/notifications")
 
@@ -2473,8 +2376,6 @@ async def get_notifications(
 
     """Get technician notifications and sync missing assignment notifications."""
 
-
-
     tech = _get_tech_for_user(
 
         db,
@@ -2485,8 +2386,6 @@ async def get_notifications(
 
     )
 
-
-
     search_ids = _get_notification_recipient_ids(
 
         current_user.user_id,
@@ -2494,8 +2393,6 @@ async def get_notifications(
         tech,
 
     )
-
-
 
     notifications = db.query(InAppNotification).filter(
 
@@ -2515,21 +2412,28 @@ async def get_notifications(
 
         # Not tenant-scoped: the job may belong to another organization.
 
-        pending_jobs = db.query(Job).filter(
-
-            Job.assigned_technician_id == tech.technician_id,
-
-            # func.lower(Job.status).in_(
-
-            #     ["assigned", "active", "planned", "queued"]
-
-            # ),
-
-
-
-        ).all()
-
-
+        pending_jobs = (
+            db.query(Job)
+            .filter(
+                Job.assigned_technician_id == tech.technician_id,
+                func.upper(
+                    func.replace(
+                        func.replace(func.trim(Job.status), "-", "_"),
+                        " ",
+                        "_",
+                    )
+                ).in_(
+                    [
+                        "ASSIGNED",
+                        "AWAITING_ACCEPTANCE",
+                        "ACTIVE",
+                        "PLANNED",
+                        "QUEUED",
+                    ]
+                ),
+            )
+            .all()
+        )
 
         pending_job_ids = [
 
@@ -2539,11 +2443,7 @@ async def get_notifications(
 
         ]
 
-
-
         existing_notification_rows = []
-
-
 
         if pending_job_ids:
 
@@ -2565,8 +2465,6 @@ async def get_notifications(
 
             ).all()
 
-
-
         existing_job_ids = {
 
             str(row.job_id)
@@ -2577,11 +2475,7 @@ async def get_notifications(
 
         }
 
-
-
         new_added = False
-
-
 
         for job in pending_jobs:
 
@@ -2629,23 +2523,17 @@ async def get_notifications(
 
                 )
 
-
-
                 db.add(new_notification)
 
                 existing_job_ids.add(str(job.id))
 
                 new_added = True
 
-
-
         if new_added:
 
             try:
 
                 db.commit()
-
-
 
                 notifications = db.query(InAppNotification).filter(
 
@@ -2660,8 +2548,6 @@ async def get_notifications(
                     InAppNotification.created_at.desc()
 
                 ).limit(100).all()
-
-
 
             except Exception as exc:
 
@@ -2683,8 +2569,6 @@ async def get_notifications(
 
                 )
 
-
-
     job_ids = [
 
         int(notification.job_id)
@@ -2697,11 +2581,7 @@ async def get_notifications(
 
     ]
 
-
-
     job_status_map = {}
-
-
 
     if job_ids:
 
@@ -2717,8 +2597,6 @@ async def get_notifications(
 
         ).all()
 
-
-
         job_status_map = {
 
             job.id: (job.status or "").upper()
@@ -2726,8 +2604,6 @@ async def get_notifications(
             for job in job_rows
 
         }
-
-
 
     # hidden_job_statuses = {
 
@@ -2747,11 +2623,7 @@ async def get_notifications(
 
     # }
 
-
-
     # filtered_notifications = []
-
-
 
     # for notification in notifications:
 
@@ -2767,8 +2639,6 @@ async def get_notifications(
 
     #     )
 
-
-
     #     job_status = (
 
     #         job_status_map.get(job_id, "")
@@ -2778,8 +2648,6 @@ async def get_notifications(
     #         else ""
 
     #     )
-
-
 
     #     if (
 
@@ -2791,13 +2659,9 @@ async def get_notifications(
 
     #         continue
 
-
-
     #     filtered_notifications.append(notification)
 
     filtered_notifications = notifications
-
-
 
     unread_count = sum(
 
@@ -2808,8 +2672,6 @@ async def get_notifications(
         if notification.status == "UNREAD"
 
     )
-
-
 
     return {
 
@@ -2861,10 +2723,6 @@ async def get_notifications(
 
     }
 
-
-
-
-
 @router.put("/notifications/{notification_id}/read")
 
 async def mark_notification_read(
@@ -2883,8 +2741,6 @@ async def mark_notification_read(
 
     """Mark one of the current technician's notifications as read."""
 
-
-
     tech = _get_tech_for_user(
 
         db,
@@ -2895,8 +2751,6 @@ async def mark_notification_read(
 
     )
 
-
-
     recipient_ids = _get_notification_recipient_ids(
 
         current_user.user_id,
@@ -2904,8 +2758,6 @@ async def mark_notification_read(
         tech,
 
     )
-
-
 
     notification = db.query(InAppNotification).filter(
 
@@ -2917,8 +2769,6 @@ async def mark_notification_read(
 
     ).first()
 
-
-
     if not notification:
 
         raise HTTPException(
@@ -2928,8 +2778,6 @@ async def mark_notification_read(
             detail="Notification not found",
 
         )
-
-
 
     if notification.status == "UNREAD":
 
@@ -2941,8 +2789,6 @@ async def mark_notification_read(
 
         db.refresh(notification)
 
-
-
     return {
 
         "message": "Marked as read",
@@ -2952,10 +2798,6 @@ async def mark_notification_read(
         "status": notification.status,
 
     }
-
-
-
-
 
 @router.put("/notifications/read-all")
 
@@ -2973,8 +2815,6 @@ async def mark_all_notifications_read(
 
     """Mark all current technician notifications as read."""
 
-
-
     tech = _get_tech_for_user(
 
         db,
@@ -2985,8 +2825,6 @@ async def mark_all_notifications_read(
 
     )
 
-
-
     recipient_ids = _get_notification_recipient_ids(
 
         current_user.user_id,
@@ -2994,8 +2832,6 @@ async def mark_all_notifications_read(
         tech,
 
     )
-
-
 
     updated_count = db.query(InAppNotification).filter(
 
@@ -3019,11 +2855,7 @@ async def mark_all_notifications_read(
 
     )
 
-
-
     db.commit()
-
-
 
     return {
 
@@ -3038,8 +2870,6 @@ async def mark_all_notifications_read(
 # Technician Status
 
 # ──────────────────────────────────────────────────
-
-
 
 @router.put("/status")
 
@@ -3065,8 +2895,6 @@ async def update_my_technician_status(
 
     ).first()
 
-
-
     if not profile or not profile.profile_completed:
 
         raise HTTPException(
@@ -3076,8 +2904,6 @@ async def update_my_technician_status(
             detail="Please complete your profile to change technician status.",
 
         )
-
-
 
     tech = _get_tech_for_user(
 
@@ -3089,8 +2915,6 @@ async def update_my_technician_status(
 
     )
 
-
-
     if not tech:
 
         raise HTTPException(
@@ -3101,17 +2925,11 @@ async def update_my_technician_status(
 
         )
 
-
-
     tech.technician_status = data.technician_status
-
-
 
     db.commit()
 
     db.refresh(tech)
-
-
 
     return {
 
@@ -3121,17 +2939,11 @@ async def update_my_technician_status(
 
     }
 
-
-
-
-
 # ──────────────────────────────────────────────────
 
 # Dashboard
 
 # ──────────────────────────────────────────────────
-
-
 
 @router.get("/billing-reports")
 
@@ -3151,8 +2963,6 @@ async def get_billing_reports(
 
         raise HTTPException(status_code=403, detail="Technician record not found")
 
-
-
     rows = (
 
         db.query(JobClosure, Job)
@@ -3170,8 +2980,6 @@ async def get_billing_reports(
         .all()
 
     )
-
-
 
     reports = []
 
@@ -3215,13 +3023,7 @@ async def get_billing_reports(
 
         })
 
-
-
     return {"reports": reports, "count": len(reports)}
-
-
-
-
 
 @router.get("/billing-reports/{closure_id}/pdf")
 
@@ -3242,8 +3044,6 @@ async def download_billing_report_pdf(
     if not tech:
 
         raise HTTPException(status_code=403, detail="Technician record not found")
-
-
 
     row = (
 
@@ -3267,8 +3067,6 @@ async def download_billing_report_pdf(
 
         raise HTTPException(status_code=404, detail="Billing report not found")
 
-
-
     closure, job = row
 
     from reportlab.lib.pagesizes import A4
@@ -3277,15 +3075,11 @@ async def download_billing_report_pdf(
 
     from reportlab.pdfgen import canvas
 
-
-
     subtotal = round(float(closure.subtotal or 0), 2)
 
     gst = round(subtotal * 0.05, 2)
 
     total = round(subtotal + gst, 2)
-
-
 
     buffer = BytesIO()
 
@@ -3303,406 +3097,205 @@ async def download_billing_report_pdf(
 
     pdf.drawString(50, height - 75, f"Report #{closure.id}  |  Job #{job.id}")
 
-
-
     y = height - 115
-
     pdf.setFont("Helvetica-Bold", 11)
-
     pdf.drawString(50, y, "Job Details")
-
     y -= 22
-
     pdf.setFont("Helvetica", 10)
-
     details = [
-
         ("Customer", job.customer_name or "N/A"),
-
         ("Service", job.service_type or "N/A"),
-
         ("Location", job.location or job.site_address or "N/A"),
-
         ("Technician", tech.technician_name or "N/A"),
-
         ("Completed", str(closure.completed_at or "N/A")),
-
     ]
-
     for label, value in details:
-
         pdf.drawString(50, y, f"{label}: {value}")
-
         y -= 18
 
-
-
     y -= 8
-
     pdf.setFont("Helvetica-Bold", 11)
-
     pdf.drawString(50, y, "Work Summary")
-
     y -= 20
-
     pdf.setFont("Helvetica", 10)
-
     words = (closure.work_summary or "").replace("\n", " ").split()
-
     line = ""
-
     for word in words:
-
         test = f"{line} {word}".strip()
-
         if len(test) > 90:
-
             pdf.drawString(50, y, line)
-
             y -= 15
-
             line = word
-
         else:
-
             line = test
 
     if line:
-
         pdf.drawString(50, y, line)
-
         y -= 25
 
-
-
     pdf.setFont("Helvetica-Bold", 11)
-
     pdf.drawString(50, y, "Cost Details")
-
     y -= 22
-
     pdf.setFont("Helvetica", 10)
-
     for label, amount in [
-
         ("Service / Labour Cost", closure.labour_cost or 0),
-
         ("Material Cost", closure.material_cost or 0),
-
         ("Subtotal", subtotal),
-
         ("GST (5%)", gst),
-
         ("Total Amount", total),
-
     ]:
-
         pdf.drawString(50, y, label)
-
         pdf.drawRightString(width - 50, y, f"INR {float(amount):,.2f}")
-
         y -= 20
 
-
-
-    # Include the backend-authoritative customer signature captured for this job.
-
+    # Include the backend-authoritative customer signature captured for this job
     # Looked up by job_id only: the signature is stored under the job's
-
     # (or customer's) tenant, which can differ from the technician's tenant.
-
     signature = (
-
         db.query(CustomerSignature)
-
         .filter(
-
             CustomerSignature.job_id == job.id,
-
         )
-
         .first()
-
     )
 
-
-
     y -= 8
-
     pdf.setFont("Helvetica-Bold", 11)
-
     pdf.drawString(50, y, "Customer Signature")
-
     y -= 18
 
-
-
     if signature and signature.signature_data:
-
         try:
-
             encoded = signature.signature_data.split(",", 1)[1]
-
             signature_bytes = base64.b64decode(encoded, validate=True)
-
             signature_image = ImageReader(BytesIO(signature_bytes))
-
             image_width, image_height = signature_image.getSize()
 
-
-
             max_width = 240
-
             max_height = 100
-
             scale = min(
-
                 max_width / float(image_width or 1),
-
                 max_height / float(image_height or 1),
-
                 1.0,
-
             )
 
             draw_width = image_width * scale
-
             draw_height = image_height * scale
 
-
-
             if y - draw_height - 35 < 55:
-
                 pdf.showPage()
-
                 y = height - 60
 
-
-
             pdf.setFont("Helvetica", 9)
-
             pdf.setStrokeColorRGB(0.75, 0.75, 0.75)
-
             pdf.rect(50, y - draw_height - 8, max_width, draw_height + 16, stroke=1, fill=0)
-
             pdf.drawImage(
-
                 signature_image,
-
                 50,
-
                 y - draw_height,
-
                 width=draw_width,
-
                 height=draw_height,
-
                 preserveAspectRatio=True,
-
                 mask="auto",
-
             )
-
             y -= draw_height + 22
 
-
-
             pdf.setFillColorRGB(0.35, 0.35, 0.35)
-
             pdf.drawString(50, y, f"Signed at: {signature.signed_at.isoformat()}")
-
             pdf.setFillColorRGB(0, 0, 0)
-
         except Exception:
-
             pdf.setFont("Helvetica", 9)
-
             pdf.drawString(50, y, "Customer signature is unavailable for this report.")
-
     else:
-
         pdf.setFont("Helvetica", 9)
-
         pdf.drawString(50, y, "No customer signature was recorded for this report.")
 
-
-
     pdf.setFont("Helvetica-Oblique", 9)
-
     pdf.drawString(50, 45, "Generated from the FieldOps technician billing report.")
-
     pdf.save()
-
     buffer.seek(0)
-
     return StreamingResponse(
-
         buffer,
-
         media_type="application/pdf",
-
         headers={"Content-Disposition": f'attachment; filename="billing_report_job_{job.id}.pdf"'},
-
     )
 
-
-
-
-
 @router.get("/dashboard", response_model=TechnicianDashboardResponse)
-
 async def get_technician_dashboard(
-
     current_user: AuthenticatedUser = Depends(
-
         require_permission(Permission.DASHBOARD_TECH_VIEW)
-
     ),
-
     db: Session = Depends(get_db),
-
 ):
 
     """Get technician dashboard statistics."""
-
-
-
     tech = _get_tech_for_user(
-
         db,
-
         current_user.user_id,
-
         current_user.tenant_id,
-
     )
-
-
 
     profile = db.query(TechnicianProfile).filter(
-
         TechnicianProfile.user_id == current_user.user_id,
-
         TechnicianProfile.tenant_id == current_user.tenant_id,
-
     ).first()
 
-
-
     profile_completed = bool(
-
         profile and profile.profile_completed
-
     )
-
-
 
     if not tech:
-
         return TechnicianDashboardResponse(
-
             profile_completed=profile_completed,
-
             technician_status=None,
-
         )
-
-
 
     # Not tenant-scoped: jobs may belong to another organization.
-
     base = db.query(Job).filter(
-
         Job.assigned_technician_id == tech.technician_id,
-
     )
 
-
-
     today = datetime.now(timezone.utc).date()
-
-
-
     total_assigned = base.count()
 
-
-
     active = base.filter(
-
         func.lower(Job.status).in_(
-
             ["accepted", "en_route", "in_progress", "paused"]
-
         )
-
     ).count()
-
-
 
     completed_today = base.filter(
-
         Job.status == "COMPLETED",
-
         func.date(Job.completed_at) == today,
-
     ).count()
-
-
 
     pending = base.filter(
-
         func.lower(Job.status).in_(
-
             ["assigned", "active"]
-
         )
-
     ).count()
-
-
 
     rejected_jobs = db.query(Job).filter(
-
         Job.rejected_by_tech_id
-
         == (tech.tech_id or str(tech.technician_id)),
-
         func.lower(Job.status)
-
         == "rejected_by_technician",
-
     ).count()
-
-
 
     total_completed = base.filter(
-
         func.lower(Job.status).in_(
-
             ["completed", "closed"]
-
         )
-
     ).count()
 
-
-
     return TechnicianDashboardResponse(
-
         total_assigned=total_assigned,
-
         active_jobs=active,
-
         completed_today=completed_today,
-
         pending_acceptance=pending,
-
         total_completed=total_completed,
-
         rejected_jobs=rejected_jobs,
-
         technician_status=tech.technician_status,
-
         profile_completed=profile_completed,
 
     )
