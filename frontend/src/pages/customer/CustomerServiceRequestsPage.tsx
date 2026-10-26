@@ -28,6 +28,7 @@ import {
   createServiceRequest,
   cancelServiceRequest,
   getCustomerInvoice,
+  updateServiceRequest,
   type CustomerInvoiceResponse,
 } from "../../services/customerPortalService";
 
@@ -1017,7 +1018,7 @@ export default function CustomerServiceRequestsPage({
     };
   }, [mapVisible, mapTarget]);
 
-  const MAX_LOCATION_ACCURACY_METERS = 150;
+  const MAX_LOCATION_ACCURACY_METERS = 250;
   const LOCATION_WAIT_TIMEOUT_MS = 30000;
 
   const getCurrentLocation = () => {

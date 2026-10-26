@@ -123,7 +123,8 @@ def test_successful_job_closure(setup_db):
         before_images=["/uploads/before1.jpg"],
         after_images=["/uploads/after1.jpg", "/uploads/after2.jpg"],
         labour_cost=150.00,
-        material_cost=75.50
+        material_cost=75.50,
+        signature_data="data:image/png;base64,AA==",
     )
 
     closure = close_job(
@@ -159,7 +160,8 @@ def test_subtotal_calculated(setup_db):
         work_summary="Completed repair work.",
         after_images=["/uploads/after.jpg"],
         labour_cost=125.25,
-        material_cost=44.75
+        material_cost=44.75,
+        signature_data="data:image/png;base64,AA==",
     )
 
     closure = close_job(
@@ -183,6 +185,7 @@ def test_completed_at_and_by_stored(setup_db):
         after_images=["/uploads/after.jpg"],
         labour_cost=50.0,
         material_cost=20.0,
+        signature_data="data:image/png;base64,AA==",
     )
 
     before_time = datetime.now(timezone.utc)
@@ -226,7 +229,8 @@ def test_duplicate_completion_rejected(setup_db):
         work_summary="First completion.",
         after_images=["/uploads/after.jpg"],
         labour_cost=50.0,
-        material_cost=20.0
+        material_cost=20.0,
+        signature_data="data:image/png;base64,AA==",
     )
 
     close_job(
@@ -260,7 +264,8 @@ def test_unauthorized_user_rejected(setup_db):
         work_summary="Unauthorized attempt.",
         after_images=["/uploads/after.jpg"],
         labour_cost=100.0,
-        material_cost=0.0
+        material_cost=0.0,
+        signature_data="data:image/png;base64,AA==",
     )
 
     # User role DISPATCHER should be rejected with 403
@@ -284,7 +289,8 @@ def test_invalid_job(setup_db):
         work_summary="Closing non-existent job.",
         after_images=["/uploads/after.jpg"],
         labour_cost=10.0,
-        material_cost=5.0
+        material_cost=5.0,
+        signature_data="data:image/png;base64,AA==",
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -307,7 +313,8 @@ def test_validation_failures():
             work_summary="",
             after_images=["/uploads/after.jpg"],
             labour_cost=10.0,
-            material_cost=5.0
+            material_cost=5.0,
+            signature_data="data:image/png;base64,AA==",
         )
 
     # Missing after images
@@ -316,7 +323,8 @@ def test_validation_failures():
             work_summary="Summary",
             after_images=[],
             labour_cost=10.0,
-            material_cost=5.0
+            material_cost=5.0,
+            signature_data="data:image/png;base64,AA==",
         )
 
     # Negative costs
@@ -325,7 +333,8 @@ def test_validation_failures():
             work_summary="Summary",
             after_images=["/uploads/after.jpg"],
             labour_cost=-50.0,
-            material_cost=5.0
+            material_cost=5.0,
+            signature_data="data:image/png;base64,AA==",
         )
 
 
@@ -337,7 +346,8 @@ def test_rollback_on_failure(setup_db):
         work_summary="Rollback test.",
         after_images=["/uploads/after.jpg"],
         labour_cost=100.0,
-        material_cost=50.0
+        material_cost=50.0,
+        signature_data="data:image/png;base64,AA==",
     )
 
     with patch.object(db, "commit", side_effect=Exception("Database commit error")):
@@ -367,7 +377,8 @@ def test_get_job_closure_api(setup_db):
         before_images=["/uploads/before.jpg"],
         after_images=["/uploads/after.jpg"],
         labour_cost=80.0,
-        material_cost=20.0
+        material_cost=20.0,
+        signature_data="data:image/png;base64,AA==",
     )
 
     close_job(
@@ -396,7 +407,8 @@ def test_structured_work_report_stored(setup_db):
         },
         after_images=["/uploads/after.jpg"],
         labour_cost=100.0,
-        material_cost=50.0
+        material_cost=50.0,
+        signature_data="data:image/png;base64,AA==",
     )
 
     closure = close_job(
@@ -427,7 +439,8 @@ def test_structured_work_report_syncs_job_work_report(setup_db):
         },
         after_images=["/uploads/after.jpg"],
         labour_cost=100.0,
-        material_cost=50.0
+        material_cost=50.0,
+        signature_data="data:image/png;base64,AA==",
     )
 
     close_job(
@@ -456,7 +469,8 @@ def test_structured_work_report_validation(setup_db):
             },
             after_images=["/uploads/after.jpg"],
             labour_cost=100.0,
-            material_cost=50.0
+            material_cost=50.0,
+            signature_data="data:image/png;base64,AA==",
         )
 
     # Blank part must fail
@@ -470,7 +484,8 @@ def test_structured_work_report_validation(setup_db):
             },
             after_images=["/uploads/after.jpg"],
             labour_cost=100.0,
-            material_cost=50.0
+            material_cost=50.0,
+            signature_data="data:image/png;base64,AA==",
         )
 
     # Negative duration must fail
@@ -484,7 +499,8 @@ def test_structured_work_report_validation(setup_db):
             },
             after_images=["/uploads/after.jpg"],
             labour_cost=100.0,
-            material_cost=50.0
+            material_cost=50.0,
+            signature_data="data:image/png;base64,AA==",
         )
 
 
@@ -496,7 +512,8 @@ def test_legacy_work_summary_creates_compatible_work_report(setup_db):
         work_summary="Completed AC repair.",
         after_images=["/uploads/after.jpg"],
         labour_cost=100.0,
-        material_cost=50.0
+        material_cost=50.0,
+        signature_data="data:image/png;base64,AA==",
     )
 
     closure = close_job(
@@ -538,6 +555,7 @@ def test_required_checklist_must_be_completed(setup_db):
         after_images=["/uploads/after.jpg"],
         labour_cost=100.0,
         material_cost=50.0,
+        signature_data="data:image/png;base64,AA==",
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -589,6 +607,7 @@ def test_optional_incomplete_checklist_item_allows_completion(setup_db):
         after_images=["/uploads/after.jpg"],
         labour_cost=100.0,
         material_cost=50.0,
+        signature_data="data:image/png;base64,AA==",
     )
 
     closure = close_job(
@@ -632,6 +651,7 @@ def test_completed_checklist_is_persisted(setup_db):
         after_images=["/uploads/after.jpg"],
         labour_cost=100.0,
         material_cost=50.0,
+        signature_data="data:image/png;base64,AA==",
     )
 
     closure = close_job(
@@ -686,6 +706,7 @@ def test_payment_status_returns_backend_authoritative_state(
             after_images=["/uploads/after.jpg"],
             labour_cost=100.0,
             material_cost=50.0,
+            signature_data="data:image/png;base64,AA==",
         ),
         technician_identifier=str(tech.technician_id),
         tenant_id=tech.tenant_id,

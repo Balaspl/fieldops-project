@@ -2,6 +2,8 @@
 import { useEffect } from "react";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+
+import "../src/gps/backgroundLocationService";
 import { configureNotifications } from "../src/notifications/notificationService";
 import { logError } from "../src/observability/logger";
 

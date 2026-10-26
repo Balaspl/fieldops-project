@@ -163,6 +163,7 @@ def completion_payload():
         "after_images": ["/uploads/after.jpg"],
         "labour_cost": 150.0,
         "material_cost": 75.5,
+        "signature_data": "data:image/png;base64,AA==",
     }
 
 

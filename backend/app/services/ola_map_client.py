@@ -360,11 +360,12 @@ class OlaMapsClient:
             raise last_error
         raise MapsAPIException("maps_unavailable", str(last_error))
     async def get_route_duration(
-    self,
-    origin_lat: float,
-    origin_lng: float,
-    dest_lat: float,
-    dest_lng: float,) -> dict:
+        self,
+        origin_lat: float,
+        origin_lng: float,
+        dest_lat: float,
+        dest_lng: float,
+    ) -> dict:
 
         if not is_valid_coordinate(origin_lat, origin_lng) or not is_valid_coordinate(dest_lat, dest_lng):
             raise MapsAPIException(

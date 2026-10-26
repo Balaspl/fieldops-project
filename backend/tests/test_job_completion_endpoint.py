@@ -133,6 +133,7 @@ def completion_payload():
         "after_images": ["/uploads/after.jpg"],
         "labour_cost": 150.0,
         "material_cost": 75.5,
+        "signature_data": "data:image/png;base64,AA==",
     }
 
 
@@ -576,6 +577,7 @@ def test_job_closure_schema_uses_canonical_completion_notes():
         after_images=["/uploads/after.jpg"],
         labour_cost=100.0,
         material_cost=25.0,
+        signature_data="data:image/png;base64,AA==",
     )
 
     assert payload.work_summary == "Replaced valve & verified pressure."

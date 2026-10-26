@@ -97,7 +97,6 @@ export function getJobActionOptions(
     case "ON_SITE":
     case "IN_PROGRESS":
       return [
-        { action: "pause", label: "Pause Job" },
         { action: "complete", label: "Complete Job" }
       ];
 

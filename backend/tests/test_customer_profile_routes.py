@@ -147,7 +147,7 @@ class FakeQuery:
 
         return len(self.all_result)
 
-    def update(self, values):
+    def update(self, values, **kwargs):
         self.update_values = values
         return self.update_result
 
@@ -2436,7 +2436,7 @@ def test_track_customer_jobs_full_path():
 
     job_two = make_job(
         job_id=102,
-        status="ASSIGNED",
+        status="ACCEPTED",
         assigned_technician_id=20,
         tenant_id="provider-tenant-2",
         site_address=None,
@@ -2910,10 +2910,22 @@ def test_get_service_history():
     completed = make_service_request(
         sr_id=1,
         status="COMPLETED",
+        linked_job_id=101,
     )
 
     cancelled = make_service_request(
         sr_id=2,
+        status="CANCELLED",
+        linked_job_id=102,
+    )
+
+    completed_job = make_job(
+        job_id=101,
+        status="COMPLETED",
+    )
+
+    cancelled_job = make_job(
+        job_id=102,
         status="CANCELLED",
     )
 
@@ -2921,8 +2933,8 @@ def test_get_service_history():
         {
             ServiceRequest: FakeQuery(
                 all_result=[
-                    completed,
-                    cancelled,
+                    (completed, completed_job),
+                    (cancelled, cancelled_job),
                 ]
             )
         }
@@ -2939,7 +2951,6 @@ def test_get_service_history():
         completed,
         cancelled,
     ]
-
 
 # ============================================================
 # NOTIFICATIONS

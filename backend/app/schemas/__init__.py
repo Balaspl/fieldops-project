@@ -1224,6 +1224,12 @@ class JobClosureCreate(BaseModel):
     after_images: list[str] = Field(..., min_length=1)
     labour_cost: float = Field(..., ge=0.0)
     material_cost: float = Field(..., ge=0.0)
+    signature_data: str = Field(
+        ...,
+        min_length=1,
+        max_length=2_000_000,
+        pattern=r"^data:image/(?:png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$",
+    )
 
     @field_validator("work_summary")
     @classmethod

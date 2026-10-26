@@ -22,12 +22,32 @@ export async function login(
     return result;
   }
 
-  if (result.access_token) {
-    await storeSessionTokens({
-      accessToken: result.access_token,
-      refreshToken: result.refresh_token
-    });
+  if (
+    typeof result.access_token !== "string" ||
+    !result.access_token.trim()
+  ) {
+    await clearSessionTokens();
+
+    throw new Error(
+      "Login did not return a valid access token."
+    );
   }
+
+  if (
+    typeof result.refresh_token !== "string" ||
+    !result.refresh_token.trim()
+  ) {
+    await clearSessionTokens();
+
+    throw new Error(
+      "Login did not return a refresh token. Please sign in again."
+    );
+  }
+
+  await storeSessionTokens({
+    accessToken: result.access_token,
+    refreshToken: result.refresh_token
+  });
 
   return result;
 }
