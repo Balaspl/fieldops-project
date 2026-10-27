@@ -22,6 +22,7 @@ IMPORTANT:
 from __future__ import annotations
 
 import inspect
+import json
 import logging
 from typing import Any, Awaitable, Callable, cast
 
@@ -129,8 +130,8 @@ def print_batch(job_id, batch_number, candidates, attempted):
 
     for i, t in enumerate(candidates, start=1):
         print(f"Rank {i}:", flush=True)
-        print(f"Technician: {t.get('technician_name')} (ID: {t.get('technician_id')})", flush=True)
-        print(f"Organization: {t.get('organization_name')} (ID: {t.get('organization_id')})", flush=True)
+        print(f"Technician ID: {t.get('technician_id')}", flush=True)
+        print(f"Organization ID: {t.get('organization_id')}", flush=True)
         print(f"Organization Distance: {t.get('organization_distance')} km", flush=True)
         print(f"Technician Distance: {t.get('technician_distance')} km", flush=True)
         print(f"Confidence: {t.get('confidence')}", flush=True)
@@ -263,11 +264,57 @@ accepted rejected timeout
 
         if value is None:
             return None
-
         try:
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _persistable_state(state: DispatcherState) -> dict[str, Any]:
+        """Return JSON-safe orchestration state for durable recovery."""
+        keys = (
+            "job_id", "dispatch_attempt_id", "all_candidates", "candidates",
+            "batch_number", "current_index", "current_technician_id",
+            "attempted_technician_ids", "rejected_technician_ids", "event",
+            "next_action", "assigned_technician_id", "planning_required",
+            "replanning_required", "batch_exhausted", "offer_status",
+            "last_offer_outcome", "pending_retry", "dispatch_exhausted", "error",
+        )
+        payload = {key: state[key] for key in keys if key in state}
+        return json.loads(json.dumps(payload, default=str))
+
+    async def resume_from_persisted_state(
+        self, state: DispatcherState, event: str
+    ) -> DispatcherState:
+        """Recover a paused dispatch without depending on process memory."""
+        if event not in ALLOWED_EVENTS:
+            raise ValueError(f"Unsupported dispatcher event: {event!r}")
+        current_id = state.get("current_technician_id")
+        attempted = self._unique_ints(state.get("attempted_technician_ids") or [])
+        if current_id is None or int(current_id) in attempted:
+            # Duplicate delivery: return the current durable state unchanged.
+            return state
+        state = dict(state)
+        state["event"] = event
+        handler = {
+            TECHNICIAN_ACCEPTED: self.handle_accepted,
+            TECHNICIAN_REJECTED: self.handle_rejected,
+            TECHNICIAN_TIMEOUT: self.handle_timeout,
+        }[event]
+        state.update(await handler(state))
+        if event == TECHNICIAN_ACCEPTED:
+            state.update({"pending_retry": False, "batch_exhausted": False})
+            return state
+        state.update(await self.check_candidates(state))
+        if state.get("next_action") == "SELECT_CANDIDATE":
+            state.update(await self.select_candidate(state))
+            state.update(await self.offer_job_node(state))
+            return state
+        state.update(await self.request_replanning_node(state))
+        if state.get("candidates"):
+            state.update(await self.select_candidate(state))
+            state.update(await self.offer_job_node(state))
+        return state
 
     # ------------------------------------------------------------------
     # Graph construction
@@ -350,10 +397,11 @@ accepted rejected timeout
             },
         )
 
-        # Offer -> wait.
-        builder.add_edge(
+        # Offer -> wait, or skip a candidate rejected by runtime validation.
+        builder.add_conditional_edges(
             "offer_job",
-            "wait_for_response",
+            self.route_after_offer,
+            {"wait_for_response": "wait_for_response", "check_candidates": "check_candidates", "end": END},
         )
 
         # Wait -> event handler.
@@ -544,8 +592,9 @@ accepted rejected timeout
             })
             seen_ids.add(technician_id)
 
-        # Offer only three at a time; retain the full ranking.
-        candidates = filtered_candidates[:3]
+        # A Planning response is one dispatch batch. Keep the full ranked
+        # response active until every candidate reaches a terminal outcome.
+        candidates = filtered_candidates
 
         updates: dict[str, Any] = {
             "job_id": int(job_id),
@@ -564,6 +613,10 @@ accepted rejected timeout
             ),
             "planning_required": False,
             "replanning_required": False,
+            "batch_exhausted": False,
+            "offer_status": state.get("offer_status"),
+            "last_offer_outcome": state.get("last_offer_outcome"),
+            "pending_retry": bool(state.get("pending_retry", False)),
             "error": state.get("error"),
         }
 
@@ -679,6 +732,8 @@ accepted rejected timeout
                 "current_technician_id": technician_id,
                 "next_action": "OFFER_JOB",
                 "replanning_required": False,
+            "batch_exhausted": False,
+            "pending_retry": False,
             }
 
         logger.info(
@@ -691,6 +746,7 @@ accepted rejected timeout
             "current_technician_id": None,
             "planning_required": True,
             "replanning_required": True,
+            "batch_exhausted": True,
             "next_action": "REQUEST_PLANNING",
         }
 
@@ -722,13 +778,37 @@ accepted rejected timeout
             state.get("current_index"),
         )
 
-        job = state.get("job") or {}
-
         if technician_id is None:
             return {
                 "error": "No current technician selected",
                 "next_action": "END",
             }
+
+        job = dict(state.get("job") or {})
+        state_job_id = state.get("job_id")
+        nested_job_id = job.get("id", job.get("job_id"))
+        if state_job_id is None:
+            logger.error(
+                "Dispatcher cannot offer without canonical job_id; state_keys=%s",
+                sorted(state.keys()),
+            )
+            return {"error": "Missing job_id in Dispatcher state", "next_action": "END"}
+        try:
+            normalized_job_id = int(state_job_id)
+            if nested_job_id is not None and int(nested_job_id) != normalized_job_id:
+                raise ValueError("job_id mismatch between job and Dispatcher state")
+        except (TypeError, ValueError) as exc:
+            logger.error(
+                "Invalid Dispatcher job identifier; state_keys=%s job_keys=%s reason=%s",
+                sorted(state.keys()), sorted(job.keys()), str(exc),
+            )
+            return {"error": f"Invalid Dispatcher job identifier: {exc}", "next_action": "END"}
+
+        # Graph state has one canonical key (job_id); runtime callbacks and
+        # legacy callers consume the Job-shaped `id` field. Normalize here.
+        job["id"] = normalized_job_id
+        job["job_id"] = normalized_job_id
+        job["_dispatch_state"] = self._persistable_state(state)
 
         try:
             await self._maybe_await(
@@ -740,16 +820,11 @@ accepted rejected timeout
 
         except Exception as exc:
             logger.exception(
-                "Failed to offer job_id=%s to technician_id=%s",
-                state.get("job_id"),
-                technician_id,
+                "dispatch_failed job_id=%s technician_id=%s dispatch_attempt_id=%s phase=offer_creation outcome=failed",
+                state.get("job_id"), technician_id, state.get("dispatch_attempt_id"),
             )
-
             return {
-                "error": (
-                    f"Failed to offer job to technician "
-                    f"{technician_id}: {exc}"
-                ),
+                "error": f"Failed to offer job to technician {technician_id}: {exc}",
                 "next_action": "END",
             }
 
@@ -762,7 +837,19 @@ accepted rejected timeout
 
         return {
             "next_action": "WAIT_FOR_RESPONSE",
+            "offer_status": "OFFERED",
+            "last_offer_outcome": None,
+            "batch_exhausted": False,
+            "pending_retry": False,
         }
+
+    @staticmethod
+    def route_after_offer(state: DispatcherState) -> str:
+        if state.get("error"):
+            return "end"
+        if state.get("current_technician_id") is None:
+            return "check_candidates"
+        return "wait_for_response"
 
     async def wait_for_response(
         self,
@@ -794,10 +881,10 @@ accepted rejected timeout
             )
 
         logger.info(
-            "Received technician event "
-            "job_id=%s technician_id=%s event=%s",
+            "technician_response job_id=%s technician_id=%s dispatch_attempt_id=%s event=%s outcome=received",
             job_id,
             technician_id,
+            state.get("dispatch_attempt_id"),
             response,
         )
 
@@ -821,7 +908,6 @@ accepted rejected timeout
         attempted = self._unique_ints(
             state.get("attempted_technician_ids") or []
         )
-
         if (
             technician_id is not None
             and technician_id not in attempted
@@ -829,9 +915,10 @@ accepted rejected timeout
             attempted.append(technician_id)
 
         logger.info(
-            "Technician accepted job_id=%s technician_id=%s",
+            "technician_accepted job_id=%s technician_id=%s dispatch_attempt_id=%s outcome=accepted",
             state.get("job_id"),
             technician_id,
+            state.get("dispatch_attempt_id"),
         )
 
         return {
@@ -893,11 +980,10 @@ accepted rejected timeout
         )
 
         logger.info(
-            "DISPATCH_REJECT_EVENT | job_id=%s | event_type=REJECT | "
-            "technician_id=%s | attempted_before=%s | "
-            "remaining_in_batch=%s",
+            "technician_rejected job_id=%s technician_id=%s dispatch_attempt_id=%s attempted_before=%s remaining_in_batch=%s outcome=next_candidate",
             state.get("job_id"),
             technician_id,
+            state.get("dispatch_attempt_id"),
             attempted_before,
             remaining_in_batch,
         )
@@ -975,11 +1061,10 @@ accepted rejected timeout
         )
 
         logger.info(
-            "DISPATCH_TIMEOUT_EVENT | job_id=%s | event_type=TIMEOUT | "
-            "technician_id=%s | attempted_before=%s | "
-            "remaining_in_batch=%s",
+            "offer_timed_out job_id=%s technician_id=%s dispatch_attempt_id=%s attempted_before=%s remaining_in_batch=%s outcome=next_candidate",
             state.get("job_id"),
             technician_id,
+            state.get("dispatch_attempt_id"),
             attempted_before_timeout,
             remaining_after_timeout,
         )
@@ -1050,9 +1135,7 @@ accepted rejected timeout
                 "error": None,
             }
     
-        # Current batch exhausted — fresh Planning required.
-        # Per design: do NOT pull ranks 4-6 from the original pool.
-        # A fresh Planning call is mandatory after each Top-3 batch is exhausted.
+        # Current Planning batch exhausted — fresh Planning required.
         logger.info(
             "BATCH_EXHAUSTED_REPLANNING_REQUIRED | job_id=%s | "
             "batch=%s | exhausted_ids=%s | attempted_count=%s | "
@@ -1069,6 +1152,7 @@ accepted rejected timeout
             "current_technician_id": None,
             "planning_required": True,
             "replanning_required": True,
+            "batch_exhausted": True,
             "next_action": "REQUEST_REPLANNING",
             "error": None,
         }
@@ -1092,6 +1176,7 @@ accepted rejected timeout
         attempted = self._unique_ints(
             state.get("attempted_technician_ids") or []
         )
+        planning_exclusions = attempted
 
         batch_number = int(state.get("batch_number") or 1)
         next_batch_number = batch_number + 1
@@ -1103,8 +1188,8 @@ accepted rejected timeout
             job_id,
             next_batch_number,
             batch_number,
-            attempted,
-            len(attempted),
+            planning_exclusions,
+            len(planning_exclusions),
         )
 
         # Call the Planning integration.
@@ -1112,7 +1197,7 @@ accepted rejected timeout
             planning_result = await self._maybe_await(
                 self.request_planning(
                     int(job_id),
-                    attempted,
+                    planning_exclusions,
                 )
             )
         except ValueError as exc:
@@ -1234,8 +1319,8 @@ accepted rejected timeout
                 
                 normalized_candidates.append(candidate_data)
 
-            # Keep the Planning batch limited to Top-3.
-            candidates = normalized_candidates[:3]
+            # Planning owns ranking and batch membership. Preserve its batch.
+            candidates = normalized_candidates
 
         except Exception as exc:
             logger.exception(
@@ -1254,8 +1339,11 @@ accepted rejected timeout
                 "error": f"Invalid Planning response: {exc}",
             }
 
-        # No more candidates: stop instead of repeatedly replanning.
+        # If planning previously offered candidates and every one rejected or
+        # timed out, finish this dispatch as rejected. Only a job that never
+        # had an eligible candidate remains retryable.
         if not candidates:
+            exhausted = bool(attempted)
             decision_reason = getattr(
                 planning_result,
                 "reason",
@@ -1265,13 +1353,13 @@ accepted rejected timeout
             logger.warning(
                 "NO_ELIGIBLE_TECHNICIANS | job_id=%s | "
                 "batch=%s | attempted=%s | reason=%s | "
-                "dispatching_stopped=True",
+                "dispatching_stopped=True | exhausted=%s",
                 job_id,
                 next_batch_number,
                 attempted,
                 decision_reason,
+                exhausted,
             )
-            print_batch(job_id, next_batch_number, [], attempted)
 
             return {
                 "candidates": [],
@@ -1280,8 +1368,11 @@ accepted rejected timeout
                 "current_technician_id": None,
                 "planning_required": False,
                 "replanning_required": False,
-                "next_action": "NO_ELIGIBLE_TECHNICIAN",
-                "error": "Planning returned no technician candidates.",
+                "pending_retry": not exhausted,
+                "dispatch_exhausted": exhausted,
+                "batch_exhausted": True,
+                "next_action": "ALL_TECHNICIANS_REJECTED_OR_TIMED_OUT" if exhausted else "NO_ELIGIBLE_TECHNICIAN",
+                "error": None,
             }
 
         logger.info(
@@ -1319,6 +1410,9 @@ accepted rejected timeout
     ) -> str:
 
         if state.get("error"):
+            return "end"
+
+        if state.get("pending_retry"):
             return "end"
 
         candidates = state.get("candidates") or []
@@ -1503,7 +1597,7 @@ accepted rejected timeout
 
         logger.info(
             "ROUTE_AFTER_REPLANNING | job_id=%s | route=end | "
-            "reason=no_eligible_technicians | dispatch_stopped=True",
+            "reason=no_eligible_technicians | retryable=True",
             state.get("job_id"),
         )
         return "end"

@@ -2,7 +2,7 @@ import asyncio
 import inspect
 
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 from fastapi.params import Depends
 
 from app.auth.dependencies import AuthenticatedUser
@@ -278,6 +278,39 @@ def test_attendance_update_changes_backend_technician_status():
     assert db.refresh_count == 1
 
 
+def test_go_online_requires_validated_availability_location_and_persists_status():
+    profile = make_profile(completed=True)
+    technician = make_technician(status="Offline")
+    db = FakeDB(profile=profile, technician=technician)
+    user = make_user()
+    gps_key = "gps:availability:tenant-1:tech-user-1"
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(update_my_technician_status(
+            data=TechnicianAvailabilityUpdate(technician_status="Available"),
+            current_user=user,
+            db=db,
+            redis_client=type("Redis", (), {"exists": lambda _self, key: False})(),
+        ))
+    assert exc_info.value.status_code == 409
+    assert technician.technician_status == "Offline"
+    assert db.commit_count == 0
+
+    redis_client = type("Redis", (), {"exists": lambda _self, key: key == gps_key})()
+    background_tasks = BackgroundTasks()
+    response = asyncio.run(update_my_technician_status(
+        data=TechnicianAvailabilityUpdate(technician_status="Available"),
+        background_tasks=background_tasks,
+        current_user=user,
+        db=db,
+        redis_client=redis_client,
+    ))
+    assert response["technician_status"] == "AVAILABLE"
+    assert technician.technician_status == "AVAILABLE"
+    assert db.commit_count == 1
+    assert background_tasks.tasks == []
+
+
 # ============================================================
 # Profile guard
 # ============================================================
@@ -386,6 +419,10 @@ class Q:
 
     def filter(self, *args):
         self.ops.append(("filter", args))
+        return self
+
+    def with_for_update(self):
+        self.ops.append(("with_for_update",))
         return self
 
     def order_by(self, *args):
@@ -810,7 +847,8 @@ def test_reject_job_paths(patch_tp):
     t = tech(current_jobs=2, tech_id=None)
     j = job()
     result = asyncio.run(tp.reject_job(job_id=1, data=data, request=req("POST", "/reject"), current_user=u(), db=DB(Q(first=t), Q(first=j), Q())))
-    assert result["status"] == "REJECTED_BY_TECHNICIAN"
+    assert result["status"] == "QUEUED"
+    assert result["offer_outcome"] == "REJECTED_BY_TECHNICIAN"
     assert t.current_jobs == 2
     assert j.assigned_technician_id is None
 
@@ -889,7 +927,172 @@ def test_complete_job_paths(patch_tp, monkeypatch):
     with pytest.raises(HTTPException):
         asyncio.run(tp.complete_job(job_id=1, data=TechnicianJobCompleteRequest(), request=req("POST", "/complete"), current_user=u(), db=DB(Q(first=tech()), Q(first=None))))
 
+def test_job_actions_reject_invalid_status_transitions(patch_tp):
+    # Accept must not accept an already completed job.
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            tp.accept_job(
+                job_id=1,
+                request=req("POST", "/accept"),
+                current_user=u(),
+                db=DB(
+                    Q(first=tech()),
+                    Q(first=job(status="COMPLETED")),
+                ),
+            )
+        )
+    assert exc.value.status_code == 409
 
+    # Reject must not reject a job already in progress.
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            tp.reject_job(
+                job_id=1,
+                data=TechnicianJobRejectRequest(
+                    reason="Technician unavailable"
+                ),
+                request=req("POST", "/reject"),
+                current_user=u(),
+                db=DB(
+                    Q(first=tech()),
+                    Q(first=job(status="IN_PROGRESS")),
+                ),
+            )
+        )
+    assert exc.value.status_code == 409
+
+    # Start travel requires ACCEPTED.
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            tp.start_job(
+                job_id=1,
+                request=req("POST", "/start"),
+                current_user=u(),
+                db=DB(
+                    Q(first=tech()),
+                    Q(first=job(status="ASSIGNED")),
+                ),
+            )
+        )
+    assert exc.value.status_code == 409
+
+    # Going on-site requires EN_ROUTE.
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            tp.on_site_job(
+                job_id=1,
+                request=req("POST", "/on-site"),
+                current_user=u(),
+                db=DB(
+                    Q(first=tech()),
+                    Q(first=job(status="ACCEPTED")),
+                ),
+            )
+        )
+    assert exc.value.status_code == 400
+
+    # Pause requires IN_PROGRESS.
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            tp.pause_job(
+                job_id=1,
+                request=req("POST", "/pause"),
+                current_user=u(),
+                db=DB(
+                    Q(first=tech()),
+                    Q(first=job(status="ACCEPTED")),
+                ),
+            )
+        )
+    assert exc.value.status_code == 409
+
+    # Resume requires PAUSED.
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            tp.resume_job(
+                job_id=1,
+                request=req("POST", "/resume"),
+                current_user=u(),
+                db=DB(
+                    Q(first=tech()),
+                    Q(first=job(status="ASSIGNED")),
+                ),
+            )
+        )
+    assert exc.value.status_code == 409
+
+    # Complete requires IN_PROGRESS.
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            tp.complete_job(
+                job_id=1,
+                data=TechnicianJobCompleteRequest(),
+                request=req("POST", "/complete"),
+                current_user=u(),
+                db=DB(
+                    Q(first=tech()),
+                    Q(first=job(status="ASSIGNED")),
+                ),
+            )
+        )
+    assert exc.value.status_code == 409
+
+def test_job_actions_handle_duplicate_requests_safely(patch_tp):
+    duplicate_cases = [
+        (
+            tp.accept_job,
+            "ACCEPTED",
+            "/accept",
+        ),
+        (
+            tp.start_job,
+            "EN_ROUTE",
+            "/start",
+        ),
+        (
+            tp.on_site_job,
+            "IN_PROGRESS",
+            "/on-site",
+        ),
+        (
+            tp.pause_job,
+            "PAUSED",
+            "/pause",
+        ),
+        (
+            tp.resume_job,
+            "IN_PROGRESS",
+            "/resume",
+        ),
+        (
+            tp.complete_job,
+            "COMPLETED",
+            "/complete",
+        ),
+    ]
+
+    for action, current_status, path in duplicate_cases:
+        db = DB(
+            Q(first=tech()),
+            Q(first=job(status=current_status)),
+        )
+
+        kwargs = {
+            "job_id": 1,
+            "request": req("POST", path),
+            "current_user": u(),
+            "db": db,
+        }
+
+        if action is tp.complete_job:
+            kwargs["data"] = TechnicianJobCompleteRequest()
+
+        result = asyncio.run(action(**kwargs))
+
+        assert result["status"] == current_status, path
+        assert db.commit_count == 0, path
+
+        
 def test_get_notifications_success_and_failure(patch_tp):
     initial = [
         nfy(job_id="1", status="UNREAD"),

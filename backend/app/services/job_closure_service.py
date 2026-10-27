@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from ..models import Job, Technician, AuditEvent, ServiceRequest
 from ..models.job_closure import JobClosure
+from ..models.customer_signature import CustomerSignature
 from ..repositories.completion_document_repository import (
     CompletionDocumentRepository,
 )
@@ -282,6 +283,21 @@ def close_job(
         db.add(closure_record)
         db.flush()
 
+        # Save the customer signature in the same transaction as
+        # the job closure. If signature persistence fails, the
+        # closure and job status transition will roll back together.
+        customer_signature = CustomerSignature(
+            job_id=job.id,
+            job_closure_id=closure_record.id,
+            tenant_id=tenant_id,
+            signature_data=closure_data.signature_data,
+            captured_by=technician_identifier,
+            signed_at=datetime.now(timezone.utc),
+        )
+
+        db.add(customer_signature)
+        db.flush()
+
         # -----------------------------------------------------------
         # 4.4.7
         # Link completion documents that were uploaded before the
@@ -361,8 +377,7 @@ def close_job(
         from .email.transactional_outbox import persist_invoice_email
         persist_invoice_email(db, job, closure_record)
 
-        # Keep the technician available after the final completion is staged.
-        tech.technician_status = "AVAILABLE"
+        # Completing work updates workload only; availability is user-controlled.
         tech.current_jobs = max(
             0,
             (tech.current_jobs or 1) - 1,

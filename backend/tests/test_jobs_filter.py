@@ -6570,6 +6570,7 @@ def test_close_job_endpoint_not_found():
             after_images=["after.jpg"],
             labour_cost=100.0,
             material_cost=50.0,
+            signature_data="data:image/png;base64,AA==",
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -6603,6 +6604,7 @@ def test_close_job_endpoint_wrong_technician():
             after_images=["after.jpg"],
             labour_cost=100.0,
             material_cost=50.0,
+            signature_data="data:image/png;base64,AA==",
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -6637,6 +6639,7 @@ def test_close_job_endpoint_terminal_status():
             after_images=["after.jpg"],
             labour_cost=100.0,
             material_cost=50.0,
+            signature_data="data:image/png;base64,AA==",
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -7357,6 +7360,7 @@ def test_close_job_endpoint_success(monkeypatch):
             after_images=["after.jpg"],
             labour_cost=100.0,
             material_cost=50.0,
+            signature_data="data:image/png;base64,AA==",
         )
 
         result = close_job_endpoint(
@@ -7971,6 +7975,7 @@ def test_close_job_terminal_status_lowercase():
             after_images=["after.jpg"],
             labour_cost=100.0,
             material_cost=50.0,
+            signature_data="data:image/png;base64,AA==",
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -10950,6 +10955,7 @@ def test_cov_close_job_dispatcher_forbidden():
         after_images=["after.jpg"],
         labour_cost=10,
         material_cost=5,
+        signature_data="data:image/png;base64,AA==",
     )
 
     db = TestingSessionLocal()
@@ -10982,6 +10988,7 @@ def test_cov_close_job_technician_record_none(monkeypatch):
         after_images=["after.jpg"],
         labour_cost=10,
         material_cost=5,
+        signature_data="data:image/png;base64,AA==",
     )
 
     db = TestingSessionLocal()

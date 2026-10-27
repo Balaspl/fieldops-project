@@ -37,6 +37,7 @@ from app.services.ai.FieldOpsAI.agents.communication_agent.store import (
 from app.services.ai.FieldOpsAI.agents.communication_agent.channels import (
     claim_delivery,
     idem_key,
+    _enqueue_task_with_retry,
 )
 from app.services.ai.FieldOpsAI.agents.communication_agent.texts import email_content
 
@@ -360,6 +361,47 @@ def test_failed_email_delivery_can_be_reclaimed_once():
     finally:
         session.close()
         engine.dispose()
+
+
+def test_delivery_enqueue_retries_with_stable_idempotency_key():
+    calls = []
+
+    class _Task:
+        def apply_async(self, *, kwargs, task_id):
+            calls.append((kwargs, task_id))
+            if len(calls) < 3:
+                raise ConnectionError("broker temporarily unavailable")
+
+    _enqueue_task_with_retry(
+        _Task(), kwargs={"delivery_id": 73}, task_id="communication-email-delivery-73"
+    )
+    assert len(calls) == 3
+    assert {task_id for _, task_id in calls} == {"communication-email-delivery-73"}
+    assert all(kwargs == {"delivery_id": 73} for kwargs, _ in calls)
+
+
+def test_enqueue_failure_keeps_notification_and_logs_delivery_event(monkeypatch, caplog):
+    from app.services.ai.FieldOpsAI.agents.communication_agent import graph
+
+    db = FakeSession()
+    state = _dispatch_state()
+    state["messages"][0]["recipient"].update(
+        {"channels": ["sms"], "phone": "+919876543210"}
+    )
+    state["messages"][0]["sms"] = "Technician is on the way"
+    monkeypatch.setattr(graph, "external_channels_enabled", lambda: {"sms"})
+    monkeypatch.setattr(graph, "upsert_notification", lambda *args, **kwargs: "notification-1")
+    monkeypatch.setattr(graph, "claim_delivery", lambda *args, **kwargs: 73)
+    monkeypatch.setattr(graph, "enqueue_sms", lambda *args, **kwargs: (_ for _ in ()).throw(ConnectionError("broker refused connection")))
+    marked = []
+    monkeypatch.setattr(graph, "mark_delivery", lambda *args, **kwargs: marked.append((args, kwargs)))
+
+    result = graph.dispatch(state, {"configurable": {"db": db}})
+    assert result["notification_ids"] == ["notification-1"]
+    assert marked and marked[0][0][1:3] == (73, "failed")
+    record = next(record for record in caplog.records if "delivery enqueue failed" in record.message)
+    assert record.event_id == "73"
+    assert record.error == "broker refused connection"
 
 
 def test_websocket_failure_keeps_committed_notification(monkeypatch):

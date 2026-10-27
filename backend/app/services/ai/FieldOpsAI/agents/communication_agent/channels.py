@@ -5,6 +5,7 @@ import asyncio
 import logging
 import os
 import re
+import time
 from typing import Any, Coroutine
 
 from sqlalchemy import func, update
@@ -15,6 +16,25 @@ from sqlalchemy.orm import Session
 from app.models_legacy import NotificationChannelDelivery
 
 logger = logging.getLogger(__name__)
+
+
+def _enqueue_task_with_retry(task: Any, *, kwargs: dict[str, Any], task_id: str) -> None:
+    """Retry transient broker enqueue errors with a stable delivery identity."""
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            task.apply_async(kwargs=kwargs, task_id=task_id)
+            return
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "Communication task enqueue attempt failed event_id=%s attempt=%s/3 error_type=%s error=%s",
+                task_id, attempt, type(exc).__name__, str(exc)[:300], exc_info=True,
+            )
+            if attempt < 3:
+                time.sleep(0.1 * attempt)
+    assert last_error is not None
+    raise last_error
 
 
 # ---------------------------------------------------------------------------
@@ -164,30 +184,38 @@ def mark_delivery(
     db.commit()
 
 
-def begin_delivery_attempt(db: Session, delivery_id: int) -> None:
-    """Record one provider attempt while preserving the queued delivery state."""
-    db.execute(
+def begin_delivery_attempt(db: Session, delivery_id: int) -> bool:
+    """Atomically claim one queued delivery; duplicate tasks cannot send it."""
+    result = db.execute(
         update(NotificationChannelDelivery)
-        .where(NotificationChannelDelivery.id == delivery_id)
+        .where(
+            NotificationChannelDelivery.id == delivery_id,
+            NotificationChannelDelivery.status.in_(("queued", "failed", "pending")),
+        )
         .values(
-            status="queued",
+            status="sending",
             error_message=None,
             attempts=NotificationChannelDelivery.attempts + 1,
             updated_at=func.now(),
         )
     )
     db.commit()
+    return bool(result.rowcount)
 
 
 # ---------------------------------------------------------------------------
 # SMS / email enqueueing
 # ---------------------------------------------------------------------------
 
-def enqueue_sms(phone: str, body: str) -> None:
+def enqueue_sms(phone: str, body: str, delivery_id: int) -> None:
     """Queue SMS delivery using the existing Celery task."""
     from app.tasks import send_sms_async
 
-    send_sms_async.delay(to_number=phone, body=body)
+    _enqueue_task_with_retry(
+        send_sms_async,
+        kwargs={"to_number": phone, "body": body, "delivery_id": int(delivery_id)},
+        task_id=f"communication-sms-delivery-{int(delivery_id)}",
+    )
 
 
 def enqueue_email(
@@ -202,14 +230,18 @@ def enqueue_email(
     """Queue email delivery using the existing Celery task."""
     from app.tasks import send_email_async
 
-    send_email_async.delay(
-        to_email=to_email,
-        subject=subject,
-        html_body=html_body,
-        plain_text=plain_text,
-        delivery_id=delivery_id,
-        invoice_job_id=invoice_job_id,
-        invoice_closure_id=invoice_closure_id,
+    _enqueue_task_with_retry(
+        send_email_async,
+        kwargs={
+            "to_email": to_email,
+            "subject": subject,
+            "html_body": html_body,
+            "plain_text": plain_text,
+            "delivery_id": delivery_id,
+            "invoice_job_id": invoice_job_id,
+            "invoice_closure_id": invoice_closure_id,
+        },
+        task_id=f"communication-email-delivery-{int(delivery_id)}",
     )
 
 

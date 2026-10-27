@@ -1,5 +1,6 @@
-import os
+﻿import os
 import time
+import secrets
 import logging
 from contextlib import contextmanager
 from fastapi import HTTPException
@@ -52,13 +53,14 @@ def with_job_lock(job_id: str):
                     redis_client.incr("metrics:lock_contention")
                 raise HTTPException(status_code=409, detail="Concurrent modification detected")
         else:
-            # Fallback to single instance lock if redlock-py is missing
+            # Give each Redis lock a unique ownership token.
             redis_client = get_redis_client()
-            if not redis_client or not redis_client.client.set(lock_key, "locked", nx=True, px=ttl_ms):
+            lock_token = secrets.token_urlsafe(32)
+            if not redis_client or not redis_client.client.set(lock_key, lock_token, nx=True, px=ttl_ms):
                 if redis_client:
                     redis_client.incr("metrics:lock_contention")
                 raise HTTPException(status_code=409, detail="Concurrent modification detected")
-            lock = "single_instance_lock"
+            lock = lock_token
             
         acquire_time = (time.time() - start_time) * 1000
         logger.debug(f"Lock acquired for job {job_id} in {acquire_time:.2f}ms")
@@ -76,10 +78,24 @@ def with_job_lock(job_id: str):
         
     finally:
         if lock:
-            if dlm and lock != "single_instance_lock":
+            if dlm:
                 dlm.unlock(lock)
-            elif not dlm:
+            else:
                 redis_client = get_redis_client()
                 if redis_client:
-                    redis_client.delete(lock_key)
+                    try:
+                        redis_client.client.eval(
+                            """
+                            if redis.call('get', KEYS[1]) == ARGV[1] then
+                                return redis.call('del', KEYS[1])
+                            end
+                            return 0
+                            """,
+                            1,
+                            lock_key,
+                            lock,
+                        )
+                    except Exception as e:
+                        logger.warning("Failed to release lock for job %s: %s", job_id, e)
             logger.debug(f"Lock released for job {job_id}")
+

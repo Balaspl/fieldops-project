@@ -1,14 +1,10 @@
-
 import axios, {
   type AxiosError,
   type InternalAxiosRequestConfig
 } from "axios";
 import * as SecureStore from "expo-secure-store";
 import { env } from "../config/env";
-import {
-  clearSessionTokens,
-  getAccessToken
-} from "../auth/session";
+import { getAccessToken } from "../auth/session";
 import { refreshAccessToken } from "../auth/refreshService";
 
 const ACCESS_TOKEN_KEY = "fieldops_access_token";
@@ -24,12 +20,94 @@ const AUTH_ENDPOINTS = [
   "/auth/mfa/recovery"
 ];
 
+const NETWORK_ERROR_CODES = new Set([
+  "ERR_NETWORK",
+  "ECONNABORTED",
+  "ETIMEDOUT",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EAI_AGAIN"
+]);
+
 function isAuthEndpoint(url?: string): boolean {
   if (!url) {
     return false;
   }
 
   return AUTH_ENDPOINTS.some((endpoint) => url.includes(endpoint));
+}
+
+/**
+ * Identifies network failures and request timeouts.
+ *
+ * HTTP responses such as 401, 403, 404, 409, 429 and 500 are
+ * not classified as network failures because the server responded.
+ */
+export function isNetworkUnavailableError(
+  error: unknown
+): boolean {
+  let candidate: unknown = error;
+  const seen = new Set<object>();
+
+  while (
+    typeof candidate === "object" &&
+    candidate !== null
+  ) {
+    if (seen.has(candidate)) {
+      return false;
+    }
+
+    seen.add(candidate);
+
+    if (axios.isAxiosError(candidate)) {
+      const axiosError: AxiosError = candidate;
+
+      // An HTTP response is not a network-unavailable error.
+      if (axiosError.response) {
+        return false;
+      }
+
+      // Cancelled requests are not necessarily network failures.
+      if (axiosError.code === "ERR_CANCELED") {
+        return false;
+      }
+
+      if (
+        axiosError.code &&
+        NETWORK_ERROR_CODES.has(axiosError.code.toUpperCase())
+      ) {
+        return true;
+      }
+
+      // React Native Axios requests can fail without a response.
+      return axiosError.request != null;
+    }
+
+    // Inspect the original error inside custom error wrappers.
+    if (!("originalError" in candidate)) {
+      return false;
+    }
+
+    candidate = (
+      candidate as { originalError?: unknown }
+    ).originalError;
+  }
+
+  return false;
+}
+
+let refreshPromise: Promise<string> | null = null;
+
+function refreshAccessTokenOnce(): Promise<string> {
+  if (!refreshPromise) {
+    refreshPromise = refreshAccessToken().finally(() => {
+      refreshPromise = null;
+    });
+  }
+
+  return refreshPromise;
 }
 
 export const apiClient = axios.create({
@@ -69,7 +147,7 @@ apiClient.interceptors.response.use(
     originalRequest._retry = true;
 
     try {
-      const newAccessToken = await refreshAccessToken();
+      const newAccessToken = await refreshAccessTokenOnce();
 
       originalRequest.headers.set(
         "Authorization",
@@ -78,12 +156,9 @@ apiClient.interceptors.response.use(
 
       return apiClient(originalRequest);
     } catch (refreshError: unknown) {
-      try {
-        await clearSessionTokens();
-      } catch {
-        // Preserve the original refresh error if secure-storage cleanup fails.
-      }
-
+      // Preserve the existing refresh-service behavior.
+      // Transient network failures must not be mistaken for proof
+      // that the technician's credentials have been rejected.
       return Promise.reject(refreshError);
     }
   }

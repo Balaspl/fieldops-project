@@ -17,6 +17,9 @@ import {
 import "@testing-library/jest-dom";
 
 import TechnicianPortalDashboard from "../TechnicianPortalDashboard";
+import useAuthStore from "../../../store/authStore";
+import * as geolocationService from "../../../services/geolocationService";
+import * as gpsService from "../../../services/gpsService";
 
 import {
   getTechnicianDashboard,
@@ -88,15 +91,60 @@ describe("TechnicianPortalDashboard - Technician Attendance and Availability", (
   });
 
   afterEach(() => {
+    useAuthStore.setState({ user: null });
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
-  it("renders the backend-authoritative attendance status", async () => {
+  it("goes online only after fresh location is stored, then reflects backend status", async () => {
+    useAuthStore.setState({ user: { tenant_id: "tenant-1" } as any });
+    const position = {
+      timestamp: Date.now(),
+      coords: { latitude: 37.5, longitude: -122.2, accuracy: 25 },
+    } as GeolocationPosition;
+    const getLocation = vi.spyOn(geolocationService, "getTechnicianLocation").mockResolvedValue(position);
+    const sendLocation = vi.spyOn(gpsService, "sendTechnicianAvailabilityLocation").mockResolvedValue({} as any);
+    mockedGetTechnicianDashboard.mockResolvedValue({ data: { ...dashboardResponse, technician_status: "Offline" } } as any);
+    mockedUpdateTechnicianStatus.mockResolvedValue({ data: { technician_status: "Available" } } as any);
+
+    renderDashboard();
+    fireEvent.click(await screen.findByRole("button", { name: "Go Online" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Go Offline" })).toBeInTheDocument());
+    expect(getLocation).toHaveBeenCalledWith(expect.objectContaining({ maxAccuracyMeters: 150 }));
+    expect(sendLocation).toHaveBeenCalledWith("tenant-1", expect.objectContaining({
+      latitude: 37.5, longitude: -122.2, accuracy: 25,
+    }));
+    expect(mockedUpdateTechnicianStatus).toHaveBeenCalledWith("Available");
+  });
+
+  it("allows retry after location submission failure without going online", async () => {
+    useAuthStore.setState({ user: { tenant_id: "tenant-1" } as any });
+    vi.spyOn(geolocationService, "getTechnicianLocation").mockResolvedValue({
+      timestamp: Date.now(), coords: { latitude: 37.5, longitude: -122.2, accuracy: 25 },
+    } as GeolocationPosition);
+    const sendLocation = vi.spyOn(gpsService, "sendTechnicianAvailabilityLocation")
+      .mockRejectedValueOnce({ response: { data: { detail: "GPS unavailable" } } })
+      .mockResolvedValueOnce({} as any);
+    mockedGetTechnicianDashboard.mockResolvedValue({ data: { ...dashboardResponse, technician_status: "Offline" } } as any);
+    mockedUpdateTechnicianStatus.mockResolvedValue({ data: { technician_status: "Available" } } as any);
+
+    renderDashboard();
+    fireEvent.click(await screen.findByRole("button", { name: "Go Online" }));
+    await screen.findByRole("alert");
+    expect(mockedUpdateTechnicianStatus).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Go Offline" })).toBeInTheDocument());
+    expect(sendLocation).toHaveBeenCalledTimes(2);
+    expect(mockedUpdateTechnicianStatus).toHaveBeenCalledWith("Available");
+  });
+
+  it("renders the backend-authoritative availability control", async () => {
     mockedGetTechnicianDashboard.mockResolvedValue({
       data: {
         ...dashboardResponse,
-        technician_status: "Busy",
+        technician_status: "Offline",
       },
     } as any);
 
@@ -104,10 +152,8 @@ describe("TechnicianPortalDashboard - Technician Attendance and Availability", (
 
     await waitFor(() => {
       expect(
-        screen.getByTestId(
-          "technician-attendance-status",
-        ),
-      ).toHaveValue("Busy");
+        screen.getByRole("button", { name: "Go Online" }),
+      ).toBeInTheDocument();
     });
 
     expect(
@@ -115,11 +161,11 @@ describe("TechnicianPortalDashboard - Technician Attendance and Availability", (
     ).toHaveBeenCalledTimes(1);
   });
 
-  it("maps backend snake_case attendance status to the UI label", async () => {
+  it("restores Online from the backend after loading", async () => {
     mockedGetTechnicianDashboard.mockResolvedValue({
       data: {
         ...dashboardResponse,
-        technician_status: "on_break",
+        technician_status: "Available",
       },
     } as any);
 
@@ -127,10 +173,8 @@ describe("TechnicianPortalDashboard - Technician Attendance and Availability", (
 
     await waitFor(() => {
       expect(
-        screen.getByTestId(
-          "technician-attendance-status",
-        ),
-      ).toHaveValue("On Break");
+        screen.getByRole("button", { name: "Go Offline" }),
+      ).toBeInTheDocument();
     });
   });
 
@@ -146,10 +190,8 @@ describe("TechnicianPortalDashboard - Technician Attendance and Availability", (
 
     await waitFor(() => {
       expect(
-        screen.getByTestId(
-          "technician-attendance-status",
-        ),
-      ).toHaveValue("Available");
+        screen.getByRole("button", { name: "Go Offline" }),
+      ).toBeInTheDocument();
     });
 
     expect(
@@ -190,22 +232,12 @@ describe("TechnicianPortalDashboard - Technician Attendance and Availability", (
 
     renderDashboard();
 
-    const attendanceSelect =
-      await screen.findByTestId(
-        "technician-attendance-status",
-      );
-
-    expect(attendanceSelect).toHaveValue("Available");
-
-    fireEvent.change(attendanceSelect, {
-      target: {
-        value: "Offline",
-      },
-    });
+    const availabilityButton = await screen.findByRole("button", { name: "Go Offline" });
+    fireEvent.click(availabilityButton);
 
     // The UI must continue showing the last
     // backend-confirmed value until the request succeeds.
-    expect(attendanceSelect).toHaveValue("Available");
+    expect(availabilityButton).toHaveAccessibleName("Go Offline");
 
     expect(
       mockedUpdateTechnicianStatus,
@@ -222,9 +254,7 @@ describe("TechnicianPortalDashboard - Technician Attendance and Availability", (
     });
 
     await waitFor(() => {
-      expect(attendanceSelect).toHaveValue(
-        "Offline",
-      );
+      expect(screen.getByRole("button", { name: "Go Online" })).toBeInTheDocument();
     });
   });
 
@@ -242,32 +272,18 @@ describe("TechnicianPortalDashboard - Technician Attendance and Availability", (
 
     renderDashboard();
 
-    const attendanceSelect =
-      await screen.findByTestId(
-        "technician-attendance-status",
-      );
-
-    expect(attendanceSelect).toHaveValue(
-      "Available",
-    );
-
-    fireEvent.change(attendanceSelect, {
-      target: {
-        value: "Busy",
-      },
-    });
+    const availabilityButton = await screen.findByRole("button", { name: "Go Offline" });
+    fireEvent.click(availabilityButton);
 
     await waitFor(() => {
       expect(
         screen.getByRole("alert"),
       ).toHaveTextContent(
-        "Unable to update attendance and availability. Please try again.",
+        "Unable to update your availability. Please check your connection and try again.",
       );
     });
 
-    expect(attendanceSelect).toHaveValue(
-      "Available",
-    );
+    expect(availabilityButton).toHaveAccessibleName("Go Offline");
   });
 
   it("shows the unavailable state when the backend does not provide a valid attendance status", async () => {
@@ -280,15 +296,10 @@ describe("TechnicianPortalDashboard - Technician Attendance and Availability", (
 
     renderDashboard();
 
-    const attendanceSelect =
-      await screen.findByTestId(
-        "technician-attendance-status",
-      );
+    const availabilityButton = await screen.findByTestId("technician-availability-toggle");
 
     await waitFor(() => {
-      expect(attendanceSelect).toHaveValue(
-        "Not Available",
-      );
+      expect(availabilityButton).toHaveAccessibleName("Go Online");
     });
 
     expect(
@@ -309,18 +320,12 @@ describe("TechnicianPortalDashboard - Technician Attendance and Availability", (
 
     renderDashboard();
 
-    const attendanceSelect =
-      await screen.findByTestId(
-        "technician-attendance-status",
-      );
+    const availabilityButton = await screen.findByTestId("technician-availability-toggle");
 
     await waitFor(() => {
-      expect(attendanceSelect).toHaveValue(
-        "Not Available",
-      );
+      expect(availabilityButton).toBeDisabled();
     });
 
-    expect(attendanceSelect).toBeDisabled();
   });
 
   it("shows the loading state before attendance and availability data is available", () => {
@@ -409,16 +414,7 @@ describe("TechnicianPortalDashboard - Technician Attendance and Availability", (
 
     renderDashboard();
 
-    const attendanceSelect =
-      await screen.findByTestId(
-        "technician-attendance-status",
-      );
-
-    await waitFor(() => {
-      expect(attendanceSelect).toHaveValue(
-        "Available",
-      );
-    });
+    const availabilityButton = await screen.findByRole("button", { name: "Go Offline" });
 
     expect(
       screen.getByText(
@@ -432,11 +428,7 @@ describe("TechnicianPortalDashboard - Technician Attendance and Availability", (
       now + 16000,
     );
 
-    fireEvent.change(attendanceSelect, {
-      target: {
-        value: "Busy",
-      },
-    });
+    fireEvent.click(availabilityButton);
 
     await waitFor(() => {
       expect(
@@ -449,7 +441,7 @@ describe("TechnicianPortalDashboard - Technician Attendance and Availability", (
     await act(async () => {
       resolveUpdate?.({
         data: {
-          technician_status: "Busy",
+          technician_status: "Offline",
         },
       });
     });

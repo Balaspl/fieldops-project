@@ -73,26 +73,6 @@ class TechnicianRepository:
 
     # ---------------------------------------------------------
 
-    def update_status(
-        self,
-        technician_id: int,
-        status: str,
-    ) -> None:
-        """
-        Update technician status.
-
-        Database commit is handled by the caller.
-        """
-
-        technician = self.get_by_id(
-            technician_id
-        )
-
-        if technician:
-            technician.technician_status = status
-
-    # ---------------------------------------------------------
-
     def increment_jobs(
         self,
         technician_id: int,

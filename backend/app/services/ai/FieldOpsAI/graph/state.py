@@ -17,6 +17,8 @@ class ValidatedJobRequirement(TypedDict, total=False):
     priority: str
     title: str
     description: str
+    category: Optional[str]
+    issue: Optional[str]
     site_latitude: Optional[float]
     site_longitude: Optional[float]
     contact_number: Optional[str]
@@ -32,6 +34,8 @@ class IntakeGraphState(TypedDict, total=False):
     service: Optional[str]
     service_type: Optional[str]
     title: Optional[str]
+    category: Optional[str]
+    issue: Optional[str]
     description: Optional[str]
     location: Optional[str]
     priority: Optional[str]
@@ -70,9 +74,14 @@ class TopTechnicianRecommendation(TypedDict, total=False):
     technician_distance: float
     distance_km: float
     workload: int
+    technician_skill: Optional[str]
+    match_level: Optional[int]
 
 
 class PlanningGraphState(TypedDict, total=False):
+    required_match_level: Optional[int]
+    taxonomy_category: Optional[str]
+    taxonomy_issue: Optional[str]
     # Input: ONLY the validated job requirement produced by Intake Agent
     job_requirement: ValidatedJobRequirement
 
@@ -83,6 +92,9 @@ class PlanningGraphState(TypedDict, total=False):
     customer_coordinates: Optional[tuple[float, float]]
     eligible_organizations: List[Dict[str, Any]]
     all_eligible_technicians: List[TopTechnicianRecommendation]
+    all_ranked_technicians: List[TopTechnicianRecommendation]
+    excluded_candidates: List[Dict[str, Any]]
+    excluded_technician_ids: List[int]
 
     # Planning output
     job_id: Optional[str | int]

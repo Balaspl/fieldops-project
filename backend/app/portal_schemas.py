@@ -211,6 +211,8 @@ class ServiceRequestCreate(BaseModel):
     title: str = Field(..., min_length=3, max_length=200)
     description: str = Field(..., min_length=10)
     service_type: Optional[str] = None
+    category: Optional[str] = None
+    issue: Optional[str] = None
     priority: str = Field(default="MEDIUM")
     preferred_visit_date: Optional[date] = None
     images: Optional[List[str]] = Field(default_factory=list)
@@ -230,9 +232,13 @@ class ServiceRequestCreate(BaseModel):
     @field_validator("priority")
     @classmethod
     def validate_priority(cls, v):
-        valid = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
+        valid = {"LOW", "MEDIUM", "HIGH", "CRITICAL", "URGENT"}
+
         if v.upper() not in valid:
-            raise ValueError(f"Priority must be one of {valid}")
+            raise ValueError(
+                "Priority must be LOW, MEDIUM, HIGH, CRITICAL or URGENT"
+            )
+
         return v.upper()
 
 
@@ -283,15 +289,13 @@ class ServiceRequestUpdate(BaseModel):
         if v is None:
             return v
 
-        valid = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
-
+        valid = {"LOW", "MEDIUM", "HIGH", "CRITICAL", "URGENT"}
         value = v.upper()
 
         if value not in valid:
             raise ValueError(
-                "Priority must be LOW, MEDIUM, HIGH or CRITICAL"
+                "Priority must be LOW, MEDIUM, HIGH, CRITICAL or URGENT"
             )
-
         return value
 
     @field_validator("preferred_visit_date")
@@ -355,6 +359,9 @@ class ServiceRequestResponse(BaseModel):
     contact_number: Optional[str] = None
     status: str
     linked_job_id: Optional[int] = None
+    assigned_technician_id: Optional[int] = None
+    assigned_technician_name: Optional[str] = None
+    assigned_technician_phone: Optional[str] = None
     created_job: Optional["CreatedServiceRequestJobResponse"] = None
     cancellation_reason: Optional[str] = None
     cancelled_at: Optional[datetime] = None
@@ -513,6 +520,8 @@ class CustomerInvoiceResponse(BaseModel):
     total_amount: float
     completed_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
+    organization_name: Optional[str] = None
+    technician_name: Optional[str] = None
 
 class CustomerPaymentStatusResponse(BaseModel):
     """Customer-safe, backend-authoritative payment status for one job."""

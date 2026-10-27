@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Type
 
@@ -109,6 +110,19 @@ from app.services.ai.pii_sanitizer import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def estimate_chat_input_tokens(messages: list[dict[str, str]], model: str) -> int:
+    """Estimate the complete serialized chat envelope with bounded headroom.
+
+    Provider framing differs slightly from the local tokenizer. A 20% margin
+    plus 16 framing tokens covers measured provider/local-count variance while
+    remaining proportional and bounded; output and daily reservations remain
+    governed by the existing budget manager.
+    """
+    serialized = json.dumps(messages, ensure_ascii=False, separators=(",", ":"))
+    base = count_tokens(serialized, model) + (4 * len(messages))
+    return max(1, math.ceil(base * 1.20) + 16)
 
 
 class _LegacyClientProviderAdapter(BaseAIProvider):
@@ -693,6 +707,9 @@ class AIOrchestrator(RuntimeInterface):
             if task == AITask.SENTIMENT:
                 category = "sentiment"
 
+            elif task == AITask.CUSTOMER_SUPPORT:
+                category = "customer_support"
+
             elif task == AITask.COMMUNICATION:
                 channel = (
                     sanitized_context.get(
@@ -780,13 +797,9 @@ class AIOrchestrator(RuntimeInterface):
                         is_retryable=False,
                     ) from None
 
-                # Estimate input tokens with the actual model selected for this provider.
-                # The framing allowance accounts for chat message boundaries.
-                estimated_input_tokens = (
-                    count_tokens(system_prompt, model_name)
-                    + count_tokens(sanitized_user_prompt, model_name)
-                    + 8
-                )
+                # Estimate the exact serialized messages sent to the provider,
+                # including role metadata and a bounded provider framing margin.
+                estimated_input_tokens = estimate_chat_input_tokens(messages, model_name)
 
                 max_output_tokens = (
                     self.token_budget_manager
@@ -1218,6 +1231,12 @@ class AIOrchestrator(RuntimeInterface):
                 if reservation_id is not None:
                     if generation_result is not None:
                         try:
+                            actual_input = generation_result.usage.prompt_tokens
+                            logger.info(
+                                "AI_TOKEN_ESTIMATE_RECONCILIATION provider=%s model=%s estimated_input=%s actual_input=%s underestimation=%s",
+                                normalized_provider, model_name, estimated_input_tokens,
+                                actual_input, max(0, actual_input - estimated_input_tokens),
+                            )
                             (
                                 self
                                 .token_budget_manager
@@ -1225,11 +1244,7 @@ class AIOrchestrator(RuntimeInterface):
                                     reservation_id=(
                                         reservation_id
                                     ),
-                                    actual_input_tokens=(
-                                        generation_result
-                                        .usage
-                                        .prompt_tokens
-                                    ),
+                                    actual_input_tokens=actual_input,
                                     actual_output_tokens=(
                                         generation_result
                                         .usage

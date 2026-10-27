@@ -7,12 +7,15 @@ import {
   Clock,
   ShieldCheck,
   X,
+  MessageSquare,
 } from "lucide-react";
 
 import { getCustomerJobs } from "../../services/customerPortalService";
 import JobLiveTrackingMap from "../../components/customer-tracking/JobLiveTrackingMap";
 import AnimatedJobProgress from "../../components/customer-tracking/AnimatedJobProgress";
 import { useTrackingStore } from "../../store/trackingStore";
+import JobMessagePanel from "../../components/customer-tracking/JobMessagePanel";
+import { getJobUnreadCount } from "../../services/jobMessagingService";
 
 type CustomerJob = {
   id: string | number;
@@ -196,6 +199,8 @@ export default function CustomerTrackingPage({
 
   const [liveJob, setLiveJob] =
     useState<CustomerJob | null>(null);
+  const [chatJob, setChatJob] = useState<CustomerJob | null>(null);
+  const [unreadByJob, setUnreadByJob] = useState<Record<number, number>>({});
   const setJobTrackingSnapshot = useTrackingStore(
     (state) => state.setJobTrackingSnapshot,
   );
@@ -241,6 +246,11 @@ export default function CustomerTrackingPage({
           );
 
         setJobs(nextJobs);
+        void Promise.all(nextJobs.map(async (job) => {
+          const id = Number(job.id);
+          try { const { data } = await getJobUnreadCount(id); return [id, data.unread_count] as const; }
+          catch { return [id, 0] as const; }
+        })).then((counts) => { if (!stopped) setUnreadByJob(Object.fromEntries(counts)); });
         setHasActiveJobs(activeJobsExist);
         setError(null);
 
@@ -1041,6 +1051,20 @@ export default function CustomerTrackingPage({
                         Additional technician details are currently unavailable.
                       </div>
                     )}
+                  {job.assigned_technician_id || isTerminal ? (
+                    <button
+                      type="button"
+                      onClick={() => setChatJob(job)}
+                      aria-label={`Message technician about job ${job.id}`}
+                      style={{ width: "100%", marginTop: "13px", padding: "10px 12px", border: 0, borderRadius: "9px", background: "#156B5B", color: "#FFFFFF", fontSize: "13px", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", cursor: "pointer" }}
+                    >
+                      <MessageSquare size={16} />
+                      {isTerminal ? "View Messages" : "Message Technician"}
+                      {(unreadByJob[Number(job.id)] ?? 0) > 0 && <span aria-label={`${unreadByJob[Number(job.id)]} unread messages`} style={{ minWidth: "20px", height: "20px", padding: "0 5px", borderRadius: "999px", background: "#FFFFFF", color: "#156B5B", fontSize: "11px", display: "grid", placeItems: "center" }}>{unreadByJob[Number(job.id)]}</span>}
+                    </button>
+                  ) : (
+                    <div role="status" style={{ marginTop: "12px", color: "#64748B", fontSize: "12px", textAlign: "center" }}>Chat available after technician assignment</div>
+                  )}
                 </div>
 
                 {/* TERMINAL STATUS */}
@@ -1289,6 +1313,20 @@ export default function CustomerTrackingPage({
             </div>
           </div>
         </div>
+      )}
+      {chatJob && (
+        <JobMessagePanel
+          jobId={Number(chatJob.id)}
+          initialTechnicianName={chatJob.assigned_technician_name}
+          token={token}
+          onClose={() => {
+            const closedJobId = Number(chatJob.id);
+            setChatJob(null);
+            void getJobUnreadCount(closedJobId).then(({ data }) => {
+              setUnreadByJob((counts) => ({ ...counts, [closedJobId]: data.unread_count }));
+            }).catch(() => undefined);
+          }}
+        />
       )}
     </div>
   );

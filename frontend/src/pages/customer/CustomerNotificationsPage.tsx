@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { io, Socket } from "socket.io-client";
 import {
   Bell, Check, CheckCheck, CircleCheck, Clock3, Hammer,
-  MapPin, Navigation, PartyPopper, RefreshCw, Wrench,
+  MapPin, Navigation, PartyPopper, RefreshCw, Wrench, X,
 } from "lucide-react";
 import "./CustomerNotificationsPage.css";
 
@@ -137,9 +137,11 @@ const normalizeNotification = (
     ),
     title: raw.title || "Notification",
     message: raw.body || raw.message || "",
+    status: raw.status,
     isRead:
+      raw.isRead === true ||
       raw.status === "READ" ||
-      raw.isRead === true,
+      (typeof raw.status === "string" && raw.status.toUpperCase() !== "UNREAD"),
     createdAt:
       raw.created_at ||
       raw.createdAt ||
@@ -265,7 +267,19 @@ const mergeNotification = (
   return updated;
 };
 
-export default function CustomerNotificationsPage() {
+export interface CustomerNotificationsPageProps {
+  onClose?: () => void;
+  selectedNotificationId?: string | number | null;
+  onNotificationsRead?: (readId?: string) => void;
+  onAllNotificationsRead?: () => void;
+}
+
+export default function CustomerNotificationsPage({
+  onClose,
+  selectedNotificationId,
+  onNotificationsRead,
+  onAllNotificationsRead,
+}: CustomerNotificationsPageProps = {}) {
   const [notifications, setNotifications] = useState<
     CustomerNotification[]
   >([]);
@@ -290,6 +304,16 @@ export default function CustomerNotificationsPage() {
   useEffect(() => {
     notificationsRef.current = notifications;
   }, [notifications]);
+
+  useEffect(() => {
+    if (!selectedNotificationId || loading) return;
+    const targetElement = document.getElementById(
+      `notification-${selectedNotificationId}`,
+    );
+    if (targetElement) {
+      targetElement.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [selectedNotificationId, loading, notifications]);
 
   const load = useCallback(async (showLoading = true) => {
     if (showLoading) {
@@ -611,7 +635,7 @@ export default function CustomerNotificationsPage() {
 
       const next = current.map((notification) =>
         notification.id === id
-          ? { ...notification, isRead: true }
+          ? { ...notification, isRead: true, status: "READ" }
           : notification,
       );
 
@@ -620,6 +644,7 @@ export default function CustomerNotificationsPage() {
 
       if (target && !target.isRead) {
         setUnread((count) => Math.max(0, count - 1));
+        onNotificationsRead?.(id);
       }
     } catch (requestError: any) {
       const status = requestError?.response?.status;
@@ -657,12 +682,14 @@ export default function CustomerNotificationsPage() {
         (notification) => ({
           ...notification,
           isRead: true,
+          status: "READ",
         }),
       );
 
       notificationsRef.current = next;
       setNotifications(next);
       setUnread(0);
+      onAllNotificationsRead?.();
     } catch (requestError: any) {
       const status = requestError?.response?.status;
 
@@ -694,12 +721,44 @@ export default function CustomerNotificationsPage() {
           </h1>
           <p className="customer-notifications__subtitle">The latest on your service, all in one place.</p>
         </div>
-        {unread > 0 && (
-          <button className="customer-notifications__mark-all" type="button" onClick={() => void markAllRead()}
-            disabled={markingAllRead || Boolean(markingReadId)} aria-busy={markingAllRead}>
-            <CheckCheck size={16} /> {markingAllRead ? "Updating..." : "Mark all as read"}
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+          <button
+            className="customer-notifications__mark-all"
+            type="button"
+            onClick={() => void markAllRead()}
+            disabled={markingAllRead || Boolean(markingReadId) || unread === 0}
+            aria-busy={markingAllRead}
+            title={unread === 0 ? "All notifications are already read" : "Mark all as read"}
+            style={
+              unread === 0
+                ? {
+                    opacity: 0.65,
+                    cursor: "default",
+                    background: "#e2e8f0",
+                    color: "#64748b",
+                    transform: "none",
+                  }
+                : undefined
+            }
+          >
+            <CheckCheck size={16} />{" "}
+            {markingAllRead
+              ? "Updating..."
+              : unread === 0
+                ? "All read"
+                : "Mark all as read"}
           </button>
-        )}
+          {onClose && (
+            <button
+              className="customer-notifications__close"
+              type="button"
+              onClick={onClose}
+              aria-label="Close notifications"
+            >
+              <X size={16} /> Close
+            </button>
+          )}
+        </div>
       </header>
 
       {mutationError && (
@@ -769,10 +828,31 @@ export default function CustomerNotificationsPage() {
               ? notification.metadata.technician.name
               : job?.assigned_technician_name;
 
+          const isSelected =
+            selectedNotificationId != null &&
+            (String(notification.id) === String(selectedNotificationId) ||
+              String(notification.jobId) === String(selectedNotificationId));
+
           return (
             <article
               key={notification.id}
+              id={`notification-${notification.id}`}
               className={`customer-notification-card ${notification.isRead ? "is-read" : "is-unread"}`}
+              style={{
+                cursor: !notification.isRead ? "pointer" : "default",
+                ...(isSelected
+                  ? {
+                      borderColor: "#059669",
+                      boxShadow:
+                        "0 0 0 2px rgba(5, 150, 105, 0.25), 0 8px 24px rgba(5, 150, 105, 0.1)",
+                    }
+                  : {}),
+              }}
+              onClick={() => {
+                if (!notification.isRead) {
+                  void markRead(notification.id);
+                }
+              }}
               aria-label={`${notification.isRead ? "Read" : "Unread"} notification: ${notification.title}`}
             >
               <div className={`customer-notification-card__icon customer-notification-card__icon--${visual.tone}`} aria-hidden="true"><EventIcon size={20} strokeWidth={2.2} /></div>

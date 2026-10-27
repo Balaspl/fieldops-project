@@ -1,0 +1,123 @@
+﻿# Local backend archive
+/backend.zip
+
+# Redis runtime database
+**/dump.rdb
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Coverage files
+.coverage
+.coverage.*
+coverage.xml
+
+# Local databases
+*.sqlite
+*.sqlite3
+
+# Environment variable files
+.env
+.env.*
+!.env.example
+
+# Temporary files
+*.tmp
+*.temp
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+*.db
+
+fieldops-projects.git/
+
+# Test coverage
+coverage/
+htmlcov/
+.nyc_output/
+
+
+# Repository metadata and files not needed for the mobile cloud build
+.git/
+.pytest_cache/
+backend/
+frontend/
+ws-server/
+docs/
+reports/
+baseline-test-results.txt
+check_notif.py
+compose.yaml
+powershell.cmd
+README.md
+package-lock.json
+
+# Mobile dependencies, caches, and generated output
+/mobile/node_modules/
+/mobile/.expo/
+/mobile/dist/
+/mobile/build/
+/mobile/web-build/
+/mobile/coverage/
+/mobile/*.tsbuildinfo
+
+# Android build artifacts and local signing configuration
+/mobile/android/.gradle/
+/mobile/android/build/
+/mobile/android/app/build/
+/mobile/android/app/.cxx/
+/mobile/android/.cxx/
+/mobile/android/local.properties
+/mobile/android/keystore.properties
+/mobile/android/app/fieldops-release.keystore
+/mobile/android/app/debug.keystore
+
+# Generated native iOS project
+/mobile/ios/
+
+# Mobile local environment files; retain the example template
+/mobile/.env
+/mobile/.env.*
+!/mobile/.env.example
+
+# Editor files and temporary output
+/mobile/.vscode/
+/mobile/.idea/
+/mobile/*.log
+/mobile/*.tmp
+/mobile/*.temp

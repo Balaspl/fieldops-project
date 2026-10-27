@@ -1,4 +1,4 @@
-from dotenv import load_dotenv
+﻿from dotenv import load_dotenv
 
 load_dotenv()
 from app.routes import completion_documents
@@ -52,6 +52,8 @@ from .routes import (
 from .routes import auth as auth_routes
 from .routes.organizations import org_router, platform_router
 from .routes import sentiment_escalations
+from .routes import customer_chat
+from .routes import job_messaging
 from . import models
 from .services.justification_validator import JustificationValidationError
 from .worker import start_scheduler, stop_scheduler
@@ -196,26 +198,39 @@ async def lifespan(app: FastAPI):
             f"Could not auto-create tables or columns: {e}"
         )
 
+    redis_url = os.getenv("REDIS_ASYNC_URL") or os.getenv("REDIS_URL")
     redis_host = os.getenv("REDIS_HOST", "localhost")
     redis_port = int(os.getenv("REDIS_PORT", 6379))
 
     try:
-        redis_async_client = aioredis.Redis(
-            host=redis_host,
-            port=redis_port,
-            decode_responses=True,
-        )
+        if redis_url:
+            redis_async_client = aioredis.from_url(
+                redis_url,
+                decode_responses=True,
+            )
+        else:
+            redis_async_client = aioredis.Redis(
+                host=redis_host,
+                port=redis_port,
+                decode_responses=True,
+            )
 
         # Test the connection before proceeding
         await redis_async_client.ping()
 
         # Pubsub listener needs decode_responses=False since GPS
         # payloads are MsgPack binary
-        redis_pubsub_client = aioredis.Redis(
-            host=redis_host,
-            port=redis_port,
-            decode_responses=False,
-        )
+        if redis_url:
+            redis_pubsub_client = aioredis.from_url(
+                redis_url,
+                decode_responses=False,
+            )
+        else:
+            redis_pubsub_client = aioredis.Redis(
+                host=redis_host,
+                port=redis_port,
+                decode_responses=False,
+            )
 
         await redis_pubsub_client.ping()
 
@@ -328,7 +343,7 @@ app = FastAPI(
 )
 
 
-# CORS — handles configured origins or development wildcard
+# CORS â€” handles configured origins or development wildcard
 
 
 
@@ -482,12 +497,12 @@ async def validation_exception_handler(
     )
 
 
-# ──── Multi-Tenant Auth Routes ────
+# â”€â”€â”€â”€ Multi-Tenant Auth Routes â”€â”€â”€â”€
 app.include_router(auth_routes.router)
 app.include_router(org_router)
 app.include_router(platform_router)
 
-# ──── Existing Routes ────
+# â”€â”€â”€â”€ Existing Routes â”€â”€â”€â”€
 app.include_router(jobs.router)
 app.include_router(completion_documents.router)
 app.include_router(jobs.api_v1_router)
@@ -518,11 +533,14 @@ app.include_router(admin_dlq.router)
 app.include_router(admin_metrics.router)
 app.include_router(admin_tools.router)
 
-# ──── Portal Routes ────
+# â”€â”€â”€â”€ Portal Routes â”€â”€â”€â”€
 from .routes import technician_portal, customer_portal
 
 app.include_router(technician_portal.router)
 app.include_router(customer_portal.router)
+app.include_router(customer_chat.router)
+app.include_router(job_messaging.router)
+app.include_router(customer_chat.faq_router)
 app.include_router(customer_confirmation.router)
 from .services.socket_manager import sio_app
 app.include_router(admin_customer_support.router)
@@ -537,6 +555,8 @@ app.include_router(sentiment_dashboard_router)
 app.include_router(oauth2.router)
 app.include_router(sso.router)
 app.include_router(status_router)
+from .routes import services_catalog
+app.include_router(services_catalog.router)
 
 # Lifespan events handled via asynccontextmanager lifespan handler
 

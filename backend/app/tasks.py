@@ -2910,15 +2910,47 @@ def send_sms_async(
     to_number: str,
     body: str,
     from_number: str | None = None,
+    delivery_id: int | None = None,
 ):
     # Send SMS in a Celery worker so the API request remains non-blocking.
     service = TwilioSMSService()
-
-    return service.send_sms(
-        to_number=to_number,
-        body=body,
-        from_number=from_number,
-    )
+    safe_delivery_id = int(delivery_id) if delivery_id is not None else None
+    if safe_delivery_id is not None:
+        from .services.ai.FieldOpsAI.agents.communication_agent.channels import begin_delivery_attempt
+        claim_db = SessionLocal()
+        try:
+            claimed = begin_delivery_attempt(claim_db, safe_delivery_id)
+        finally:
+            claim_db.close()
+        if not claimed:
+            logger.info("SMS delivery skipped: duplicate or already claimed", extra={"delivery_id": safe_delivery_id})
+            return {"success": True, "skipped": "already_claimed"}
+    try:
+        result = service.send_sms(to_number=to_number, body=body, from_number=from_number)
+    except Exception as exc:
+        if safe_delivery_id is not None:
+            from .services.ai.FieldOpsAI.agents.communication_agent.channels import mark_delivery
+            failed_db = SessionLocal()
+            try:
+                mark_delivery(failed_db, safe_delivery_id, "failed", str(exc)[:500], increment_attempt=False)
+            finally:
+                failed_db.close()
+        raise
+    if safe_delivery_id is not None:
+        from .services.ai.FieldOpsAI.agents.communication_agent.channels import mark_delivery
+        result_db = SessionLocal()
+        try:
+            delivery_status = "accepted" if result.success else "failed"
+            mark_delivery(
+                result_db, safe_delivery_id, delivery_status,
+                None if result.success else (result.error_message or "SMS provider rejected message")[:500],
+                provider_id=getattr(result, "sid", None), increment_attempt=False,
+            )
+        finally:
+            result_db.close()
+        if not result.success and self.request.retries < self.max_retries:
+            raise self.retry(exc=RuntimeError(result.error_message or "SMS delivery failed"), countdown=2 ** (self.request.retries + 1))
+    return result
 
 
 def _build_customer_invoice_pdf_attachment(
@@ -3085,26 +3117,42 @@ def send_email_async(
 
         delivery_db = SessionLocal()
         try:
-            begin_delivery_attempt(delivery_db, int(delivery_id))
+            claimed = begin_delivery_attempt(delivery_db, int(delivery_id))
         finally:
             delivery_db.close()
+        if not claimed:
+            logger.info(
+                "Email delivery task skipped: duplicate or already claimed",
+                extra={"delivery_id": int(delivery_id)},
+            )
+            return {"success": True, "skipped": "already_claimed"}
 
     import asyncio
 
-    result = asyncio.run(
-        service.send_email(
-            to_email=to_email,
-            subject=subject,
-            html_body=html_body,
-            plain_text=plain_text,
-            attachments=attachments,
-            message_id=(
-                f"<delivery-{int(delivery_id)}@fieldops.local>"
-                if delivery_id is not None
-                else None
-            ),
+    try:
+        result = asyncio.run(
+            service.send_email(
+                to_email=to_email,
+                subject=subject,
+                html_body=html_body,
+                plain_text=plain_text,
+                attachments=attachments,
+                message_id=(
+                    f"<delivery-{int(delivery_id)}@fieldops.local>"
+                    if delivery_id is not None
+                    else None
+                ),
+            )
         )
-    )
+    except Exception as exc:
+        if delivery_id is not None:
+            from .services.ai.FieldOpsAI.agents.communication_agent.channels import mark_delivery
+            failed_db = SessionLocal()
+            try:
+                mark_delivery(failed_db, int(delivery_id), "failed", str(exc)[:500], increment_attempt=False)
+            finally:
+                failed_db.close()
+        raise
 
     transient = (
         result.status_code in {421, 450, 451, 452, 500, 502, 503, 504}
@@ -3129,6 +3177,17 @@ def send_email_async(
                    "reason": "temporary_provider_failure",
                    "retry_number": self.request.retries + 1},
         )
+        if delivery_id is not None:
+            from .services.ai.FieldOpsAI.agents.communication_agent.channels import mark_delivery
+            retry_db = SessionLocal()
+            try:
+                mark_delivery(
+                    retry_db, int(delivery_id), "failed",
+                    (result.error or "temporary email provider failure")[:500],
+                    increment_attempt=False,
+                )
+            finally:
+                retry_db.close()
         raise self.retry(
             exc=RuntimeError("Temporary email provider failure"),
             countdown=2 ** (self.request.retries + 1),

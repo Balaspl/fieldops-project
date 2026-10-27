@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import {
   Bike,
   CalendarCheck2,
@@ -123,13 +124,43 @@ export default function AnimatedJobProgress({
   const liveUpdate = useTrackingStore(
     (state) => state.jobLiveUpdates[String(jobId)],
   );
-  const status = normalizeStatus(
-    (useLiveUpdates ? liveUpdate?.status : undefined) ?? apiStatus,
-  );
+
+  const apiNorm = normalizeStatus(apiStatus);
+  const liveNorm = normalizeStatus(useLiveUpdates ? liveUpdate?.status : undefined);
+
+  // Resolution rules:
+  // 1. If apiStatus is in terminal status (COMPLETED, CLOSED, CANCELLED), API is authoritative!
+  //    Never let a stale liveUpdate from when the technician was on the road keep the UI in EN_ROUTE!
+  // 2. If both exist and neither is terminal, pick whichever stage is further along.
+  // 3. Otherwise fall back to whichever is present.
+  let status = apiNorm;
+  if (["COMPLETED", "CLOSED", "CANCELLED"].includes(apiNorm)) {
+    status = apiNorm;
+  } else if (["COMPLETED", "CLOSED", "CANCELLED"].includes(liveNorm)) {
+    status = liveNorm;
+  } else if (apiNorm && liveNorm) {
+    const apiStage = stageForStatus(apiNorm, workStartedAt);
+    const liveStage = stageForStatus(liveNorm, workStartedAt);
+    status = liveStage >= apiStage ? liveNorm : apiNorm;
+  } else {
+    status = liveNorm || apiNorm;
+  }
+
   const currentStage = stageForStatus(status, workStartedAt);
   const completed = status === "COMPLETED";
   const cancelled = status === "CANCELLED";
   const closed = status === "CLOSED";
+
+  // Sync terminal status to tracking store so all tracking observers stay aligned
+  useEffect(() => {
+    if (completed && jobId) {
+      useTrackingStore.getState().setJobTrackingSnapshot(String(jobId), {
+        status: "COMPLETED",
+        eta: null,
+        duration_minutes: null,
+      });
+    }
+  }, [completed, jobId]);
 
   const eta =
     useLiveUpdates && liveUpdate?.eta !== undefined

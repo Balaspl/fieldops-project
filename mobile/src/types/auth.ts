@@ -1,10 +1,12 @@
-
 export interface AuthenticatedUser {
   id: string | number;
   email: string;
   role: string;
+  first_name?: string;
+  last_name?: string;
   full_name?: string;
   tenant_id?: string | number;
+  organization_name?: string;
 }
 
 export interface AuthTokens {
@@ -26,6 +28,8 @@ export interface LoginResponse {
   expires_in?: number;
   user?: AuthenticatedUser;
   mfa_required?: boolean;
+  challenge?: string;
+  status?: string;
   message?: string;
 }
 

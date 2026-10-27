@@ -7,7 +7,6 @@ import React, {
 } from "react";
 import {
   getAllTechnicians,
-  updateTechnicianAvailability,
   createTechnician,
   updateTechnician,
   deleteTechnician,
@@ -16,7 +15,7 @@ import {
 import usePageVisibility from "../hooks/usePageVisibility";
 import useInterval from "../hooks/useInterval";
 import StatusBadge from "../components/ui/StatusBadge";
-import { Eye, Pencil, Trash2, ChevronDown } from "lucide-react";
+import { Eye, Pencil, Trash2 } from "lucide-react";
 import EmptyState from "../components/ui/EmptyState";
 import { SkillComboSelect } from "../components/ui/SkillComboSelect";
 import LoadingSpinner from "../components/ui/LoadingSpinner";
@@ -846,50 +845,6 @@ const styles = {
     fontWeight: 600,
   } as React.CSSProperties,
 
-  tldStatusSelectWrap: {
-    marginTop: "18px",
-  } as React.CSSProperties,
-
-  tldStatusSelectWrapLabel: {
-    display: "block",
-    fontSize: "10px",
-    fontWeight: 600,
-    color: "#2F4F3E",
-    marginBottom: "6px",
-  } as React.CSSProperties,
-
-  tldStatusSelect: {
-    width: "100%",
-    padding: "8px 10px",
-    border: "1.5px solid #E3ECE7",
-    borderRadius: "8px",
-    fontSize: "11px",
-    fontFamily: "'Inter', sans-serif",
-    color: "#1F2933",
-    background: "#FFFFFF",
-    outline: "none",
-    cursor: "pointer",
-    transition: "border-color .2s",
-    boxSizing: "border-box",
-  } as React.CSSProperties,
-
-  tldSaveBtn: {
-    width: "100%",
-    marginTop: "14px",
-    padding: "10px",
-    background: "#7AAE8A",
-    color: "#fff",
-    border: "none",
-    borderRadius: "8px",
-    fontSize: "11.5px",
-    fontWeight: 700,
-    fontFamily: "'Inter', sans-serif",
-    cursor: "pointer",
-    transition: "background .2s",
-    boxShadow: "0 2px 6px rgba(122,174,138,.25)",
-    boxSizing: "border-box",
-  } as React.CSSProperties,
-
   popupOverlay: {
     position: "fixed",
     inset: 0,
@@ -1142,78 +1097,6 @@ const localCss = `
   }
 `;
 
-const getStatusSelectStyle = (status: string): React.CSSProperties => {
-  const s = (status || "").toLowerCase().trim();
-  const base: React.CSSProperties = {
-    ...styles.tldStatusSelect,
-  };
-  if (s === "available") {
-    return {
-      ...base,
-      background: "#DDEEE5",
-      color: "#2F4F3E",
-      borderColor: "#B0D4BC",
-    };
-  }
-  if (s === "busy") {
-    return {
-      ...base,
-      background: "#FEF0D6",
-      color: "#7A5120",
-      borderColor: "#F0D09A",
-    };
-  }
-  if (s === "offline") {
-    return {
-      ...base,
-      background: "#F0F4F2",
-      color: "#6B7280",
-      borderColor: "#D0DCD4",
-    };
-  }
-  if (s === "assigned") {
-    return {
-      ...base,
-      background: "#E0F2FE",
-      color: "#0369A1",
-      borderColor: "#7DD3FC",
-    };
-  }
-  if (s === "en route" || s === "en_route") {
-    return {
-      ...base,
-      background: "#FEF9C3",
-      color: "#854D0E",
-      borderColor: "#FDE68A",
-    };
-  }
-  if (s === "on site" || s === "on_site") {
-    return {
-      ...base,
-      background: "#EDE9FE",
-      color: "#6D28D9",
-      borderColor: "#DDD6FE",
-    };
-  }
-  if (s === "on break" || s === "on_break") {
-    return {
-      ...base,
-      background: "#FEF0D6",
-      color: "#92400E",
-      borderColor: "#FCD29A",
-    };
-  }
-  if (s === "suspended") {
-    return {
-      ...base,
-      background: "#FEE2E2",
-      color: "#991B1B",
-      borderColor: "#FECACA",
-    };
-  }
-  return base;
-};
-
 function SkeletonRows({ n = 8 }) {
   return (
     <>
@@ -1335,9 +1218,6 @@ export default function TechnicianListPage() {
   const [uniqueZones, setUniqueZones] = useState<string[]>([]);
 
   const [selected, setSelected] = useState<NormalizedTech | null>(null);
-  const [newStatus, setNewStatus] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [updatingId, setUpdatingId] = useState<string | number | null>(null);
 
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -1352,7 +1232,7 @@ export default function TechnicianListPage() {
     technician_name: "",
     technician_skill: "",
     technician_location: "",
-    technician_status: "Available",
+    technician_status: "Offline",
   });
 
   const openAddForm = () => {
@@ -1362,7 +1242,7 @@ export default function TechnicianListPage() {
       technician_name: "",
       technician_skill: "",
       technician_location: "",
-      technician_status: "Available",
+      technician_status: "Offline",
     });
     setFormErrors({});
     setIsFormOpen(true);
@@ -1626,7 +1506,6 @@ export default function TechnicianListPage() {
   }
   function openSidebar(tech: NormalizedTech) {
     setSelected(tech);
-    setNewStatus(normalizeStatus(tech.status));
     window.location.hash = `#/technicians/${tech.id}`;
   }
   function closeSidebar() {
@@ -1647,51 +1526,6 @@ export default function TechnicianListPage() {
     statusFilter !== "ALL" ||
     skillFilter !== "ALL" ||
     zoneFilter !== "ALL";
-
-  async function handleInlineStatusChange(techId: string | number, ns: string) {
-    setUpdatingId(techId);
-    try {
-      await updateTechnicianAvailability(techId, ns);
-      setTechnicians((prev) =>
-        prev.map((t) => (t.id === techId ? { ...t, status: ns } : t)),
-      );
-      const tech = technicians.find((t) => t.id === techId);
-      showToast(`${tech?.name || "Technician"} set to ${ns}`);
-    } catch (err: any) {
-      showToast(
-        err.response?.data?.error ||
-          err.response?.data?.detail ||
-          "Failed to update status",
-        "error",
-      );
-    } finally {
-      setUpdatingId(null);
-    }
-  }
-
-  async function handleSaveStatus() {
-    if (!selected) return;
-    setSaving(true);
-    try {
-      await updateTechnicianAvailability(selected.id, newStatus);
-      setTechnicians((prev) =>
-        prev.map((t) =>
-          t.id === selected.id ? { ...t, status: newStatus } : t,
-        ),
-      );
-      showToast(`${selected.name} set to ${newStatus}`);
-      closeSidebar();
-    } catch (err: any) {
-      showToast(
-        err.response?.data?.error ||
-          err.response?.data?.detail ||
-          "Failed to update status",
-        "error",
-      );
-    } finally {
-      setSaving(false);
-    }
-  }
 
   function handleManualRefresh() {
     fetchData(technicians.length > 0);
@@ -2165,56 +1999,7 @@ export default function TechnicianListPage() {
                           position: "relative",
                         }}
                       >
-                        <div
-                          style={{
-                            display: "inline-block",
-                            position: "relative",
-                            minWidth: "110px",
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <select
-                            value={normalizeStatus(tech.status)}
-                            onChange={(e) =>
-                              handleInlineStatusChange(tech.id, e.target.value)
-                            }
-                            disabled={updatingId === tech.id}
-                            className="tld-status-select-style"
-                            style={{
-                              ...getStatusSelectStyle(tech.status),
-                              width: "100%",
-                              padding: "4px 20px 4px 8px",
-                              fontSize: "10px",
-                              borderRadius: "6px",
-                              appearance: "none",
-                              opacity: updatingId === tech.id ? 0.6 : 1,
-                              fontWeight: 600,
-                            }}
-                          >
-                            <option value="Available">Available</option>
-                            <option value="Busy">Busy</option>
-                            <option value="Assigned">Assigned</option>
-                            <option value="Offline">Offline</option>
-                            <option value="En Route">En Route</option>
-                            <option value="On Site">On Site</option>
-                            <option value="On Break">On Break</option>
-                            <option value="Suspended">Suspended</option>
-                          </select>
-                          <div
-                            style={{
-                              position: "absolute",
-                              right: "8px",
-                              top: "50%",
-                              transform: "translateY(-50%)",
-                              pointerEvents: "none",
-                              color: getStatusSelectStyle(tech.status)
-                                .color as string,
-                              opacity: 0.8,
-                            }}
-                          >
-                            <ChevronDown size={11} />
-                          </div>
-                        </div>
+                        <StatusBadge status={tech.status as any} size="sm" />
                       </td>
                       <td data-label="Workload" style={styles.tldTableTd}>
                         <div style={styles.tldWorkloadCell}>
@@ -2401,36 +2186,9 @@ export default function TechnicianListPage() {
                 <span style={styles.tldDetailValue}>{val}</span>
               </div>
             ))}
-            <div style={styles.tldStatusSelectWrap}>
-              <label style={styles.tldStatusSelectWrapLabel}>
-                Update Availability Status
-              </label>
-              <select
-                className="tld-status-select-style"
-                style={styles.tldStatusSelect}
-                value={newStatus}
-                onChange={(e) => setNewStatus(e.target.value)}
-              >
-                <option value="Available">Available</option>
-                <option value="Busy">Busy</option>
-                <option value="Assigned">Assigned</option>
-                <option value="Offline">Offline</option>
-                <option value="En Route">En Route</option>
-                <option value="On Site">On Site</option>
-                <option value="On Break">On Break</option>
-                <option value="Suspended">Suspended</option>
-              </select>
-              <button
-                className="tld-save-btn-style"
-                style={styles.tldSaveBtn}
-                onClick={handleSaveStatus}
-                disabled={
-                  saving || newStatus === normalizeStatus(selected.status)
-                }
-              >
-                {saving ? "Saving…" : "Save Status"}
-              </button>
-            </div>
+            <p style={{ color: "#64748b", fontSize: 12 }}>
+              Availability is controlled by the technician from Go Online / Go Offline.
+            </p>
           </div>
         )}
       </div>
@@ -2637,41 +2395,8 @@ export default function TechnicianListPage() {
             )}
           </div>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-            <label
-              style={{
-                fontSize: "11px",
-                fontWeight: "bold",
-                color: "#475569",
-                textTransform: "uppercase",
-              }}
-            >
-              {isEditing ? "Status" : "Initial Status"}
-            </label>
-            <select
-              name="technician_status"
-              value={techFormData.technician_status}
-              onChange={handleFormChange}
-              className="tld-select-style"
-              style={{
-                width: "100%",
-                padding: "8px 12px",
-                border: "1px solid #e2e8f0",
-                borderRadius: "6px",
-                fontSize: "13px",
-                background: "#fff",
-                boxSizing: "border-box",
-              }}
-            >
-              <option value="Available">Available</option>
-              <option value="Busy">Busy</option>
-              <option value="Assigned">Assigned</option>
-              <option value="Offline">Offline</option>
-              <option value="En Route">En Route</option>
-              <option value="On Site">On Site</option>
-              <option value="On Break">On Break</option>
-              <option value="Suspended">Suspended</option>
-            </select>
+          <div style={{ color: "#64748b", fontSize: 12 }}>
+            New technicians start Offline. Technicians manage availability from their portal.
           </div>
 
           <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>

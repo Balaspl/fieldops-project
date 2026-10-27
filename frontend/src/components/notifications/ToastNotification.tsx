@@ -68,7 +68,8 @@ const VARIANTS = {
 // Override icon for en_route
 function resolveIcon(toast: ToastItem) {
   if (toast.eventType === 'job.en_route') return Navigation;
-  return VARIANTS[toast.type].icon;
+  const variant = VARIANTS[toast.type] || VARIANTS.info;
+  return variant.icon;
 }
 
 // ─── Props ────────────────────────────────────────────────────────────
@@ -90,7 +91,7 @@ export default function ToastNotification({
   onResume,
   onNavigate,
 }: ToastNotificationProps) {
-  const v = VARIANTS[toast.type];
+  const v = VARIANTS[toast.type] || VARIANTS.info;
   const Icon = resolveIcon(toast);
   const isCritical = toast.priority === 'critical';
 

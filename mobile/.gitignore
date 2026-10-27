@@ -15,7 +15,15 @@ expo-env.d.ts
 dist/
 build/
 web-build/
-android/
+# ignore generated android build output, but track android project configuration.
+android/.gradle/
+android/build/
+android/app/build/
+android/app/.cxx/
+android/.cxx/
+android/local.properties
+android/keystore.properties
+android/app/fieldops-release.keystore
 ios/
 
 # Debug logs

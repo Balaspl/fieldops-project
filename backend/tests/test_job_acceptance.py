@@ -1,3 +1,7 @@
+import asyncio
+from datetime import date, time
+from types import SimpleNamespace
+
 import pytest
 
 from datetime import datetime, timezone, timedelta
@@ -10,7 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.main import app
-from app.models import Job, Technician, AuditEvent
+from app.models import Job, Technician, AuditEvent, InAppNotification
 from app.database import Base, get_db
 from app.redis_client import get_redis_client
 from app.auth.dependencies import (
@@ -18,6 +22,9 @@ from app.auth.dependencies import (
     AuthenticatedUser,
 )
 from app.auth.rbac import UserRole
+from app.routes import technician_portal
+from app.services.ai.FieldOpsAI.agents.dispatcher_agent import dispatcher_runtime
+from app.services import socket_manager
 
 
 # ============================================================
@@ -323,6 +330,7 @@ def test_accept_succeeds_for_valid_assigned_job(setup_db):
     db.refresh(tech)
 
     assert job.status == "ACCEPTED"
+    assert job.assigned_technician_id == tech.technician_id
 
     assert tech.technician_status == "AVAILABLE"
 
@@ -358,6 +366,84 @@ def test_accept_succeeds_for_valid_assigned_job(setup_db):
     assert audit.old_status == "ASSIGNED"
 
     assert audit.new_status == "ACCEPTED"
+
+
+def test_dispatch_offer_is_persisted_visible_in_portal_and_accepted_atomically(
+    setup_db,
+    monkeypatch,
+):
+    db = setup_db
+    tech = create_technician(db, tech_id="tech-123")
+    job = Job(
+        customer_name="Alice",
+        location="Chennai",
+        issue_description="Leaking tap",
+        priority="HIGH",
+        service_type="Plumbing",
+        contact_number="0000000000",
+        preferred_service_date=date.today(),
+        preferred_service_time=time(9),
+        preferred_service_timezone="UTC",
+        required_skill="Plumbing",
+        status="CREATED",
+        tenant_id="tenant-1",
+        customer_tenant_id="tenant-1",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    monkeypatch.setattr(dispatcher_runtime, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(dispatcher_runtime, "get_redis_client", lambda: None)
+    emitted = []
+
+    async def emit_notification(tech_id, payload):
+        emitted.append((tech_id, payload))
+        return True
+
+    monkeypatch.setattr(socket_manager, "emit_notification", emit_notification)
+    runtime = dispatcher_runtime.DispatcherRuntime.__new__(dispatcher_runtime.DispatcherRuntime)
+    asyncio.run(runtime.offer_job(
+        {"id": job.id, "service_type": job.service_type, "dispatch_attempt_id": "attempt-job-accept"},
+        tech.technician_id,
+    ))
+
+    db.refresh(job)
+    offer = db.query(InAppNotification).filter_by(
+        job_id=str(job.id),
+        recipient_id="tech-123",
+        type="JOB_ASSIGNED",
+    ).one()
+    assert job.assigned_technician_id == tech.technician_id
+    assert job.status == "ASSIGNED"
+    assert offer.notification_metadata["dispatch_attempt_id"] == "attempt-job-accept"
+    assert emitted[0][0] == "tech-123"
+
+    user = asyncio.run(override_current_user("Bearer tech-123"))
+    portal_jobs = asyncio.run(
+        technician_portal.get_assigned_jobs(
+            status_filter=None,
+            current_user=user,
+            db=db,
+        )
+    )
+    assert any(portal_job.id == job.id for portal_job in portal_jobs)
+
+    class _ResumedDispatcher:
+        async def resume_dispatch(self, **_kwargs):
+            return {"next_action": "COMPLETE_ASSIGNMENT"}
+
+    monkeypatch.setattr(
+        technician_portal,
+        "get_dispatcher_runtime",
+        lambda: _ResumedDispatcher(),
+    )
+    response = accept_job(job.id, "tech-123")
+    assert response.status_code == 200
+
+    db.refresh(job)
+    assert job.assigned_technician_id == tech.technician_id
+    assert job.status == "ACCEPTED"
 
 
 # ============================================================

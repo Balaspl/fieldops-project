@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Briefcase,
   CheckCircle,
@@ -12,17 +12,13 @@ import {
   getTechnicianJobs,
   updateTechnicianStatus,
 } from "../../services/technicianPortalService";
-
-const TECHNICIAN_STATUSES = [
-  "Available",
-  "Busy",
-  "Assigned",
-  "Offline",
-  "En Route",
-  "On Site",
-  "On Break",
-  "Suspended",
-];
+import { sendTechnicianAvailabilityLocation } from "../../services/gpsService";
+import useAuthStore from "../../store/authStore";
+import {
+  GeolocationAcquisitionError,
+  GPS_AVAILABILITY_MAX_ACCURACY_METERS,
+  getTechnicianLocation,
+} from "../../services/geolocationService";
 
 const AVAILABILITY_STALE_AFTER_MS = 15000;
 
@@ -204,6 +200,9 @@ export default function TechnicianPortalDashboard({
 
   const [lastAttendanceSync, setLastAttendanceSync] =
     useState<Date | null>(null);
+  const [gpsError, setGpsError] = useState<string | null>(null);
+  const tenantId = useAuthStore((state) => state.user?.tenant_id);
+  const transitionInFlight = useRef(false);
 
   const loadDashboard = async () => {
     try {
@@ -294,16 +293,45 @@ export default function TechnicianPortalDashboard({
     return () => clearInterval(timer);
   }, []);
 
-  const handleStatusChange = async (
-    newStatus: string,
-  ) => {
+  const handleAvailabilityChange = async () => {
+    if (transitionInFlight.current) return;
+    const goingOnline = technicianStatus.toLowerCase() !== "available";
+    transitionInFlight.current = true;
     try {
       setSavingStatus(true);
       setAttendanceError(null);
+      setGpsError(null);
+
+      if (goingOnline) {
+        if (!tenantId) throw new Error("Your account is missing its organization context.");
+        try {
+          const position = await getTechnicianLocation({
+            timeoutMs: 30_000,
+            maximumAgeMs: 15_000,
+            maxAccuracyMeters: GPS_AVAILABILITY_MAX_ACCURACY_METERS,
+          });
+          await sendTechnicianAvailabilityLocation(tenantId, {
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            accuracy: position.coords.accuracy,
+            timestamp: new Date(position.timestamp).toISOString(),
+          });
+        } catch (error) {
+          if (error instanceof GeolocationAcquisitionError) {
+            setGpsError(error.message);
+          } else {
+            const detail = (error as any)?.response?.data?.detail;
+            setGpsError(typeof detail === "string"
+              ? `Location was not accepted: ${detail}`
+              : "Could not send your location. Check your connection and retry.");
+          }
+          return;
+        }
+      }
 
       const response =
         await updateTechnicianStatus(
-          newStatus,
+          goingOnline ? "Available" : "Offline",
         );
 
       const authoritativeStatus =
@@ -342,10 +370,11 @@ export default function TechnicianPortalDashboard({
       );
 
       setAttendanceError(
-        "Unable to update attendance and availability. Please try again.",
+        "Unable to update your availability. Please check your connection and try again.",
       );
     } finally {
       setSavingStatus(false);
+      transitionInFlight.current = false;
     }
   };
 
@@ -496,67 +525,33 @@ export default function TechnicianPortalDashboard({
               color: "#6B7280",
             }}
           >
-            Attendance / Availability
+            Availability
           </span>
-
-          <select
-            aria-label="Technician attendance and availability"
-            data-testid="technician-attendance-status"
-            value={
-              profileCompleted
-                ? technicianStatus
-                : "Not Available"
-            }
-            disabled={
-              savingStatus ||
-              !profileCompleted
-            }
-            onChange={(e) => {
-              if (!profileCompleted) {
-                setShowProfileMessage(true);
-                return;
-              }
-
-              handleStatusChange(
-                e.target.value,
-              );
+          <button
+            type="button"
+            aria-label={technicianStatus.toLowerCase() === "available" ? "Go Offline" : "Go Online"}
+            data-testid="technician-availability-toggle"
+            disabled={savingStatus || !profileCompleted}
+            onClick={() => {
+              if (!profileCompleted) { setShowProfileMessage(true); return; }
+              void handleAvailabilityChange();
             }}
             style={{
-              minWidth: "185px",
+              minWidth: "130px",
               height: "40px",
               padding: "0 12px",
-              border: "1px solid #D7E5DE",
+              border: "0",
               borderRadius: "8px",
-              background: "#FFFFFF",
-              color: "#1F2933",
+              background: technicianStatus.toLowerCase() === "available" ? "#B91C1C" : "#15803D",
+              color: "#FFFFFF",
               fontSize: "14px",
               fontWeight: 600,
-              cursor: savingStatus
-                ? "wait"
-                : "pointer",
-              opacity: savingStatus
-                ? 0.7
-                : 1,
+              cursor: savingStatus ? "wait" : "pointer",
+              opacity: savingStatus ? 0.7 : 1,
             }}
           >
-            <option
-              value="Not Available"
-              disabled
-            >
-              Not Available
-            </option>
-
-            {TECHNICIAN_STATUSES.map(
-              (status) => (
-                <option
-                  key={status}
-                  value={status}
-                >
-                  {status}
-                </option>
-              ),
-            )}
-          </select>
+            {savingStatus ? "Updating…" : technicianStatus.toLowerCase() === "available" ? "Go Offline" : "Go Online"}
+          </button>
 
           <div
             style={{
@@ -567,6 +562,19 @@ export default function TechnicianPortalDashboard({
               minWidth: "235px",
             }}
           >
+            {gpsError && (
+              <span role="alert" style={{ fontSize: "12px", color: "#B91C1C" }}>
+                {gpsError}{" "}
+                <button
+                  type="button"
+                  onClick={() => void handleAvailabilityChange()}
+                  disabled={savingStatus}
+                  style={{ border: 0, background: "transparent", color: "#1D4ED8", textDecoration: "underline", cursor: savingStatus ? "wait" : "pointer", padding: 0, font: "inherit" }}
+                >
+                  Retry
+                </button>
+              </span>
+            )}
             {attendanceError ? (
               <span
                 role="alert"

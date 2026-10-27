@@ -127,8 +127,8 @@ def render_invoice_pdf(job, closure, signature=None) -> bytes:
     y -= 10
     section("COST DETAILS")
     costs = (
-        ("Labour", float(getattr(closure, "labour_cost", 0) or 0)),
-        ("Material", float(getattr(closure, "material_cost", 0) or 0)),
+        ("Service Charge", float(getattr(closure, "labour_cost", 0) or 0)),
+        ("Material Cost", float(getattr(closure, "material_cost", 0) or 0)),
         ("Subtotal", totals["subtotal"]),
         ("GST (5%)", totals["gst_amount"]),
         ("Total", totals["total_amount"]),

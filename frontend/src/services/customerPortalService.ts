@@ -362,6 +362,8 @@ export interface CustomerInvoiceResponse {
   total_amount: number;
   completed_at: string | null;
   created_at: string | null;
+  organization_name?: string | null;
+  technician_name?: string | null;
 }
 
 export interface CustomerPaymentHistoryResponse {

@@ -47,9 +47,17 @@ if "*" in ALLOWED_ORIGINS:
         "Configure explicit frontend origins instead."
     )
 
+_socketio_redis_url = os.getenv("SOCKETIO_REDIS_URL")
+_socketio_manager = (
+    socketio.AsyncRedisManager(_socketio_redis_url, channel="fieldops-socketio")
+    if _socketio_redis_url
+    else None
+)
+
 sio = socketio.AsyncServer(
     async_mode="asgi",
     cors_allowed_origins=ALLOWED_ORIGINS,
+    client_manager=_socketio_manager,
 )
 
 sio_app = socketio.ASGIApp(sio)
@@ -472,7 +480,7 @@ async def unsubscribe_from_job(sid, data):
 # TECHNICIAN NOTIFICATIONS
 # ============================================================
 
-async def emit_notification(tech_id: str, payload: dict):
+async def emit_notification(tech_id: str, payload: dict) -> bool:
     """
     Preserve the existing technician notification API.
     """
@@ -485,13 +493,17 @@ async def emit_notification(tech_id: str, payload: dict):
         )
 
         logger.info(
-            "Emitted real-time notification to technician"
+            "Emitted real-time notification to technician_id=%s",
+            tech_id,
         )
+        return True
 
     except Exception:
         logger.exception(
-            "Failed to emit technician notification"
+            "Failed to emit technician notification technician_id=%s",
+            tech_id,
         )
+        return False
 
 
 # ============================================================

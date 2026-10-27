@@ -1,4 +1,4 @@
-import redis
+﻿import redis
 from redis.exceptions import ConnectionError, TimeoutError
 import os
 import time
@@ -6,19 +6,29 @@ from typing import Optional
 
 class RedisCacheManager:
     def __init__(self):
+        redis_url = os.getenv("REDIS_ASYNC_URL") or os.getenv("REDIS_URL")
         redis_host = os.getenv("REDIS_HOST", "localhost")
         redis_port = int(os.getenv("REDIS_PORT", 6379))
-        
-        self.pool = redis.ConnectionPool(
-            host=redis_host, 
-            port=redis_port, 
-            decode_responses=True,
-            socket_timeout=0.3,
-            socket_connect_timeout=0.3
-        )
-        self.client = redis.Redis(connection_pool=self.pool)
-        self._was_connected = True
 
+        if redis_url:
+            self.client = redis.Redis.from_url(
+                redis_url,
+                decode_responses=True,
+                socket_timeout=0.3,
+                socket_connect_timeout=0.3,
+            )
+            self.pool = self.client.connection_pool
+        else:
+            self.pool = redis.ConnectionPool(
+                host=redis_host,
+                port=redis_port,
+                decode_responses=True,
+                socket_timeout=0.3,
+                socket_connect_timeout=0.3,
+            )
+            self.client = redis.Redis(connection_pool=self.pool)
+
+        self._was_connected = True
     def _execute_with_retry(self, operation, *args, **kwargs):
         retries = 1
         for i in range(retries):
@@ -92,3 +102,4 @@ def get_redis_client():
     if redis_manager is None:
         redis_manager = RedisCacheManager()
     return redis_manager
+

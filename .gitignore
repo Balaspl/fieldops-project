@@ -70,3 +70,4 @@ fieldops-projects.git/
 coverage/
 htmlcov/
 .nyc_output/
+backend/planning-output.txt

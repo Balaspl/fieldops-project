@@ -161,7 +161,7 @@ def test_cooldown_set_on_rejection(mock_lock, setup_db):
     cooldown = CooldownService.check_cooldown(fake_redis, str(job.id), "tech-123")
     assert cooldown is not None
     assert cooldown["remaining_seconds"] <= 120
-    assert cooldown["remaining_seconds"] > 115 # Roughly 120
+    assert cooldown["remaining_seconds"] > 110  # Allow up to 10 seconds elapsed # Roughly 120
 
 def test_technician_excluded_during_cooldown(setup_db):
     job_id = "job-2"

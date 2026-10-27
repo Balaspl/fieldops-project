@@ -15,25 +15,90 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   );
 }
 
+
 function getPayloadMessage(payload: unknown): string | null {
   if (typeof payload === "string" && payload.trim()) {
     return payload.trim();
+  }
+
+  if (Array.isArray(payload)) {
+    const messages = payload
+      .map((item) => {
+        if (isRecord(item)) {
+          const message =
+            typeof item.msg === "string"
+              ? item.msg.trim()
+              : getPayloadMessage(
+                  item.message ?? item.detail ?? item.error
+                );
+
+          if (!message) {
+            return null;
+          }
+
+          const location = Array.isArray(item.loc)
+            ? item.loc.filter(
+                (part): part is string | number =>
+                  typeof part === "string" ||
+                  typeof part === "number"
+              )
+            : [];
+
+          const field = location
+            .filter((part) => part !== "body")
+            .join(".");
+
+          return field ? `${field}: ${message}` : message;
+        }
+
+        return getPayloadMessage(item);
+      })
+      .filter((message): message is string => Boolean(message));
+
+    return messages.length > 0
+      ? [...new Set(messages)].join("; ")
+      : null;
   }
 
   if (!isRecord(payload)) {
     return null;
   }
 
-  const data = payload as ApiErrorPayload;
+  if (typeof payload.msg === "string" && payload.msg.trim()) {
+    const location = Array.isArray(payload.loc)
+      ? payload.loc.filter(
+          (part): part is string | number =>
+            typeof part === "string" ||
+            typeof part === "number"
+        )
+      : [];
 
-  for (const value of [data.detail, data.message, data.error]) {
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
+    const field = location
+      .filter((part) => part !== "body")
+      .join(".");
+
+    return field
+      ? `${field}: ${payload.msg.trim()}`
+      : payload.msg.trim();
+  }
+
+  for (const key of ["detail", "message", "error", "msg"]) {
+    const value = payload[key];
+
+    if (value === undefined || value === null) {
+      continue;
+    }
+
+    const message = getPayloadMessage(value);
+
+    if (message) {
+      return message;
     }
   }
 
   return null;
 }
+
 
 export function getApiErrorMessage(
   error: unknown,

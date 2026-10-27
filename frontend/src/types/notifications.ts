@@ -86,6 +86,7 @@ export interface NotificationDrawerProps {
   onMarkAllAsRead?: () => void;
   onDismissNotification?: (notificationId: string) => void;
   loading?: boolean;
+  onViewAll?: () => void;
 }
 
 export interface PermissionRequestProps {
@@ -197,7 +198,8 @@ export interface ToastItem {
 export interface ToastContextValue {
   toasts: ToastItem[];
   addToast: (
-    toast: Omit<ToastItem, "id" | "timestamp">
+    toast: Omit<ToastItem, "id" | "timestamp"> | string,
+    type?: ToastType
   ) => string;
   dismissToast: (id: string) => void;
   pauseToast: (id: string) => void;

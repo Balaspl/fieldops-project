@@ -19,9 +19,6 @@ from app.services.ai.FieldOpsAI.repositories.job_repository import JobRepository
 from app.services.ai.FieldOpsAI.repositories.technician_repository import (
     TechnicianRepository,
 )
-from app.services.ai.FieldOpsAI.repositories.job_assignment_repository import (
-    JobAssignmentRepository,
-)
 
 from app.services.ai.FieldOpsAI.agents.planning_agent import PlanningAgent
 from app.services.ai.FieldOpsAI.schemas.agent_config import AgentConfig
@@ -37,6 +34,10 @@ from app.services.ai.FieldOpsAI.runtime.lifecycle import AgentLifecycle
 from app.services.ai.FieldOpsAI.runtime.agent_pool import AgentPool
 from app.services.ai.FieldOpsAI.schemas.agent_result import AgentResultStatus
 from app.services.ai.FieldOpsAI.runtime.orchestrator import AIOrchestrator
+from app.redis_client import get_redis_client
+from app.models import Organization
+from app.services.dispatch_eligibility import evaluate_technician_dispatch_eligibility
+from app.services.ai.FieldOpsAI.graph.planning_graph import check_skill_match_level
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,6 @@ class PlanningService:
 
         self.job_repository = JobRepository(db)
         self.technician_repository = TechnicianRepository(db)
-        self.assignment_repository = JobAssignmentRepository(db)
 
         self._config_manager = config_manager
         self._pool = pool
@@ -114,24 +114,92 @@ class PlanningService:
 
         # 4. Load available technicians across organizations.
         technicians = self.technician_repository.get_available()
+        redis_client = get_redis_client()
+        dispatch_eligible = []
+        excluded_candidates: list[dict] = []
+        active_organizations = {
+            str(org_id): (latitude, longitude)
+            for org_id, latitude, longitude in self.db.query(
+                Organization.id,
+                Organization.site_latitude,
+                Organization.site_longitude,
+            ).filter(
+                Organization.status == "ACTIVE",
+                Organization.deleted_at.is_(None),
+            ).all()
+        }
+        for technician in technicians:
+            technician_id = int(technician.technician_id)
+            reason = None
+            organization_location = active_organizations.get(str(technician.tenant_id))
+            if organization_location is None:
+                reason = "technician_tenant_inactive_or_missing"
+                eligibility = {"eligible": False, "reason": reason}
+            else:
+                eligibility = evaluate_technician_dispatch_eligibility(
+                    technician,
+                    job_tenant_id=None,
+                    redis_client=redis_client,
+                    fallback_location=organization_location,
+                )
+            if eligibility["eligible"]:
+                skill_level = check_skill_match_level(
+                    technician.technician_skill,
+                    job.required_skill or job.service_type,
+                    job.service_type,
+                    getattr(job, "title", None),
+                    job.issue_description,
+                )
+                if skill_level < 1:
+                    reason = "required_skill_mismatch"
+                else:
+                    location = eligibility["location_coordinates"]
+                    technician_data = self.technician_repository.to_ai_dict(technician)
+                    technician_data.update({
+                        "tenant_id": str(technician.tenant_id),
+                        "location": f"{location[0]},{location[1]}",
+                        "location_accuracy_meters": eligibility["accuracy_meters"],
+                        "location_age_seconds": eligibility["location_age_seconds"],
+                        "heartbeat_age_seconds": eligibility["heartbeat_age_seconds"],
+                        "eligible": True,
+                        "exclusion_reason": None,
+                    })
+                    dispatch_eligible.append((technician, technician_data))
+            else:
+                reason = eligibility["reason"]
+            if reason:
+                excluded_candidates.append({
+                    "technician_id": technician_id,
+                    "eligible": False,
+                    "exclusion_reason": reason,
+                })
+        technicians = [technician for technician, _ in dispatch_eligible]
 
         if not technicians:
-            raise ValueError(
-                "No available technicians found."
+            return PlanningDecision(
+                action="no_assignment",
+                job_id=int(job.id),
+                priority=(str(job.priority or "MEDIUM").upper() if str(job.priority or "MEDIUM").upper() in {"LOW", "MEDIUM", "HIGH", "CRITICAL"} else "MEDIUM"),
+                reason="No technicians met the current planning eligibility requirements.",
+                excluded_candidates=excluded_candidates,
             )
 
         # 5. Exclude technicians already attempted by the dispatcher.
         available_technicians = []
 
+        data_by_id = {int(technician.technician_id): data for technician, data in dispatch_eligible}
         for technician in technicians:
             technician_id = int(technician.technician_id)
 
             if technician_id in rejected_ids:
+                excluded_candidates.append({
+                    "technician_id": technician_id,
+                    "eligible": False,
+                    "exclusion_reason": "already_attempted_in_dispatch_cycle",
+                })
                 continue
 
-            technician_data = (
-                self.technician_repository.to_ai_dict(technician)
-            )
+            technician_data = data_by_id[technician_id]
 
             available_technicians.append(technician_data)
 
@@ -150,9 +218,12 @@ class PlanningService:
         )
 
         if not available_technicians:
-            raise ValueError(
-                "No new available technicians remain after excluding "
-                "previously attempted technicians."
+            return PlanningDecision(
+                action="no_assignment",
+                job_id=int(job.id),
+                priority=(str(job.priority or "MEDIUM").upper() if str(job.priority or "MEDIUM").upper() in {"LOW", "MEDIUM", "HIGH", "CRITICAL"} else "MEDIUM"),
+                reason="No unattempted technicians meet the current planning eligibility requirements.",
+                excluded_candidates=excluded_candidates,
             )
 
         # 6. Build planning context.
@@ -236,6 +307,7 @@ class PlanningService:
        
         # 14. Final safety check: remove attempted technicians
         # from the complete ranked pool and recommendations.
+            eligible_ids = {int(item["technician_id"]) for item in available_technicians}
             if decision.all_ranked_technicians:
                 filtered_ranked = []
                 seen_ids: set[int] = set()
@@ -252,6 +324,14 @@ class PlanningService:
                         )
                         continue
 
+                    if technician_id not in eligible_ids:
+                        excluded_candidates.append({
+                            "technician_id": technician_id,
+                            "eligible": False,
+                            "exclusion_reason": "not_in_current_eligible_planning_pool",
+                        })
+                        continue
+
                     if technician_id in seen_ids:
                         continue
 
@@ -260,6 +340,7 @@ class PlanningService:
 
                 # Preserve every remaining ranked candidate.
                 decision.all_ranked_technicians = filtered_ranked
+                decision.excluded_candidates = excluded_candidates
 
                 # The current offer batch remains limited to three.
                 decision.recommended_technicians = filtered_ranked[:3]
@@ -281,6 +362,14 @@ class PlanningService:
                         )
                         continue
 
+                    if technician_id not in eligible_ids:
+                        excluded_candidates.append({
+                            "technician_id": technician_id,
+                            "eligible": False,
+                            "exclusion_reason": "not_in_current_eligible_planning_pool",
+                        })
+                        continue
+
                     if technician_id in seen_ids:
                         continue
 
@@ -290,6 +379,11 @@ class PlanningService:
                 decision.recommended_technicians = (
                     filtered_recommendations[:3]
                 )
+                decision.excluded_candidates = excluded_candidates
+            decision.top_3 = (
+                decision.all_ranked_technicians
+                or decision.recommended_technicians
+            )[:3]
             return decision
 
 
@@ -325,4 +419,4 @@ class PlanningService:
                 rejected_technician_ids=rejected_technician_ids,
             )
         )
-    
+

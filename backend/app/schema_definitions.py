@@ -940,6 +940,28 @@ class JobClosureCreate(BaseModel):
     after_images: list[str] = Field(..., min_length=1)
     labour_cost: float = Field(..., ge=0.0)
     material_cost: float = Field(..., ge=0.0)
+    signature_data: str
+
+    @field_validator("signature_data")
+    @classmethod
+    def validate_customer_signature(cls, value: str) -> str:
+        canonical = value.strip()
+
+        if not canonical:
+            raise ValueError("Customer signature is required")
+
+        if len(canonical) > 2_000_000:
+            raise ValueError("Customer signature is too large")
+
+        if not re.fullmatch(
+            r"data:image/(?:png|jpeg);base64,[A-Za-z0-9+/=]+",
+            canonical,
+        ):
+            raise ValueError(
+                "Customer signature must be a PNG or JPEG base64 data URL"
+            )
+
+        return canonical
 
     @field_validator("work_summary")
     @classmethod

@@ -234,7 +234,8 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({
   onNotificationClick,
   onMarkAllAsRead,
   onDismissNotification,
-  loading = false
+  loading = false,
+  onViewAll
 }) => {
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
 
@@ -401,6 +402,44 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({
                 </div>
               )}
             </div>
+
+            {onViewAll && (
+              <div
+                style={{
+                  padding: "12px 20px",
+                  borderTop: "1px solid #e2e8f0",
+                  backgroundColor: "#f8fafc",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={onViewAll}
+                  style={{
+                    width: "100%",
+                    padding: "9px 16px",
+                    borderRadius: "8px",
+                    border: "1px solid #cbd5e1",
+                    backgroundColor: "#ffffff",
+                    color: "#0f172a",
+                    fontSize: "13px",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    textAlign: "center",
+                    transition: "all 0.15s ease",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = "#f1f5f9";
+                    e.currentTarget.style.borderColor = "#94a3b8";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = "#ffffff";
+                    e.currentTarget.style.borderColor = "#cbd5e1";
+                  }}
+                >
+                  View All Notifications
+                </button>
+              </div>
+            )}
           </motion.div>
         </div>
       )}

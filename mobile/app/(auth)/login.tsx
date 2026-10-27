@@ -2,14 +2,17 @@
 import { useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
-  View
+  View,
 } from "react-native";
+import { StatusBar } from "expo-status-bar";
 import { useRouter } from "expo-router";
 import { useAuthStore } from "../../src/auth/authStore";
 
@@ -23,6 +26,7 @@ export default function LoginScreen() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
 
   async function handleLogin() {
@@ -39,7 +43,7 @@ export default function LoginScreen() {
     try {
       const result = await login({
         email: normalizedEmail,
-        password
+        password,
       });
 
       if (result.mfa_required) {
@@ -55,160 +59,259 @@ export default function LoginScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.keyboardView}
+      style={styles.screen}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
-      <View style={styles.container}>
-        <View style={styles.brand}>
-          <Text style={styles.logo}>FieldOps</Text>
-          <Text style={styles.subtitle}>
-            Sign in to your technician workspace
-          </Text>
-        </View>
+      <StatusBar style="light" />
 
-        <View style={styles.form}>
-          <Text style={styles.label}>Email address</Text>
-          <TextInput
-            value={email}
-            onChangeText={setEmail}
-            placeholder="you@example.com"
-            placeholderTextColor="#94A3B8"
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="email-address"
-            autoComplete="email"
-            textContentType="emailAddress"
-            accessibilityLabel="Email address"
-            editable={!isLoading}
-            style={styles.input}
-          />
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.card}>
+          <View style={styles.brand}>
+            <Image
+              source={require("../../assets/images/fieldops-logo.png")}
+              style={styles.logo}
+              resizeMode="contain"
+              accessibilityLabel="FieldOps Commander logo"
+            />
 
-          <Text style={styles.label}>Password</Text>
-          <TextInput
-            value={password}
-            onChangeText={setPassword}
-            placeholder="Enter your password"
-            placeholderTextColor="#94A3B8"
-            secureTextEntry
-            autoCapitalize="none"
-            autoComplete="password"
-            textContentType="password"
-            accessibilityLabel="Password"
-            editable={!isLoading}
-            onSubmitEditing={() => void handleLogin()}
-            style={styles.input}
-          />
-
-          {validationError || authError ? (
-            <Text accessibilityRole="alert" style={styles.error}>
-              {validationError ?? authError}
+            <Text style={styles.title}>FieldOps Commander</Text>
+            <Text style={styles.subtitle}>
+              Enterprise Field Operations Platform
             </Text>
-          ) : null}
+          </View>
 
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Sign in"
-            disabled={isLoading}
-            onPress={() => void handleLogin()}
-            style={({ pressed }) => [
-              styles.button,
-              pressed && styles.buttonPressed,
-              isLoading && styles.buttonDisabled
-            ]}
-          >
-            {isLoading ? (
-              <ActivityIndicator color="#FFFFFF" />
-            ) : (
-              <Text style={styles.buttonText}>Sign in</Text>
-            )}
-          </Pressable>
+          <View style={styles.form}>
+            <Text style={styles.label}>Email Address</Text>
 
-          <Text style={styles.footer}>
-            Access is managed by your FieldOps organization.
-          </Text>
+            <View style={styles.inputContainer}>
+              <Text style={styles.inputIcon}>✉</Text>
+              <TextInput
+                value={email}
+                onChangeText={setEmail}
+                placeholder="you@example.com"
+                placeholderTextColor="#8290A3"
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="email-address"
+                autoComplete="email"
+                textContentType="emailAddress"
+                accessibilityLabel="Email address"
+                editable={!isLoading}
+                returnKeyType="next"
+                style={styles.input}
+              />
+            </View>
+
+            <Text style={styles.label}>Password</Text>
+
+            <View style={styles.inputContainer}>
+              <Text style={styles.inputIcon}>♙</Text>
+              <TextInput
+                value={password}
+                onChangeText={setPassword}
+                placeholder="Enter your password"
+                placeholderTextColor="#8290A3"
+                secureTextEntry={!showPassword}
+                autoCapitalize="none"
+                autoComplete="password"
+                textContentType="password"
+                accessibilityLabel="Password"
+                editable={!isLoading}
+                onSubmitEditing={() => void handleLogin()}
+                returnKeyType="done"
+                style={styles.input}
+              />
+
+              <Pressable
+                onPress={() => setShowPassword((visible) => !visible)}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  showPassword ? "Hide password" : "Show password"
+                }
+                style={styles.eyeButton}
+              >
+                <Text style={styles.eyeIcon}>
+                  {showPassword ? "Hide" : "◉"}
+                </Text>
+              </Pressable>
+            </View>
+
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => router.push("/(auth)/forgot-password" as any)}
+              style={styles.forgotButton}
+            >
+              <Text style={styles.forgotText}>Forgot Password?</Text>
+            </Pressable>
+
+            {validationError || authError ? (
+              <Text accessibilityRole="alert" style={styles.error}>
+                {validationError ?? authError}
+              </Text>
+            ) : null}
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Sign in"
+              disabled={isLoading}
+              onPress={() => void handleLogin()}
+              style={({ pressed }) => [
+                styles.signInButton,
+                pressed && styles.signInPressed,
+                isLoading && styles.buttonDisabled,
+              ]}
+            >
+              {isLoading ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.signInText}>Sign In  →</Text>
+              )}
+            </Pressable>
+
+            <Text style={styles.footer}>
+              Access is managed by your FieldOps organization.
+            </Text>
+          </View>
         </View>
-      </View>
+      </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  keyboardView: {
+  screen: {
     flex: 1,
-    backgroundColor: "#F8FAFC"
+    backgroundColor: "#062719",
   },
-  container: {
-    flex: 1,
+  scrollContent: {
+    flexGrow: 1,
     justifyContent: "center",
-    paddingHorizontal: 26,
-    paddingVertical: 32
+    paddingHorizontal: 18,
+    paddingVertical: 28,
+  },
+  card: {
+    width: "100%",
+    maxWidth: 500,
+    alignSelf: "center",
+    backgroundColor: "#0B2B1D",
+    borderColor: "#174B32",
+    borderWidth: 1,
+    borderRadius: 24,
+    paddingHorizontal: 22,
+    paddingTop: 30,
+    paddingBottom: 28,
   },
   brand: {
-    marginBottom: 36
+    alignItems: "center",
+    marginBottom: 30,
   },
   logo: {
-    color: "#1D4ED8",
-    fontSize: 34,
+    width: "100%",
+    height: 112,
+    marginBottom: 14,
+  },
+  title: {
+    color: "#E8F5EC",
+    fontSize: 25,
     fontWeight: "800",
-    letterSpacing: -0.5
+    textAlign: "center",
+    letterSpacing: -0.6,
   },
   subtitle: {
-    color: "#64748B",
-    fontSize: 16,
-    lineHeight: 23,
-    marginTop: 8
+    color: "#91B2A0",
+    fontSize: 14,
+    textAlign: "center",
+    marginTop: 9,
   },
   form: {
-    width: "100%"
+    width: "100%",
   },
   label: {
-    color: "#334155",
+    color: "#B5CCBE",
     fontSize: 14,
-    fontWeight: "600",
-    marginBottom: 8,
-    marginTop: 16
+    fontWeight: "500",
+    marginBottom: 9,
+    marginTop: 17,
+  },
+  inputContainer: {
+    minHeight: 56,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#E7EFFD",
+    borderColor: "#C6D6E9",
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+  },
+  inputIcon: {
+    color: "#16A765",
+    fontSize: 21,
+    width: 28,
+    textAlign: "center",
+    marginRight: 8,
   },
   input: {
-    backgroundColor: "#FFFFFF",
-    borderColor: "#CBD5E1",
-    borderWidth: 1,
-    borderRadius: 10,
-    color: "#0F172A",
+    flex: 1,
+    color: "#172033",
+    fontSize: 15,
+    paddingVertical: 14,
+  },
+  eyeButton: {
+    paddingHorizontal: 5,
+    paddingVertical: 10,
+  },
+  eyeIcon: {
+    color: "#8298A7",
     fontSize: 16,
-    minHeight: 52,
-    paddingHorizontal: 14
+    fontWeight: "600",
+  },
+  forgotButton: {
+    alignSelf: "flex-end",
+    marginTop: 16,
+    paddingVertical: 3,
+  },
+  forgotText: {
+    color: "#80EBAF",
+    fontSize: 14,
+    fontWeight: "700",
   },
   error: {
-    color: "#B91C1C",
-    fontSize: 14,
-    lineHeight: 20,
-    marginTop: 14
+    color: "#FF8B8B",
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 14,
   },
-  button: {
+  signInButton: {
+    minHeight: 58,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#1D4ED8",
-    borderRadius: 10,
-    minHeight: 52,
-    marginTop: 24,
-    paddingHorizontal: 18
+    backgroundColor: "#12833F",
+    borderColor: "#1A9C50",
+    borderWidth: 1,
+    borderRadius: 14,
+    marginTop: 28,
+    paddingHorizontal: 18,
   },
-  buttonPressed: {
-    backgroundColor: "#1E40AF"
+  signInPressed: {
+    backgroundColor: "#0E7136",
   },
   buttonDisabled: {
-    opacity: 0.65
+    opacity: 0.65,
   },
-  buttonText: {
+  signInText: {
     color: "#FFFFFF",
-    fontSize: 16,
-    fontWeight: "700"
+    fontSize: 17,
+    fontWeight: "800",
   },
   footer: {
-    color: "#64748B",
+    color: "#A5BEB0",
     fontSize: 12,
-    lineHeight: 18,
-    marginTop: 20,
-    textAlign: "center"
-  }
+    lineHeight: 19,
+    marginTop: 24,
+    textAlign: "center",
+  },
 });

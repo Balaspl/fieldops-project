@@ -2,7 +2,7 @@ import os
 from typing import Optional
 import logging
 
-from sqlalchemy import Boolean,CheckConstraint,Column,Date,DateTime,Float,ForeignKey,Index,Integer,JSON,String, Text,UniqueConstraint
+from sqlalchemy import Boolean,CheckConstraint,Column,Date,DateTime,Float,ForeignKey,Index,Integer,JSON,String, Text,Time,UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import uuid
@@ -33,7 +33,7 @@ class Technician(Base):
     technician_location = Column(String(150), nullable=False)
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)
-    technician_status = Column(String(30), default="AVAILABLE")
+    technician_status = Column(String(30), default="OFFLINE")
     current_jobs = Column(Integer, default=0)
     max_jobs = Column(Integer, default=5)
     last_ping = Column(DateTime(timezone=True), nullable=True) # Added for heartbeat
@@ -110,6 +110,8 @@ class Job(Base):
     service_type = Column(String(50), nullable=False)
     contact_number = Column(String(15), nullable=False)
     preferred_service_date = Column(Date, nullable=False)
+    preferred_service_time = Column(Time, nullable=True)
+    preferred_service_timezone = Column(String(64), nullable=True)
     required_skill = Column(String(100), nullable=True) # My addition
     status = Column(String(30), default="CREATED")
     assigned_technician_id = Column(Integer, ForeignKey("technicians.technician_id"), nullable=True) # My addition
@@ -160,6 +162,9 @@ class Job(Base):
     rejection_reason = Column(Text, nullable=True)
     rejected_at = Column(DateTime(timezone=True), nullable=True)
     rejected_by_tech_id = Column(String(50), nullable=True)
+
+    # Durable Dispatcher workflow snapshot for reject/timeout/restart recovery.
+    dispatch_state = Column(JSON, nullable=True)
 
     # Share tracking link fields
     share_token = Column(String(36), unique=True, index=True, nullable=True)

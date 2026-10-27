@@ -1,7 +1,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  Alert,
   FlatList,
+  Pressable,
   RefreshControl,
   StyleSheet,
   Text,
@@ -9,6 +11,7 @@ import {
 } from "react-native";
 import {
   getTechnicianNotifications,
+  markTechnicianNotificationRead,
   type NotificationCollection,
   type TechnicianNotification
 } from "../../src/api/notifications";
@@ -78,6 +81,35 @@ export default function NotificationsScreen() {
     }
   }, []);
 
+  const markNotificationRead = useCallback(
+    async (notification: TechnicianNotification) => {
+      const alreadyRead =
+        notification.read ?? notification.is_read ?? false;
+
+      if (alreadyRead) {
+        return;
+      }
+
+      try {
+        await markTechnicianNotificationRead(notification.id);
+
+        setNotifications((current) =>
+          current.map((item) =>
+            String(item.id) === String(notification.id)
+              ? { ...item, read: true, is_read: true }
+              : item
+          )
+        );
+      } catch {
+        Alert.alert(
+          "Unable to update notification",
+          "Please check your connection and try again."
+        );
+      }
+    },
+    []
+  );
+
   useEffect(() => {
     void loadNotifications();
   }, [loadNotifications]);
@@ -135,7 +167,11 @@ export default function NotificationsScreen() {
           const message = item.message ?? item.body;
 
           return (
-            <View
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Mark notification ${item.title || "FieldOps update"} as read`}
+              disabled={isRead}
+              onPress={() => void markNotificationRead(item)}
               style={[
                 styles.card,
                 !isRead && styles.unreadCard
@@ -160,7 +196,7 @@ export default function NotificationsScreen() {
               <Text style={styles.date}>
                 {formatDate(item.created_at)}
               </Text>
-            </View>
+            </Pressable>
           );
         }}
       />

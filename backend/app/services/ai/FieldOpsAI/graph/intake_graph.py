@@ -137,6 +137,8 @@ def parse_request_node(state: IntakeGraphState) -> Dict[str, Any]:
 
     service = raw.get("service") or raw.get("service_type") or state.get("service") or state.get("service_type")
     title = raw.get("title") or state.get("title") or ""
+    category = raw.get("category") or raw.get("title") or state.get("category") or state.get("title") or ""
+    issue = raw.get("issue") or state.get("issue") or ""
     description = raw.get("description") or raw.get("request") or raw.get("issue_description") or state.get("description") or ""
     location = raw.get("location") or state.get("location") or ""
     priority = (raw.get("priority") or state.get("priority") or "MEDIUM").upper()
@@ -162,6 +164,8 @@ def parse_request_node(state: IntakeGraphState) -> Dict[str, Any]:
         "service": str(service).strip() if service else None,
         "service_type": str(service).strip() if service else None,
         "title": str(title).strip(),
+        "category": str(category).strip() if category else None,
+        "issue": str(issue).strip() if issue else None,
         "description": str(description).strip(),
         "location": str(location).strip() if location else None,
         "priority": priority,
@@ -363,6 +367,8 @@ def build_validated_job_node(state: IntakeGraphState) -> Dict[str, Any]:
         "location": state.get("location") or "",
         "priority": state.get("priority") or "MEDIUM",
         "title": state.get("title") or service,
+        "category": state.get("category") or state.get("title") or service,
+        "issue": state.get("issue") or "",
         "description": state.get("description") or "",
         "site_latitude": state.get("site_latitude"),
         "site_longitude": state.get("site_longitude"),

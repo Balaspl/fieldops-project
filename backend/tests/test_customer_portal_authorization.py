@@ -248,6 +248,10 @@ def test_customer_job_list_contains_only_own_tenant_scoped_requests(customer_db)
 
 
 def test_customer_job_list_includes_permitted_technician_details(customer_db):
+    assigned_job = customer_db.query(Job).filter(Job.id == 101).one()
+    assigned_job.status = "ACCEPTED"
+    customer_db.flush()
+
     jobs = asyncio.run(
         track_customer_jobs(_customer(), customer_db)
     )
@@ -264,6 +268,10 @@ def test_customer_job_list_includes_permitted_technician_details(customer_db):
 
 
 def test_customer_job_detail_excludes_private_technician_profile_fields(customer_db):
+    assigned_job = customer_db.query(Job).filter(Job.id == 101).one()
+    assigned_job.status = "ACCEPTED"
+    customer_db.flush()
+
     job = asyncio.run(
         get_customer_job_detail(101, _customer(), customer_db)
     )

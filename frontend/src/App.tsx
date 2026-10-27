@@ -17,6 +17,11 @@ import {
   FileText,
   Navigation,
   Headphones,
+  Bell,
+  ChevronDown,
+  Menu,
+  MapPin,
+  Wrench,
 } from "lucide-react";
 import useAuthStore from "./store/authStore";
 
@@ -41,11 +46,17 @@ import {
   startHeartbeatLoop,
   stopHeartbeatLoop,
 } from "./services/heartbeatService";
-import { getAdminCustomerSupportRequests } from "./services/customerPortalService";
+import {
+  getAdminCustomerSupportRequests,
+  getCustomerProfile,
+} from "./services/customerPortalService";
+import ErrorBoundary from "./components/ui/ErrorBoundary";
+import SuperAdminServicesPage from "./pages/SuperAdminServicesPage";
 import { ToastProvider, useToast } from "./hooks/useToast";
 import LoadingSpinner from "./components/ui/LoadingSpinner";
 import TechnicianLocationTracker from "./components/technician/TechnicianLocationTracker";
 import TechnicianAvailabilityLocation from "./components/technician/TechnicianAvailabilityLocation";
+import CustomerSupportWidget from "./components/customer/CustomerSupportWidget";
 
 // Lazy load page components
 const LoginPage = lazy(() => import("./pages/LoginPage"));
@@ -563,7 +574,12 @@ function AppInner() {
     userRole === "dispatcher";
 
   const isSuperAdmin =
-    userRole === "super_admin";
+    userRole === "super_admin" ||
+    userRole === "admin" ||
+    userRole === "head" ||
+    (user as any)?.role === "super_admin" ||
+    (user as any)?.role === "admin" ||
+    (user as any)?.is_superadmin === true;
 
   const isAdminOrDispatcher =
     !isTechnician && !isCustomer;
@@ -582,7 +598,7 @@ function AppInner() {
         return "tech_dashboard";
 
       if (isCustomer)
-        return "cust_dashboard";
+        return "cust_requests";
 
       return "dashboard";
     });
@@ -597,6 +613,74 @@ function AppInner() {
     }
   }, [isCustomer]);
 
+  const [previousCustomerTab, setPreviousCustomerTab] =
+    useState<string>("cust_requests");
+  const [selectedCustomerNotificationId, setSelectedCustomerNotificationId] =
+    useState<string | null>(null);
+
+  const [customerLocation, setCustomerLocation] =
+    useState("Chennai, Tamil Nadu");
+
+  const [customerName, setCustomerName] = useState(() => {
+    if (user?.first_name && user.first_name.toLowerCase() !== "carl") {
+      return `${user.first_name} ${user.last_name || ""}`.trim();
+    }
+    return "lincy";
+  });
+
+  useEffect(() => {
+    if (!isCustomer) return;
+    let active = true;
+
+    const handleProfileData = (profile: any) => {
+      if (!profile) return;
+      if (profile.city && profile.state) {
+        setCustomerLocation(`${profile.city}, ${profile.state}`);
+      } else if (profile.city) {
+        setCustomerLocation(profile.city);
+      } else if (profile.address) {
+        setCustomerLocation(profile.address);
+      }
+
+      if (profile.full_name && profile.full_name.trim()) {
+        const cleaned = profile.full_name.trim();
+        if (cleaned.toLowerCase() !== "carl customer" && cleaned.toLowerCase() !== "carl") {
+          setCustomerName(cleaned);
+        } else {
+          setCustomerName("lincy");
+        }
+      } else if (user?.first_name && user.first_name.toLowerCase() !== "carl") {
+        setCustomerName(`${user.first_name} ${user.last_name || ""}`.trim());
+      }
+    };
+
+    const fetchProfile = () => {
+      getCustomerProfile()
+        .then((res: any) => {
+          if (!active) return;
+          handleProfileData(res?.data);
+        })
+        .catch(() => {});
+    };
+
+    fetchProfile();
+
+    const onProfileUpdated = (event: any) => {
+      if (event?.detail) {
+        handleProfileData(event.detail);
+      } else {
+        fetchProfile();
+      }
+    };
+
+    window.addEventListener("customer-profile-updated", onProfileUpdated);
+
+    return () => {
+      active = false;
+      window.removeEventListener("customer-profile-updated", onProfileUpdated);
+    };
+  }, [isCustomer, activeTab, user]);
+
   const [sidebarCollapsed, setSidebarCollapsed] =
     useState(false);
 
@@ -606,10 +690,14 @@ function AppInner() {
   const handleTabChange = (
     tab: string,
   ) => {
-    if (tab === activeTab) return;
+    let targetTab = tab;
+    if (targetTab === "my_requests") {
+      targetTab = "cust_requests";
+    }
+    if (targetTab === activeTab) return;
 
     setIsNavigating(true);
-    setActiveTab(tab);
+    setActiveTab(targetTab);
 
     setTimeout(() => {
       setIsNavigating(false);
@@ -634,6 +722,9 @@ function AppInner() {
 
       case "planning":
         return "Loading Planning Board...";
+
+      case "services":
+        return "Loading Services Catalog...";
 
       case "profile":
         return "Loading Account & Organization Control...";
@@ -861,6 +952,12 @@ function AppInner() {
       return;
     }
 
+    // Availability is explicit; login and page visibility never start it.
+    if ((technicianAvailability || "").toLowerCase() !== "available") {
+      stopHeartbeatLoop();
+      return;
+    }
+
     const technicianId = String(user.id);
 
     console.log(
@@ -868,10 +965,7 @@ function AppInner() {
       technicianId,
     );
 
-    startHeartbeatLoop(
-      technicianId,
-      450000,
-    );
+    startHeartbeatLoop(technicianId);
 
     return () => {
       console.log(
@@ -884,6 +978,7 @@ function AppInner() {
   }, [
     isTechnician,
     user?.id,
+    technicianAvailability,
   ]);
 
   // Track socket notification IDs to prevent duplicate toasts on reconnects.
@@ -1006,6 +1101,19 @@ function AppInner() {
     async (
       notif: NotificationItem,
     ) => {
+      if (isCustomer) {
+        if (activeTab !== "cust_notifications") {
+          setPreviousCustomerTab(activeTab);
+        }
+        setSelectedCustomerNotificationId(String(notif.id));
+        setIsNotificationDrawerOpen(false);
+        handleTabChange("cust_notifications");
+        if (!notif.isRead) {
+          await handleMarkAsRead(notif.id);
+        }
+        return;
+      }
+
       setSelectedNotification(
         notif,
       );
@@ -1196,93 +1304,393 @@ function AppInner() {
   };
 
   return (
-    <div style={styles.appShell}>
+    <div
+      style={
+        isCustomer
+          ? {
+              display: "flex",
+              flexDirection: "column",
+              height: "100vh",
+              overflow: "hidden",
+              fontFamily: "'Inter', sans-serif",
+            }
+          : styles.appShell
+      }
+    >
       <style>
         {localCss}
       </style>
 
-      <aside
-        style={
-          isMobileLayout
-            ? styles.sidebarMobile
-            : sidebarCollapsed
-              ? {
-                  ...styles.sidebar,
-                  ...styles.sidebarCollapsed,
-                }
-              : styles.sidebar
-        }
-      >
-        <button
-          className="sidebar-toggle-style"
-          style={
-            isMobileLayout
-              ? {
-                  display:
-                    "none",
-                }
-              : sidebarCollapsed
-                ? {
-                    ...styles.sidebarToggle,
-                    ...styles.sidebarToggleCollapsed,
-                  }
-                : styles.sidebarToggle
-          }
-          onClick={() =>
-            setSidebarCollapsed(
-              !sidebarCollapsed,
-            )
-          }
-          aria-label="Toggle sidebar"
-        >
-          {sidebarCollapsed ? (
-            <ChevronsRight
-              size={18}
-            />
-          ) : (
-            <ChevronsLeft
-              size={18}
-            />
-          )}
-        </button>
-
-        <div
-          className="sidebar-content-style"
+      {/* Customer Top Navbar */}
+      {isCustomer && (
+        <header
           style={{
-            ...styles.sidebarContent,
-            ...(isMobileLayout
-              ? styles.sidebarContentMobile
-              : {}),
-            ...(!isMobileLayout &&
-            sidebarCollapsed
-              ? styles.sidebarContentCollapsed
-              : {}),
+            height: "60px",
+            minHeight: "60px",
+            background: "#FFFFFF",
+            borderBottom: "1px solid #E2E8F0",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: isMobileLayout ? "0 12px" : "0 24px",
+            zIndex: 350,
+            boxSizing: "border-box",
+            width: "100%",
+            flexShrink: 0,
           }}
         >
+          {/* Left: Original FC FieldOps Commander Logo */}
           <div
-            style={
-              isMobileLayout
-                ? {
-                    display:
-                      "none",
-                  }
-                : styles.sidebarBrand
-            }
+            style={{
+              display: "flex",
+              alignItems: "center",
+              cursor: "pointer",
+            }}
+            onClick={() => handleTabChange("cust_requests")}
+            title="FieldOps Home"
           >
-            <div
-              style={
-                styles.brandLogoWrap
-              }
+            <img
+              src={logo}
+              alt="FieldOps Commander"
+              style={{
+                height: "32px",
+                width: "auto",
+                objectFit: "contain",
+                display: "block",
+              }}
+            />
+          </div>
+
+          {/* Right: Location + Notification Bell + Customer Profile */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: isMobileLayout ? "10px" : "18px",
+            }}
+          >
+            {/* Location Pill */}
+            {!isMobileLayout && (
+              <div
+                onClick={() => handleTabChange("cust_profile")}
+                title="Customer Location (from Profile) - Click to manage"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  background: "#FFFFFF",
+                  border: "1px solid #E2E8F0",
+                  borderRadius: "999px",
+                  padding: "7px 18px",
+                  color: "#334155",
+                  fontSize: "13px",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  transition: "all 0.2s",
+                  boxShadow: "0 1px 2px rgba(0, 0, 0, 0.04)",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "#F8FAFC";
+                  e.currentTarget.style.borderColor = "#CBD5E1";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "#FFFFFF";
+                  e.currentTarget.style.borderColor = "#E2E8F0";
+                }}
+              >
+                <MapPin size={15} color="#059669" style={{ flexShrink: 0 }} />
+                <span
+                  style={{
+                    maxWidth: "220px",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {customerLocation}
+                </span>
+                <ChevronDown size={14} color="#64748B" style={{ flexShrink: 0 }} />
+              </div>
+            )}
+
+            {/* Notification Bell */}
+            <button
+              type="button"
+              onClick={() => setIsNotificationDrawerOpen(true)}
+              title="Notifications"
+              style={{
+                background: "transparent",
+                border: "none",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+                position: "relative",
+                padding: "6px",
+              }}
             >
-              <img
-                src={logo}
-                alt="FieldOps Logo"
-                style={
-                  styles.brandLogoImg
-                }
-              />
+              <Bell size={20} color="#475569" />
+              {(unreadCount > 0 || notifications.filter((n) => !n.isRead).length > 0) && (
+                <span
+                  style={{
+                    position: "absolute",
+                    top: "0px",
+                    right: "-2px",
+                    minWidth: "16px",
+                    height: "16px",
+                    padding: "0 4px",
+                    borderRadius: "999px",
+                    background: "#EF4444",
+                    color: "#FFFFFF",
+                    fontSize: "10px",
+                    fontWeight: 700,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    boxShadow: "0 0 0 2px #FFFFFF",
+                  }}
+                >
+                  {(unreadCount || notifications.filter((n) => !n.isRead).length) > 99
+                    ? "99+"
+                    : (unreadCount || notifications.filter((n) => !n.isRead).length)}
+                </span>
+              )}
+            </button>
+
+            {/* Customer Profile Pill */}
+            <div
+              onClick={() => handleTabChange("cust_profile")}
+              title="Customer Profile - Click to manage"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "10px",
+                cursor: "pointer",
+              }}
+            >
+              <div
+                style={{
+                  width: "38px",
+                  height: "38px",
+                  borderRadius: "50%",
+                  background: "#059669",
+                  color: "#FFFFFF",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontWeight: 700,
+                  fontSize: "16px",
+                  flexShrink: 0,
+                }}
+              >
+                {customerName ? customerName[0].toUpperCase() : (user?.first_name ? user.first_name[0].toUpperCase() : "C")}
+              </div>
+              {!isMobileLayout && (
+                <div style={{ display: "flex", flexDirection: "column", textAlign: "left" }}>
+                  <span style={{ fontSize: "14px", fontWeight: 700, color: "#0F172A", lineHeight: 1.2 }}>
+                    {customerName || (user ? `${user.first_name || ""} ${user.last_name || ""}`.trim() : "Customer")}
+                  </span>
+                  <span style={{ fontSize: "10px", fontWeight: 700, color: "#0D9488", letterSpacing: "0.08em", lineHeight: 1.2 }}>
+                    CUSTOMER
+                  </span>
+                </div>
+              )}
             </div>
           </div>
+        </header>
+      )}
+
+      {/* Main Body Layout (Sidebar + Main Area) */}
+      <div
+        style={
+          isCustomer
+            ? {
+                display: "flex",
+                flex: 1,
+                minHeight: 0,
+                height: "calc(100vh - 60px)",
+                width: "100%",
+                overflow: "hidden",
+                position: "relative",
+              }
+            : { display: "contents" }
+        }
+      >
+        <aside
+          style={
+            isCustomer
+              ? {
+                  width: sidebarCollapsed ? "64px" : "240px",
+                  minWidth: sidebarCollapsed ? "64px" : "240px",
+                  background: "#FFFFFF",
+                  borderRight: "1px solid #E2E8F0",
+                  display: "flex",
+                  flexDirection: "column",
+                  height: "100%",
+                  position: "relative",
+                  zIndex: 200,
+                  boxSizing: "border-box",
+                  transition: "width 0.25s ease, min-width 0.25s ease",
+                }
+              : isMobileLayout
+                ? styles.sidebarMobile
+                : sidebarCollapsed
+                  ? {
+                      ...styles.sidebar,
+                      ...styles.sidebarCollapsed,
+                    }
+                  : styles.sidebar
+          }
+        >
+          {/* Customer attached semi-circle toggle tab (matches reference image) */}
+          {isCustomer && !isMobileLayout && (
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+              title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              aria-label="Toggle sidebar"
+              style={{
+                position: "absolute",
+                right: "0px",
+                top: "16px",
+                width: "18px",
+                height: "32px",
+                borderTopLeftRadius: "16px",
+                borderBottomLeftRadius: "16px",
+                borderTopRightRadius: "0px",
+                borderBottomRightRadius: "0px",
+                background: "#FFFFFF",
+                border: "1px solid #CBD5E1",
+                borderRight: "none",
+                boxShadow: "-2px 1px 4px rgba(0, 0, 0, 0.06)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+                zIndex: 300,
+                padding: "0 0 0 2px",
+                transition: "background 0.15s ease",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "#F8FAFC";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "#FFFFFF";
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "2.5px",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <span
+                  style={{
+                    width: "9px",
+                    height: "1.5px",
+                    backgroundColor: "#64748B",
+                    borderRadius: "1px",
+                    display: "block",
+                  }}
+                />
+                <span
+                  style={{
+                    width: "9px",
+                    height: "1.5px",
+                    backgroundColor: "#64748B",
+                    borderRadius: "1px",
+                    display: "block",
+                  }}
+                />
+                <span
+                  style={{
+                    width: "9px",
+                    height: "1.5px",
+                    backgroundColor: "#64748B",
+                    borderRadius: "1px",
+                    display: "block",
+                  }}
+                />
+              </div>
+            </button>
+          )}
+
+          {/* Toggle button for non-customer roles */}
+          {!isCustomer && (
+            <button
+              className="sidebar-toggle-style"
+              style={
+                isMobileLayout
+                  ? {
+                      display: "none",
+                    }
+                  : sidebarCollapsed
+                    ? {
+                        ...styles.sidebarToggle,
+                        ...styles.sidebarToggleCollapsed,
+                      }
+                    : styles.sidebarToggle
+              }
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+              aria-label="Toggle sidebar"
+            >
+              {sidebarCollapsed ? (
+                <ChevronsRight size={18} />
+              ) : (
+                <ChevronsLeft size={18} />
+              )}
+            </button>
+          )}
+
+          <div
+            className="sidebar-content-style"
+            style={
+              isCustomer
+                ? {
+                    display: "flex",
+                    flexDirection: "column",
+                    height: "100%",
+                    flex: 1,
+                    padding: sidebarCollapsed ? "12px 6px" : "12px 10px",
+                    boxSizing: "border-box",
+                    overflowY: "auto",
+                    overflowX: "hidden",
+                  }
+                : {
+                    ...styles.sidebarContent,
+                    ...(isMobileLayout
+                      ? styles.sidebarContentMobile
+                      : {}),
+                    ...(!isMobileLayout &&
+                    sidebarCollapsed
+                      ? styles.sidebarContentCollapsed
+                      : {}),
+                  }
+            }
+          >
+            {/* Logo inside sidebar ONLY for non-customer */}
+            {!isCustomer && (
+              <div
+                style={
+                  isMobileLayout
+                    ? {
+                        display: "none",
+                      }
+                    : styles.sidebarBrand
+                }
+              >
+                <div style={styles.brandLogoWrap}>
+                  <img
+                    src={logo}
+                    alt="FieldOps Logo"
+                    style={styles.brandLogoImg}
+                  />
+                </div>
+              </div>
+            )}
 
           {isTechnician ? (
             <nav
@@ -1506,121 +1914,27 @@ function AppInner() {
             </nav>
           ) : isCustomer ? (
             <nav
-              style={
-                isMobileLayout
-                  ? styles.sidebarNavMobile
-                  : styles.sidebarNav
-              }
-            >
-              <span
                 style={
-                  isMobileLayout ||
-                  sidebarCollapsed
-                    ? {
-                        display:
-                          "none",
-                      }
-                    : styles.navGroupLabel
+                  isMobileLayout
+                    ? styles.sidebarNavMobile
+                    : styles.sidebarNav
                 }
               >
-                CUSTOMER PORTAL
-              </span>
-
+                {/* 1. New Request */}
               <button
                 className="nav-item-style"
-                style={getItemStyle(
-                  "cust_dashboard",
-                )}
-                onClick={() =>
-                  handleTabChange(
-                    "cust_dashboard",
-                  )
-                }
-              >
-                <LayoutDashboard
-                  size={18}
-                  style={{
-                    flexShrink: 0,
-                  }}
-                />
-
-                <span
-                  className="nav-text"
-                  style={
-                    isMobileLayout ||
-                    sidebarCollapsed
-                      ? {
-                          display:
-                            "none",
-                        }
-                      : {}
-                  }
-                >
-                  Dashboard
-                </span>
-              </button>
-
-              <button
-                className="nav-item-style"
-                style={getItemStyle(
-                  "cust_profile",
-                )}
-                onClick={() =>
-                  handleTabChange(
-                    "cust_profile",
-                  )
-                }
-              >
-                <User
-                  size={18}
-                  style={{
-                    flexShrink: 0,
-                  }}
-                />
-
-                <span
-                  className="nav-text"
-                  style={
-                    isMobileLayout ||
-                    sidebarCollapsed
-                      ? {
-                          display:
-                            "none",
-                        }
-                      : {}
-                  }
-                >
-                  My Profile
-                </span>
-              </button>
-
-              <button
-                className="nav-item-style"
-                style={getItemStyle(
-                  "cust_create_request",
-                )}
-                onClick={() =>
-                  handleTabChange(
-                    "cust_create_request",
-                  )
-                }
+                style={getItemStyle("cust_create_request")}
+                onClick={() => handleTabChange("cust_create_request")}
               >
                 <PlusCircle
                   size={18}
-                  style={{
-                    flexShrink: 0,
-                  }}
+                  style={{ flexShrink: 0 }}
                 />
-
                 <span
                   className="nav-text"
                   style={
-                    isMobileLayout ||
-                    sidebarCollapsed
-                      ? {
-                          display:
-                            "none",
-                        }
+                    isMobileLayout || sidebarCollapsed
+                      ? { display: "none" }
                       : {}
                   }
                 >
@@ -1628,33 +1942,21 @@ function AppInner() {
                 </span>
               </button>
 
+              {/* 3. My Requests */}
               <button
                 className="nav-item-style"
-                style={getItemStyle(
-                  "cust_requests",
-                )}
-                onClick={() =>
-                  handleTabChange(
-                    "cust_requests",
-                  )
-                }
+                style={getItemStyle("cust_requests")}
+                onClick={() => handleTabChange("cust_requests")}
               >
                 <FileText
                   size={18}
-                  style={{
-                    flexShrink: 0,
-                  }}
+                  style={{ flexShrink: 0 }}
                 />
-
                 <span
                   className="nav-text"
                   style={
-                    isMobileLayout ||
-                    sidebarCollapsed
-                      ? {
-                          display:
-                            "none",
-                        }
+                    isMobileLayout || sidebarCollapsed
+                      ? { display: "none" }
                       : {}
                   }
                 >
@@ -1662,135 +1964,21 @@ function AppInner() {
                 </span>
               </button>
 
+              {/* 4. Service History */}
               <button
                 className="nav-item-style"
-                style={getItemStyle(
-                  "cust_tracking",
-                )}
-                onClick={() =>
-                  handleTabChange(
-                    "cust_tracking",
-                  )
-                }
-              >
-                <Navigation
-                  size={18}
-                  style={{
-                    flexShrink: 0,
-                  }}
-                />
-
-                <span
-                  className="nav-text"
-                  style={
-                    isMobileLayout ||
-                    sidebarCollapsed
-                      ? {
-                          display:
-                            "none",
-                        }
-                      : {}
-                  }
-                >
-                  Job Tracking
-                </span>
-              </button>
-
-              <button
-                className="nav-item-style"
-                style={getItemStyle(
-                  "cust_invoices",
-                )}
-                onClick={() =>
-                  handleTabChange(
-                    "cust_invoices",
-                  )
-                }
-              >
-                <FileText
-                  size={18}
-                  style={{
-                    flexShrink: 0,
-                  }}
-                />
-
-                <span
-                  className="nav-text"
-                  style={
-                    isMobileLayout ||
-                    sidebarCollapsed
-                      ? {
-                          display:
-                            "none",
-                        }
-                      : {}
-                  }
-                >
-                  Invoices
-                </span>
-              </button>
-
-              <button
-                className="nav-item-style"
-                style={getItemStyle(
-                  "cust_notifications",
-                )}
-                onClick={() =>
-                  handleTabChange(
-                    "cust_notifications",
-                  )
-                }
-              >
-                <BellRing
-                  size={18}
-                  style={{
-                    flexShrink: 0,
-                  }}
-                />
-
-                <span
-                  className="nav-text"
-                  style={
-                    isMobileLayout ||
-                    sidebarCollapsed
-                      ? {
-                          display:
-                            "none",
-                        }
-                      : {}
-                  }
-                >
-                  Notifications
-                </span>
-              </button>
-
-              <button
-                className="nav-item-style"
-                style={getItemStyle(
-                  "cust_history",
-                )}
-                onClick={() =>
-                  handleTabChange(
-                    "cust_history",
-                  )
-                }
+                style={getItemStyle("cust_history")}
+                onClick={() => handleTabChange("cust_history")}
               >
                 <History
                   size={18}
-                  style={{
-                    flexShrink: 0,
-                  }}
+                  style={{ flexShrink: 0 }}
                 />
-
                 <span
                   className="nav-text"
                   style={
-                    isMobileLayout ||
-                    sidebarCollapsed
-                      ? {
-                          display:
-                            "none",
-                        }
+                    isMobileLayout || sidebarCollapsed
+                      ? { display: "none" }
                       : {}
                   }
                 >
@@ -1798,71 +1986,25 @@ function AppInner() {
                 </span>
               </button>
 
+              {/* 5. Support */}
               <button
                 className="nav-item-style"
-                style={getItemStyle(
-                  "cust_support",
-                )}
-                onClick={() =>
-                  handleTabChange(
-                    "cust_support",
-                  )
-                }
+                style={getItemStyle("cust_support")}
+                onClick={() => handleTabChange("cust_support")}
               >
                 <Headphones
                   size={18}
-                  style={{
-                    flexShrink: 0,
-                  }}
+                  style={{ flexShrink: 0 }}
                 />
-
                 <span
                   className="nav-text"
                   style={
-                    isMobileLayout ||
-                    sidebarCollapsed
-                      ? {
-                          display:
-                            "none",
-                        }
+                    isMobileLayout || sidebarCollapsed
+                      ? { display: "none" }
                       : {}
                   }
                 >
                   Support
-                </span>
-              </button>
-
-              <button
-                className="nav-item-style"
-                style={getItemStyle(
-                  "cust_settings",
-                )}
-                onClick={() =>
-                  handleTabChange(
-                    "cust_settings",
-                  )
-                }
-              >
-                <Settings
-                  size={18}
-                  style={{
-                    flexShrink: 0,
-                  }}
-                />
-
-                <span
-                  className="nav-text"
-                  style={
-                    isMobileLayout ||
-                    sidebarCollapsed
-                      ? {
-                          display:
-                            "none",
-                        }
-                      : {}
-                  }
-                >
-                  Settings
                 </span>
               </button>
             </nav>
@@ -2094,6 +2236,36 @@ function AppInner() {
                 </span>
               </button>
 
+              {isSuperAdmin && (
+                <button
+                  className="nav-item-style"
+                  style={getItemStyle("services")}
+                  onClick={() => handleTabChange("services")}
+                  title="Services"
+                >
+                  <Wrench
+                    size={18}
+                    style={{
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span
+                    className="nav-text"
+                    style={
+                      isMobileLayout ||
+                      sidebarCollapsed
+                        ? {
+                            display:
+                              "none",
+                          }
+                        : {}
+                    }
+                  >
+                    Services
+                  </span>
+                </button>
+              )}
+
               {(isSuperAdmin ||
                 isDispatcher) && (
                 <button
@@ -2174,18 +2346,60 @@ function AppInner() {
             </nav>
           )}
 
-          <div
-            style={
-              isMobileLayout
-                ? {
-                    display:
-                      "none",
-                  }
-                : sidebarCollapsed
-                  ? styles.sidebarProfileMiniCollapsed
-                  : styles.sidebarProfileMini
-            }
-          >
+          {isCustomer ? (
+            <div
+              style={{
+                marginTop: "auto",
+                padding: sidebarCollapsed ? "12px 6px" : "12px 14px",
+                borderTop: "1px solid #E2E8F0",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => logout()}
+                title="Log out"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: sidebarCollapsed ? "0" : "10px",
+                  justifyContent: sidebarCollapsed ? "center" : "flex-start",
+                  background: "transparent",
+                  border: "none",
+                  color: "#64748B",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  padding: "8px 10px",
+                  borderRadius: "8px",
+                  width: "100%",
+                  transition: "all 0.2s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = "#EF4444";
+                  e.currentTarget.style.background = "#FEF2F2";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = "#64748B";
+                  e.currentTarget.style.background = "transparent";
+                }}
+              >
+                <LogOut size={18} />
+                {!sidebarCollapsed && <span>Logout</span>}
+              </button>
+            </div>
+          ) : (
+            <div
+              style={
+                isMobileLayout
+                  ? {
+                      display:
+                        "none",
+                    }
+                  : sidebarCollapsed
+                    ? styles.sidebarProfileMiniCollapsed
+                    : styles.sidebarProfileMini
+              }
+            >
             <div
               onClick={() =>
                 handleTabChange(
@@ -2325,17 +2539,23 @@ function AppInner() {
               </button>
             </div>
           </div>
+          )}
         </div>
       </aside>
 
       <div
         style={
-          isMobileLayout
+          isCustomer
             ? {
                 ...styles.mainArea,
-                ...styles.mainAreaMobile,
+                height: "100%",
               }
-            : styles.mainArea
+            : isMobileLayout
+              ? {
+                  ...styles.mainArea,
+                  ...styles.mainAreaMobile,
+                }
+              : styles.mainArea
         }
       >
         <main
@@ -2394,6 +2614,7 @@ function AppInner() {
               fullPage={true}
             />
           ) : (
+            <ErrorBoundary fallbackTitle="View Loading Error">
             <Suspense
               fallback={
                 <LoadingSpinner
@@ -2512,7 +2733,10 @@ function AppInner() {
 
               {activeTab ===
                 "cust_profile" && (
-                <CustomerProfilePage />
+                <CustomerProfilePage
+                  onClose={() => handleTabChange("cust_requests")}
+                  onNavigate={handleTabChange}
+                />
               )}
 
               {activeTab ===
@@ -2542,7 +2766,34 @@ function AppInner() {
 
               {activeTab ===
                 "cust_notifications" && (
-                <CustomerNotificationsPage />
+                <CustomerNotificationsPage
+                  onClose={() =>
+                    handleTabChange(
+                      previousCustomerTab || "cust_requests",
+                    )
+                  }
+                  selectedNotificationId={
+                    selectedCustomerNotificationId
+                  }
+                  onNotificationsRead={(readId) => {
+                    if (readId) {
+                      setNotifications((prev) =>
+                        prev.map((n) =>
+                          String(n.id) === String(readId)
+                            ? { ...n, isRead: true }
+                            : n,
+                        ),
+                      );
+                      setUnreadCount((c) => Math.max(0, c - 1));
+                    }
+                  }}
+                  onAllNotificationsRead={() => {
+                    setNotifications((prev) =>
+                      prev.map((n) => ({ ...n, isRead: true })),
+                    );
+                    setUnreadCount(0);
+                  }}
+                />
               )}
 
               {activeTab ===
@@ -2570,14 +2821,29 @@ function AppInner() {
                 />
               )}
 
+              {activeTab === "services" && (
+                <SuperAdminServicesPage />
+              )}
               {activeTab ===
                 "cust_settings" && (
                 <CustomerSettingsPage />
               )}
             </Suspense>
+            </ErrorBoundary>
           )}
         </main>
       </div>
+      {/* End Main Body Layout */}
+      </div>
+
+      {isCustomer && user?.id && (
+        <CustomerSupportWidget
+          customerId={String(user.id)}
+          onSupportClick={() => handleTabChange("cust_support")}
+          onServiceRequestsClick={() => handleTabChange("cust_requests")}
+          onTrackingClick={() => handleTabChange("cust_tracking")}
+        />
+      )}
 
       <NotificationDrawer
         isOpen={
@@ -2599,6 +2865,17 @@ function AppInner() {
         }
         onDismissNotification={
           handleDismissNotification
+        }
+        onViewAll={
+          isCustomer
+            ? () => {
+                if (activeTab !== "cust_notifications") {
+                  setPreviousCustomerTab(activeTab);
+                }
+                setIsNotificationDrawerOpen(false);
+                handleTabChange("cust_notifications");
+              }
+            : undefined
         }
       />
 
