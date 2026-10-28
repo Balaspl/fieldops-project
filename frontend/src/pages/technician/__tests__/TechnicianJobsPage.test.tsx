@@ -8,13 +8,20 @@ import {
 } from "vitest";
 
 import {
+  act,
   render,
   screen,
   waitFor,
   fireEvent,
+  within,
 } from "@testing-library/react";
 
 import TechnicianJobsPage from "../TechnicianJobsPage";
+import useAuthStore from "../../../store/authStore";
+import {
+  publishTechnicianGpsFix,
+  useTechnicianGpsStore,
+} from "../../../store/technicianGpsStore";
 
 import {
   getTechnicianJobs,
@@ -242,6 +249,8 @@ describe(
 
     afterEach(() => {
       vi.clearAllMocks();
+      useAuthStore.setState({ user: null });
+      useTechnicianGpsStore.setState({ location: null });
     });
 
 
@@ -332,6 +341,252 @@ describe(
         ).toBeGreaterThan(0);
       },
     );
+
+    it("shows the current-location distance and omits messaging from the assignment popup", async () => {
+      useAuthStore.setState({
+        user: { id: "tech-user-1", tenant_id: "tenant-1" } as any,
+      });
+      publishTechnicianGpsFix(
+        "tech-user-1",
+        "tenant-1",
+        {
+          timestamp: Date.now(),
+          coords: {
+            latitude: 12.9716,
+            longitude: 77.5946,
+            accuracy: 10,
+          },
+        } as GeolocationPosition,
+      );
+      mockedGetTechnicianJobs.mockResolvedValue(
+        createJobsResponse([
+          {
+            ...representativeJob,
+            site_latitude: 12.9816,
+            site_longitude: 77.5946,
+          },
+        ]),
+      );
+
+      render(<TechnicianJobsPage />);
+      const popup = await screen.findByRole("dialog", {
+        name: "Job Assigned",
+      });
+      expect(
+        await within(popup).findByText("Current location to customer"),
+      ).toBeTruthy();
+      expect(
+        within(popup).getByTestId("assignment-top-distance").textContent,
+      ).toBe("1.1 km");
+      expect(
+        within(popup).getByTestId("assignment-distance-summary").textContent,
+      ).toBe("1.1 km");
+      expect(
+        screen.getAllByRole("button", { name: /Message Customer/ }),
+      ).toHaveLength(1);
+    });
+
+    it("uses the assigned-at offer deadline for the popup countdown", async () => {
+      mockedGetTechnicianJobs.mockResolvedValue(
+        createJobsResponse([
+          {
+            ...representativeJob,
+            assigned_at: new Date(Date.now() - 50_000).toISOString(),
+          },
+        ]),
+      );
+
+      render(<TechnicianJobsPage />);
+
+      const popup = await screen.findByRole("dialog", {
+        name: "Job Assigned",
+      });
+      const cardCountdown = screen.getByTestId(
+        "assigned-job-acceptance-countdown",
+      );
+      const popupCountdown = within(popup).getByTestId(
+        "assignment-countdown",
+      );
+      expect(cardCountdown.textContent).toMatch(
+        /^Time left to accept: 04:\d{2}$/,
+      );
+      expect(
+        popupCountdown.textContent,
+      ).toMatch(/^04:\d{2}$/);
+      expect(cardCountdown.textContent).toContain(popupCountdown.textContent ?? "");
+    });
+
+    it("waits for a valid current GPS fix when technician location is missing or invalid", async () => {
+      useAuthStore.setState({
+        user: { id: "tech-user-1", tenant_id: "tenant-1" } as any,
+      });
+      mockedGetTechnicianJobs.mockResolvedValue(
+        createJobsResponse([
+          {
+            ...representativeJob,
+            site_latitude: 12.9816,
+            site_longitude: 77.5946,
+          },
+        ]),
+      );
+
+      render(<TechnicianJobsPage />);
+      const popup = await screen.findByRole("dialog", {
+        name: "Job Assigned",
+      });
+      expect(
+        within(popup).getByTestId("assignment-distance-summary").textContent,
+      ).toBe("Waiting for GPS location");
+      expect(
+        publishTechnicianGpsFix(
+          "tech-user-1",
+          "tenant-1",
+          {
+            timestamp: Date.now(),
+            coords: {
+              latitude: 91,
+              longitude: 77.5946,
+              accuracy: 10,
+            },
+          } as GeolocationPosition,
+        ),
+      ).toBe(false);
+      expect(
+        within(popup).getByTestId("assignment-distance-summary").textContent,
+      ).toBe("Waiting for GPS location");
+    });
+
+    it("shows customer location unavailable when customer coordinates are invalid", async () => {
+      mockedGetTechnicianJobs.mockResolvedValue(
+        createJobsResponse([
+          {
+            ...representativeJob,
+            site_latitude: 91,
+            site_longitude: 77.5946,
+          },
+        ]),
+      );
+
+      render(<TechnicianJobsPage />);
+      const popup = await screen.findByRole("dialog", {
+        name: "Job Assigned",
+      });
+      expect(
+        within(popup).getByTestId("assignment-distance-summary").textContent,
+      ).toBe("Customer location unavailable");
+    });
+
+    it("shows customer location unavailable when job coordinates are missing", async () => {
+      mockedGetTechnicianJobs.mockResolvedValue(
+        createJobsResponse([representativeJob]),
+      );
+
+      render(<TechnicianJobsPage />);
+      const popup = await screen.findByRole("dialog", {
+        name: "Job Assigned",
+      });
+      expect(
+        within(popup).getByTestId("assignment-distance-summary").textContent,
+      ).toBe("Customer location unavailable");
+    });
+
+    it("updates the displayed distance when a new live GPS fix arrives", async () => {
+      useAuthStore.setState({
+        user: { id: "tech-user-1", tenant_id: "tenant-1" } as any,
+      });
+      publishTechnicianGpsFix(
+        "tech-user-1",
+        "tenant-1",
+        {
+          timestamp: Date.now(),
+          coords: {
+            latitude: 12.9716,
+            longitude: 77.5946,
+            accuracy: 10,
+          },
+        } as GeolocationPosition,
+      );
+      mockedGetTechnicianJobs.mockResolvedValue(
+        createJobsResponse([
+          {
+            ...representativeJob,
+            site_latitude: 12.9816,
+            site_longitude: 77.5946,
+          },
+        ]),
+      );
+
+      render(<TechnicianJobsPage />);
+      const popup = await screen.findByRole("dialog", {
+        name: "Job Assigned",
+      });
+      expect(
+        within(popup).getByTestId("assignment-distance-summary").textContent,
+      ).toBe("1.1 km");
+
+      await act(async () => {
+        publishTechnicianGpsFix(
+          "tech-user-1",
+          "tenant-1",
+          {
+            timestamp: Date.now() + 1,
+            coords: {
+              latitude: 12.9766,
+              longitude: 77.5946,
+              accuracy: 10,
+            },
+          } as GeolocationPosition,
+        );
+      });
+
+      expect(
+        within(popup).getByTestId("assignment-distance-summary").textContent,
+      ).toBe("0.6 km");
+    });
+
+    it("routes assigned-popup rejection through the existing confirmation flow", async () => {
+      render(<TechnicianJobsPage />);
+
+      const popup = await screen.findByRole("dialog", {
+        name: "Job Assigned",
+      });
+
+      fireEvent.click(
+        within(popup).getByRole("button", { name: "Reject" }),
+      );
+      expect(await screen.findByText("Reject Job #101")).toBeTruthy();
+      fireEvent.change(
+        screen.getByPlaceholderText(
+          "Explain why you're rejecting this job...",
+        ),
+        { target: { value: "Unable to take this job" } },
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: "Confirm Reject" }),
+      );
+
+      await waitFor(() => {
+        expect(mockedRejectTechnicianJob).toHaveBeenCalledWith(
+          101,
+          "Unable to take this job",
+        );
+      });
+    });
+
+    it("routes assigned-popup acceptance to the existing accept API", async () => {
+      render(<TechnicianJobsPage />);
+      const popup = await screen.findByRole("dialog", {
+        name: "Job Assigned",
+      });
+
+      fireEvent.click(
+        within(popup).getByRole("button", { name: "Accept Job" }),
+      );
+
+      await waitFor(() => {
+        expect(mockedAcceptTechnicianJob).toHaveBeenCalledWith(101);
+      });
+    });
 
     it(
       "maps accepted, en-route and in-progress backend statuses",

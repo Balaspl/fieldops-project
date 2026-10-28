@@ -197,7 +197,7 @@ const styles = {
     padding: "4px 6px",
     overflow: "hidden",
     boxShadow: "0 -2px 8px rgba(47, 79, 62, 0.06)",
-    zIndex: 9999,
+    zIndex: 200,
     background: "#F3F8F5",
     boxSizing: "border-box",
   } as React.CSSProperties,
@@ -602,6 +602,8 @@ function AppInner() {
 
       return "dashboard";
     });
+
+  const isTechnicianShell = isTechnician;
 
   useEffect(() => {
     if (
@@ -1114,6 +1116,15 @@ function AppInner() {
         return;
       }
 
+      if (isTechnician) {
+        setIsNotificationDrawerOpen(false);
+        handleTabChange("tech_notifications");
+        if (!notif.isRead) {
+          await handleMarkAsRead(notif.id);
+        }
+        return;
+      }
+
       setSelectedNotification(
         notif,
       );
@@ -1500,6 +1511,114 @@ function AppInner() {
         </header>
       )}
 
+      {/* Shared technician navbar: shown across every technician page. */}
+      {isTechnician && (
+        <header
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            width: "100%",
+            height: "60px",
+            minHeight: "60px",
+            padding: isMobileLayout ? "0 12px" : "0 24px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            background: "#FFFFFF",
+            borderBottom: "1px solid #E2E8F0",
+            boxSizing: "border-box",
+            zIndex: 1000,
+          }}
+        >
+          <button
+            type="button"
+            aria-label="Go to technician dashboard"
+            title="FieldOps Home"
+            onClick={() => handleTabChange("tech_dashboard")}
+            style={{ border: 0, padding: 0, background: "transparent", cursor: "pointer", display: "flex", alignItems: "center", flexShrink: 0 }}
+          >
+            <img src={logo} alt="FieldOps Commander" style={{ height: 34, width: "auto", objectFit: "contain", display: "block" }} />
+          </button>
+
+          <div style={{ display: "flex", alignItems: "center", gap: isMobileLayout ? 8 : 18 }}>
+            <div
+              aria-label="Service area: Chennai, Tamil Nadu"
+              style={{ display: "flex", alignItems: "center", gap: 8, padding: isMobileLayout ? "8px 10px" : "9px 14px", border: "1px solid #E2E8F0", borderRadius: 24, color: "#334155", fontSize: 13, whiteSpace: "nowrap" }}
+            >
+              <MapPin size={16} color="#059669" />
+              {!isMobileLayout && <span>Chennai, Tamil Nadu</span>}
+              {!isMobileLayout && <ChevronDown size={14} color="#64748B" />}
+            </div>
+
+            <button
+              type="button"
+              aria-label="Open technician notifications"
+              title="Notifications"
+              onClick={() => setIsNotificationDrawerOpen(true)}
+              style={{ background: "transparent", border: 0, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", position: "relative", padding: 6 }}
+            >
+              <Bell size={20} color="#475569" />
+              {unreadCount > 0 && (
+                <span style={{ position: "absolute", top: 0, right: -2, minWidth: 16, height: 16, padding: "0 4px", borderRadius: 999, background: "#EF4444", color: "#FFFFFF", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 0 0 2px #FFFFFF" }}>
+                  {unreadCount > 99 ? "99+" : unreadCount}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              aria-label="Open technician profile"
+              onClick={() => handleTabChange("tech_profile")}
+              style={{ border: 0, padding: 0, background: "transparent", cursor: "pointer", display: "flex", alignItems: "center", gap: 10, textAlign: "left" }}
+            >
+              <span style={{ width: 40, height: 40, borderRadius: "50%", background: "#059669", color: "#FFFFFF", display: "grid", placeItems: "center", fontWeight: 700, flexShrink: 0 }}>
+                {user?.first_name ? user.first_name[0].toUpperCase() : "T"}
+              </span>
+              {!isMobileLayout && (
+                <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <strong style={{ color: "#0F172A", fontSize: 13, lineHeight: 1.2, whiteSpace: "nowrap" }}>
+                    {user ? `${user.first_name || ""} ${user.last_name || ""}`.trim() : "Technician"}
+                  </strong>
+                  <small style={{ color: "#0D9488", fontSize: 10, fontWeight: 700, letterSpacing: "0.08em" }}>TECHNICIAN</small>
+                </span>
+              )}
+            </button>
+          </div>
+        </header>
+      )}
+
+      {isTechnician && !isMobileLayout && (
+        <button
+          type="button"
+          aria-label={sidebarCollapsed ? "Expand technician sidebar" : "Collapse technician sidebar"}
+          title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+          style={{
+            position: "fixed",
+            top: 72,
+            left: sidebarCollapsed ? 60 : 220,
+            zIndex: 1001,
+            width: 28,
+            height: 28,
+            padding: 0,
+            border: "1px solid #D7E3DC",
+            borderRadius: "0 8px 8px 0",
+            background: "#FFFFFF",
+            color: "#475569",
+            boxShadow: "2px 2px 8px rgba(15, 23, 42, 0.10)",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Menu size={16} />
+        </button>
+      )}
+
       {/* Main Body Layout (Sidebar + Main Area) */}
       <div
         style={
@@ -1531,6 +1650,17 @@ function AppInner() {
                   zIndex: 200,
                   boxSizing: "border-box",
                   transition: "width 0.25s ease, min-width 0.25s ease",
+                }
+            : isTechnicianShell && !isMobileLayout
+              ? {
+                  ...(sidebarCollapsed
+                    ? {
+                        ...styles.sidebar,
+                        ...styles.sidebarCollapsed,
+                      }
+                    : styles.sidebar),
+                  top: "60px",
+                  height: "calc(100vh - 60px)",
                 }
               : isMobileLayout
                 ? styles.sidebarMobile
@@ -1619,7 +1749,7 @@ function AppInner() {
           )}
 
           {/* Toggle button for non-customer roles */}
-          {!isCustomer && (
+          {!isCustomer && !isTechnicianShell && (
             <button
               className="sidebar-toggle-style"
               style={
@@ -1672,7 +1802,7 @@ function AppInner() {
             }
           >
             {/* Logo inside sidebar ONLY for non-customer */}
-            {!isCustomer && (
+            {!isCustomer && !isTechnicianShell && (
               <div
                 style={
                   isMobileLayout
@@ -1843,72 +1973,6 @@ function AppInner() {
                   }
                 >
                   Billing Report
-                </span>
-              </button>
-
-              <button
-                className="nav-item-style"
-                style={getItemStyle(
-                  "tech_performance_report",
-                )}
-                onClick={() =>
-                  handleTabChange(
-                    "tech_performance_report",
-                  )
-                }
-              >
-                <Activity
-                  size={18}
-                  style={{
-                    flexShrink: 0,
-                  }}
-                />
-
-                <span
-                  className="nav-text"
-                  style={
-                    sidebarCollapsed
-                      ? {
-                          display:
-                            "none",
-                        }
-                      : {}
-                  }
-                >
-                  Performance Report
-                </span>
-              </button>
-
-              <button
-                className="nav-item-style"
-                style={getItemStyle(
-                  "tech_notifications",
-                )}
-                onClick={() =>
-                  handleTabChange(
-                    "tech_notifications",
-                  )
-                }
-              >
-                <BellRing
-                  size={18}
-                  style={{
-                    flexShrink: 0,
-                  }}
-                />
-
-                <span
-                  className="nav-text"
-                  style={
-                    sidebarCollapsed
-                      ? {
-                          display:
-                            "none",
-                        }
-                      : {}
-                  }
-                >
-                  Notifications
                 </span>
               </button>
             </nav>
@@ -2387,6 +2451,48 @@ function AppInner() {
                 {!sidebarCollapsed && <span>Logout</span>}
               </button>
             </div>
+          ) : isTechnician ? (
+            <div
+              style={{
+                marginTop: "auto",
+                padding: sidebarCollapsed ? "12px 6px" : "12px 14px",
+                borderTop: "1px solid #E2E8F0",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => logout()}
+                title="Log out"
+                aria-label="Log out"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: sidebarCollapsed ? "center" : "flex-start",
+                  gap: "10px",
+                  background: "transparent",
+                  border: "none",
+                  color: "#64748B",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  padding: "8px 10px",
+                  borderRadius: "8px",
+                  width: "100%",
+                  transition: "all 0.2s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = "#EF4444";
+                  e.currentTarget.style.background = "#FEF2F2";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = "#64748B";
+                  e.currentTarget.style.background = "transparent";
+                }}
+              >
+                <LogOut size={18} />
+                {!sidebarCollapsed && <span>Logout</span>}
+              </button>
+            </div>
           ) : (
             <div
               style={
@@ -2403,11 +2509,7 @@ function AppInner() {
             <div
               onClick={() =>
                 handleTabChange(
-                  isTechnician
-                    ? "tech_settings"
-                    : isCustomer
-                      ? "cust_profile"
-                      : "profile",
+                  isCustomer ? "cust_profile" : "profile",
                 )
               }
               style={{
@@ -2474,68 +2576,42 @@ function AppInner() {
               style={
                 sidebarCollapsed
                   ? {
-                      marginTop:
-                        "12px",
-                      display:
-                        "flex",
-                      flexDirection:
-                        "column",
-                      alignItems:
-                        "center",
+                      marginTop: "12px",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
                       gap: "8px",
                     }
                   : {
-                      marginLeft:
-                        "auto",
-                      display:
-                        "flex",
-                      alignItems:
-                        "center",
+                      marginLeft: "auto",
+                      display: "flex",
+                      alignItems: "center",
                       gap: "8px",
                     }
               }
             >
               <button
                 title="Log out"
-                onClick={() =>
-                  logout()
-                }
+                onClick={() => logout()}
                 style={{
-                  background:
-                    "none",
-                  border:
-                    "none",
-                  color:
-                    "#94a3b8",
-                  cursor:
-                    "pointer",
-                  padding:
-                    "6px",
-                  display:
-                    "flex",
-                  alignItems:
-                    "center",
-                  borderRadius:
-                    "6px",
-                  transition:
-                    "color 0.2s",
+                  background: "none",
+                  border: "none",
+                  color: "#94a3b8",
+                  cursor: "pointer",
+                  padding: "6px",
+                  display: "flex",
+                  alignItems: "center",
+                  borderRadius: "6px",
+                  transition: "color 0.2s",
                 }}
-                onMouseEnter={(
-                  e,
-                ) =>
-                  (e.currentTarget.style.color =
-                    "#ef4444")
-                }
-                onMouseLeave={(
-                  e,
-                ) =>
-                  (e.currentTarget.style.color =
-                    "#94a3b8")
-                }
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = "#ef4444";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = "#94a3b8";
+                }}
               >
-                <LogOut
-                  size={18}
-                />
+                <LogOut size={18} />
               </button>
             </div>
           </div>
@@ -2561,6 +2637,9 @@ function AppInner() {
         <main
           style={{
             ...styles.pageWrap,
+            ...(isTechnician
+              ? { paddingTop: "60px", boxSizing: "border-box" }
+              : {}),
             ...(isMobileLayout
               ? styles.pageWrapMobile
               : {}),
@@ -2689,7 +2768,9 @@ function AppInner() {
 
               {activeTab ===
                 "tech_profile" && (
-                <TechnicianProfilePage />
+                <TechnicianProfilePage
+                  onNavigate={handleTabChange}
+                />
               )}
 
               {activeTab ===
@@ -2874,6 +2955,11 @@ function AppInner() {
                 }
                 setIsNotificationDrawerOpen(false);
                 handleTabChange("cust_notifications");
+              }
+            : isTechnician
+            ? () => {
+                setIsNotificationDrawerOpen(false);
+                handleTabChange("tech_notifications");
               }
             : undefined
         }
@@ -3179,4 +3265,3 @@ function App() {
 }
 
 export default App;
-

@@ -18,6 +18,8 @@ type CustomerSignatureModalProps = {
   jobId: string | number;
   onClose: () => void;
   onSuccess?: (signature: CustomerSignatureResponse) => void;
+  captureOnly?: boolean;
+  onCapture?: (signatureData: string) => Promise<void> | void;
 };
 
 const CANVAS_WIDTH = 700;
@@ -64,6 +66,8 @@ export const CustomerSignatureModal = ({
   jobId,
   onClose,
   onSuccess,
+  captureOnly = false,
+  onCapture,
 }: CustomerSignatureModalProps) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const drawingRef = useRef(false);
@@ -114,6 +118,12 @@ export const CustomerSignatureModal = ({
   }, [prepareCanvas]);
 
   useEffect(() => {
+    if (captureOnly) {
+      setLoading(false);
+      setSignature(null);
+      return;
+    }
+
     let active = true;
 
     const loadSignature = async () => {
@@ -160,7 +170,7 @@ export const CustomerSignatureModal = ({
     return () => {
       active = false;
     };
-  }, [jobId]);
+  }, [captureOnly, jobId]);
 
   const getCanvasPoint = (
     event: ReactPointerEvent<HTMLCanvasElement>,
@@ -305,6 +315,14 @@ export const CustomerSignatureModal = ({
     setSavedMessage(null);
 
     try {
+      if (captureOnly) {
+        if (!onCapture) {
+          throw new Error("Job completion is unavailable. Please try again.");
+        }
+        await onCapture(signatureData);
+        return;
+      }
+
       const response = await captureCustomerSignature(
         jobId,
         signatureData,
@@ -337,7 +355,7 @@ export const CustomerSignatureModal = ({
       style={{
         position: "fixed",
         inset: 0,
-        zIndex: 1000,
+        zIndex: captureOnly ? 1300 : 1000,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -510,8 +528,9 @@ export const CustomerSignatureModal = ({
                     color: "#6b7280",
                   }}
                 >
-                  Signature is captured as a PNG data URL and submitted
-                  through the backend customer-confirmation endpoint.
+                  {captureOnly
+                    ? "The job will only be completed after this signature is submitted."
+                    : "Signature is captured as a PNG data URL and submitted through the backend customer-confirmation endpoint."}
                 </div>
               </div>
             )}
@@ -613,8 +632,8 @@ export const CustomerSignatureModal = ({
                     }}
                   >
                     {saving
-                      ? "Saving signature..."
-                      : "Save Signature"}
+                      ? captureOnly ? "Completing job..." : "Saving signature..."
+                      : captureOnly ? "Complete Job" : "Save Signature"}
                   </button>
                 </>
               )}

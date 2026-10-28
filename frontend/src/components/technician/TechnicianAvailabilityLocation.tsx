@@ -3,6 +3,7 @@ import {
   sendTechnicianAvailabilityLocation,
 } from "../../services/gpsService";
 import { GPS_AVAILABILITY_MAX_ACCURACY_METERS } from "../../services/geolocationService";
+import { publishTechnicianGpsFix } from "../../store/technicianGpsStore";
 
 interface TechnicianAvailabilityLocationProps {
   technicianId: string;
@@ -301,6 +302,12 @@ const TechnicianAvailabilityLocation = ({
       ) {
         return;
       }
+
+      publishTechnicianGpsFix(
+        technicianIdRef.current,
+        tenantIdRef.current,
+        position,
+      );
 
       console.log(
         "[TechnicianAvailabilityLocation] GPS position:",

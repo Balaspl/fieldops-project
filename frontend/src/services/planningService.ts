@@ -406,6 +406,13 @@ export interface JobClosureData {
   after_images: string[];
   labour_cost: number;
   material_cost: number;
+  payment_method?: "CASH" | "UPI" | "BOTH";
+  payment_provider?: "GOOGLE_PAY" | "PHONEPE";
+  payment_demo?: boolean;
+  cash_amount?: number;
+  upi_amount?: number;
+  gst_amount?: number;
+  total_amount?: number;
 }
 
 /**

@@ -13,6 +13,7 @@ import {
   waitFor,
   fireEvent,
   act,
+  within,
 } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
@@ -22,24 +23,38 @@ import * as geolocationService from "../../../services/geolocationService";
 import * as gpsService from "../../../services/gpsService";
 
 import {
+  acceptTechnicianJob,
   getTechnicianDashboard,
+  getTechnicianPerformanceReport,
   getTechnicianJobs,
+  rejectTechnicianJob,
   updateTechnicianStatus,
 } from "../../../services/technicianPortalService";
 
 vi.mock("../../../services/technicianPortalService", () => ({
+  acceptTechnicianJob: vi.fn(),
   getTechnicianDashboard: vi.fn(),
+  getTechnicianPerformanceReport: vi.fn(),
   getTechnicianJobs: vi.fn(),
+  rejectTechnicianJob: vi.fn(),
   updateTechnicianStatus: vi.fn(),
 }));
+
+const mockedAcceptTechnicianJob = vi.mocked(acceptTechnicianJob);
 
 const mockedGetTechnicianDashboard = vi.mocked(
   getTechnicianDashboard,
 );
 
+const mockedGetTechnicianPerformanceReport = vi.mocked(
+  getTechnicianPerformanceReport,
+);
+
 const mockedGetTechnicianJobs = vi.mocked(
   getTechnicianJobs,
 );
+
+const mockedRejectTechnicianJob = vi.mocked(rejectTechnicianJob);
 
 const mockedUpdateTechnicianStatus = vi.mocked(
   updateTechnicianStatus,
@@ -78,10 +93,21 @@ describe("TechnicianPortalDashboard - Technician Attendance and Availability", (
     mockedGetTechnicianDashboard.mockResolvedValue({
       data: dashboardResponse,
     } as any);
+    mockedGetTechnicianPerformanceReport.mockResolvedValue({
+      data: {
+        performance_period: "week",
+        period_completed_jobs: 0,
+        completion_trend: [],
+        status_distribution: [],
+      },
+    } as any);
 
     mockedGetTechnicianJobs.mockResolvedValue({
       data: [],
     } as any);
+
+    mockedAcceptTechnicianJob.mockResolvedValue({ data: {} } as any);
+    mockedRejectTechnicianJob.mockResolvedValue({ data: {} } as any);
 
     mockedUpdateTechnicianStatus.mockResolvedValue({
       data: {
@@ -159,6 +185,162 @@ describe("TechnicianPortalDashboard - Technician Attendance and Availability", (
     expect(
       mockedGetTechnicianDashboard,
     ).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the rejected jobs count from the dashboard response", async () => {
+    mockedGetTechnicianDashboard.mockResolvedValue({
+      data: { ...dashboardResponse, rejected_jobs: 23 },
+    } as any);
+
+    renderDashboard();
+
+    expect(await screen.findByText("Rejected Jobs")).toBeInTheDocument();
+    expect(screen.getByText("23")).toBeInTheDocument();
+  });
+
+  it("shows absolute acceptance countdowns for each eligible dashboard job immediately", async () => {
+    const now = Date.now();
+    mockedGetTechnicianJobs.mockResolvedValue({
+      data: [
+        {
+          id: 81,
+          status: "ASSIGNED",
+          service_type: "Electrical",
+          assigned_at: new Date(now).toISOString(),
+        },
+        {
+          id: 82,
+          status: "PENDING",
+          service_type: "Plumbing",
+          assigned_at: new Date(now - 120_000).toISOString(),
+        },
+        {
+          id: 83,
+          status: "ASSIGNED",
+          assigned_at: new Date(now - 360_000).toISOString(),
+        },
+        {
+          id: 84,
+          status: "REJECTED_BY_TECHNICIAN",
+          assigned_at: new Date(now).toISOString(),
+        },
+      ],
+    } as any);
+
+    renderDashboard();
+
+    const countdowns = await screen.findAllByTestId(
+      "dashboard-acceptance-countdown",
+    );
+    const countdownFor = (jobId: number) =>
+      countdowns.filter(
+        (element) => element.getAttribute("data-job-id") === String(jobId),
+      );
+    expect(countdownFor(81).length).toBeGreaterThan(0);
+    expect(countdownFor(81)[0]).toHaveTextContent(
+      /^Time left to accept: 04:5\d$/,
+    );
+    expect(countdownFor(82)[0]).toHaveTextContent(
+      /^Time left to accept: 02:5\d$/,
+    );
+    expect(countdownFor(83)[0]).toHaveTextContent(
+      "Acceptance deadline reached",
+    );
+    expect(countdownFor(84)).toHaveLength(0);
+  });
+
+  it("opens the assignment popup as soon as the dashboard loads an offered job", async () => {
+    mockedGetTechnicianJobs.mockResolvedValue({
+      data: [
+        {
+          id: 186,
+          status: "ASSIGNED",
+          service_type: "Electrical",
+          customer_name: "Dashboard Customer",
+          assigned_at: new Date().toISOString(),
+        },
+      ],
+    } as any);
+
+    renderDashboard();
+
+    expect(
+      await screen.findByRole("dialog", { name: "Job Assigned" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Job ID: #186")).toBeInTheDocument();
+    expect(
+      within(
+        screen.getByRole("dialog", { name: "Job Assigned" }),
+      ).getByTestId("assignment-countdown"),
+    ).toHaveTextContent(/^\d{2}:\d{2}$/);
+    expect(mockedGetTechnicianJobs).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts a dashboard assignment through the existing API and closes the popup", async () => {
+    mockedGetTechnicianJobs
+      .mockResolvedValueOnce({
+        data: [
+          {
+            id: 187,
+            status: "ASSIGNED",
+            assigned_at: new Date().toISOString(),
+          },
+        ],
+      } as any)
+      .mockResolvedValueOnce({ data: [] } as any);
+
+    renderDashboard();
+    const popup = await screen.findByRole("dialog", {
+      name: "Job Assigned",
+    });
+    fireEvent.click(
+      within(popup).getByRole("button", { name: "Accept Job" }),
+    );
+
+    await waitFor(() => {
+      expect(mockedAcceptTechnicianJob).toHaveBeenCalledWith(187);
+      expect(
+        screen.queryByRole("dialog", { name: "Job Assigned" }),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it("uses the existing rejection confirmation and API from the dashboard popup", async () => {
+    mockedGetTechnicianJobs
+      .mockResolvedValueOnce({
+        data: [
+          {
+            id: 188,
+            status: "ASSIGNED",
+            assigned_at: new Date().toISOString(),
+          },
+        ],
+      } as any)
+      .mockResolvedValueOnce({ data: [] } as any);
+
+    renderDashboard();
+    const popup = await screen.findByRole("dialog", {
+      name: "Job Assigned",
+    });
+    fireEvent.click(within(popup).getByRole("button", { name: "Reject" }));
+
+    fireEvent.change(
+      within(popup).getByLabelText("Why are you rejecting this job?"),
+      { target: { value: "No availability for this scheduled service." } },
+    );
+    fireEvent.click(
+      within(popup).getByRole("button", { name: "Confirm Reject" }),
+    );
+
+    await waitFor(() => {
+      expect(mockedRejectTechnicianJob).toHaveBeenCalledWith(
+        188,
+        "No availability for this scheduled service.",
+      );
+      expect(
+        screen.queryByRole("dialog", { name: "Job Assigned" }),
+      ).not.toBeInTheDocument();
+    });
   });
 
   it("restores Online from the backend after loading", async () => {
@@ -444,6 +626,23 @@ describe("TechnicianPortalDashboard - Technician Attendance and Availability", (
           technician_status: "Offline",
         },
       });
+    });
+  });
+
+  it("replaces live location with the selectable performance report", async () => {
+    renderDashboard();
+
+    expect(await screen.findByRole("heading", { name: "Performance Report" })).toBeInTheDocument();
+    expect(screen.queryByText(/Live Location & Route/i)).not.toBeInTheDocument();
+    expect(mockedGetTechnicianPerformanceReport).toHaveBeenCalledWith("week");
+
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Performance report period" }),
+      { target: { value: "month" } },
+    );
+
+    await waitFor(() => {
+      expect(mockedGetTechnicianPerformanceReport).toHaveBeenLastCalledWith("month");
     });
   });
 });
