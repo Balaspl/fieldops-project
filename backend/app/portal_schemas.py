@@ -415,6 +415,9 @@ class TechnicianJobResponse(BaseModel):
     updated_at: Optional[datetime] = None
     sla_deadline: Optional[datetime] = None
     assigned_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    rejected_at: Optional[datetime] = None
+    rejection_reason: Optional[str] = None
     site_address: Optional[str] = None
     site_latitude: Optional[float] = None
     site_longitude: Optional[float] = None
@@ -433,7 +436,18 @@ class TechnicianJobRejectRequest(BaseModel):
 class TechnicianJobCompleteRequest(BaseModel):
     completion_notes: Optional[str] = None
     photos: Optional[List[str]] = Field(default_factory=list)
+    before_images: Optional[List[str]] = Field(default_factory=list)
     signature: Optional[str] = None
+    signature_data: Optional[str] = Field(None, min_length=1, max_length=2_000_000)
+    payment_method: Optional[str] = None
+    payment_provider: Optional[str] = None
+    payment_demo: Optional[bool] = None
+    cash_amount: Optional[float] = Field(None, ge=0)
+    upi_amount: Optional[float] = Field(None, ge=0)
+    gst_amount: Optional[float] = Field(None, ge=0)
+    total_amount: Optional[float] = Field(None, ge=0)
+    labour_cost: Optional[float] = Field(None, ge=0)
+    material_cost: Optional[float] = Field(None, ge=0)
 
 
 # ──────────────────────────────────────────────────
@@ -465,6 +479,7 @@ class DeclinedJobReassignRequest(BaseModel):
 # ──────────────────────────────────────────────────
 
 class TechnicianDashboardResponse(BaseModel):
+    total_jobs: int = 0
     total_assigned: int = 0
     active_jobs: int = 0
     completed_today: int = 0
@@ -473,6 +488,16 @@ class TechnicianDashboardResponse(BaseModel):
     rejected_jobs: int = 0
     technician_status: Optional[str] = None
     profile_completed: bool = False
+
+
+class TechnicianPerformanceReportResponse(BaseModel):
+    performance_period: str = "week"
+    period_completed_jobs: int = 0
+    average_completion_minutes: Optional[float] = None
+    customer_rating: Optional[float] = None
+    total_distance_km: Optional[float] = None
+    completion_trend: List[Dict[str, Any]] = Field(default_factory=list)
+    status_distribution: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class CustomerDashboardResponse(BaseModel):

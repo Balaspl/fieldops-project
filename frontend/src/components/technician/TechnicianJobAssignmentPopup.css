@@ -1,0 +1,400 @@
+.technician-job-assignment-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  box-sizing: border-box;
+  overflow-y: auto;
+}
+
+.technician-job-assignment-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.58);
+  backdrop-filter: blur(5px);
+}
+
+.technician-job-assignment-card {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 680px);
+  max-width: 680px;
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  padding: 30px;
+  border-radius: 24px;
+  box-sizing: border-box;
+  background: #fff;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
+}
+
+.technician-job-assignment-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.technician-job-assignment-id {
+  display: block;
+  margin-bottom: 6px;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.technician-job-assignment-title {
+  margin: 0;
+  color: #172033;
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.technician-job-assignment-subtitle {
+  margin: 6px 0 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.technician-job-assignment-close {
+  display: grid;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: #f1f5f4;
+  color: #64748b;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.technician-job-assignment-close:hover {
+  background: #e2eee9;
+  color: #176b58;
+}
+
+.technician-job-assignment-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  margin-bottom: 18px;
+  overflow: hidden;
+  border: 1px solid #a7f3d0;
+  border-radius: 16px;
+  background: #ecfdf5;
+}
+
+.technician-job-assignment-summary-cell {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+}
+
+.technician-job-assignment-summary-cell + .technician-job-assignment-summary-cell {
+  border-left: 1px solid #bbebd2;
+}
+
+.technician-job-assignment-icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 50%;
+  background: #d1fae5;
+  color: #087857;
+}
+
+.technician-job-assignment-summary-content {
+  min-width: 0;
+}
+
+.technician-job-assignment-eyebrow {
+  display: block;
+  margin-bottom: 5px;
+  color: #477362;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.technician-job-assignment-summary-value {
+  color: #075c43;
+  font-size: 23px;
+  font-weight: 800;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.technician-job-assignment-summary-note {
+  display: block;
+  margin-top: 3px;
+  color: #28735a;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.technician-job-assignment-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.technician-job-assignment-customer-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.technician-job-assignment-info-card {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 13px;
+  border: 1px solid #e8eeeb;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.technician-job-assignment-info-icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 50%;
+  background: #f1f5f4;
+  color: #64748b;
+}
+
+.technician-job-assignment-info-icon.is-blue {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.technician-job-assignment-info-icon.is-green {
+  background: #ecfdf5;
+  color: #087857;
+}
+
+.technician-job-assignment-info-content {
+  min-width: 0;
+  flex: 1;
+}
+
+.technician-job-assignment-info-value {
+  color: #273449;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.technician-job-assignment-location-card {
+  min-height: 100%;
+  box-sizing: border-box;
+  background: #fbfdfc;
+}
+
+.technician-job-assignment-distance {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  border: 1px solid #ccebdc;
+  border-radius: 14px;
+  background: #f0fdf6;
+  color: #176b58;
+}
+
+.technician-job-assignment-distance-label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.technician-job-assignment-distance-value {
+  flex: 0 0 auto;
+  color: #075c43;
+  font-size: 21px;
+  font-weight: 800;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.technician-job-assignment-service {
+  margin-bottom: 18px;
+  padding: 15px 16px;
+  border: 1px solid #e8edf0;
+  border-radius: 14px;
+  background: #f8fafb;
+}
+
+.technician-job-assignment-service-heading {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 8px;
+}
+
+.technician-job-assignment-service-name {
+  color: #1f2937;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.technician-job-assignment-service-description {
+  margin: 0;
+  color: #526071;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.technician-job-assignment-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.technician-job-assignment-action {
+  display: inline-flex;
+  flex: 1;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 12px;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: filter 150ms ease, transform 150ms ease, opacity 150ms ease;
+}
+
+.technician-job-assignment-action:hover:not(:disabled) {
+  filter: brightness(0.95);
+  transform: translateY(-1px);
+}
+
+.technician-job-assignment-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.technician-job-assignment-action.is-accept {
+  background: #078a4d;
+}
+
+.technician-job-assignment-action.is-reject {
+  background: #dc2626;
+}
+
+.technician-job-assignment-action.is-cancel {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #334155;
+}
+
+.technician-job-assignment-rejection {
+  display: grid;
+  gap: 8px;
+  margin: 20px 0;
+  color: #273449;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.technician-job-assignment-rejection textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  font: inherit;
+}
+
+@media (max-width: 640px) {
+  .technician-job-assignment-modal {
+    align-items: flex-start;
+    padding: 12px;
+  }
+
+  .technician-job-assignment-card {
+    max-height: calc(100dvh - 24px);
+    padding: 20px;
+    border-radius: 18px;
+  }
+
+  .technician-job-assignment-title {
+    font-size: 23px;
+  }
+
+  .technician-job-assignment-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .technician-job-assignment-summary-cell {
+    gap: 8px;
+    padding: 13px 10px;
+  }
+
+  .technician-job-assignment-summary-value {
+    font-size: 20px;
+  }
+}
+
+@media (max-width: 420px) {
+  .technician-job-assignment-modal {
+    padding: 8px;
+  }
+
+  .technician-job-assignment-card {
+    max-height: calc(100dvh - 16px);
+    padding: 16px;
+  }
+
+  .technician-job-assignment-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .technician-job-assignment-summary-cell + .technician-job-assignment-summary-cell {
+    border-top: 1px solid #bbebd2;
+    border-left: 0;
+  }
+
+  .technician-job-assignment-distance {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .technician-job-assignment-distance-value {
+    text-align: left;
+  }
+
+  .technician-job-assignment-actions {
+    flex-direction: column;
+  }
+}

@@ -33,33 +33,35 @@ const getTypeIcon = (type: string) => {
 
 const styles = {
   container: {
-    position: "fixed",
-    inset: 0,
-    zindex: 999,
+    display: "contents",
   } as React.CSSProperties,
 
   backdrop: {
     position: "fixed",
     top: 0,
     left: 0,
+    right: 0,
+    bottom: 0,
     width: "100%",
     height: "100%",
     backgroundColor: "rgba(15, 23, 42, 0.4)",
     backdropFilter: "blur(4px)",
-    zIndex: 999,
+    zIndex: 9998,
   } as React.CSSProperties,
 
   drawer: {
     position: "fixed",
     top: 0,
     right: 0,
+    bottom: 0,
     height: "100%",
     backgroundColor: "#ffffff",
     boxShadow: "-4px 0 24px rgba(15, 23, 42, 0.15)",
-    zIndex: 1000,
+    zIndex: 9999,
     display: "flex",
     flexDirection: "column",
     boxSizing: "border-box",
+    overflowY: "auto",
   } as React.CSSProperties,
 
   header: {
@@ -260,24 +262,31 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({
     ...(isMobile ? {
       top: "auto",
       bottom: 0,
+      left: 0,
+      right: 0,
       width: "100%",
       maxWidth: "100%",
       height: "75vh",
       borderRadius: "16px 16px 0 0",
       boxShadow: "0 -4px 24px rgba(15, 23, 42, 0.15)",
     } : {
+      top: 0,
+      right: 0,
+      bottom: 0,
       width: "100%",
-      maxWidth: "440px",
+      maxWidth: "500px",
+      height: "100%",
     })
   };
 
   return (
     <AnimatePresence>
       {isOpen && (
-        <div style={styles.container} className="noc-module">
+        <div key="notification-center-module" style={styles.container} className="noc-module">
           <style>{localCss}</style>
           {/* Backdrop */}
           <motion.div
+            key="notification-backdrop"
             style={styles.backdrop}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -287,6 +296,7 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({
 
           {/* Drawer container */}
           <motion.div
+            key="notification-drawer"
             style={drawerResponsive}
             role="dialog"
             aria-modal="true"

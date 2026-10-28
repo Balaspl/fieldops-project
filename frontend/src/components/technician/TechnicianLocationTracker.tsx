@@ -15,6 +15,7 @@ import {
 } from "../../services/gpsService";
 
 import type { AuthUser } from "../../store/authStore";
+import { publishTechnicianGpsFix } from "../../store/technicianGpsStore";
 
 type Props = {
   user: AuthUser | null;
@@ -147,6 +148,12 @@ export default function TechnicianLocationTracker({
            * THIS IS THE REAL TECHNICIAN
            * CURRENT LOCATION.
            */
+          publishTechnicianGpsFix(
+            user.id,
+            user.tenant_id,
+            currentPosition,
+          );
+
           setPosition(
             currentPosition,
           );
@@ -408,7 +415,7 @@ export default function TechnicianLocationTracker({
         position: "fixed",
         right: 16,
         bottom: 16,
-        zIndex: 10000,
+        zIndex: 50,
 
         display: "flex",
         alignItems: "center",

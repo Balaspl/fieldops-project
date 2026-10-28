@@ -26,10 +26,13 @@ Cross-tenant jobs:
 """
 
 import uuid
+import calendar
 
 import logging
 
 import base64
+
+import math
 
 from datetime import datetime, timezone, date, timedelta
 
@@ -43,7 +46,7 @@ from fastapi.responses import StreamingResponse
 
 from sqlalchemy.orm import Session
 
-from sqlalchemy import func
+from sqlalchemy import func, or_, and_
 
 from typing import Optional
 
@@ -56,11 +59,8 @@ from ..auth.rbac import Permission
 from ..auth.password import hash_password, verify_password
 
 from ..models import (
-
-    Job, Technician, InAppNotification,
-
+    Job, Technician, InAppNotification, GPSPing, CustomerFeedback,
     TechnicianProfile,
-
 )
 
 from ..models_legacy import(
@@ -82,7 +82,8 @@ from ..models.customer_signature import CustomerSignature
 from ..portal_schemas import (
     TechnicianProfileCreate, TechnicianProfileUpdate, TechnicianProfileResponse,
     TechnicianJobResponse, TechnicianJobRejectRequest, TechnicianJobCompleteRequest,
-    TechnicianDashboardResponse, ChangePasswordRequest,
+    TechnicianDashboardResponse, TechnicianPerformanceReportResponse,
+    ChangePasswordRequest,
 )
 
 from ..schemas import TechnicianAvailabilityUpdate, JobExpenseCreate, JobExpenseResponse
@@ -116,6 +117,197 @@ def _json_safe(value):
         return value.isoformat()
 
     return value
+
+
+def _utc_datetime(value: Optional[datetime]) -> Optional[datetime]:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _performance_period_bounds(
+    period: str,
+    now: datetime,
+) -> tuple[datetime, datetime]:
+    now = _utc_datetime(now)
+    if period == "month":
+        start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+        if now.month == 12:
+            end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+        else:
+            end = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
+        return start, end
+
+    start_date = now.date() - timedelta(days=now.weekday())
+    start = datetime.combine(start_date, datetime.min.time(), timezone.utc)
+    return start, start + timedelta(days=7)
+
+
+def _gps_distance_km(points: list[GPSPing]) -> float:
+    distance = 0.0
+    previous = None
+    previous_job_id = None
+    for point in points:
+        if not (
+            -90 <= point.latitude <= 90
+            and -180 <= point.longitude <= 180
+            and (point.accuracy is None or 0 <= point.accuracy <= 100)
+        ):
+            continue
+        timestamp = _utc_datetime(point.timestamp)
+        if point.job_id != previous_job_id:
+            previous = None
+        if previous is not None:
+            previous_timestamp, previous_lat, previous_lon = previous
+            if timestamp and (timestamp - previous_timestamp).total_seconds() <= 15 * 60:
+                lat1, lat2 = math.radians(previous_lat), math.radians(point.latitude)
+                delta_lat = lat2 - lat1
+                delta_lon = math.radians(point.longitude - previous_lon)
+                haversine = (
+                    math.sin(delta_lat / 2) ** 2
+                    + math.cos(lat1)
+                    * math.cos(lat2)
+                    * math.sin(delta_lon / 2) ** 2
+                )
+                distance += 6371.0 * 2 * math.asin(math.sqrt(min(1.0, haversine)))
+        if timestamp:
+            previous = (timestamp, point.latitude, point.longitude)
+            previous_job_id = point.job_id
+    return distance
+
+
+def _build_technician_performance_report(
+    db: Session,
+    tech: Technician,
+    period: str,
+    now: Optional[datetime] = None,
+) -> dict:
+    now = _utc_datetime(now or datetime.now(timezone.utc))
+    start, end = _performance_period_bounds(period, now)
+    base = db.query(Job).filter(
+        Job.assigned_technician_id == tech.technician_id,
+    )
+    completed_jobs = base.filter(
+        Job.completed_at >= start,
+        Job.completed_at < end,
+    ).all()
+    period_jobs = base.filter(
+        func.coalesce(Job.assigned_at, Job.created_at) >= start,
+        func.coalesce(Job.assigned_at, Job.created_at) < end,
+    ).all()
+    job_ids = [job.id for job in period_jobs]
+
+    durations = []
+    for job in completed_jobs:
+        completed_at = _utc_datetime(job.completed_at)
+        started_at = next(
+            (
+                _utc_datetime(value)
+                for value in (
+                    job.work_started_at,
+                    job.on_site_at,
+                )
+                if value is not None
+            ),
+            None,
+        )
+        if completed_at and started_at and completed_at >= started_at:
+            durations.append((completed_at - started_at).total_seconds() / 60)
+
+    feedback_rows = []
+    if completed_jobs:
+        feedback_rows = (
+            db.query(CustomerFeedback.rating)
+            .join(Job, CustomerFeedback.job_id == Job.id)
+            .filter(
+                Job.assigned_technician_id == tech.technician_id,
+                CustomerFeedback.created_at >= start,
+                CustomerFeedback.created_at < end,
+            )
+            .all()
+        )
+    ratings = [row[0] for row in feedback_rows if row[0] is not None]
+
+    gps_points = []
+    if job_ids and tech.tech_id and tech.tenant_id:
+        gps_points = (
+            db.query(GPSPing)
+            .filter(
+                GPSPing.tenant_id == tech.tenant_id,
+                GPSPing.technician_id == tech.tech_id,
+                GPSPing.job_id.in_([str(job_id) for job_id in job_ids]),
+                GPSPing.timestamp >= start,
+                GPSPing.timestamp < end,
+            )
+            .order_by(GPSPing.job_id, GPSPing.timestamp)
+            .all()
+        )
+
+    trend_size = 7 if period == "week" else calendar.monthrange(now.year, now.month)[1]
+    trend_counts = [0] * (trend_size if period == "week" else (trend_size + 6) // 7)
+    for job in completed_jobs:
+        completed_at = _utc_datetime(job.completed_at)
+        if completed_at:
+            index = (
+                completed_at.weekday()
+                if period == "week"
+                else (completed_at.day - 1) // 7
+            )
+            trend_counts[index] += 1
+
+    trend = (
+        [
+            {"label": (start + timedelta(days=index)).strftime("%a"), "count": count}
+            for index, count in enumerate(trend_counts)
+        ]
+        if period == "week"
+        else [
+            {
+                "label": f"{index * 7 + 1}-{min((index + 1) * 7, trend_size)}",
+                "count": count,
+            }
+            for index, count in enumerate(trend_counts)
+        ]
+    )
+
+    status_counts = {
+        "completed": 0,
+        "active": 0,
+        "pending": 0,
+        "cancelled": 0,
+        "other": 0,
+    }
+    for job in period_jobs:
+        status_value = (job.status or "").lower()
+        if status_value in {"completed", "closed"}:
+            category = "completed"
+        elif status_value in {"accepted", "en_route", "in_progress", "paused"}:
+            category = "active"
+        elif status_value in {"assigned", "active", "pending"}:
+            category = "pending"
+        elif status_value in {"cancelled", "canceled"}:
+            category = "cancelled"
+        else:
+            category = "other"
+        status_counts[category] += 1
+
+    return {
+        "performance_period": period,
+        "period_completed_jobs": len(completed_jobs),
+        "average_completion_minutes": (
+            round(sum(durations) / len(durations), 1) if durations else None
+        ),
+        "customer_rating": round(sum(ratings) / len(ratings), 1) if ratings else None,
+        "total_distance_km": round(_gps_distance_km(gps_points), 1) if gps_points else None,
+        "completion_trend": trend,
+        "status_distribution": [
+            {"status": status, "count": count}
+            for status, count in status_counts.items()
+            if count > 0
+        ],
+    }
 
 def _get_tech_for_user(
 
@@ -989,17 +1181,79 @@ async def get_job_history(
 
 ):
 
-    """List terminal jobs for this technician, including cancelled history."""
+    """List terminal and rejected jobs associated with this technician."""
+    tech = _get_tech_for_user(db, current_user.user_id, current_user.tenant_id)
+    if not tech:
+        return []
 
-    query = _get_assigned_jobs_query(db, current_user.user_id, current_user.tenant_id)
-
-    query = query.filter(
-
-        func.lower(Job.status).in_(["completed", "closed", "cancelled"])
-
+    completed_jobs = (
+        db.query(Job)
+        .filter(
+            Job.assigned_technician_id == tech.technician_id,
+            func.lower(Job.status).in_(["completed", "closed"]),
+        )
+        .all()
+    )
+    rejected_attempts = (
+        db.query(Job, RedispatchAttempt)
+        .join(RedispatchAttempt, RedispatchAttempt.job_id == Job.id)
+        .filter(
+            RedispatchAttempt.technician_id == tech.technician_id,
+            func.lower(RedispatchAttempt.event_type) == "rejection",
+            RedispatchAttempt.technician_tenant_id == tech.tenant_id,
+        )
+        .all()
+    )
+    recipient_id = str(tech.tech_id or tech.technician_id)
+    current_rejections = (
+        db.query(Job)
+        .filter(
+            Job.rejected_by_tech_id == recipient_id,
+            func.lower(Job.status).in_(["queued", "rejected_by_technician"]),
+        )
+        .all()
     )
 
-    return query.order_by(Job.completed_at.desc()).all()
+    history = [
+        (
+            job.completed_at or getattr(job, "closed_at", None) or job.created_at,
+            TechnicianJobResponse.model_validate(job),
+        )
+        for job in completed_jobs
+    ]
+    attempted_job_ids = {job.id for job, _ in rejected_attempts}
+    for job, attempt in rejected_attempts:
+        if (
+            str(job.status or "").lower() in {"completed", "closed"}
+            and job.assigned_technician_id == tech.technician_id
+        ):
+            continue
+        rejected_job = TechnicianJobResponse.model_validate(job).model_copy(
+            update={
+                "status": "REJECTED_BY_TECHNICIAN",
+                "rejected_at": attempt.created_at,
+                "rejection_reason": attempt.reason,
+            }
+        )
+        history.append((attempt.created_at, rejected_job))
+
+    for job in current_rejections:
+        if job.id in attempted_job_ids:
+            continue
+        rejected_job = TechnicianJobResponse.model_validate(job).model_copy(
+            update={"status": "REJECTED_BY_TECHNICIAN"}
+        )
+        history.append((job.rejected_at or job.created_at, rejected_job))
+
+    def event_timestamp(value):
+        if value is None:
+            return 0
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.timestamp()
+
+    history.sort(key=lambda item: event_timestamp(item[0]), reverse=True)
+    return [job for _, job in history]
 
 @router.get("/jobs/{job_id}", response_model=TechnicianJobResponse)
 
@@ -1742,6 +1996,15 @@ async def start_job(
             detail="Technician record not found",
         )
 
+    # Serialize start requests for this technician so concurrent requests
+    # cannot start two jobs at the same time.
+    (
+        db.query(Technician)
+        .filter(Technician.technician_id == tech.technician_id)
+        .with_for_update()
+        .first()
+    )
+
     # Lock the assigned job while validating and applying the transition.
     # Authorization remains based on assignment, including cross-tenant jobs.
     job = (
@@ -1758,6 +2021,26 @@ async def start_job(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Job not found or not assigned to you",
+        )
+
+    started_job = (
+        db.query(Job.id)
+        .filter(
+            Job.assigned_technician_id == tech.technician_id,
+            Job.id != job_id,
+            func.lower(Job.status).in_(
+                ["en_route", "on_site", "in_progress", "paused"]
+            ),
+        )
+        .first()
+    )
+    if started_job:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Another job is already in progress. Complete it before "
+                "starting a new job."
+            ),
         )
 
     current_status = (
@@ -2190,13 +2473,83 @@ async def complete_job(
             "status": "COMPLETED",
         }
 
-    if current_status != "IN_PROGRESS":
+    if current_status not in {"IN_PROGRESS", "PAUSED"}:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                "Job must be IN_PROGRESS before it can be completed. "
+                "Job must be in progress or paused before it can be completed. "
                 f"Current status: {job.status}"
             ),
+        )
+
+    try:
+        request_payload = await request.json()
+    except Exception:
+        request_payload = {}
+
+    signature_data = request_payload.get("signature_data")
+    if (
+        not isinstance(signature_data, str)
+        or not signature_data.strip()
+        or len(signature_data) > 2_000_000
+        or not signature_data.strip().startswith(
+            ("data:image/png;base64,", "data:image/jpeg;base64,")
+        )
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Customer signature is required to complete this job",
+        )
+
+    def read_money(field: str) -> float:
+        try:
+            amount = float(request_payload.get(field))
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"A valid {field.replace('_', ' ')} is required",
+            )
+        if not math.isfinite(amount) or amount < 0:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{field.replace('_', ' ').capitalize()} must be a non-negative amount",
+            )
+        return round(amount, 2)
+
+    labour_cost = read_money("labour_cost")
+    material_cost = read_money("material_cost")
+    subtotal = round(labour_cost + material_cost, 2)
+    gst_amount = round(subtotal * 0.05, 2)
+    total_amount = round(subtotal + gst_amount, 2)
+    payment_method = str(request_payload.get("payment_method") or "").strip().upper()
+    payment_provider = str(request_payload.get("payment_provider") or "").strip().upper()
+    payment_demo = request_payload.get("payment_demo") is True
+    cash_amount = read_money("cash_amount")
+    upi_amount = read_money("upi_amount")
+
+    if payment_method not in {"CASH", "UPI", "BOTH"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Choose Cash, UPI, or Both as the payment method",
+        )
+    if payment_method in {"UPI", "BOTH"} and (
+        not payment_demo or payment_provider not in {"GOOGLE_PAY", "PHONEPE"}
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="UPI is currently available only in the Google Pay or PhonePe demo checkout.",
+        )
+    amounts_match = (
+        abs(cash_amount - total_amount) <= 0.01 and upi_amount <= 0.01
+        if payment_method == "CASH"
+        else abs(upi_amount - total_amount) <= 0.01 and cash_amount <= 0.01
+        if payment_method == "UPI"
+        else cash_amount > 0 and upi_amount > 0 and abs(cash_amount + upi_amount - total_amount) <= 0.01
+    )
+    if not amounts_match:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Payment amounts must match the total for the selected payment method",
         )
 
     old_status = job.status
@@ -2303,9 +2656,26 @@ async def complete_job(
 
             work_summary=data.completion_notes or "Job completed",
 
-            before_images=[],
+            work_report={
+                "summary": data.completion_notes or "Job completed",
+                "parts_used": [],
+                "duration_minutes": None,
+                "payment": {
+                    "method": payment_method,
+                    "provider": payment_provider if payment_method != "CASH" else None,
+                    "demo": payment_demo if payment_method != "CASH" else False,
+                    "cash_amount": cash_amount,
+                    "upi_amount": upi_amount,
+                    "subtotal": subtotal,
+                    "gst_rate": 5,
+                    "gst_amount": gst_amount,
+                    "total_amount": total_amount,
+                },
+            },
 
-            after_images=list(data.photos or []),
+            before_images=list(request_payload.get("before_images") or []),
+
+            after_images=list(request_payload.get("photos") or data.photos or []),
 
             labour_cost=labour_cost,
 
@@ -2323,9 +2693,30 @@ async def complete_job(
 
     else:
         closure_record = existing_closure
+        closure_record.work_summary = data.completion_notes or "Job completed"
+        closure_record.before_images = list(request_payload.get("before_images") or [])
+        closure_record.after_images = list(request_payload.get("photos") or data.photos or [])
+        closure_record.labour_cost = labour_cost
+        closure_record.material_cost = material_cost
+        closure_record.subtotal = subtotal
+        closure_record.work_report = {
+            "summary": data.completion_notes or "Job completed",
+            "parts_used": [],
+            "duration_minutes": None,
+            "payment": {
+                "method": payment_method,
+                "provider": payment_provider if payment_method != "CASH" else None,
+                "demo": payment_demo if payment_method != "CASH" else False,
+                "cash_amount": cash_amount,
+                "upi_amount": upi_amount,
+                "subtotal": subtotal,
+                "gst_rate": 5,
+                "gst_amount": gst_amount,
+                "total_amount": total_amount,
+            },
+        }
 
-    # Persist the customer signature in the same transaction as the closure.
-    # Older callers that omit the optional signature remain compatible.
+    # Persist the required customer signature in the same transaction as the closure.
     signature_data = request_payload.get("signature_data")
 
     if signature_data is not None:
@@ -3292,6 +3683,26 @@ async def download_billing_report_pdf(
         headers={"Content-Disposition": f'attachment; filename="billing_report_job_{job.id}.pdf"'},
     )
 
+@router.get("/performance-report", response_model=TechnicianPerformanceReportResponse)
+async def get_technician_performance_report(
+    period: str = Query("week", pattern="^(week|month)$"),
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.DASHBOARD_TECH_VIEW)
+    ),
+    db: Session = Depends(get_db),
+):
+    tech = _get_tech_for_user(
+        db,
+        current_user.user_id,
+        current_user.tenant_id,
+    )
+    if not tech:
+        return TechnicianPerformanceReportResponse(performance_period=period)
+    return TechnicianPerformanceReportResponse(
+        **_build_technician_performance_report(db, tech, period)
+    )
+
+
 @router.get("/dashboard", response_model=TechnicianDashboardResponse)
 async def get_technician_dashboard(
     current_user: AuthenticatedUser = Depends(
@@ -3347,11 +3758,10 @@ async def get_technician_dashboard(
         )
     ).count()
 
-    rejected_jobs = db.query(Job).filter(
-        Job.rejected_by_tech_id
-        == (tech.tech_id or str(tech.technician_id)),
-        func.lower(Job.status)
-        == "rejected_by_technician",
+    rejected_jobs = db.query(RedispatchAttempt).filter(
+        RedispatchAttempt.technician_id == tech.technician_id,
+        RedispatchAttempt.technician_tenant_id == tech.tenant_id,
+        func.lower(RedispatchAttempt.event_type) == "rejection",
     ).count()
 
     total_completed = base.filter(
@@ -3360,7 +3770,13 @@ async def get_technician_dashboard(
         )
     ).count()
 
+    # Match the dashboard's visible job categories. Counting all records
+    # still linked to the technician includes historical/non-dashboard
+    # statuses, which made Total Jobs exceed the sum of the displayed cards.
+    total_jobs = pending + active + total_completed + rejected_jobs
+
     return TechnicianDashboardResponse(
+        total_jobs=total_jobs,
         total_assigned=total_assigned,
         active_jobs=active,
         completed_today=completed_today,

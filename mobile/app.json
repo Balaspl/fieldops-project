@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "scheme": "fieldops",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/icon-square.png",
     "plugins": [
       "expo-router",
       "expo-secure-store",
@@ -42,7 +42,8 @@
         {
           "useSQLCipher": true
         }
-      ]
+      ],
+      "expo-font"
     ],
     "android": {
       "package": "com.fieldops.mobile",

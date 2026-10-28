@@ -7,13 +7,14 @@ import {
   Image as ImageIcon,
   Upload,
 } from "lucide-react";
-import { closeJob, JobClosureData } from "../../services/planningService";
+import { closeJob, type JobClosureData } from "../../services/planningService";
 
 interface JobClosureModalProps {
   jobId: number | string;
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (data: JobClosureData) => void;
+  paymentFlow?: boolean;
 }
 
 const compressImage = (
@@ -108,6 +109,7 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
   isOpen,
   onClose,
   onSuccess,
+  paymentFlow = false,
 }) => {
   const [workSummary, setWorkSummary] = useState("");
   const [partsUsedText, setPartsUsedText] = useState("");
@@ -121,6 +123,14 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
 
   const [serviceCharge, setServiceCharge] = useState<string>("");
   const [materialCost, setMaterialCost] = useState<string>("");
+  const [paymentMethod, setPaymentMethod] = useState<"CASH" | "UPI" | "BOTH">("CASH");
+  const [paymentProvider, setPaymentProvider] = useState<"GOOGLE_PAY" | "PHONEPE">("GOOGLE_PAY");
+  const [cashAmount, setCashAmount] = useState("");
+  const [upiAmount, setUpiAmount] = useState("");
+  const [step, setStep] = useState<"service" | "payment" | "upi_demo">("service");
+  const [serviceData, setServiceData] = useState<JobClosureData | null>(null);
+  const [pendingPaymentData, setPendingPaymentData] = useState<JobClosureData | null>(null);
+  const [demoPaymentApproved, setDemoPaymentApproved] = useState(false);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -240,110 +250,142 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
     e.preventDefault();
     setError(null);
 
-    const canonicalWorkSummary = workSummary.trim();
+    if (step === "upi_demo") return;
 
-    if (!canonicalWorkSummary) {
-      setError("Work summary is required.");
-      return;
-    }
-
-    if (canonicalWorkSummary.length > 5000) {
-      setError("Work summary cannot exceed 5000 characters.");
-      return;
-    }
-
-    if (/<\s*\/?[A-Za-z][^>]*>/.test(canonicalWorkSummary)) {
-      setError("Work summary must be plain text and cannot contain markup tags.");
-      return;
-    }
-
-    const partsUsed = partsUsedText
-      .split(/\r?\n/)
-      .map((part) => part.trim())
-      .filter(Boolean);
-
-    const normalizedDuration = durationMinutes.trim();
-    let parsedDuration: number | undefined;
-
-    if (normalizedDuration !== "") {
-      parsedDuration = Number(normalizedDuration);
-
-      if (!Number.isInteger(parsedDuration) || parsedDuration < 0) {
-        setError("Duration must be a whole number of minutes greater than or equal to 0.");
+    if (step === "service") {
+      const canonicalWorkSummary = workSummary.trim();
+      if (!canonicalWorkSummary) {
+        setError("Work summary is required.");
         return;
       }
+      if (canonicalWorkSummary.length > 5000) {
+        setError("Work summary cannot exceed 5000 characters.");
+        return;
+      }
+      if (/<\s*\/?[A-Za-z][^>]*>/.test(canonicalWorkSummary)) {
+        setError("Work summary must be plain text and cannot contain markup tags.");
+        return;
+      }
+
+      const partsUsed = partsUsedText.split(/\r?\n/).map((part) => part.trim()).filter(Boolean);
+      const normalizedDuration = durationMinutes.trim();
+      let parsedDuration: number | undefined;
+      if (normalizedDuration !== "") {
+        parsedDuration = Number(normalizedDuration);
+        if (!Number.isInteger(parsedDuration) || parsedDuration < 0) {
+          setError("Duration must be a whole number of minutes greater than or equal to 0.");
+          return;
+        }
+      }
+
+      const filteredAfterImages = afterImages.map((img) => img.trim()).filter(Boolean);
+      if (filteredAfterImages.length === 0) {
+        setError("At least one after image is required.");
+        return;
+      }
+      const structuredDetails = [
+        `Work Summary: ${canonicalWorkSummary}`,
+        partsUsed.length > 0 ? `Parts Used:\n${partsUsed.map((part) => `- ${part}`).join("\n")}` : "Parts Used: None reported",
+        parsedDuration !== undefined ? `Duration (minutes): ${parsedDuration}` : "Duration (minutes): Not reported",
+      ].join("\n\n");
+
+      const closureDraft: JobClosureData = {
+        work_summary: structuredDetails,
+        before_images: beforeImages.map((img) => img.trim()).filter(Boolean),
+        after_images: filteredAfterImages,
+        labour_cost: Math.max(0, Number(serviceCharge) || 0),
+        material_cost: Math.max(0, Number(materialCost) || 0),
+      };
+
+      if (!paymentFlow) {
+        if (serviceCharge.trim() === "" || materialCost.trim() === "") {
+          setError("Service Charge and Material Cost are required.");
+          return;
+        }
+        setIsSubmitting(true);
+        try {
+          await closeJob(jobId, closureDraft);
+          onSuccess(closureDraft);
+          onClose();
+        } catch (err: any) {
+          const errMsg = err?.response?.data?.detail || err?.message || "Failed to complete job.";
+          setError(typeof errMsg === "string" ? errMsg : JSON.stringify(errMsg));
+        } finally {
+          setIsSubmitting(false);
+        }
+        return;
+      }
+
+      setServiceData(closureDraft);
+      setStep("payment");
+      return;
     }
 
     if (serviceCharge.trim() === "" || materialCost.trim() === "") {
       setError("Service Charge and Material Cost are required.");
       return;
     }
-
-
-    const filteredAfterImages = afterImages
-      .map((img) => img.trim())
-      .filter(Boolean);
-
-    if (filteredAfterImages.length === 0) {
-      setError("At least one after image is required.");
+    const service = Number(serviceCharge);
+    const materials = Number(materialCost);
+    if (!Number.isFinite(service) || service < 0 || !Number.isFinite(materials) || materials < 0) {
+      setError("Enter valid non-negative service and material costs.");
+      return;
+    }
+    if (!serviceData) {
+      setError("Service details are missing. Return to the service step and try again.");
       return;
     }
 
-    const filteredBeforeImages = beforeImages
-      .map((img) => img.trim())
-      .filter(Boolean);
+    const roundedSubtotal = Math.round((service + materials) * 100) / 100;
+    const roundedGst = Math.round(roundedSubtotal * 0.05 * 100) / 100;
+    const roundedTotal = Math.round((roundedSubtotal + roundedGst) * 100) / 100;
+    const paidCash = paymentMethod === "CASH" ? roundedTotal : paymentMethod === "BOTH" ? Number(cashAmount) : 0;
+    const paidUpi = paymentMethod === "UPI" ? roundedTotal : paymentMethod === "BOTH" ? Number(upiAmount) : 0;
+
+    if (paymentMethod === "BOTH") {
+      if (!Number.isFinite(paidCash) || !Number.isFinite(paidUpi) || paidCash < 0 || paidUpi < 0) {
+        setError("Enter valid cash and UPI amounts.");
+        return;
+      }
+      if (Math.abs(paidCash + paidUpi - roundedTotal) > 0.01) {
+        setError("Cash and UPI amounts must add up to the total.");
+        return;
+      }
+    }
+
+    const paymentData: JobClosureData = {
+      ...serviceData,
+      labour_cost: Math.round(service * 100) / 100,
+      material_cost: Math.round(materials * 100) / 100,
+      payment_method: paymentMethod,
+      payment_provider: paymentMethod === "CASH" ? undefined : paymentProvider,
+      payment_demo: paymentMethod !== "CASH",
+      cash_amount: Math.round(paidCash * 100) / 100,
+      upi_amount: Math.round(paidUpi * 100) / 100,
+      gst_amount: roundedGst,
+      total_amount: roundedTotal,
+    };
+
+    if (paymentMethod !== "CASH") {
+      setPendingPaymentData(paymentData);
+      setDemoPaymentApproved(false);
+      setStep("upi_demo");
+      return;
+    }
 
     setIsSubmitting(true);
-
     try {
-      const structuredDetails = [
-        `Work Summary: ${canonicalWorkSummary}`,
-        partsUsed.length > 0
-          ? `Parts Used:\n${partsUsed.map((part) => `- ${part}`).join("\n")}`
-          : "Parts Used: None reported",
-        parsedDuration !== undefined
-          ? `Duration (minutes): ${parsedDuration}`
-          : "Duration (minutes): Not reported",
-      ].join("\n\n");
-
-      const payload: JobClosureData = {
-        // The existing completion schema has one authoritative work-summary field.
-        // Structured report inputs are normalized into that field instead of
-        // creating a second completion payload model.
-        work_summary: structuredDetails,
-        before_images: filteredBeforeImages,
-        after_images: filteredAfterImages,
-
-        // Service Charge is stored as labour/service cost for billing reports.
-        labour_cost: Math.max(
-          0,
-          Number(serviceCharge) || 0
-        ),
-
-        material_cost: Math.max(
-          0,
-          Number(materialCost) || 0
-        ),
-      };
-
-      await closeJob(jobId, payload);
-
-      onSuccess();
-      onClose();
-    } catch (err: any) {
-      const errMsg =
-        err?.response?.data?.detail ||
-        err?.message ||
-        "Failed to complete job.";
-
-      setError(
-        typeof errMsg === "string"
-          ? errMsg
-          : JSON.stringify(errMsg)
-      );
+      onSuccess(paymentData);
+    } catch (submitError: any) {
+      setError(submitError?.message || "Unable to continue to customer signature.");
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const continueFromDemoPayment = () => {
+    if (!demoPaymentApproved || !pendingPaymentData) return;
+    onSuccess(pendingPaymentData);
   };
 
   // -----------------------------
@@ -368,7 +410,7 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
             />
 
             <h3 style={styles.headerTitle}>
-              Complete Job #{jobId}
+              {step === "service" ? "Service Completion" : step === "upi_demo" ? "UPI Payment" : "Payment"} — Job #{jobId}
             </h3>
           </div>
 
@@ -449,6 +491,8 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
             </div>
           )}
 
+          {step === "service" ? (
+          <>
           {/* Work Summary */}
           <div style={styles.formGroup}>
             <label style={styles.label}>
@@ -659,119 +703,114 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
             </div>
           </div>
 
-          {/* Financial Breakdown */}
-          <div style={styles.costGrid}>
+          {!paymentFlow && (
+            <div style={styles.costGrid}>
+              <div style={styles.formGroup}><label style={styles.label}>Service Charge (₹)</label><input type="number" min="0" step="0.01" required style={styles.input} value={serviceCharge} onChange={(e) => setServiceCharge(e.target.value)} /></div>
+              <div style={styles.formGroup}><label style={styles.label}>Material Cost (₹)</label><input type="number" min="0" step="0.01" required style={styles.input} value={materialCost} onChange={(e) => setMaterialCost(e.target.value)} /></div>
+              <div style={styles.formGroup}><label style={styles.label}>Subtotal (₹)</label><input type="text" style={{ ...styles.input, backgroundColor: "#f1f5f9", fontWeight: 700, color: "#166534" }} value={`₹ ${subtotal.toFixed(2)}`} readOnly /></div>
+              <div style={styles.formGroup}><label style={styles.label}>GST (5%)</label><input type="text" style={{ ...styles.input, backgroundColor: "#f1f5f9", fontWeight: 700, color: "#166534" }} value={`₹ ${gstAmount.toFixed(2)}`} readOnly /></div>
+              <div style={styles.formGroup}><label style={styles.label}>Total (₹)</label><input type="text" style={{ ...styles.input, backgroundColor: "#dcfce7", fontWeight: 700, color: "#166534" }} value={`₹ ${totalAmount.toFixed(2)}`} readOnly /></div>
+            </div>
+          )}
 
-            {/* Service Charge */}
-            <div style={styles.formGroup}>
-              <label style={styles.label}>
-                Service Charge (₹)
-              </label>
-
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                required
-                style={styles.input}
-                value={serviceCharge}
-                onChange={(e) => {
-                  const value =
-                    e.target.value.replace(
-                      /^0+(?=\d)/,
-                      ""
-                    );
-
-                  setServiceCharge(value);
-                }}
-              />
+          </>
+          ) : step === "payment" ? (
+          <>
+            <div style={{ ...styles.paymentIntro, marginBottom: 2 }}>
+              Review the service charges and record how the customer paid.
+            </div>
+            <div style={styles.costGrid}>
+              <div style={styles.formGroup}>
+                <label style={styles.label}>Service Charge (₹)</label>
+                <input type="number" step="0.01" min="0" required style={styles.input} value={serviceCharge} onChange={(e) => setServiceCharge(e.target.value)} />
+              </div>
+              <div style={styles.formGroup}>
+                <label style={styles.label}>Material Cost (₹)</label>
+                <input type="number" step="0.01" min="0" required style={styles.input} value={materialCost} onChange={(e) => setMaterialCost(e.target.value)} />
+              </div>
+              <div style={styles.formGroup}>
+                <label style={styles.label}>Subtotal (₹)</label>
+                <input type="text" style={{ ...styles.input, backgroundColor: "#f1f5f9", fontWeight: 700, color: "#166534" }} value={`₹ ${subtotal.toFixed(2)}`} readOnly />
+              </div>
+              <div style={styles.formGroup}>
+                <label style={styles.label}>GST (5%)</label>
+                <input type="text" style={{ ...styles.input, backgroundColor: "#f1f5f9", fontWeight: 700, color: "#166534" }} value={`₹ ${gstAmount.toFixed(2)}`} readOnly />
+              </div>
+              <div style={styles.formGroup}>
+                <label style={styles.label}>Total (₹)</label>
+                <input type="text" style={{ ...styles.input, backgroundColor: "#dcfce7", fontWeight: 700, color: "#166534" }} value={`₹ ${totalAmount.toFixed(2)}`} readOnly />
+              </div>
             </div>
 
-            {/* Material Cost */}
-            <div style={styles.formGroup}>
-              <label style={styles.label}>
-                Material Cost (₹)
-              </label>
+            <fieldset style={styles.paymentFieldset}>
+              <legend style={styles.label}>Payment Method</legend>
+              <div style={styles.paymentMethods}>
+                {(["CASH", "UPI", "BOTH"] as const).map((method) => (
+                  <label key={method} style={{ ...styles.paymentMethod, ...(paymentMethod === method ? styles.paymentMethodSelected : {}) }}>
+                    <input type="radio" name="payment-method" value={method} checked={paymentMethod === method} onChange={() => setPaymentMethod(method)} />
+                    {method === "BOTH" ? "Cash + UPI" : method}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
 
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                required
-                style={styles.input}
-                value={materialCost}
-                onChange={(e) => {
-                  const value =
-                    e.target.value.replace(
-                      /^0+(?=\d)/,
-                      ""
-                    );
+            {paymentMethod !== "CASH" && (
+              <div>
+                <div style={styles.label}>Choose UPI app</div>
+                <div style={styles.paymentMethods}>
+                  {([
+                    { id: "GOOGLE_PAY", title: "Google Pay", mark: "G", color: "#4285F4" },
+                    { id: "PHONEPE", title: "PhonePe", mark: "पे", color: "#5F259F" },
+                  ] as const).map((provider) => (
+                    <label key={provider.id} style={{ ...styles.paymentMethod, ...(paymentProvider === provider.id ? styles.paymentMethodSelected : {}) }}>
+                      <input type="radio" name="upi-provider" value={provider.id} checked={paymentProvider === provider.id} onChange={() => setPaymentProvider(provider.id)} />
+                      <span style={{ ...styles.providerMark, background: provider.color }}>{provider.mark}</span>
+                      {provider.title}
+                    </label>
+                  ))}
+                </div>
+                <div style={styles.demoNotice} role="note">Payment preview only. No UPI app will open and no payment will be processed.</div>
+              </div>
+            )}
 
-                  setMaterialCost(value);
-                }}
-              />
+            {paymentMethod === "BOTH" ? (
+              <div style={styles.costGrid}>
+                <div style={styles.formGroup}>
+                  <label style={styles.label}>Cash Amount (₹)</label>
+                  <input type="number" min="0" step="0.01" style={styles.input} value={cashAmount} onChange={(e) => setCashAmount(e.target.value)} placeholder="Enter cash amount" required />
+                </div>
+                <div style={styles.formGroup}>
+                  <label style={styles.label}>UPI Amount (₹)</label>
+                  <input type="number" min="0" step="0.01" style={styles.input} value={upiAmount} onChange={(e) => setUpiAmount(e.target.value)} placeholder="Enter UPI amount" required />
+                </div>
+                <div style={styles.paymentTotalHint}>Cash + UPI must equal ₹ {totalAmount.toFixed(2)}</div>
+              </div>
+            ) : (
+              <div style={styles.paymentTotalHint}>Amount received by {paymentMethod} : ₹ {totalAmount.toFixed(2)}</div>
+            )}
+          </>
+          ) : (
+            <div style={styles.demoCheckout}>
+              <div style={styles.demoBadge}>PAYMENT PREVIEW · NO PAYMENT PROCESSED</div>
+              <span style={{ ...styles.demoProviderMark, background: paymentProvider === "GOOGLE_PAY" ? "#4285F4" : "#5F259F" }}>
+                {paymentProvider === "GOOGLE_PAY" ? "G" : "पे"}
+              </span>
+              <h2 style={styles.demoTitle}>Pay with {paymentProvider === "GOOGLE_PAY" ? "Google Pay" : "PhonePe"}</h2>
+              <p style={styles.demoSubtitle}>Preview the payment confirmation flow. No payment is being requested from your bank account.</p>
+              <div style={styles.demoReceipt}>
+                <div><span>Pay to</span><strong>FieldOps Services</strong></div>
+                <div><span>Merchant UPI ID</span><strong>merchant@upi</strong></div>
+                <div><span>Job</span><strong>#{jobId}</strong></div>
+                <div style={styles.demoAmountRow}><span>Amount</span><strong>₹ {pendingPaymentData?.total_amount?.toFixed(2) ?? totalAmount.toFixed(2)}</strong></div>
+              </div>
+              {demoPaymentApproved ? (
+                <div style={styles.demoApproved} role="status">✓ Payment preview complete. No payment was processed.</div>
+              ) : (
+                <div style={styles.demoWaiting} role="status">Waiting for {paymentProvider === "GOOGLE_PAY" ? "Google Pay" : "PhonePe"} approval…</div>
+              )}
+              {!demoPaymentApproved && <button type="button" onClick={() => setDemoPaymentApproved(true)} style={styles.demoPayButton}>Preview payment confirmation</button>}
             </div>
-
-            {/* Subtotal */}
-            <div style={styles.formGroup}>
-              <label style={styles.label}>
-                Subtotal (₹)
-              </label>
-
-              <input
-                type="text"
-                style={{
-                  ...styles.input,
-                  backgroundColor: "#f1f5f9",
-                  fontWeight: 700,
-                  color: "#166534",
-                }}
-                value={`₹ ${subtotal.toFixed(2)}`}
-                readOnly
-                disabled
-              />
-            </div>
-
-            {/* GST */}
-            <div style={styles.formGroup}>
-              <label style={styles.label}>
-                GST (5%)
-              </label>
-
-              <input
-                type="text"
-                style={{
-                  ...styles.input,
-                  backgroundColor: "#f1f5f9",
-                  fontWeight: 700,
-                  color: "#166534",
-                }}
-                value={`₹ ${gstAmount.toFixed(2)}`}
-                readOnly
-                disabled
-              />
-            </div>
-
-            {/* Total */}
-            <div style={styles.formGroup}>
-              <label style={styles.label}>
-                Total (₹)
-              </label>
-
-              <input
-                type="text"
-                style={{
-                  ...styles.input,
-                  backgroundColor: "#dcfce7",
-                  fontWeight: 700,
-                  color: "#166534",
-                }}
-                value={`₹ ${totalAmount.toFixed(2)}`}
-                readOnly
-                disabled
-              />
-            </div>
-          </div>
+          )}
 
           {/* Footer Actions */}
           <div style={styles.footer}>
@@ -784,16 +823,37 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
               Cancel
             </button>
 
-            <button
-              type="submit"
-              data-testid="submit-job-closure"
-              style={styles.submitBtn}
-              disabled={isSubmitting || uploadingType !== null}
+            {step === "payment" && <button
+              type="button"
+              style={styles.cancelBtn}
+              onClick={() => { setError(null); setStep("service"); }}
+              disabled={isSubmitting}
             >
-              {isSubmitting
-                ? "Submitting..."
-                : "Submit Job Closure"}
-            </button>
+              Back
+            </button>}
+
+            {step === "upi_demo" && <button
+              type="button"
+              style={styles.cancelBtn}
+              onClick={() => { setError(null); setStep("payment"); }}
+            >
+              Back to Payment
+            </button>}
+
+            {step === "upi_demo" ? (
+              <button type="button" style={styles.submitBtn} disabled={!demoPaymentApproved} onClick={continueFromDemoPayment}>
+                Continue to Customer Signature
+              </button>
+            ) : (
+              <button
+                type="submit"
+                data-testid="submit-job-closure"
+                style={styles.submitBtn}
+                disabled={isSubmitting || uploadingType !== null}
+              >
+                {isSubmitting ? "Submitting..." : step === "service" ? paymentFlow ? "Payment" : "Submit Job Closure" : "Review Payment"}
+              </button>
+            )}
           </div>
         </form>
       </div>
@@ -1000,6 +1060,93 @@ const styles: Record<string, React.CSSProperties> = {
     display: "grid",
     gridTemplateColumns: "repeat(3, 1fr)",
     gap: "12px",
+  },
+
+  paymentIntro: {
+    padding: "12px 14px",
+    borderRadius: 10,
+    background: "#eff6ff",
+    border: "1px solid #bfdbfe",
+    color: "#1e3a8a",
+    fontSize: 13,
+  },
+
+  paymentFieldset: {
+    border: 0,
+    padding: 0,
+    margin: 0,
+  },
+
+  paymentMethods: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+    gap: 10,
+    marginTop: 8,
+  },
+
+  paymentMethod: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "12px 14px",
+    borderRadius: 10,
+    border: "1px solid #cbd5e1",
+    background: "#fff",
+    color: "#334155",
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+  },
+
+  paymentMethodSelected: {
+    border: "1px solid #16a34a",
+    background: "#f0fdf4",
+    color: "#166534",
+    boxShadow: "0 0 0 2px rgba(22, 163, 74, .10)",
+  },
+
+  providerMark: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    color: "white",
+    fontWeight: 800,
+  },
+
+  demoNotice: {
+    marginTop: 10,
+    padding: "10px 12px",
+    borderRadius: 9,
+    background: "#eff6ff",
+    border: "1px solid #bfdbfe",
+    color: "#1e40af",
+    fontSize: 12,
+    lineHeight: 1.5,
+  },
+
+  demoCheckout: { display: "flex", flexDirection: "column", alignItems: "center", gap: 12, padding: "12px 0" },
+  demoBadge: { padding: "6px 10px", borderRadius: 999, background: "#fff7ed", color: "#9a3412", fontSize: 11, fontWeight: 800, letterSpacing: ".04em" },
+  demoProviderMark: { display: "inline-flex", alignItems: "center", justifyContent: "center", width: 58, height: 58, borderRadius: 18, color: "white", fontSize: 28, fontWeight: 800, boxShadow: "0 8px 18px rgba(15,23,42,.18)" },
+  demoTitle: { margin: 0, color: "#0f172a", fontSize: 22 },
+  demoSubtitle: { margin: 0, maxWidth: 480, textAlign: "center", color: "#64748b", fontSize: 13, lineHeight: 1.5 },
+  demoReceipt: { width: "100%", maxWidth: 480, padding: 16, display: "grid", gap: 12, border: "1px solid #e2e8f0", borderRadius: 14, background: "#f8fafc" },
+  demoAmountRow: { borderTop: "1px solid #e2e8f0", paddingTop: 12, fontSize: 17 },
+  demoApproved: { width: "100%", maxWidth: 480, padding: 12, borderRadius: 10, background: "#dcfce7", color: "#166534", fontWeight: 700, textAlign: "center" },
+  demoWaiting: { width: "100%", maxWidth: 480, padding: 12, borderRadius: 10, background: "#eff6ff", color: "#1d4ed8", textAlign: "center" },
+  demoPayButton: { padding: "11px 18px", border: 0, borderRadius: 9, background: "#166534", color: "white", fontWeight: 700, cursor: "pointer" },
+
+  paymentTotalHint: {
+    gridColumn: "1 / -1",
+    padding: "12px 14px",
+    borderRadius: 10,
+    background: "#f8fafc",
+    border: "1px solid #e2e8f0",
+    color: "#475569",
+    fontSize: 13,
+    fontWeight: 600,
   },
 
   footer: {

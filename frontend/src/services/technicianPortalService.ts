@@ -9,6 +9,7 @@ import api from "./api";
 // ---------------------------------------------------------------------------
 
 export interface TechnicianDashboardResponse {
+  total_jobs?: number;
   total_assigned?: number;
   active_jobs?: number;
   completed_today?: number;
@@ -17,6 +18,16 @@ export interface TechnicianDashboardResponse {
   rejected_jobs?: number;
   technician_status?: string | null;
   profile_completed?: boolean;
+}
+
+export interface TechnicianPerformanceReportResponse {
+  performance_period?: "week" | "month";
+  period_completed_jobs?: number;
+  average_completion_minutes?: number | null;
+  customer_rating?: number | null;
+  total_distance_km?: number | null;
+  completion_trend?: Array<{ label: string; count: number }>;
+  status_distribution?: Array<{ status: string; count: number }>;
 }
 
 export interface TechnicianStatusUpdateResponse {
@@ -143,6 +154,14 @@ export const markAllTechnicianNotificationsRead = () =>
 export const getTechnicianDashboard = () =>
   api.get<TechnicianDashboardResponse>(
     "/api/technician/dashboard",
+  );
+
+export const getTechnicianPerformanceReport = (
+  period: "week" | "month",
+) =>
+  api.get<TechnicianPerformanceReportResponse>(
+    "/api/technician/performance-report",
+    { params: { period } },
   );
 
 // ---------------------------------------------------------------------------

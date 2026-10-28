@@ -40,6 +40,16 @@ import {
 
   MessageSquare,
 
+  Briefcase as BriefcaseIcon,
+
+  CalendarDays,
+
+  FileText,
+
+  ChevronRight,
+
+  Wrench,
+
 } from "lucide-react";
 
 import {
@@ -54,6 +64,8 @@ import {
 
   onSiteTechnicianJob,
 
+  completeTechnicianJob,
+
 } from "../../services/technicianPortalService";
 
 import { JobClosureModal } from "../../components/jobs/JobClosureModal";
@@ -63,6 +75,24 @@ import CustomerSignatureModal from "../../components/jobs/CustomerSignatureModal
 import JobLiveTrackingMap from "../../components/customer-tracking/JobLiveTrackingMap";
 
 import JobMessagePanel from "../../components/customer-tracking/JobMessagePanel";
+
+import type { JobClosureData } from "../../services/planningService";
+
+import useAuthStore from "../../store/authStore";
+import {
+  formatAcceptanceCountdown,
+  useAcceptanceCountdowns,
+} from "../../hooks/useAcceptanceCountdown";
+import TechnicianJobAssignmentPopup from "../../components/technician/TechnicianJobAssignmentPopup";
+import {
+  TECHNICIAN_GPS_MAX_AGE_MS,
+  isValidTechnicianGpsFix,
+  useTechnicianGpsStore,
+} from "../../store/technicianGpsStore";
+import {
+  haversineDistanceKm,
+  parseCoordinates,
+} from "../../utils/geo";
 
 const s = {
 
@@ -514,6 +544,8 @@ const hasValidCoordinates = (job: any): boolean => {
 
 };
 
+const STARTED_JOB_STATUSES = ["EN_ROUTE", "ON_SITE", "IN_PROGRESS", "PAUSED"];
+
 export default function TechnicianJobsPage() {
 
   const [jobs, setJobs] = useState<any[]>([]);
@@ -534,6 +566,10 @@ export default function TechnicianJobsPage() {
 
     useState<number | null>(null);
 
+  const [pendingClosureData, setPendingClosureData] =
+
+    useState<JobClosureData | null>(null);
+
   const [completeNotes, setCompleteNotes] = useState("");
 
   const [actionLoading, setActionLoading] = useState<number | null>(null);
@@ -546,13 +582,28 @@ export default function TechnicianJobsPage() {
 
   const [assignedPopupJob, setAssignedPopupJob] = useState<any | null>(null);
 
+  const authUser = useAuthStore((state) => state.user);
+  const technicianGpsLocation = useTechnicianGpsStore(
+    (state) => state.location,
+  );
+  const [gpsFreshnessNow, setGpsFreshnessNow] = useState(Date.now());
+
   const [messageJobId, setMessageJobId] = useState<number | null>(null);
 
   const assignedPopupJobIdRef = useRef<number | null>(null);
 
   const rejectedPopupJobIdsRef = useRef<Set<number>>(new Set());
 
-  const [timerSeconds, setTimerSeconds] = useState(5 * 60);
+  const countdownJobs =
+    assignedPopupJob &&
+    !jobs.some((job) => Number(job.id) === Number(assignedPopupJob.id))
+      ? [...jobs, assignedPopupJob]
+      : jobs;
+  const acceptanceCountdowns = useAcceptanceCountdowns(countdownJobs);
+  const timerSeconds = assignedPopupJob
+    ? acceptanceCountdowns[String(assignedPopupJob.id)] ?? null
+    : null;
+  const legacyTimerSeconds = timerSeconds ?? 0;
 
   const checkForAssignedJob = async () => {
     // Never show the assignment popup while the rejection dialog is open.
@@ -646,69 +697,51 @@ export default function TechnicianJobsPage() {
 
 }, []);
 
-const getRemainingAcceptanceSeconds = (job: any | null) => {
-
-  if (!job?.assigned_at) {
-
-    return 5 * 60;
-
-  }
-
-  const assignedAt = new Date(job.assigned_at).getTime();
-
-  if (Number.isNaN(assignedAt)) {
-
-    return 5 * 60;
-
-  }
-
-  const expiresAt = assignedAt + 5 * 60 * 1000;
-
-  return Math.max(
-
-    0,
-
-    Math.floor((expiresAt - Date.now()) / 1000)
-
-  );
-
-};
-
 useEffect(() => {
+  setGpsFreshnessNow(Date.now());
 
-  if (!assignedPopupJob) return;
+  if (!assignedPopupJob || !technicianGpsLocation) return;
 
-  const updateTimer = () => {
+  const expiresAt =
+    technicianGpsLocation.fix.timestamp + TECHNICIAN_GPS_MAX_AGE_MS;
+  const staleInMs = expiresAt - Date.now() + 1;
+  if (staleInMs <= 0) return;
 
-    setTimerSeconds(
+  const timer = window.setTimeout(
+    () => setGpsFreshnessNow(Date.now()),
+    staleInMs,
+  );
+  return () => window.clearTimeout(timer);
+}, [assignedPopupJob, technicianGpsLocation]);
 
-      getRemainingAcceptanceSeconds(assignedPopupJob)
-
-    );
-
-  };
-
-  // Calculate immediately when the popup opens
-
-  updateTimer();
-
-  // Then update every second
-
-  const interval = window.setInterval(updateTimer, 1000);
-
-  return () => window.clearInterval(interval);
-
-}, [assignedPopupJob]);
-
-  const formatTimer = (secs: number) => {
-
-    const mins = Math.floor(secs / 60);
-
-    const remainderSecs = secs % 60;
-
-    return `${mins}:${remainderSecs < 10 ? "0" : ""}${remainderSecs}`;
-
-  };
+const customerCoordinates = assignedPopupJob
+  ? parseCoordinates(
+      assignedPopupJob.site_latitude,
+      assignedPopupJob.site_longitude,
+    )
+  : null;
+const isValidCustomerLocation =
+  customerCoordinates !== null &&
+  !(customerCoordinates.latitude === 0 && customerCoordinates.longitude === 0);
+const technicianLocationMatchesUser =
+  technicianGpsLocation?.technicianId === String(authUser?.id ?? "") &&
+  technicianGpsLocation?.tenantId === String(authUser?.tenant_id ?? "");
+const technicianFix = technicianLocationMatchesUser
+  ? technicianGpsLocation?.fix
+  : null;
+const hasFreshTechnicianLocation =
+  technicianFix !== undefined &&
+  technicianFix !== null &&
+  isValidTechnicianGpsFix(technicianFix, gpsFreshnessNow);
+const assignedJobDistanceKm =
+  isValidCustomerLocation && hasFreshTechnicianLocation && technicianFix
+    ? haversineDistanceKm(technicianFix, customerCoordinates)
+    : null;
+const assignmentDistanceDisplay = !isValidCustomerLocation
+  ? "Customer location unavailable"
+  : !hasFreshTechnicianLocation || assignedJobDistanceKm === null
+    ? "Waiting for GPS location"
+    : `${assignedJobDistanceKm.toFixed(1)} km`;
 
   const doAction = async (id: number, action: () => Promise<any>) => {
 
@@ -749,6 +782,14 @@ useEffect(() => {
   const handleStart = async (jobId: number) => {
 
     const currentJob = jobs.find((job) => job.id === jobId);
+
+    const anotherJobIsStarted = jobs.some(
+      (job) =>
+        Number(job.id) !== Number(jobId) &&
+        STARTED_JOB_STATUSES.includes(normalizeStatus(job.status)),
+    );
+
+    if (anotherJobIsStarted) return;
 
     if (normalizeStatus(currentJob?.status) !== "ACCEPTED") {
 
@@ -904,37 +945,45 @@ useEffect(() => {
 
   };
 
-  const handleCompletionSuccess = async () => {
+  const handlePaymentSubmitted = (data: JobClosureData) => {
+    if (completeModal === null) return;
+    setPendingClosureData(data);
+    setCustomerSignatureModal(completeModal);
+  };
 
-    const completedJobId = completeModal;
-
-    if (!completedJobId) return;
-
-    setCompleteModal(null);
-
-    try {
-
-      await loadJobs();
-
-    } finally {
-
-      setCustomerSignatureModal(completedJobId);
-
-      window.dispatchEvent(
-
-        new CustomEvent("technician-dashboard-refresh"),
-
-      );
-
+  const handleSignatureAndComplete = async (signatureData: string) => {
+    if (customerSignatureModal === null || !pendingClosureData) {
+      throw new Error("Payment details are missing. Return to the payment step and try again.");
     }
 
+    await completeTechnicianJob(customerSignatureModal, {
+      completion_notes: pendingClosureData.work_summary,
+      photos: pendingClosureData.after_images,
+      before_images: pendingClosureData.before_images,
+      labour_cost: pendingClosureData.labour_cost,
+      material_cost: pendingClosureData.material_cost,
+      payment_method: pendingClosureData.payment_method,
+      payment_provider: pendingClosureData.payment_provider,
+      payment_demo: pendingClosureData.payment_demo,
+      cash_amount: pendingClosureData.cash_amount,
+      upi_amount: pendingClosureData.upi_amount,
+      gst_amount: pendingClosureData.gst_amount,
+      total_amount: pendingClosureData.total_amount,
+      signature_data: signatureData,
+    });
+
+    setCustomerSignatureModal(null);
+    setCompleteModal(null);
+    setPendingClosureData(null);
+    await loadJobs();
+    window.dispatchEvent(new CustomEvent("technician-dashboard-refresh"));
   };
 
   const handlePopupAccept = async () => {
 
-  if (!assignedPopupJob) return;
+  if (!assignedPopupJob || actionLoading === assignedPopupJob.id) return;
 
-  if (timerSeconds <= 0) {
+  if (timerSeconds !== null && timerSeconds <= 0) {
 
     alert("Acceptance window has expired.");
 
@@ -943,6 +992,7 @@ useEffect(() => {
   }
 
   const jobId = assignedPopupJob.id;
+  setActionLoading(jobId);
 
     try {
 
@@ -1042,6 +1092,12 @@ useEffect(() => {
     const btns: ReactNode[] = [];
 
     const isLoading = actionLoading === job?.id;
+
+    const anotherJobIsStarted = jobs.some(
+      (candidate) =>
+        Number(candidate.id) !== Number(job?.id) &&
+        STARTED_JOB_STATUSES.includes(normalizeStatus(candidate.status)),
+    );
 
     if (st === "ASSIGNED" || st === "ACTIVE") {
 
@@ -1153,19 +1209,21 @@ useEffect(() => {
 
           aria-label={`Start job ${job.id}`}
 
-          disabled={isStarting}
+          disabled={isStarting || anotherJobIsStarted}
 
           style={{
 
             ...s.btn("#DBEAFE", "#1E40AF"),
 
-            opacity: isStarting ? 0.6 : 1,
+            opacity: isStarting || anotherJobIsStarted ? 0.55 : 1,
 
-            cursor: isStarting ? "not-allowed" : "pointer",
+            cursor: isStarting || anotherJobIsStarted ? "not-allowed" : "pointer",
 
           }}
 
           onClick={() => handleStart(job.id)}
+
+          title={anotherJobIsStarted ? "Finish the job already in progress before starting another." : undefined}
 
         >
 
@@ -1184,6 +1242,10 @@ useEffect(() => {
               Starting...
 
             </>
+
+          ) : anotherJobIsStarted ? (
+
+            "Finish Current Job"
 
           ) : (
 
@@ -1379,7 +1441,7 @@ useEffect(() => {
 
         >
 
-          {isLoading ? "Completing..." : "Complete"}
+          {isLoading ? "Submitting..." : "Service Complete"}
 
         </button>,
 
@@ -1421,6 +1483,360 @@ useEffect(() => {
 
           }
 
+          .technician-assigned-card {
+            background: linear-gradient(115deg, #ffffff 0%, #fbfefd 100%);
+            border: 1px solid #e3ece7;
+            border-left: 4px solid #0aa66a;
+            border-radius: 15px;
+            padding: 20px 22px 14px;
+            margin-bottom: 16px;
+            box-shadow: 0 5px 18px rgba(21, 68, 52, 0.08);
+            transition: box-shadow 180ms ease, transform 180ms ease;
+          }
+          .technician-assigned-card:hover {
+            box-shadow: 0 10px 24px rgba(21, 68, 52, 0.12);
+            transform: translateY(-2px);
+          }
+          .technician-assigned-details {
+            display: grid;
+            grid-template-columns: minmax(230px, 2fr) repeat(3, minmax(130px, 1fr)) auto;
+            align-items: center;
+          }
+          .technician-assigned-details:not(.has-route) {
+            grid-template-columns: minmax(230px, 2fr) repeat(2, minmax(130px, 1fr));
+          }
+          .technician-assigned-detail {
+            min-width: 0;
+            padding: 4px 18px;
+            border-right: 1px solid #e7edf2;
+          }
+          .technician-assigned-detail:first-child { padding-left: 4px; }
+          .technician-assigned-detail:last-child { border-right: 0; }
+          .technician-assigned-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            border-top: 1px solid #e9eef2;
+            padding-top: 12px;
+            margin-top: 12px;
+          }
+          @media (max-width: 1050px) {
+            .technician-assigned-details { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 12px; }
+            .technician-assigned-detail { padding: 4px 10px; }
+            .technician-assigned-detail:nth-child(2n) { border-right: 0; }
+          }
+          @media (max-width: 600px) {
+            .technician-assigned-card { padding: 16px 14px 12px; }
+            .technician-assigned-details { grid-template-columns: minmax(0, 1fr); }
+            .technician-assigned-detail { border-right: 0; border-bottom: 1px solid #e7edf2; padding: 8px 2px; }
+            .technician-assigned-detail:last-child { border-bottom: 0; }
+            .technician-assigned-footer { align-items: flex-start; }
+          }
+          .technician-job-assignment-modal {
+            position: fixed;
+            inset: 0;
+            z-index: 9999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            box-sizing: border-box;
+            overflow-y: auto;
+          }
+          .technician-job-assignment-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.58);
+            backdrop-filter: blur(5px);
+          }
+          .technician-job-assignment-card {
+            position: relative;
+            z-index: 1;
+            width: min(100%, 680px);
+            max-width: 680px;
+            max-height: calc(100dvh - 40px);
+            overflow-y: auto;
+            padding: 30px;
+            border-radius: 24px;
+            box-sizing: border-box;
+            background: #fff;
+            box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
+          }
+          .technician-job-assignment-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 20px;
+          }
+          .technician-job-assignment-id {
+            display: block;
+            margin-bottom: 6px;
+            color: #64748b;
+            font-size: 13px;
+            font-weight: 700;
+          }
+          .technician-job-assignment-title {
+            margin: 0;
+            color: #172033;
+            font-size: 26px;
+            font-weight: 800;
+            line-height: 1.2;
+          }
+          .technician-job-assignment-subtitle {
+            margin: 6px 0 0;
+            color: #64748b;
+            font-size: 13px;
+            line-height: 1.5;
+          }
+          .technician-job-assignment-close {
+            display: grid;
+            flex: 0 0 auto;
+            width: 38px;
+            height: 38px;
+            place-items: center;
+            border: 0;
+            border-radius: 50%;
+            background: #f1f5f4;
+            color: #64748b;
+            cursor: pointer;
+            transition: background 160ms ease, color 160ms ease;
+          }
+          .technician-job-assignment-close:hover {
+            background: #e2eee9;
+            color: #176b58;
+          }
+          .technician-job-assignment-summary {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            margin-bottom: 18px;
+            overflow: hidden;
+            border: 1px solid #a7f3d0;
+            border-radius: 16px;
+            background: #ecfdf5;
+          }
+          .technician-job-assignment-summary-cell {
+            display: flex;
+            min-width: 0;
+            align-items: center;
+            gap: 12px;
+            padding: 16px;
+          }
+          .technician-job-assignment-summary-cell + .technician-job-assignment-summary-cell {
+            border-left: 1px solid #bbebd2;
+          }
+          .technician-job-assignment-icon {
+            display: grid;
+            flex: 0 0 auto;
+            width: 40px;
+            height: 40px;
+            place-items: center;
+            border-radius: 50%;
+            background: #d1fae5;
+            color: #087857;
+          }
+          .technician-job-assignment-summary-content {
+            min-width: 0;
+          }
+          .technician-job-assignment-eyebrow {
+            display: block;
+            margin-bottom: 5px;
+            color: #477362;
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+          }
+          .technician-job-assignment-summary-value {
+            color: #075c43;
+            font-size: 23px;
+            font-weight: 800;
+            line-height: 1.15;
+            overflow-wrap: anywhere;
+          }
+          .technician-job-assignment-summary-note {
+            display: block;
+            margin-top: 3px;
+            color: #28735a;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+          }
+          .technician-job-assignment-columns {
+            display: grid;
+            grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+            gap: 12px;
+            margin-bottom: 14px;
+          }
+          .technician-job-assignment-customer-stack {
+            display: grid;
+            gap: 10px;
+          }
+          .technician-job-assignment-info-card {
+            display: flex;
+            min-width: 0;
+            align-items: flex-start;
+            gap: 11px;
+            padding: 13px;
+            border: 1px solid #e8eeeb;
+            border-radius: 14px;
+            background: #fff;
+          }
+          .technician-job-assignment-info-icon {
+            display: grid;
+            flex: 0 0 auto;
+            width: 34px;
+            height: 34px;
+            place-items: center;
+            border-radius: 50%;
+            background: #f1f5f4;
+            color: #64748b;
+          }
+          .technician-job-assignment-info-icon.is-blue {
+            background: #eff6ff;
+            color: #2563eb;
+          }
+          .technician-job-assignment-info-icon.is-green {
+            background: #ecfdf5;
+            color: #087857;
+          }
+          .technician-job-assignment-info-content {
+            min-width: 0;
+            flex: 1;
+          }
+          .technician-job-assignment-info-value {
+            color: #273449;
+            font-size: 13px;
+            font-weight: 700;
+            line-height: 1.45;
+            overflow-wrap: anywhere;
+            white-space: pre-wrap;
+          }
+          .technician-job-assignment-location-card {
+            min-height: 100%;
+            box-sizing: border-box;
+            background: #fbfdfc;
+          }
+          .technician-job-assignment-distance {
+            display: flex;
+            min-width: 0;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            margin-bottom: 14px;
+            padding: 14px 16px;
+            border: 1px solid #ccebdc;
+            border-radius: 14px;
+            background: #f0fdf6;
+            color: #176b58;
+          }
+          .technician-job-assignment-distance-label {
+            display: flex;
+            min-width: 0;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            font-weight: 700;
+          }
+          .technician-job-assignment-distance-value {
+            flex: 0 0 auto;
+            color: #075c43;
+            font-size: 21px;
+            font-weight: 800;
+            text-align: right;
+            overflow-wrap: anywhere;
+          }
+          .technician-job-assignment-service {
+            margin-bottom: 18px;
+            padding: 15px 16px;
+            border: 1px solid #e8edf0;
+            border-radius: 14px;
+            background: #f8fafb;
+          }
+          .technician-job-assignment-service-heading {
+            display: flex;
+            align-items: center;
+            gap: 11px;
+            margin-bottom: 8px;
+          }
+          .technician-job-assignment-service-name {
+            color: #1f2937;
+            font-size: 15px;
+            font-weight: 800;
+            line-height: 1.4;
+            overflow-wrap: anywhere;
+          }
+          .technician-job-assignment-service-description {
+            margin: 0;
+            color: #596579;
+            font-size: 13px;
+            line-height: 1.55;
+            overflow-wrap: anywhere;
+            white-space: pre-wrap;
+          }
+          .technician-job-assignment-actions {
+            display: flex;
+            gap: 12px;
+          }
+          .technician-job-assignment-action {
+            display: flex;
+            flex: 1;
+            min-width: 0;
+            min-height: 48px;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            border: 0;
+            border-radius: 12px;
+            color: #fff;
+            font-size: 15px;
+            font-weight: 800;
+            cursor: pointer;
+            transition: transform 140ms ease, filter 140ms ease, box-shadow 140ms ease;
+          }
+          .technician-job-assignment-action:hover:not(:disabled) {
+            filter: brightness(1.04);
+            transform: translateY(-1px);
+            box-shadow: 0 5px 12px rgba(15, 23, 42, 0.12);
+          }
+          .technician-job-assignment-action:active:not(:disabled) {
+            transform: translateY(0);
+          }
+          .technician-job-assignment-action:disabled {
+            cursor: not-allowed;
+            opacity: 0.58;
+          }
+          .technician-job-assignment-action.is-accept { background: #079669; }
+          .technician-job-assignment-action.is-reject { background: #ef4444; }
+          @media (max-width: 600px) {
+            .technician-job-assignment-modal { align-items: flex-start; padding: 12px; }
+            .technician-job-assignment-card {
+              width: 100%;
+              max-height: calc(100dvh - 24px);
+              padding: 20px;
+              border-radius: 20px;
+            }
+            .technician-job-assignment-title { font-size: 23px; }
+            .technician-job-assignment-columns { grid-template-columns: minmax(0, 1fr); }
+            .technician-job-assignment-location-card { min-height: auto; }
+            .technician-job-assignment-summary-cell { padding: 13px 10px; gap: 8px; }
+            .technician-job-assignment-icon { width: 34px; height: 34px; }
+            .technician-job-assignment-summary-value { font-size: 20px; }
+          }
+          @media (max-width: 420px) {
+            .technician-job-assignment-modal { padding: 8px; }
+            .technician-job-assignment-card { max-height: calc(100dvh - 16px); padding: 16px; }
+            .technician-job-assignment-summary { grid-template-columns: minmax(0, 1fr); }
+            .technician-job-assignment-summary-cell + .technician-job-assignment-summary-cell {
+              border-top: 1px solid #bbebd2;
+              border-left: 0;
+            }
+            .technician-job-assignment-distance { align-items: flex-start; flex-direction: column; gap: 7px; }
+            .technician-job-assignment-distance-value { text-align: left; }
+            .technician-job-assignment-actions { flex-direction: column; }
+          }
+
         `}
 
       </style>
@@ -1429,7 +1845,10 @@ useEffect(() => {
 
         <div>
 
-          <h2 style={s.title}>Assigned Jobs</h2>
+          <h2 style={{ ...s.title, display: "flex", alignItems: "center", gap: 14, margin: 0, fontSize: 28 }}>
+            <span style={{ width: 54, height: 54, borderRadius: 14, display: "grid", placeItems: "center", color: "#078A65", background: "linear-gradient(145deg, #E7FFF5, #D2F8E9)", border: "1px solid #BCEED8", boxShadow: "0 5px 14px rgba(10, 166, 106, .1)" }}><BriefcaseIcon size={27} /></span>
+            Assigned Jobs
+          </h2>
 
           <div
 
@@ -1555,9 +1974,12 @@ useEffect(() => {
 
             };
 
+          const canViewRoute = STARTED_JOB_STATUSES.includes(normalizedStatus);
+          const acceptanceSeconds = acceptanceCountdowns[String(job.id)];
+
           return (
 
-            <div key={job.id} style={s.card}>
+            <article key={job.id} className="technician-assigned-card">
 
               <div style={s.cardHeader}>
 
@@ -1573,65 +1995,66 @@ useEffect(() => {
 
                 </div>
 
-                <span style={s.badge(priority.bg, priority.fg)}>
-
-                  {job.priority || "MEDIUM"}
-
-                </span>
-
-              </div>
-
-              <div style={s.meta}>
-
-                <span style={s.metaItem}>
-
-                  <MapPin size={14} />
-
-                  {job.location || "N/A"}
-
-                </span>
-
-                <span style={s.metaItem}>
-
-                  <Phone size={14} />
-
-                  {job.contact_number || "N/A"}
-
-                </span>
-
-                <span style={s.metaItem}>
-
-                  <Clock size={14} />
-
-                  {formatSchedule(job)}
-
-                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  <span style={{ ...s.badge(priority.bg, priority.fg), padding: "6px 13px", fontSize: 12 }}>
+                    {job.priority || "MEDIUM"}
+                  </span>
+                  <span style={{ ...s.badge(statusMeta.bg, statusMeta.fg), padding: "6px 13px", fontSize: 12 }}>
+                    {getStatusLabel(job.status)}
+                  </span>
+                </div>
 
               </div>
 
-              {job.issue_description && (
+              <div className={`technician-assigned-details${canViewRoute ? " has-route" : ""}`} style={{ borderTop: "1px solid #E9EEF2", borderBottom: "1px solid #E9EEF2", padding: "14px 0" }}>
 
-                <div
+                <div className="technician-assigned-detail" style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
 
-                  style={{
+                  <MapPin size={21} color="#26354D" style={{ flex: "0 0 auto", marginTop: 2 }} />
 
-                    fontSize: "13px",
-
-                    color: "#4B5563",
-
-                    marginBottom: "8px",
-
-                    lineHeight: 1.5,
-
-                  }}
-
-                >
-
-                  {job.issue_description}
+                  <div style={{ minWidth: 0 }}>
+                    <strong style={{ display: "block", color: "#172033", fontSize: 14 }}>{job.customer_name || "Customer"}</strong>
+                    <span style={{ display: "block", color: "#64748B", fontSize: 13, lineHeight: 1.5, marginTop: 2 }}>{job.location || job.site_address || "Location not provided"}</span>
+                  </div>
 
                 </div>
 
-              )}
+                <div className="technician-assigned-detail" style={{ display: "flex", alignItems: "flex-start", gap: 11 }}>
+
+                  <Phone size={21} color="#26354D" style={{ flex: "0 0 auto", marginTop: 2 }} />
+
+                  <div style={{ minWidth: 0 }}>
+                    <strong style={{ display: "block", color: "#172033", fontSize: 14 }}>{job.contact_number || "Phone not provided"}</strong>
+                    {job.contact_number && <a href={`tel:${String(job.contact_number).replace(/[^+\d]/g, "")}`} style={{ display: "inline-block", color: "#1769E8", fontSize: 13, marginTop: 3 }}>Call Customer</a>}
+                  </div>
+
+                </div>
+
+                <div className="technician-assigned-detail" style={{ display: "flex", alignItems: "flex-start", gap: 11 }}>
+
+                  <CalendarDays size={21} color="#26354D" style={{ flex: "0 0 auto", marginTop: 2 }} />
+
+                  <div><strong style={{ display: "block", color: "#172033", fontSize: 14 }}>{formatSchedule(job)}</strong><span style={{ color: "#718096", fontSize: 12 }}>Scheduled date</span></div>
+
+                </div>
+
+                {canViewRoute && <>
+                  <div className="technician-assigned-detail" style={{ display: "flex", alignItems: "flex-start", gap: 11 }}>
+                    <Navigation size={21} color="#26354D" style={{ flex: "0 0 auto", marginTop: 2 }} />
+                    <div><strong style={{ display: "block", color: "#172033", fontSize: 14 }}>Route</strong><span style={{ color: "#718096", fontSize: 12 }}>{hasValidCoordinates(job) ? "View customer location" : "Location unavailable"}</span></div>
+                  </div>
+                  <button type="button" aria-label={`View route for job ${job.id}`} disabled={!hasValidCoordinates(job)} onClick={() => handleOpenLiveMap(job)} style={{ border: 0, background: "transparent", color: hasValidCoordinates(job) ? "#334155" : "#CBD5E1", cursor: hasValidCoordinates(job) ? "pointer" : "not-allowed", padding: 8 }}><ChevronRight size={23} /></button>
+                </>}
+
+              </div>
+
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 4px 2px" }}>
+                <FileText size={21} color="#26354D" style={{ flex: "0 0 auto", marginTop: 1 }} />
+                <div style={{ minWidth: 0 }}>
+                  <strong style={{ display: "block", color: "#172033", fontSize: 14 }}>Service Details</strong>
+                  <span style={{ display: "block", color: "#64748B", fontSize: 13, lineHeight: 1.5, marginTop: 2 }}>{job.issue_description || "No additional service details provided."}</span>
+                </div>
+              </div>
 
               <div
 
@@ -1643,15 +2066,50 @@ useEffect(() => {
 
                   alignItems: "center",
 
+                  borderTop: "1px solid #E9EEF2",
+
+                  paddingTop: 12,
+
+                  marginTop: 12,
+
                 }}
 
               >
 
-                <span style={s.badge(statusMeta.bg, statusMeta.fg)}>
-
-                  {getStatusLabel(job.status)}
-
-                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <span style={{ width: 28, height: 28, borderRadius: "50%", background: "#D1FAE5", color: "#059669", display: "grid", placeItems: "center" }}><CheckCircle size={17} /></span>
+                  <span style={s.badge(statusMeta.bg, statusMeta.fg)}>{getStatusLabel(job.status)}</span>
+                  {acceptanceSeconds !== null &&
+                    acceptanceSeconds !== undefined && (
+                      <span
+                        data-testid="assigned-job-acceptance-countdown"
+                        data-job-id={job.id}
+                        aria-live="off"
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 5,
+                          color:
+                            acceptanceSeconds <= 30
+                              ? "#DC2626"
+                              : acceptanceSeconds <= 120
+                                ? "#D97706"
+                                : "#078A4D",
+                          fontSize: 12,
+                          fontWeight: 700,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        <Clock size={14} />
+                        {acceptanceSeconds === 0
+                          ? "Acceptance deadline reached"
+                          : `Time left to accept: ${formatAcceptanceCountdown(
+                              acceptanceSeconds,
+                            )}`}
+                      </span>
+                    )}
+                  <span style={{ color: "#718096", fontSize: 12 }}>Assigned {job.assigned_at ? `on ${new Date(job.assigned_at).toLocaleString()}` : "date not recorded"}</span>
+                </div>
 
                 <div
 
@@ -1680,7 +2138,7 @@ useEffect(() => {
 
               </div>
 
-            </div>
+            </article>
 
           );
 
@@ -1689,392 +2147,203 @@ useEffect(() => {
       )}
 
       {assignedPopupJob && !rejectModal && (
+        <TechnicianJobAssignmentPopup
+          job={assignedPopupJob}
+          countdownSeconds={timerSeconds}
+          distanceDisplay={assignmentDistanceDisplay}
+          loading={actionLoading === assignedPopupJob.id}
+          onClose={() => setAssignedPopupJob(null)}
+          onAccept={() => void handlePopupAccept()}
+          onReject={handlePopupRejectClick}
+        />
+      )}
+      {false && assignedPopupJob && !rejectModal && (
 
-        <div style={s.modal}>
+        <div className="technician-job-assignment-modal">
 
           <div
 
-            style={s.overlay}
+            className="technician-job-assignment-backdrop"
 
             onClick={() => setAssignedPopupJob(null)}
 
           />
 
-          <div style={s.modalCard}>
-
-            <div
-
-              style={{
-
-                display: "flex",
-
-                justifyContent: "space-between",
-
-                alignItems: "center",
-
-                marginBottom: "4px",
-
-              }}
-
-            >
-
-              <span
-
-                style={{
-
-                  fontSize: "13px",
-
-                  fontWeight: 700,
-
-                  color: "#6B7280",
-
-                }}
-
-              >
-
-                Job ID: #{assignedPopupJob.id}
-
-              </span>
-
+          <div
+            className="technician-job-assignment-card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="technician-job-assignment-title"
+          >
+            <header className="technician-job-assignment-header">
+              <div>
+                <span className="technician-job-assignment-id">
+                  Job ID: #{assignedPopupJob.id}
+                </span>
+                <h3
+                  className="technician-job-assignment-title"
+                  id="technician-job-assignment-title"
+                >
+                  Job Assigned
+                </h3>
+                <p className="technician-job-assignment-subtitle">
+                  You have been assigned a new service job.
+                </p>
+              </div>
               <button
-
+                className="technician-job-assignment-close"
                 type="button"
-
                 aria-label="Close assigned job popup"
-
                 onClick={() => setAssignedPopupJob(null)}
-
-                style={{
-
-                  background: "#F3F4F6",
-
-                  border: "none",
-
-                  borderRadius: "50%",
-
-                  width: "30px",
-
-                  height: "30px",
-
-                  display: "flex",
-
-                  alignItems: "center",
-
-                  justifyContent: "center",
-
-                  cursor: "pointer",
-
-                  color: "#6B7280",
-
-                }}
-
               >
-
-                <X size={18} />
-
+                <X size={20} />
               </button>
+            </header>
 
-            </div>
-
-            <h3 style={s.modalTitle}>Job Assigned</h3>
-
-            <div
-
-              style={{
-
-                background: "#ECFDF5",
-
-                border: "1px solid #A7F3D0",
-
-                borderRadius: "12px",
-
-                padding: "12px 16px",
-
-                display: "flex",
-
-                alignItems: "center",
-
-                gap: "10px",
-
-                marginTop: "12px",
-
-                marginBottom: "20px",
-
-              }}
-
+            <section
+              className="technician-job-assignment-summary"
+              aria-label="Offer time and customer distance"
             >
-
-              <Clock size={20} color="#059669" />
-
-              <div style={{ display: "flex", alignItems: "baseline", gap: "8px" }}>
-
-                <span
-
-                  style={{
-
-                    fontSize: "18px",
-
-                    fontWeight: 800,
-
-                    color: "#065F46",
-
-                    fontFamily: "monospace",
-
-                    letterSpacing: "0.05em",
-
-                  }}
-
-                >
-
-                  {timerSeconds <= 0
-
-                  ? "EXPIRED"
-
-                  : formatTimer(timerSeconds)}
-
+              <div className="technician-job-assignment-summary-cell">
+                <span className="technician-job-assignment-icon">
+                  <Clock size={19} />
                 </span>
-
-                <span
-
-                  style={{
-
-                    fontSize: "12px",
-
-                    fontWeight: 700,
-
-                    color: "#047857",
-
-                    letterSpacing: "0.06em",
-
-                  }}
-
-                >
-
-                  REMAINING
-
+                <div className="technician-job-assignment-summary-content">
+                  <span className="technician-job-assignment-eyebrow">
+                    TIME REMAINING
+                  </span>
+                  <div
+                    className="technician-job-assignment-summary-value"
+                    data-testid="assignment-countdown"
+                  >
+                    {legacyTimerSeconds <= 0
+                      ? "EXPIRED"
+                      : formatAcceptanceCountdown(legacyTimerSeconds)}
+                  </div>
+                  {legacyTimerSeconds > 0 && (
+                    <span className="technician-job-assignment-summary-note">
+                      REMAINING
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="technician-job-assignment-summary-cell">
+                <span className="technician-job-assignment-icon">
+                  <Navigation size={19} />
                 </span>
-
+                <div className="technician-job-assignment-summary-content">
+                  <span className="technician-job-assignment-eyebrow">
+                    DISTANCE TO CUSTOMER
+                  </span>
+                  <div
+                    className="technician-job-assignment-summary-value"
+                    data-testid="assignment-top-distance"
+                    aria-live="polite"
+                  >
+                    {assignmentDistanceDisplay}
+                  </div>
+                </div>
               </div>
+            </section>
 
-            </div>
+            <section className="technician-job-assignment-columns">
+              <div className="technician-job-assignment-customer-stack">
+                <article className="technician-job-assignment-info-card">
+                  <span className="technician-job-assignment-info-icon">
+                    <User size={17} />
+                  </span>
+                  <div className="technician-job-assignment-info-content">
+                    <span className="technician-job-assignment-eyebrow">
+                      CUSTOMER
+                    </span>
+                    <div className="technician-job-assignment-info-value">
+                      {assignedPopupJob.customer_name || "N/A"}
+                    </div>
+                  </div>
+                </article>
+                <article className="technician-job-assignment-info-card">
+                  <span className="technician-job-assignment-info-icon is-blue">
+                    <Phone size={16} />
+                  </span>
+                  <div className="technician-job-assignment-info-content">
+                    <span className="technician-job-assignment-eyebrow">
+                      CONTACT
+                    </span>
+                    <div className="technician-job-assignment-info-value">
+                      {assignedPopupJob.contact_number || "N/A"}
+                    </div>
+                  </div>
+                </article>
+                <article className="technician-job-assignment-info-card">
+                  <span className="technician-job-assignment-info-icon">
+                    <CalendarDays size={16} />
+                  </span>
+                  <div className="technician-job-assignment-info-content">
+                    <span className="technician-job-assignment-eyebrow">
+                      SCHEDULE
+                    </span>
+                    <div className="technician-job-assignment-info-value">
+                      {formatSchedule(assignedPopupJob)}
+                    </div>
+                  </div>
+                </article>
+              </div>
+              <article className="technician-job-assignment-info-card technician-job-assignment-location-card">
+                <span className="technician-job-assignment-info-icon is-green">
+                  <MapPin size={17} />
+                </span>
+                <div className="technician-job-assignment-info-content">
+                  <span className="technician-job-assignment-eyebrow">
+                    LOCATION
+                  </span>
+                  <div className="technician-job-assignment-info-value">
+                    {assignedPopupJob.site_address ||
+                      assignedPopupJob.location ||
+                      "N/A"}
+                  </div>
+                </div>
+              </article>
+            </section>
 
-            <div
-
-              style={{
-
-                display: "grid",
-
-                gridTemplateColumns: "1fr 1fr",
-
-                gap: "16px",
-
-                marginBottom: "18px",
-
-              }}
-
+            <section
+              className="technician-job-assignment-distance"
+              aria-live="polite"
             >
-
-              <div>
-
-                <div style={s.label}>CUSTOMER</div>
-
-                <div
-
-                  style={{
-
-                    display: "flex",
-
-                    alignItems: "center",
-
-                    gap: "6px",
-
-                    fontSize: "14px",
-
-                    fontWeight: 600,
-
-                    color: "#1F2933",
-
-                  }}
-
-                >
-
-                  <User size={15} color="#6B7280" />
-
-                  {assignedPopupJob.customer_name || "N/A"}
-
-                </div>
-
+              <div className="technician-job-assignment-distance-label">
+                <span className="technician-job-assignment-icon">
+                  <Navigation size={18} />
+                </span>
+                <span>Current location to customer</span>
               </div>
-
-              <div>
-
-                <div style={s.label}>CONTACT</div>
-
-                <div
-
-                  style={{
-
-                    display: "flex",
-
-                    alignItems: "center",
-
-                    gap: "6px",
-
-                    fontSize: "14px",
-
-                    fontWeight: 600,
-
-                    color: "#2563EB",
-
-                  }}
-
-                >
-
-                  <Phone size={15} color="#2563EB" />
-
-                  {assignedPopupJob.contact_number || "N/A"}
-
-                </div>
-
-              </div>
-
-              <div>
-
-                <div style={s.label}>SCHEDULE</div>
-
-                <div
-
-                  style={{
-
-                    display: "flex",
-
-                    alignItems: "center",
-
-                    gap: "6px",
-
-                    fontSize: "14px",
-
-                    fontWeight: 600,
-
-                    color: "#4B5563",
-
-                  }}
-
-                >
-
-                  <Clock size={15} color="#4B5563" />
-
-                  {formatSchedule(assignedPopupJob)}
-
-                </div>
-
-              </div>
-
-              <div>
-
-                <div style={s.label}>LOCATION</div>
-
-                <div
-
-                  style={{
-
-                    display: "flex",
-
-                    alignItems: "center",
-
-                    gap: "6px",
-
-                    fontSize: "14px",
-
-                    fontWeight: 600,
-
-                    color: "#4B5563",
-
-                  }}
-
-                >
-
-                  <MapPin size={15} color="#4B5563" />
-
-                  {assignedPopupJob.location || "N/A"}
-
-                </div>
-
-              </div>
-
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setMessageJobId(Number(assignedPopupJob.id))}
-              style={{ width: "100%", marginBottom: "14px", padding: "10px 12px", border: 0, borderRadius: "9px", background: "#156B5B", color: "#FFFFFF", fontSize: "13px", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", cursor: "pointer" }}
-            >
-              <MessageSquare size={16} /> Message Customer
-            </button>
-
-            <div
-
-              style={{
-
-                background: "#F9FAFB",
-
-                borderRadius: "10px",
-
-                padding: "12px 14px",
-
-                marginBottom: "20px",
-
-                border: "1px solid #F3F4F6",
-
-              }}
-
-            >
-
-              <div
-
-                style={{
-
-                  fontSize: "14px",
-
-                  fontWeight: 700,
-
-                  color: "#1F2933",
-
-                  marginBottom: "6px",
-
-                }}
-
+              <strong
+                className="technician-job-assignment-distance-value"
+                data-testid="assignment-distance-summary"
               >
+                {assignmentDistanceDisplay}
+              </strong>
+            </section>
 
-                {assignedPopupJob.service_type || "Service Request"}
-
-              </div>
-
-              {assignedPopupJob.issue_description && (
-
-                <div
-
-                  style={{
-
-                    fontSize: "13px",
-
-                    color: "#4B5563",
-
-                    lineHeight: 1.5,
-
-                  }}
-
-                >
-
-                  {assignedPopupJob.issue_description}
-
+            <section className="technician-job-assignment-service">
+              <div className="technician-job-assignment-service-heading">
+                <span className="technician-job-assignment-info-icon">
+                  <Wrench size={17} />
+                </span>
+                <div>
+                  <span className="technician-job-assignment-eyebrow">
+                    SERVICE TYPE
+                  </span>
+                  <div className="technician-job-assignment-service-name">
+                    {assignedPopupJob.service_type || "Service Request"}
+                  </div>
                 </div>
+              </div>
+              <p className="technician-job-assignment-service-description">
+                {assignedPopupJob.issue_description ||
+                  "No additional service details provided."}
+              </p>
+            </section>
 
-              )}
-
-            </div>
-
-            <div style={{ display: "flex", gap: "12px", marginTop: "12px" }}>
+            <div className="technician-job-assignment-actions">
 
               <button
 
@@ -2086,47 +2355,11 @@ useEffect(() => {
 
                   actionLoading === assignedPopupJob.id ||
 
-                  timerSeconds <= 0
+                  legacyTimerSeconds <= 0
 
                 }
 
-                style={{
-
-                  flex: 1,
-
-                  height: "46px",
-
-                  background: "#059669",
-
-                  color: "#fff",
-
-                  border: "none",
-
-                  borderRadius: "12px",
-
-                  fontSize: "15px",
-
-                  fontWeight: 700,
-
-                  cursor:
-
-                    actionLoading === assignedPopupJob.id
-
-                      ? "not-allowed"
-
-                      : "pointer",
-
-                  display: "flex",
-
-                  alignItems: "center",
-
-                  justifyContent: "center",
-
-                  gap: "8px",
-
-                  opacity: actionLoading === assignedPopupJob.id ? 0.6 : 1,
-
-                }}
+                className="technician-job-assignment-action is-accept"
 
               >
 
@@ -2148,43 +2381,7 @@ useEffect(() => {
 
                 disabled={actionLoading === assignedPopupJob.id}
 
-                style={{
-
-                  flex: 1,
-
-                  height: "46px",
-
-                  background: "#EF4444",
-
-                  color: "#fff",
-
-                  border: "none",
-
-                  borderRadius: "12px",
-
-                  fontSize: "15px",
-
-                  fontWeight: 700,
-
-                  cursor:
-
-                    actionLoading === assignedPopupJob.id
-
-                      ? "not-allowed"
-
-                      : "pointer",
-
-                  display: "flex",
-
-                  alignItems: "center",
-
-                  justifyContent: "center",
-
-                  gap: "8px",
-
-                  opacity: actionLoading === assignedPopupJob.id ? 0.6 : 1,
-
-                }}
+                className="technician-job-assignment-action is-reject"
 
               >
 
@@ -2360,9 +2557,15 @@ useEffect(() => {
 
           isOpen={!!completeModal}
 
-          onClose={() => setCompleteModal(null)}
+          paymentFlow
 
-          onSuccess={handleCompletionSuccess}
+          onClose={() => {
+            setCompleteModal(null);
+            setCustomerSignatureModal(null);
+            setPendingClosureData(null);
+          }}
+
+          onSuccess={handlePaymentSubmitted}
 
         />
 
@@ -2376,19 +2579,9 @@ useEffect(() => {
 
           onClose={() => setCustomerSignatureModal(null)}
 
-          onSuccess={() => {
+          captureOnly
 
-            setCustomerSignatureModal(null);
-
-            void loadJobs();
-
-            window.dispatchEvent(
-
-              new CustomEvent("technician-dashboard-refresh"),
-
-            );
-
-          }}
+          onCapture={handleSignatureAndComplete}
 
         />
 

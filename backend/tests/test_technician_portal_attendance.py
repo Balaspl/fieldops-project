@@ -1,5 +1,7 @@
 import asyncio
 import inspect
+from datetime import datetime, timezone, timedelta
+from types import SimpleNamespace
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException
@@ -9,7 +11,10 @@ from app.auth.dependencies import AuthenticatedUser
 from app.auth.rbac import Permission, UserRole
 from app.models import Technician, TechnicianProfile
 from app.routes.technician_portal import (
+    _build_technician_performance_report,
     _get_tech_for_user,
+    _gps_distance_km,
+    _performance_period_bounds,
     update_my_technician_status,
 )
 from app.schemas import TechnicianAvailabilityUpdate
@@ -456,6 +461,7 @@ class Q:
 class DB:
     def __init__(self, *queries, commit_error=False):
         self._queries = list(queries)
+        self.queried_models = []
         self.commit_error = commit_error
         self.added = []
         self.commit_count = 0
@@ -463,6 +469,7 @@ class DB:
         self.refresh_count = 0
 
     def query(self, *args):
+        self.queried_models.append(args)
         return self._queries.pop(0) if self._queries else Q()
 
     def add(self, obj):
@@ -799,9 +806,61 @@ def test_get_assigned_jobs_both_paths(monkeypatch):
 
 
 def test_get_job_history(monkeypatch):
-    q = Q(all_=[job(status="COMPLETED")])
-    monkeypatch.setattr(tp, "_get_assigned_jobs_query", lambda *a: q)
-    assert asyncio.run(tp.get_job_history(current_user=u(), db=DB()))
+    completed_job = job(status="COMPLETED")
+    completed_job.completed_at = datetime.now(timezone.utc)
+    rejected_job = job(status="QUEUED", job_id=2)
+    rejection = SimpleNamespace(
+        created_at=datetime.now(timezone.utc),
+        reason="Technician unavailable",
+    )
+    monkeypatch.setattr(tp, "_get_tech_for_user", lambda *a: tech())
+
+    history = asyncio.run(
+        tp.get_job_history(
+            current_user=u(),
+            db=DB(
+                Q(all_=[completed_job]),
+                Q(all_=[(rejected_job, rejection)]),
+            ),
+        )
+    )
+
+    assert {entry.status for entry in history} == {
+        "REJECTED_BY_TECHNICIAN",
+        "COMPLETED",
+    }
+    rejected_entry = next(
+        entry
+        for entry in history
+        if entry.status == "REJECTED_BY_TECHNICIAN"
+    )
+    assert rejected_entry.rejected_at == rejection.created_at
+    assert rejected_entry.rejection_reason == "Technician unavailable"
+
+
+def test_get_job_history_keeps_completed_job_out_of_rejected_events(monkeypatch):
+    completed_job = job(status="COMPLETED")
+    completed_job.completed_at = datetime.now(timezone.utc)
+    completed_job.rejection_reason = "Previously declined"
+    completed_job.rejected_at = datetime.now(timezone.utc)
+    attempt = SimpleNamespace(
+        created_at=completed_job.rejected_at,
+        reason="Previously declined",
+    )
+    monkeypatch.setattr(tp, "_get_tech_for_user", lambda *a: tech())
+
+    history = asyncio.run(
+        tp.get_job_history(
+            current_user=u(),
+            db=DB(
+                Q(all_=[completed_job]),
+                Q(all_=[(completed_job, attempt)]),
+            ),
+        )
+    )
+
+    assert len(history) == 1
+    assert history[0].status == "COMPLETED"
 
 
 def test_get_job_detail_paths():
@@ -1216,10 +1275,186 @@ def test_dashboard_paths(monkeypatch):
     monkeypatch.setattr(tp, "TechnicianDashboardResponse", Capture)
     result = asyncio.run(tp.get_technician_dashboard(current_user=u(), db=DB(Q(first=None), Q(first=profile(completed=False)))))
     assert result["profile_completed"] is False
-    result = asyncio.run(tp.get_technician_dashboard(current_user=u(), db=DB(Q(first=tech(status="BUSY")), Q(first=profile()), Q(counts=[7, 4, 2, 1, 6]), Q(counts=[3]))))
+    db = DB(
+        Q(first=tech(status="BUSY")),
+        Q(first=profile()),
+        Q(counts=[7, 4, 2, 1, 6]),
+        Q(counts=[3]),
+    )
+    result = asyncio.run(
+        tp.get_technician_dashboard(current_user=u(), db=db)
+    )
     assert result["total_assigned"] == 7
     assert result["active_jobs"] == 4
     assert result["completed_today"] == 2
     assert result["pending_acceptance"] == 1
     assert result["total_completed"] == 6
     assert result["rejected_jobs"] == 3
+    assert db.queried_models[-1] == (tp.RedispatchAttempt,)
+
+
+def test_performance_period_bounds_are_calendar_aligned():
+    now = datetime(2025, 5, 7, 12, tzinfo=timezone.utc)
+    week_start, week_end = _performance_period_bounds("week", now)
+    month_start, month_end = _performance_period_bounds("month", now)
+
+    assert week_start == datetime(2025, 5, 5, tzinfo=timezone.utc)
+    assert week_end == datetime(2025, 5, 12, tzinfo=timezone.utc)
+    assert month_start == datetime(2025, 5, 1, tzinfo=timezone.utc)
+    assert month_end == datetime(2025, 6, 1, tzinfo=timezone.utc)
+
+
+def test_performance_distance_uses_valid_gps_segments_per_job():
+    start = datetime(2025, 5, 5, tzinfo=timezone.utc)
+    pings = [
+        SimpleNamespace(
+            job_id="1", latitude=0, longitude=0, accuracy=10, timestamp=start
+        ),
+        SimpleNamespace(
+            job_id="1",
+            latitude=0,
+            longitude=0.001,
+            accuracy=10,
+            timestamp=start + timedelta(minutes=4),
+        ),
+        SimpleNamespace(
+            job_id="1",
+            latitude=0,
+            longitude=1,
+            accuracy=200,
+            timestamp=start + timedelta(minutes=5),
+        ),
+        SimpleNamespace(
+            job_id="2",
+            latitude=0,
+            longitude=1,
+            accuracy=10,
+            timestamp=start + timedelta(minutes=6),
+        ),
+        SimpleNamespace(
+            job_id="2",
+            latitude=0,
+            longitude=1.001,
+            accuracy=10,
+            timestamp=start + timedelta(minutes=10),
+        ),
+        SimpleNamespace(
+            job_id="2",
+            latitude=91,
+            longitude=1.002,
+            accuracy=10,
+            timestamp=start + timedelta(minutes=11),
+        ),
+    ]
+
+    assert _gps_distance_km(pings) == pytest.approx(0.2224, abs=0.002)
+
+
+def test_performance_report_aggregates_real_completion_feedback_and_gps_data():
+    completed_at = datetime(2025, 5, 6, 11, tzinfo=timezone.utc)
+    completed_job = SimpleNamespace(
+        id=11,
+        status="COMPLETED",
+        completed_at=completed_at,
+        work_started_at=completed_at - timedelta(hours=1),
+        on_site_at=None,
+        en_route_at=None,
+        assigned_at=None,
+    )
+    active_job = SimpleNamespace(
+        id=12,
+        status="IN_PROGRESS",
+        completed_at=None,
+        work_started_at=None,
+        on_site_at=None,
+        en_route_at=None,
+        assigned_at=None,
+    )
+    start = datetime(2025, 5, 6, 10, tzinfo=timezone.utc)
+    pings = [
+        SimpleNamespace(
+            job_id="11", latitude=0, longitude=0, accuracy=10, timestamp=start
+        ),
+        SimpleNamespace(
+            job_id="11",
+            latitude=0,
+            longitude=0.001,
+            accuracy=10,
+            timestamp=start + timedelta(minutes=4),
+        ),
+    ]
+
+    class Query:
+        def __init__(self, results):
+            self.results = list(results)
+
+        def filter(self, *args):
+            return self
+
+        def join(self, *args):
+            return self
+
+        def order_by(self, *args):
+            return self
+
+        def all(self):
+            return self.results.pop(0) if self.results and isinstance(self.results[0], list) else list(self.results)
+
+    class ReportDB:
+        def query(self, model):
+            if model is tp.Job:
+                return Query([[completed_job], [completed_job, active_job]])
+            if model is tp.CustomerFeedback.rating:
+                return Query([(4,), (5,)])
+            if model is tp.GPSPing:
+                return Query(pings)
+            raise AssertionError(f"Unexpected model query: {model}")
+
+    report = _build_technician_performance_report(
+        ReportDB(),
+        SimpleNamespace(technician_id=7, tech_id="tech-7", tenant_id="tenant-1"),
+        "week",
+        now=datetime(2025, 5, 7, 12, tzinfo=timezone.utc),
+    )
+
+    assert report["period_completed_jobs"] == 1
+    assert report["average_completion_minutes"] == 60
+    assert report["customer_rating"] == 4.5
+    assert report["total_distance_km"] == 0.1
+    assert report["completion_trend"][1] == {"label": "Tue", "count": 1}
+    assert report["status_distribution"] == [
+        {"status": "completed", "count": 1},
+        {"status": "active", "count": 1},
+    ]
+
+
+def test_performance_report_endpoint_returns_requested_period(monkeypatch):
+    monkeypatch.setattr(
+        tp,
+        "_get_tech_for_user",
+        lambda db, user_id, tenant_id: SimpleNamespace(technician_id=7),
+    )
+    monkeypatch.setattr(
+        tp,
+        "_build_technician_performance_report",
+        lambda db, technician, period: {
+            "performance_period": period,
+            "period_completed_jobs": 3,
+            "average_completion_minutes": 45,
+            "customer_rating": 4.5,
+            "total_distance_km": 10.2,
+            "completion_trend": [],
+            "status_distribution": [],
+        },
+    )
+
+    response = asyncio.run(
+        tp.get_technician_performance_report(
+            period="month",
+            current_user=u(),
+            db=DB(),
+        )
+    )
+
+    assert response.performance_period == "month"
+    assert response.period_completed_jobs == 3
