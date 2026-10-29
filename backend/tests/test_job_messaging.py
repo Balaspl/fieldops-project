@@ -87,6 +87,29 @@ def test_history_is_separate_per_job_and_offline_unread_is_confirmed(messaging_d
     assert job_messaging.get_unread_count(first.id, customer, messaging_db)["unread_count"] == 0
 
 
+def test_customer_messaging_waits_until_assigned_technician_accepts(messaging_db):
+    assigned = _seed(messaging_db, job_status="ASSIGNED", assigned=True, technician_id=11)
+    customer = _user("customer-1", "customer-tenant", "customer")
+
+    waiting = asyncio.run(job_messaging.get_job_messages(assigned.id, customer, messaging_db))
+    assert waiting["can_send"] is False
+    assert "accepts the job" in waiting["read_only_reason"].lower()
+    with pytest.raises(HTTPException) as not_accepted:
+        asyncio.run(job_messaging.send_job_message(
+            assigned.id, job_messaging.MessageCreate(body="Hello"), customer, messaging_db
+        ))
+    assert not_accepted.value.status_code == 409
+    assert messaging_db.query(JobMessage).filter(JobMessage.job_id == assigned.id).count() == 0
+
+    accepted = _seed(messaging_db, job_status="ACCEPTED", assigned=True, technician_id=11)
+    ready = asyncio.run(job_messaging.get_job_messages(accepted.id, customer, messaging_db))
+    assert ready["can_send"] is True
+    sent = asyncio.run(job_messaging.send_job_message(
+        accepted.id, job_messaging.MessageCreate(body="Hello"), customer, messaging_db
+    ))
+    assert sent["body"] == "Hello"
+
+
 def test_unassigned_job_does_not_create_chat_and_terminal_jobs_are_read_only(messaging_db):
     queued = _seed(messaging_db, job_status="QUEUED", assigned=False, technician_id=11)
     customer = _user("customer-1", "customer-tenant", "customer")

@@ -53,7 +53,7 @@ ACTIVE_STATUSES = {"ASSIGNED", "EN_ROUTE", "ON_SITE", "IN_PROGRESS", "ACTIVE"}
 class TechnicianAvailabilityLocationRequest(BaseModel):
     latitude: float
     longitude: float
-    accuracy: float
+    accuracy: Optional[float] = None
     altitude: Optional[float] = None
     timestamp: datetime
 
@@ -1210,15 +1210,13 @@ async def gps_ping(
             )
 
         # Server-side interval gating.
-        # Normal pings remain at the historical
-        # 30-second cadence.
-        # Explicit live EN_ROUTE tracking may use 5 seconds.
+        # Normal pings retain the historical 30-second cadence.
+        # Explicit live EN_ROUTE tracking accepts GPS updates every 2 seconds.
         interval_seconds = (
-            5
+            2
             if (
                 live_tracking
-                and job_status_upper
-                == "EN_ROUTE"
+                and job_status_upper == "EN_ROUTE"
             )
             else 30
         )
@@ -2480,7 +2478,7 @@ async def update_technician_availability_location(
             detail="Invalid longitude",
         )
 
-    if not math.isfinite(payload.accuracy) or payload.accuracy <= 0:
+    if payload.accuracy is None or not math.isfinite(payload.accuracy) or payload.accuracy <= 0:
         logger.warning("GPS availability location rejected", extra={"event": "gps_availability_rejected", "reason": "invalid_accuracy"})
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -2549,6 +2547,18 @@ async def update_technician_availability_location(
             detail="Location could not be stored; retry shortly",
             headers={"Retry-After": "5"},
         )
+
+    # Notify the dispatcher that this technician's pre-assignment location
+    # changed. This signal is best-effort; the stored location remains valid
+    # even if the notification write fails.
+    try:
+        redis_client.set(
+            "dispatch:availability_changed",
+            json.dumps({"tenant_id": tenant_id, "technician_id": technician_id, "timestamp": iso_utc(now)}),
+            ex=30,
+        )
+    except Exception:
+        logger.warning("Could not publish availability-change signal", extra={"tenant_id": tenant_id})
 
     return {
         "status": "stored",

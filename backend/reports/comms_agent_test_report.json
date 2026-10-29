@@ -1,6 +1,6 @@
 {
-  "total": 291,
-  "passed": 291,
+  "total": 307,
+  "passed": 307,
   "failed": 0,
   "skipped": 0,
   "tests": [
@@ -905,6 +905,22 @@
       "outcome": "passed"
     },
     {
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_dispatcher_uses_planning_order_without_rechecking_eligibility",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_job_154_rejection_or_timeout_offers_rank_two_once[TECHNICIAN_REJECTED]",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_job_154_rejection_or_timeout_offers_rank_two_once[TECHNICIAN_TIMEOUT]",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_restart_recovery_advances_persisted_batch_without_duplicate_offer",
+      "outcome": "passed"
+    },
+    {
       "nodeid": "tests/agents/test_dispatcher_graph.py::test_dispatcher_reject_timeout_reject_then_replans_and_accepts",
       "outcome": "passed"
     },
@@ -933,7 +949,7 @@
       "outcome": "passed"
     },
     {
-      "nodeid": "tests/agents/test_dispatcher_graph.py::test_replanning_limits_batch_to_top_three",
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_replanning_preserves_entire_ranked_batch",
       "outcome": "passed"
     },
     {
@@ -950,6 +966,54 @@
     },
     {
       "nodeid": "tests/agents/test_dispatcher_graph.py::test_invalid_event_is_rejected",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_runtime_handoff.py::test_offer_job_id_normalizes_graph_and_legacy_state",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_runtime_handoff.py::test_offer_missing_job_id_fails_with_available_keys",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_runtime_handoff.py::test_terminal_jobs_are_never_retreated_as_dispatchable[CANCELLED]",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_runtime_handoff.py::test_terminal_jobs_are_never_retreated_as_dispatchable[CANCELED]",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_runtime_handoff.py::test_terminal_jobs_are_never_retreated_as_dispatchable[COMPLETED]",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_runtime_handoff.py::test_terminal_jobs_are_never_retreated_as_dispatchable[CLOSED]",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_runtime_handoff.py::test_unassigned_pending_jobs_remain_dispatchable[CREATED]",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_runtime_handoff.py::test_unassigned_pending_jobs_remain_dispatchable[QUEUED]",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_runtime_handoff.py::test_unassigned_pending_jobs_remain_dispatchable[UNASSIGNED]",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_runtime_handoff.py::test_runtime_hands_planning_ranking_to_dispatcher_without_replanning",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_runtime_handoff.py::test_offer_is_persisted_and_realtime_notification_is_sent",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_runtime_handoff.py::test_future_job_registers_dispatch_at_one_hour_before_visit",
       "outcome": "passed"
     },
     {

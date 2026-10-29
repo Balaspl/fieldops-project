@@ -13,6 +13,7 @@ import os
 import requests
 from io import BytesIO
 from datetime import datetime, timezone
+from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from fastapi.responses import StreamingResponse
@@ -21,6 +22,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from math import radians, sin, cos, asin, sqrt
 from typing import Optional
+from pydantic import BaseModel, Field
 from fastapi import BackgroundTasks
 from ..database import get_db
 from ..auth.dependencies import (
@@ -40,6 +42,7 @@ from ..models import (
     ServiceRequest,
     Organization,
     GPSPing,
+    JobAssignment,
     CustomerFeedback,
     CustomerSupportRequest,
     
@@ -243,14 +246,127 @@ def geocode_customer_location(address: str):
         return None
 
 
-def _latest_technician_ping(db: Session, job_id: int):
-    """Return the most recent GPS fix for a job, if one exists."""
-    return (
-        db.query(GPSPing)
-        .filter(GPSPing.job_id == str(job_id))
-        .order_by(GPSPing.timestamp.desc(), GPSPing.created_at.desc())
+def _latest_technician_ping(db: Session, job: Job):
+    """Return the newest GPS fix from the technician currently assigned to this job."""
+    if job.assigned_technician_id is None or not job.tenant_id:
+        return None
+
+    assigned_technician = (
+        db.query(Technician)
+        .filter(
+            Technician.technician_id == job.assigned_technician_id,
+            Technician.tenant_id == str(job.tenant_id),
+        )
         .first()
     )
+
+    if not assigned_technician or not assigned_technician.tech_id:
+        return None
+
+    return (
+        db.query(GPSPing)
+        .filter(
+            GPSPing.job_id == str(job.id),
+            GPSPing.tenant_id == str(assigned_technician.tenant_id),
+            GPSPing.technician_id == str(assigned_technician.tech_id),
+        )
+        .order_by(
+            GPSPing.timestamp.desc(),
+            GPSPing.created_at.desc(),
+        )
+        .first()
+    )
+
+
+def _customer_job_acceptance(db: Session, job: Job) -> tuple[bool, Optional[datetime]]:
+    """Return acceptance evidence for the job's currently assigned technician."""
+    if job.assigned_technician_id is None:
+        return False, None
+
+    query = db.query(JobAssignment).filter(
+        JobAssignment.job_id == job.id,
+        JobAssignment.technician_id == job.assigned_technician_id,
+        JobAssignment.status == "ACCEPTED",
+    )
+    if job.tenant_id:
+        query = query.filter(JobAssignment.tenant_id == job.tenant_id)
+
+    assignment = query.order_by(JobAssignment.responded_at.desc()).first()
+    if assignment is not None:
+        return True, assignment.responded_at
+
+    # Older jobs may not have a persisted JobAssignment row. Do not fabricate
+    # an acceptance timestamp; status is only a fallback for the boolean.
+    status = str(job.status or "").strip().upper().replace("-", "_").replace(" ", "_")
+    accepted_by_status = status in {
+        "ACCEPTED", "EN_ROUTE", "ENROUTE", "ON_SITE", "ONSITE",
+        "IN_PROGRESS", "COMPLETED", "CLOSED",
+    }
+    return accepted_by_status, None
+
+
+def _customer_distance_travelled_km(
+    db: Session,
+    job: Job,
+    technician: Optional[Technician],
+) -> Optional[float]:
+    """Sum recorded GPS segments between en-route and arrival, when data is usable."""
+    if (
+        not job.en_route_at
+        or technician is None
+        or not technician.tech_id
+        or not technician.tenant_id
+    ):
+        return None
+
+    query = db.query(GPSPing).filter(
+        GPSPing.job_id == str(job.id),
+        # GPS history is stored under the technician/provider tenant, which
+        # can differ from the originating customer's tenant.
+        GPSPing.tenant_id == str(technician.tenant_id),
+        GPSPing.technician_id == str(technician.tech_id),
+        GPSPing.timestamp >= job.en_route_at,
+    )
+    # Once the technician arrives, keep the journey distance fixed and exclude
+    # GPS movement around the service site. Some legacy jobs lack on_site_at;
+    # work_started_at/completed_at are safer fallback boundaries for those rows.
+    journey_end = job.on_site_at or job.work_started_at or job.completed_at
+    if journey_end is not None:
+        query = query.filter(GPSPing.timestamp <= journey_end)
+
+    pings = query.order_by(GPSPing.timestamp.asc(), GPSPing.created_at.asc()).all()
+    if len(pings) < 2:
+        return None
+
+    total_km = 0.0
+    accepted_segments = 0
+    previous = pings[0]
+    for current in pings[1:]:
+        # Avoid adding clearly low-quality coordinates to the displayed mileage.
+        if (previous.accuracy is not None and previous.accuracy > 150) or (
+            current.accuracy is not None and current.accuracy > 150
+        ):
+            previous = current
+            continue
+
+        elapsed_seconds = (current.timestamp - previous.timestamp).total_seconds()
+        if elapsed_seconds <= 0:
+            previous = current
+            continue
+
+        segment_km = haversine_km(
+            float(previous.latitude),
+            float(previous.longitude),
+            float(current.latitude),
+            float(current.longitude),
+        )
+        # Ignore implausible jumps (GPS glitches), rather than exaggerating travel.
+        if segment_km / (elapsed_seconds / 3600) <= 180:
+            total_km += segment_km
+            accepted_segments += 1
+        previous = current
+
+    return round(total_km, 1) if accepted_segments else None
 
 
 # ──────────────────────────────────────────────────
@@ -551,6 +667,8 @@ async def list_service_requests(
 ):
     """List customer's own service requests."""
 
+    handler_started = perf_counter()
+
     query = (
         db.query(ServiceRequest, Job.status.label("linked_job_status"))
         .outerjoin(
@@ -581,7 +699,9 @@ async def list_service_requests(
                 == status_filter.lower()
             )
 
+    query_started = perf_counter()
     rows = query.order_by(ServiceRequest.created_at.desc()).all()
+    query_elapsed_ms = (perf_counter() - query_started) * 1000
     requests = []
     for service_request, linked_job_status in rows:
         sr_status_str = str(service_request.status or "").strip().upper()
@@ -599,6 +719,13 @@ async def list_service_requests(
             service_request.status = job_status_str
 
         requests.append(service_request)
+
+    logger.warning(
+        "customer_service_requests_timing rows=%d query_ms=%.1f handler_ms=%.1f",
+        len(rows),
+        query_elapsed_ms,
+        (perf_counter() - handler_started) * 1000,
+    )
 
     return requests
 
@@ -870,7 +997,7 @@ async def create_service_request(
                 timezone.utc
             ).date()
         ),
-        preferred_service_time=DEFAULT_VISIT_TIME,
+        preferred_service_time=data.preferred_service_time or DEFAULT_VISIT_TIME,
         preferred_service_timezone=selected_timezone or DEFAULT_TIMEZONE,
         required_skill=req_skill,
         status="CREATED",
@@ -1146,12 +1273,19 @@ async def update_service_request(
 
     return sr
 
+class CustomerCancellationRequest(BaseModel):
+    reason: str = Field(
+        min_length=3,
+        max_length=500,
+        description="Reason provided by the customer for cancelling the service request.",
+    )
 
 @router.post(
     "/service-requests/{sr_id}/cancel"
 )
 async def cancel_service_request(
     sr_id: int,
+    data: CustomerCancellationRequest,
     request: Request,
     current_user: AuthenticatedUser = Depends(
         require_permission(Permission.CUSTOMERS_CREATE_REQUEST)
@@ -1206,7 +1340,13 @@ async def cancel_service_request(
     if sr.linked_job_id and not linked_job:
         raise HTTPException(status_code=404, detail="Linked job not found")
 
-    cancellation_reason = "Cancelled by customer"
+    cancellation_reason = data.reason.strip()
+
+    if len(cancellation_reason) < 3:
+        raise HTTPException(
+            status_code=400,
+            detail="Please provide a cancellation reason with at least 3 characters.",
+        )
     from ..services.job_status_machine import (
         InvalidTransitionError,
         PermissionDeniedError,
@@ -1781,10 +1921,14 @@ async def track_customer_jobs(
         tech_experience = None
         tech_certifications = None
         eta_payload = {}
+        technician_accepted, accepted_at = _customer_job_acceptance(db, job)
 
-        # Technician privacy: Only expose technician details AFTER the job is accepted
-        tech_accepted = str(job.status or "").upper() in {
-            "ACCEPTED", "EN_ROUTE", "ON_SITE", "IN_PROGRESS", "COMPLETED", "CLOSED"
+        # Do not expose personal technician details until the assigned
+        # technician has accepted, whether acceptance is recorded on the
+        # assignment row or the job's status field.
+        tech_accepted = technician_accepted or str(job.status or "").upper() in {
+            "ACCEPTED", "EN_ROUTE", "ENROUTE", "ON_SITE", "ONSITE",
+            "IN_PROGRESS", "COMPLETED", "CLOSED",
         }
 
         if tech_accepted and job.assigned_technician_id:
@@ -1836,7 +1980,11 @@ async def track_customer_jobs(
                         tech,
                     )
 
-        latest_ping = _latest_technician_ping(db, job.id)
+        latest_ping = _latest_technician_ping(db, job)
+        assigned_technician = technicians_by_id.get(job.assigned_technician_id)
+        distance_travelled_km = _customer_distance_travelled_km(
+            db, job, assigned_technician
+        )
         results.append(
             CustomerJobTrackingResponse(
                 id=job.id,
@@ -1855,6 +2003,14 @@ async def track_customer_jobs(
                 assigned_technician_skills=tech_skills,
                 assigned_technician_experience=tech_experience,
                 assigned_technician_certifications=tech_certifications,
+                technician_accepted=technician_accepted,
+                accepted_at=accepted_at,
+                assigned_at=job.assigned_at,
+                en_route_at=job.en_route_at,
+                distance_travelled_km=distance_travelled_km,
+                issue_description=job.issue_description,
+                preferred_service_date=job.preferred_service_date,
+                preferred_service_time=job.preferred_service_time,
                 **eta_payload,
                 technician_latitude=float(latest_ping.latitude) if latest_ping else None,
                 technician_longitude=float(latest_ping.longitude) if latest_ping else None,
@@ -1939,9 +2095,13 @@ async def get_customer_job_detail(
     tech_certifications = None
     eta_payload = {}
 
-    # Technician privacy: Only expose technician details AFTER the job is accepted
-    tech_accepted = str(job.status or "").upper() in {
-        "ACCEPTED", "EN_ROUTE", "ON_SITE", "IN_PROGRESS", "COMPLETED", "CLOSED"
+    technician_accepted, accepted_at = _customer_job_acceptance(db, job)
+
+    # Assignment response data is the authoritative acceptance signal when
+    # available; fall back to the persisted lifecycle status for older jobs.
+    tech_accepted = technician_accepted or str(job.status or "").upper() in {
+        "ACCEPTED", "EN_ROUTE", "ENROUTE", "ON_SITE", "ONSITE",
+        "IN_PROGRESS", "COMPLETED", "CLOSED",
     }
 
     if tech_accepted and job.assigned_technician_id:
@@ -2003,7 +2163,15 @@ async def get_customer_job_detail(
                         tech,
                     )
 
-    latest_ping = _latest_technician_ping(db, job.id)
+    latest_ping = _latest_technician_ping(db, job)
+    assigned_technician = None
+    if job.assigned_technician_id is not None:
+        assigned_technician = db.query(Technician).filter(
+            Technician.technician_id == job.assigned_technician_id,
+        ).first()
+    distance_travelled_km = _customer_distance_travelled_km(
+        db, job, assigned_technician
+    )
     return CustomerJobTrackingResponse(
         id=job.id,
         customer_name=job.customer_name,
@@ -2021,6 +2189,14 @@ async def get_customer_job_detail(
         assigned_technician_skills=tech_skills,
         assigned_technician_experience=tech_experience,
         assigned_technician_certifications=tech_certifications,
+        technician_accepted=technician_accepted,
+        accepted_at=accepted_at,
+        assigned_at=job.assigned_at,
+        en_route_at=job.en_route_at,
+        distance_travelled_km=distance_travelled_km,
+        issue_description=job.issue_description,
+        preferred_service_date=job.preferred_service_date,
+        preferred_service_time=job.preferred_service_time,
         **eta_payload,
         technician_latitude=float(latest_ping.latitude) if latest_ping else None,
         technician_longitude=float(latest_ping.longitude) if latest_ping else None,

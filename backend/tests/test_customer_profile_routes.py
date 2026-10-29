@@ -365,6 +365,11 @@ def make_job(
     tenant_id="provider-tenant",
     customer_id="customer-1",
     created_at=NOW,
+    assigned_at=None,
+    en_route_at=None,
+    issue_description=None,
+    preferred_service_date=None,
+    preferred_service_time=None,
     completed_at=None,
     on_site_at=None,
     work_started_at=None,
@@ -384,6 +389,11 @@ def make_job(
         customer_id=customer_id,
         customer_tenant_id="tenant-1",
         created_at=created_at,
+        assigned_at=assigned_at,
+        en_route_at=en_route_at,
+        issue_description=issue_description,
+        preferred_service_date=preferred_service_date,
+        preferred_service_time=preferred_service_time,
         completed_at=completed_at,
         on_site_at=on_site_at,
         work_started_at=work_started_at,
@@ -1077,21 +1087,35 @@ def test_geocode_photon_error(monkeypatch):
 def test_latest_technician_ping():
     ping = make_ping()
 
+    job = make_job(
+        job_id=101,
+        assigned_technician_id=10,
+        tenant_id="provider-tenant",
+    )
+
+    technician = make_technician(
+        technician_id=10,
+        tenant_id="provider-tenant",
+        tech_id="tech-user-1",
+    )
+
     db = FakeDB(
         {
+            Technician: FakeQuery(
+                first_result=technician,
+            ),
             customer_portal.GPSPing: FakeQuery(
-                first_result=ping
-            )
+                first_result=ping,
+            ),
         }
     )
 
     result = customer_portal._latest_technician_ping(
         db,
-        101,
+        job,
     )
 
     assert result is ping
-
 
 # ============================================================
 # PASSWORD CHANGE
@@ -2141,6 +2165,9 @@ def test_cancel_service_request_not_found():
         asyncio.run(
             customer_portal.cancel_service_request(
                 sr_id=1,
+                data=customer_portal.CustomerCancellationRequest(
+                    reason="Cancelled by customer"
+                ),
                 request=None,
                 current_user=customer(),
                 db=db,
@@ -2168,6 +2195,9 @@ def test_cancel_service_request_rejects_non_pending():
         asyncio.run(
             customer_portal.cancel_service_request(
                 sr_id=1,
+                data=customer_portal.CustomerCancellationRequest(
+                    reason="Cancelled by customer"
+                ),
                 request=None,
                 current_user=customer(),
                 db=db,
@@ -2197,6 +2227,9 @@ def test_cancel_service_request_missing_linked_job():
         asyncio.run(
             customer_portal.cancel_service_request(
                 sr_id=1,
+                data=customer_portal.CustomerCancellationRequest(
+                    reason="Cancelled by customer"
+                ),
                 request=None,
                 current_user=customer(),
                 db=db,
@@ -2256,6 +2289,9 @@ def test_cancel_service_request_success_with_linked_job(
     result = asyncio.run(
         customer_portal.cancel_service_request(
             sr_id=1,
+            data=customer_portal.CustomerCancellationRequest(
+                reason="Cancelled by customer"
+            ),
             request=None,
             current_user=customer(),
             db=db,
@@ -2298,6 +2334,9 @@ def test_cancel_service_request_success_without_linked_job(
     result = asyncio.run(
         customer_portal.cancel_service_request(
             sr_id=1,
+            data=customer_portal.CustomerCancellationRequest(
+                reason="Cancelled by customer"
+            ),
             request=None,
             current_user=customer(),
             db=db,
@@ -2411,12 +2450,14 @@ def test_cancel_service_request_transition_exceptions(
             asyncio.run(
                 customer_portal.cancel_service_request(
                     sr_id=1,
+                    data=customer_portal.CustomerCancellationRequest(
+                        reason="Cancelled by customer"
+                    ),
                     request=None,
                     current_user=customer(),
                     db=db,
                 )
             )
-
         assert db.rollback_count == 1
         return
 
@@ -2426,6 +2467,9 @@ def test_cancel_service_request_transition_exceptions(
         asyncio.run(
             customer_portal.cancel_service_request(
                 sr_id=1,
+                data=customer_portal.CustomerCancellationRequest(
+                    reason="Cancelled by customer"
+                ),
                 request=None,
                 current_user=customer(),
                 db=db,
@@ -2515,12 +2559,20 @@ def test_track_customer_jobs_full_path():
                     job_two,
                 ]
             ),
-            Technician: FakeQuery(
-                all_result=[
-                    tech_one,
-                    tech_two,
-                ]
-            ),
+            Technician: [
+                FakeQuery(
+                    all_result=[
+                        tech_one,
+                        tech_two,
+                    ]
+                ),
+                FakeQuery(
+                    first_result=tech_one,
+                ),
+                FakeQuery(
+                    first_result=tech_two,
+                ),
+            ],
             TechnicianProfile: FakeQuery(
                 all_result=[
                     profile,
@@ -2687,9 +2739,17 @@ def test_get_customer_job_detail_with_technician_and_profile():
             Job: FakeQuery(
                 first_result=job
             ),
-            Technician: FakeQuery(
-                first_result=tech
-            ),
+            Technician: [
+                FakeQuery(
+                    first_result=tech,
+                ),
+                FakeQuery(
+                    first_result=tech,
+                ),
+                FakeQuery(
+                    first_result=tech,
+                ),
+            ],
             TechnicianProfile: FakeQuery(
                 first_result=profile
             ),

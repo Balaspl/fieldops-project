@@ -258,6 +258,17 @@ async def force_assign(
             detail="Technician not found",
         )
 
+    # Do not force-assign jobs to unavailable technicians.
+    technician_status = (
+        tech.technician_status or ""
+    ).strip().upper()
+
+    if technician_status != "AVAILABLE":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Technician is unavailable for assignment",
+        )
+
     if not tech.tech_id:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

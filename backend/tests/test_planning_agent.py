@@ -15,8 +15,8 @@ from __future__ import annotations
 
 
 import asyncio
-
 import threading
+from datetime import datetime, timezone
 
 from typing import Any, Dict, List
 
@@ -69,11 +69,13 @@ from app.services.ai.FieldOpsAI.schemas.agent_result import AgentResult, AgentRe
 
 
 class TechnicianRecord(dict):
-    """Test double supporting both ORM-style attributes and mapping access.
+    """Test double supporting ORM-style attributes and mapping access."""
 
-    PlanningService may read technician fields as attributes, while the AI
-    payload path may consume the same fields as dictionary keys.
-    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # A planning candidate must have a fresh heartbeat.
+        self.setdefault("last_ping", datetime.now(timezone.utc))
 
     def __getattr__(self, name: str) -> Any:
         try:
@@ -84,6 +86,11 @@ class TechnicianRecord(dict):
     def __setattr__(self, name: str, value: Any) -> None:
         self[name] = value
 
+def configure_planning_test_db(db) -> None:
+    """Provide the active provider organization required for planning."""
+    db.query.return_value.filter.return_value.all.return_value = [
+        ("tenant-123", 13.0827, 80.2707),
+    ]
 
 class MockOrchestrator:
 
@@ -682,22 +689,15 @@ async def test_compatibility_plan_rejects_use_from_active_event_loop(
 
 
 class FakeJob:
-
     def __init__(self, id: int, tenant_id: str, customer_name: str, location: str, priority: str, required_skill: str) -> None:
-
         self.id = id
-
         self.tenant_id = tenant_id
-
         self.customer_name = customer_name
-
         self.location = location
-
         self.priority = priority
-
         self.required_skill = required_skill
-
-
+        self.service_type = required_skill
+        self.issue_description = ""
 
 
 
@@ -712,6 +712,7 @@ async def test_planning_service_plan_async_success(
 ) -> None:
 
     db = MagicMock()
+    configure_planning_test_db(db)
 
     mock_job_repo = MagicMock()
 
@@ -807,6 +808,7 @@ async def test_planning_service_plan_async_failure_guarantees_exactly_one_call(
 ) -> None:
 
     db = MagicMock()
+    configure_planning_test_db(db)
 
     mock_job_repo = MagicMock()
 
@@ -908,6 +910,7 @@ async def test_planning_service_plan_active_loop_rejection() -> None:
 async def test_planning_service_rejects_missing_successful_output(valid_planning_config: AgentConfig) -> None:
 
     db = MagicMock()
+    configure_planning_test_db(db)
 
     mock_job_repo = MagicMock()
 
@@ -1007,6 +1010,7 @@ async def test_planning_service_rejects_missing_successful_output(valid_planning
 async def test_planning_service_rejects_wrong_successful_output_type(valid_planning_config: AgentConfig) -> None:
 
     db = MagicMock()
+    configure_planning_test_db(db)
 
     mock_job_repo = MagicMock()
 
@@ -1112,6 +1116,7 @@ async def test_planning_service_with_falsey_pool(
 ) -> None:
 
     db = MagicMock()
+    configure_planning_test_db(db)
 
     mock_job_repo = MagicMock()
 
@@ -1727,6 +1732,7 @@ def test_planning_service_plan_sync_successful_no_active_loop(
 ) -> None:
 
     db = MagicMock()
+    configure_planning_test_db(db)
 
     mock_job_repo = MagicMock()
 
@@ -1853,14 +1859,15 @@ async def test_planning_service_no_technicians() -> None:
 
 
 
-    with pytest.raises(ValueError) as exc_info:
+    decision = await service.plan_async(job_id=45)
 
-        await service.plan_async(job_id=45)
-
-    assert "No available technicians found." in str(exc_info.value)
-
-
-
+    assert decision.action == "no_assignment"
+    assert decision.job_id == 45
+    assert decision.recommended_technicians == []
+    assert (
+        decision.reason
+        == "No technicians met the current planning eligibility requirements."
+    )
 
 
 @pytest.mark.anyio
@@ -1874,6 +1881,7 @@ async def test_planning_service_default_agent_factory(
 ) -> None:
 
     db = MagicMock()
+    configure_planning_test_db(db)
 
     mock_job_repo = MagicMock()
 

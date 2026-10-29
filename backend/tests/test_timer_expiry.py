@@ -42,6 +42,7 @@ class TechnicianFactory(factory.alchemy.SQLAlchemyModelFactory):
     technician_name = factory.Sequence(lambda n: f"Tech {n}")
     technician_skill = "HVAC"
     technician_location = "13.0,80.0"
+    technician_status = "AVAILABLE"
 
 class JobFactory(factory.alchemy.SQLAlchemyModelFactory):
     class Meta:
@@ -163,6 +164,7 @@ def test_redispatch_triggered(worker_deps, db_session, fake_redis, monkeypatch):
         mock_resume.assert_called_once_with(
             job_id=int(job.id),
             event="TECHNICIAN_TIMEOUT",
+            technician_id=int(tech.technician_id),
         )
 
 
@@ -204,6 +206,7 @@ def test_audit_log_created(
         mock_resume.assert_called_once_with(
             job_id=int(job.id),
             event="TECHNICIAN_TIMEOUT",
+            technician_id=int(tech.technician_id),
         )
 
 
@@ -273,6 +276,7 @@ def test_boundary_10_00_expired(
         mock_resume.assert_called_once_with(
             job_id=int(job.id),
             event="TECHNICIAN_TIMEOUT",
+            technician_id=int(tech.technician_id),
         )
 
 

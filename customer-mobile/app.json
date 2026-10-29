@@ -1,0 +1,62 @@
+{
+  "expo": {
+    "name": "FieldOps Customer",
+    "slug": "fieldops-customer-mobile",
+    "version": "1.0.0",
+    "scheme": "fieldopscustomer",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "icon": "./assets/images/icon.png",
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow FieldOps Customer to use your location when you confirm a service address.",
+          "isAndroidBackgroundLocationEnabled": false,
+          "isAndroidForegroundServiceEnabled": false,
+          "isIosBackgroundLocationEnabled": false
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/fieldops-splash.png",
+          "imageWidth": 175,
+          "resizeMode": "contain",
+          "backgroundColor": "#002A20"
+        }
+      ],
+      "expo-font"
+    ],
+    "android": {
+      "package": "com.fieldops.customer",
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#002A20"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "com.fieldops.customer",
+      "supportsTablet": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "extra": {
+      "router": {}
+    },
+    "androidStatusBar": {
+      "backgroundColor": "#002A20",
+      "barStyle": "light-content"
+    }
+  }
+}

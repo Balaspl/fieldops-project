@@ -420,11 +420,12 @@ async def http_exception_handler(
     exc: StarletteHTTPException,
 ):
     """
-    Globally format HTTP exceptions to {"error": "message"}
+    Globally format HTTP exceptions while preserving response headers.
     """
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.detail},
+        headers=exc.headers,
     )
 
 

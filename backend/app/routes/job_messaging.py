@@ -16,7 +16,18 @@ from ..services.socket_manager import sio
 
 
 router = APIRouter(prefix="/api/v1/job-messages", tags=["Job Messages"])
-TERMINAL_READ_ONLY = {"COMPLETED", "CLOSED", "CANCELLED"}
+TERMINAL_READ_ONLY = {"COMPLETED", "CLOSED", "CANCELLED", "CANCELED"}
+CHAT_ENABLED_STATUSES = {
+    # ASSIGNED means the technician has been selected but has not accepted yet.
+    # Customer/technician messaging becomes available only after acceptance.
+    "ACCEPTED",
+    "EN_ROUTE",
+    "ENROUTE",
+    "ON_SITE",
+    "ONSITE",
+    "IN_PROGRESS",
+    "IN PROGRESS",
+}
 
 
 class MessageCreate(BaseModel):
@@ -68,8 +79,11 @@ def _context(db: Session, job_id: int, user: AuthenticatedUser):
     if not (is_customer or is_current_tech):
         # Same 404 for missing and unauthorized jobs prevents job enumeration.
         raise HTTPException(404, "Job not found")
-    status = str(job.status or "").upper()
-    can_send = job.assigned_technician_id is not None and status not in TERMINAL_READ_ONLY
+    status = str(job.status or "").strip().upper()
+    can_send = (
+        job.assigned_technician_id is not None
+        and status in CHAT_ENABLED_STATUSES
+    )
     customer_user_id = user.user_id if is_customer else (
         customer_requests[0].customer_user_id if len(customer_requests) == 1 else None
     )
@@ -148,6 +162,18 @@ async def get_job_messages(job_id: int, user: AuthenticatedUser = Depends(get_cu
             await sio.emit("job_message_read", {"job_id": job_id, "reader_user_id": user.user_id, "read_at": now.isoformat()}, room=f"user_{other_id}")
         except Exception:
             pass
+    status = str(job.status or "").strip().upper()
+    if status in TERMINAL_READ_ONLY:
+        read_only_reason = "Messaging is read-only after job completion or cancellation."
+    elif not job.assigned_technician_id:
+        read_only_reason = "Chat is available after technician assignment."
+    elif status not in CHAT_ENABLED_STATUSES:
+        read_only_reason = "Chat is available after the assigned technician accepts the job."
+    elif technician_id is None:
+        read_only_reason = "The assigned technician does not have an active portal account."
+    else:
+        read_only_reason = None
+
     return {
         "job_id": job_id,
         "job_reference": f"JOB-{job_id}",
@@ -156,7 +182,7 @@ async def get_job_messages(job_id: int, user: AuthenticatedUser = Depends(get_cu
         "participant_name": job.customer_name if _role(user) == "TECHNICIAN" else technician_name,
         "assigned": job.assigned_technician_id is not None,
         "can_send": can_send,
-        "read_only_reason": "Messaging is read-only after job completion or cancellation." if str(job.status or "").upper() in TERMINAL_READ_ONLY else ("Chat is available after technician assignment." if not job.assigned_technician_id else ("The assigned technician does not have an active portal account." if technician_id is None else None)),
+        "read_only_reason": read_only_reason,
         "unread_count": 0,
         "messages": [_message_json(item, user.user_id) for item in messages],
     }

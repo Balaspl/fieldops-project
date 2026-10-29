@@ -21,6 +21,10 @@ class _Session:
     def __exit__(self, *_args):
         return False
 
+    def commit(self):
+        # Match the SQLAlchemy Session API for this test double.
+        return None
+
 
 def test_offer_job_id_normalizes_graph_and_legacy_state():
     runtime = dispatcher_runtime.DispatcherRuntime
@@ -89,6 +93,8 @@ async def test_runtime_hands_planning_ranking_to_dispatcher_without_replanning(m
     assert [candidate["technician_id"] for candidate in captured["all_candidates"]] == [17, 18]
     assert captured["candidates"] == captured["all_candidates"]
     assert captured["dispatch_attempt_id"]
+    assert job.dispatch_state["next_action"] == "WAIT_FOR_RESPONSE"
+    assert job.dispatch_state["current_technician_id"] == 17
 
 
 @pytest.mark.asyncio

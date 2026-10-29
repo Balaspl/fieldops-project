@@ -91,10 +91,23 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     return 6371.0 * (2 * math.asin(math.sqrt(a)))
 
 
-def get_route_cache_key(origin_lat: float, origin_lng: float, dest_lat: float, dest_lng: float) -> str:
-    origin = f"{origin_lat:.6f},{origin_lng:.6f}"
-    dest = f"{dest_lat:.6f},{dest_lng:.6f}"
-    return f"maps:ola:route:{hashlib.md5(origin.encode()).hexdigest()}:{hashlib.md5(dest.encode()).hexdigest()}"
+def get_route_cache_key(
+    origin_lat: float,
+    origin_lng: float,
+    dest_lat: float,
+    dest_lng: float,
+) -> str:
+    # Round the moving technician origin to approximately 10-metre precision.
+    # Nearby GPS updates can then reuse a recently calculated Ola route.
+    origin = f"{origin_lat:.4f},{origin_lng:.4f}"
+
+    # Keep the customer's destination more precise.
+    dest = f"{dest_lat:.5f},{dest_lng:.5f}"
+
+    origin_hash = hashlib.md5(origin.encode()).hexdigest()
+    destination_hash = hashlib.md5(dest.encode()).hexdigest()
+
+    return f"maps:ola:route:{origin_hash}:{destination_hash}"
 
 
 def decode_polyline(encoded: str) -> list[list[float]]:
