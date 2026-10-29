@@ -177,6 +177,10 @@ def get_jobs_stats(
                 ),
             )
         )
+                # Preserve the organization-scoped query before date filtering.
+        # Dashboard job cards count current jobs across all dates.
+        all_time_query = query
+
         if start_date:
             query = query.filter(Job.created_at >= start_date)
 
@@ -234,6 +238,68 @@ def get_jobs_stats(
                 ]
             ),
         ).count()
+                # Count unique jobs for the dashboard cards, independent
+        # of the selected date range.
+        all_time_status = func.upper(
+            func.replace(
+                func.replace(Job.status, " ", ""),
+                "_",
+                "",
+            )
+        )
+
+        def count_unique_jobs(job_query):
+            return int(
+                job_query.with_entities(
+                    func.count(func.distinct(Job.id))
+                ).scalar()
+                or 0
+            )
+
+        job_cards = {
+            "total": count_unique_jobs(all_time_query),
+
+            "unassigned": count_unique_jobs(
+                all_time_query.filter(
+                    Job.assigned_technician_id.is_(None),
+                    all_time_status.in_(
+                        ["CREATED", "QUEUED", "ACTIVE", "UNASSIGNED"]
+                    ),
+                )
+            ),
+
+            "accepted": count_unique_jobs(
+                all_time_query.filter(
+                    all_time_status == "ACCEPTED"
+                )
+            ),
+
+            "rejected": count_unique_jobs(
+                all_time_query.filter(
+                    all_time_status == "REJECTEDBYTECHNICIAN"
+                )
+            ),
+
+            "en_route": count_unique_jobs(
+                all_time_query.filter(
+                    all_time_status == "ENROUTE"
+                )
+            ),
+
+            "in_progress": count_unique_jobs(
+                all_time_query.filter(
+                    all_time_status.in_(
+                        ["INPROGRESS", "ONSITE", "PAUSED"]
+                    )
+                )
+            ),
+
+            "completed": count_unique_jobs(
+                all_time_query.filter(
+                    all_time_status.in_(["COMPLETED", "CLOSED"])
+                )
+            ),
+        }
 
         # Technician availability counts with tenant isolation
         tech_query = db.query(Technician).filter(
@@ -243,7 +309,44 @@ def get_jobs_stats(
         tech_busy = tech_query.filter((func.lower(Technician.technician_status) == "busy") | (func.lower(Technician.technician_status) == "on job") | (func.lower(Technician.technician_status) == "on job / busy")).count()
         tech_break = tech_query.filter(func.lower(Technician.technician_status) == "break").count()
         tech_offline = tech_query.filter(func.lower(Technician.technician_status) == "offline").count()
+                # Count registered technicians by service skill.
+        # Counts are organization-wide, regardless of online status.
+        service_category_names = [
+            "HVAC Repair",
+            "Electrical",
+            "Plumbing",
+            "Network Support",
+            "General Maintenance",
+            "Appliance Repair",
+            "Roofing & Carpentry",
+            "CCTV & Security",
+        ]
 
+        service_technician_counts = {
+            name: 0 for name in service_category_names
+        }
+
+        for technician in tech_query:
+            raw_skills = technician.technician_skill or ""
+
+            technician_skills = {
+                " ".join(skill.strip().casefold().split())
+                for skill in (
+                    raw_skills
+                    .replace(";", ",")
+                    .replace("|", ",")
+                    .split(",")
+                )
+                if skill.strip()
+            }
+
+            for category_name in service_category_names:
+                normalized_category = (
+                    " ".join(category_name.casefold().split())
+                )
+
+                if normalized_category in technician_skills:
+                    service_technician_counts[category_name] += 1
         # Category splits based on required_skill
         hvac_count = query.filter(func.lower(Job.required_skill) == "hvac").count()
         electrical_count = query.filter(func.lower(Job.required_skill) == "electrical").count()
@@ -254,6 +357,8 @@ def get_jobs_stats(
             other_count = 0
 
         return {
+            "job_cards": job_cards,
+            "service_technicians": service_technician_counts,
             "jobs": {
                 "total": total_jobs,
                 "active": active_count,
@@ -637,13 +742,49 @@ def get_jobs(
             )
             
         if status and status.upper() != "ALL":
-            s_lower = status.lower().strip().replace(" ", "")
-            if s_lower == "inprogress":
-                query = query.filter(func.lower(func.replace(Job.status, " ", "")).in_(["inprogress"]))
-            elif s_lower == "cancelled" or s_lower == "canceled":
-                query = query.filter(func.lower(Job.status).in_(["cancelled", "canceled"]))
+            normalized_input = (
+                status.strip()
+                .upper()
+                .replace(" ", "")
+                .replace("_", "")
+                .replace("-", "")
+            )
+
+            normalized_job_status = func.upper(
+                func.replace(
+                    func.replace(
+                        func.replace(Job.status, " ", ""),
+                        "_",
+                        "",
+                    ),
+                    "-",
+                    "",
+                )
+            )
+
+            if normalized_input == "INPROGRESS":
+                query = query.filter(
+                    normalized_job_status.in_(
+                        ["INPROGRESS", "ONSITE", "PAUSED"]
+                    )
+                )
+
+            elif normalized_input == "ENROUTE":
+                query = query.filter(
+                    normalized_job_status == "ENROUTE"
+                )
+
+            elif normalized_input in {"CANCELLED", "CANCELED"}:
+                query = query.filter(
+                    normalized_job_status.in_(
+                        ["CANCELLED", "CANCELED"]
+                    )
+                )
+
             else:
-                query = query.filter(func.lower(Job.status) == s_lower)
+                query = query.filter(
+                    normalized_job_status == normalized_input
+                )
                 
         if priority and priority.upper() != "ALL":
             p_upper = priority.upper()

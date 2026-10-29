@@ -16,6 +16,7 @@ import {
   getAvailableTechnicians,
   getPendingJobs,
   getPlannedAssignments,
+  getJobs,
   assignJob,
   assignJobsBulk,
   cancelJobsBulk,
@@ -32,9 +33,12 @@ import EmptyState from "../components/ui/EmptyState";
 import OverrideModal from "../components/notifications/OverrideModal";
 import OverrideHistory from "../components/notifications/OverrideHistory";
 import OverrideWarning from "../components/notifications/OverrideWarning";
-import MetricsCards from "../components/dispatch/MetricsCards";
+import PlanningJobFilters, {
+  type PlanningJobFilterValues,
+} from "../components/dispatch/PlanningJobFilters";
 import DispatchQueueTable from "../components/dispatch/DispatchQueueTable";
-
+import CompletedJobsTable from "../components/dispatch/CompletedJobsTable";
+import InProgressJobsTable from "../components/dispatch/InProgressJobsTable";
 import { getDispatchQueue } from "../services/dispatchQueueService";
 import {
   extendSLA,
@@ -315,18 +319,21 @@ interface OverrideHistoryItem {
 
 const styles = {
   planningDashboard: {
-    fontFamily: "'Inter', sans-serif",
-    background: "#EEF4F1",
-    height: "100%",
-    maxHeight: "100%",
-    padding: "10px 14px",
-    color: "#1F2933",
-    display: "flex",
-    flexDirection: "column",
-    gap: "8px",
-    boxSizing: "border-box",
-    overflow: "hidden",
-  } as React.CSSProperties,
+  fontFamily: "'Inter', sans-serif",
+  background: "#EEF4F1",
+  height: "auto",
+minHeight: "100%",
+maxHeight: "none",
+overflow: "visible",
+  padding: "10px 14px",
+  color: "#1F2933",
+  display: "flex",
+  flexDirection: "column",
+  gap: "8px",
+  boxSizing: "border-box",
+  overflowX: "hidden",
+  overflowY: "auto",
+} as React.CSSProperties,
 
   refreshIconBtn: {
     background: "#FFFFFF",
@@ -414,16 +421,17 @@ const styles = {
   } as React.CSSProperties,
 
   dashboardSection: {
-    background: "#FFFFFF",
-    borderRadius: "12px",
-    boxShadow: "0 1px 4px rgba(47, 79, 62, 0.07)",
-    border: "1px solid #E3ECE7",
-    display: "flex",
-    flexDirection: "column",
-    overflow: "hidden",
-    boxSizing: "border-box",
-    flex: 1,
-  } as React.CSSProperties,
+  background: "#FFFFFF",
+  borderRadius: "12px",
+  boxShadow: "0 1px 4px rgba(47, 79, 62, 0.07)",
+  border: "1px solid #E3ECE7",
+  display: "flex",
+  flexDirection: "column",
+  overflow: "hidden",
+  boxSizing: "border-box",
+  flex: "0 0 auto",
+  minHeight: "420px",
+} as React.CSSProperties,
 
   topThreeWrapper: {
     padding: "10px 14px 0",
@@ -1098,6 +1106,9 @@ const localCss = `
   .planning-table-body tr {
     animation: planningFadeInRow 0.25s ease-out forwards !important;
   }
+  .planning-dashboard-scroll > * {
+  flex-shrink: 0 !important;
+ }
 `;
 
 const ShareTrackingLinkButton = ({ jobId }: { jobId: string | number }) => {
@@ -1160,8 +1171,12 @@ const ShareTrackingLinkButton = ({ jobId }: { jobId: string | number }) => {
     </button>
   );
 };
-
-function PlanningDashboard() {
+interface PlanningDashboardProps {
+  onViewCompletedJob?: (job: any) => void;
+}
+function PlanningDashboard({
+  onViewCompletedJob,
+}: PlanningDashboardProps) {
   const [pendingJobs, setPendingJobs] = useState<PendingJob[]>([]);
   const [plannedAssignments, setPlannedAssignments] = useState<PlannedAssignment[]>([]);
   const [allTechsList, setAllTechsList] = useState<Technician[]>([]);
@@ -1221,8 +1236,20 @@ function PlanningDashboard() {
     }
   };
 
-  const [activeTab, setActiveTab] = useState("pending");
-
+  const [activeTab, setActiveTab] = useState("planned");
+  const [planningFilters, setPlanningFilters] =
+  
+  useState<PlanningJobFilterValues>({
+    search: "",
+    location: "",
+    priority: "ALL",
+    serviceType: "ALL",
+    status: "ALL",
+    technician: "ALL",
+    sla: "ALL",
+  });
+  const [filteredJobIds, setFilteredJobIds] =
+  useState<Set<string> | null>(null);
   const [pendingPage, setPendingPage] = useState(1);
   const [plannedPage, setPlannedPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
@@ -1271,6 +1298,8 @@ function PlanningDashboard() {
   const [activeMetricFilter, setActiveMetricFilter] = useState("all");
   
   const [dispatchQueueCount, setDispatchQueueCount] = useState(0);
+  const [inProgressCount, setInProgressCount] = useState(0);
+  const [completedCount, setCompletedCount] = useState(0);
 
   const [declinedJobsList, setDeclinedJobsList] = useState<any[]>([]);
   const [declinedLoading, setDeclinedLoading] = useState(false);
@@ -1431,15 +1460,114 @@ function PlanningDashboard() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
+  
+useEffect(() => {
+  const hasActiveFilters =
+    planningFilters.search.trim() !== "" ||
+    planningFilters.location.trim() !== "" ||
+    planningFilters.priority !== "ALL" ||
+    planningFilters.serviceType !== "ALL" ||
+    planningFilters.status !== "ALL" ||
+    planningFilters.technician !== "ALL" ||
+    planningFilters.sla !== "ALL";
+
+  if (!hasActiveFilters) {
+    setFilteredJobIds(null);
+    return;
+  }
+
+  let cancelled = false;
+
+  const loadFilteredJobIds = async () => {
+    try {
+      const serviceLabels: Record<string, string> = {
+        HVAC_REPAIR: "HVAC Repair",
+        ELECTRICAL_SERVICE: "Electrical Service",
+        PLUMBING_SERVICE: "Plumbing Service",
+        NETWORK_SUPPORT: "Network Support",
+        GENERAL_MAINTENANCE: "General Maintenance",
+        APPLIANCE_REPAIR: "Appliance Repair",
+        ROOFING_CARPENTRY: "Roofing & Carpentry",
+        CCTV_SECURITY: "CCTV & Security",
+      };
+
+      const technicianId =
+        planningFilters.technician === "ALL"
+          ? undefined
+          : Number(planningFilters.technician);
+
+      const response = await getJobs({
+        search: planningFilters.search.trim() || undefined,
+        location: planningFilters.location.trim() || undefined,
+        priority:
+          planningFilters.priority === "ALL"
+            ? undefined
+            : planningFilters.priority,
+        service_type:
+          planningFilters.serviceType === "ALL"
+            ? undefined
+            : serviceLabels[planningFilters.serviceType] ||
+              planningFilters.serviceType,
+        status:
+          planningFilters.status === "ALL" ||
+          planningFilters.status === "CREATED"
+            ? undefined
+            : planningFilters.status,
+        sla:
+          planningFilters.sla === "ALL"
+            ? undefined
+            : planningFilters.sla,
+        technician_id:
+          technicianId !== undefined &&
+          Number.isFinite(technicianId)
+            ? technicianId
+            : undefined,
+      });
+
+      const jobs = Array.isArray(response?.data)
+        ? response.data
+        : [];
+
+      const matchingJobs =
+        planningFilters.status === "CREATED"
+          ? jobs.filter(
+              (job: { assigned_technician_id?: number | null }) =>
+                job.assigned_technician_id == null,
+            )
+          : jobs;
+
+      if (!cancelled) {
+        setFilteredJobIds(
+          new Set(
+            matchingJobs.map((job: { id: string | number }) =>
+              String(job.id),
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      console.error("Failed to apply Planning filters:", error);
+
+      if (!cancelled) {
+        setFilteredJobIds(null);
+        setError("Failed to apply filters. Please try again.");
+      }
+    }
+  };
+
+  void loadFilteredJobIds();
+
+  return () => {
+    cancelled = true;
+  };
+}, [planningFilters]);
+
+
   const handleMetricFilterChange = (filter: string, metricKey: string) => {
     console.log("Metric card clicked:", metricKey, filter);
     setActiveMetricFilter(metricKey);
     // Dispatched jobs have an assigned technician → they live in Planned Assignments
-    if (metricKey === "dispatched") {
-      setActiveTab("planned");
-    } else {
-      setActiveTab("pending");
-    }
+    setActiveTab("planned");
     setPendingPage(1);
   };
 
@@ -1531,7 +1659,10 @@ function PlanningDashboard() {
 
   const fetchDispatchQueueCount = async () => {
     try {
-      const res = await getDispatchQueue({ limit: 100 });
+      const res = await getDispatchQueue({
+  status: "EN_ROUTE",
+  limit: 100,
+});
       if (res && res.data) {
         setDispatchQueueCount(res.data.length);
       }
@@ -1539,6 +1670,76 @@ function PlanningDashboard() {
       console.warn("Could not fetch dispatch queue count");
     }
   };
+  const fetchInProgressCount = async () => {
+  try {
+    const response = await getJobs({
+      status: "IN_PROGRESS",
+      page: 1,
+      limit: 100,
+    });
+
+    const rows = Array.isArray(response?.data)
+      ? response.data.filter((job: { status?: string }) =>
+          ["IN_PROGRESS", "ON_SITE"].includes(
+            (job.status || "")
+              .trim()
+              .toUpperCase()
+              .replace(/[\s-]+/g, "_"),
+          ),
+        )
+      : [];
+
+    const header =
+      response?.headers?.["x-total-count"] ??
+      response?.headers?.["X-Total-Count"];
+
+    const parsedCount = Number.parseInt(String(header ?? ""), 10);
+
+    setInProgressCount(
+      Number.isFinite(parsedCount)
+        ? Math.max(parsedCount, rows.length)
+        : rows.length,
+    );
+  } catch (error) {
+    console.warn("Could not fetch in-progress job count", error);
+  }
+};
+
+const fetchCompletedCount = async () => {
+  try {
+    const response = await getJobs({
+      status: "COMPLETED",
+      page: 1,
+      limit: 100,
+    });
+
+    const completedRows = Array.isArray(response?.data)
+      ? response.data.filter(
+          (job: { status?: string }) =>
+            (job.status || "")
+              .trim()
+              .toUpperCase()
+              .replace(/[\s-]+/g, "_") === "COMPLETED",
+        )
+      : [];
+
+    const header =
+      response?.headers?.["x-total-count"] ??
+      response?.headers?.["X-Total-Count"];
+
+    const parsedCount = Number.parseInt(String(header ?? ""), 10);
+
+    // Use the backend total when reliable, but never show
+    // a count smaller than the completed rows we received.
+    const count = Number.isFinite(parsedCount)
+      ? Math.max(parsedCount, completedRows.length)
+      : completedRows.length;
+
+    setCompletedCount(count);
+  } catch (error) {
+    console.warn("Could not fetch completed job count", error);
+  }
+};
 
   const fetchAllData = () => {
     setError("");
@@ -1547,6 +1748,8 @@ function PlanningDashboard() {
     fetchPlannedAssignments(debSearchQuery);
     fetchTechniciansList();
     fetchDispatchQueueCount();
+    fetchInProgressCount();
+    fetchCompletedCount();
     fetchDeclinedJobsList();
   };
 
@@ -1555,6 +1758,8 @@ function PlanningDashboard() {
     fetchPlannedAssignments(debSearchQuery);
     fetchTechniciansList();
     fetchDispatchQueueCount();
+    fetchInProgressCount();
+    fetchCompletedCount();
     fetchDeclinedJobsList();
   };
 
@@ -1744,9 +1949,11 @@ function PlanningDashboard() {
   };
 
   useEffect(() => {
-    fetchTechniciansList();
-    fetchDispatchQueueCount();
-  }, []);
+  fetchTechniciansList();
+  fetchDispatchQueueCount();
+  fetchInProgressCount();
+  fetchCompletedCount();
+}, []);
 
   useEffect(() => {
     setPendingPage(1);
@@ -2467,7 +2674,11 @@ function PlanningDashboard() {
       );
   }, [normalPendingJobs]);
 
-  const filteredPendingJobs = normalPendingJobs;
+  const filteredPendingJobs = normalPendingJobs.filter(
+  (job) =>
+    filteredJobIds === null ||
+    filteredJobIds.has(String(job.id)),
+);
 
   const metricFilteredPendingJobs = useMemo(() => {
     if (activeMetricFilter === "dispatched") {
@@ -2476,7 +2687,26 @@ function PlanningDashboard() {
     return filteredPendingJobs;
   }, [filteredPendingJobs, activeMetricFilter]);
 
-  const filteredPlannedAssignments = plannedAssignments;
+  const filteredPlannedAssignments = plannedAssignments.filter((item) => {
+  const status = (item.status || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, "_");
+
+  const isPlannedStatus = [
+    "ASSIGNED",
+    "WAITING_FOR_ACCEPT",
+    "WAITING_FOR_ACCEPTANCE",
+    "ACCEPTED",
+    "ACCEPTED_BY_TECHNICIAN",
+  ].includes(status);
+
+  const matchesSelectedFilters =
+    filteredJobIds === null ||
+    filteredJobIds.has(String(item.job_id));
+
+  return isPlannedStatus && matchesSelectedFilters;
+});
 
   // Page reset is handled by the debSearchQuery and activeMetricFilter effect.
 
@@ -2604,11 +2834,24 @@ function PlanningDashboard() {
   };
 
   return (
-    <div style={styles.planningDashboard}>
+    <div
+  className="planning-dashboard-scroll"
+  style={styles.planningDashboard}
+>
       <style>{localCss}</style>
-      <div style={{ marginBottom: "10px" }}>
-        <MetricsCards onFilterChange={handleMetricFilterChange} />
-      </div>
+      <PlanningJobFilters
+  technicians={allTechsList}
+  resultCount={
+    totalPendingCount +
+    totalPlannedCount +
+    dispatchQueueCount +
+    inProgressCount +
+    completedCount +
+    declinedJobsList.length
+  }
+  onRefresh={fetchAllData}
+  onFiltersChange={setPlanningFilters}
+/>
 
       <AlertBanner
         onViewHistory={(jobId: number, jobTitle: string) => {
@@ -2788,31 +3031,6 @@ function PlanningDashboard() {
       <div className="planning-tabs-responsive" style={styles.planningTabs}>
         <div className="planning-tab-btn-group" style={{ display: "flex", overflowX: "auto", flexWrap: "nowrap", flex: 1 }}>
           <button
-            className={`planning-tab-style ${activeTab === 'pending' ? 'active-tab-style' : ''}`}
-            style={{
-              ...styles.planningTab,
-              ...(activeTab === 'pending' ? styles.planningTabActive : {}),
-              paddingLeft: "10px",
-              paddingRight: "16px",
-            }}
-            onClick={() => setActiveTab('pending')}
-          >
-            <span
-              className="planning-tab-dot-style"
-              style={{
-                ...styles.planningTabDot,
-                backgroundColor: "#EF4444",
-                boxShadow: "0 0 0 2px rgba(239,68,68,0.15)",
-              }}
-            />
-            <span>Unassigned Jobs</span>
-            <span style={{
-              ...styles.planningTabCount,
-              ...(activeTab === 'pending' ? styles.planningTabCountActive : {})
-            }}>{totalPendingCount}</span>
-          </button>
-          <div className="planning-tab-divider" />
-          <button
             className={`planning-tab-style ${activeTab === 'planned' ? 'active-tab-style' : ''}`}
             style={{
               ...styles.planningTab,
@@ -2834,7 +3052,7 @@ function PlanningDashboard() {
             <span style={{
               ...styles.planningTabCount,
               ...(activeTab === 'planned' ? styles.planningTabCountActive : {})
-            }}>{totalPlannedCount}</span>
+            }}>{totalPendingCount + totalPlannedCount}</span>
           </button>
           <div className="planning-tab-divider" />
           <button
@@ -2855,37 +3073,89 @@ function PlanningDashboard() {
                 boxShadow: "0 0 0 2px rgba(59,130,246,0.15)",
               }}
             />
-            <span>Dispatch Queue</span>
+            <span>En Route Jobs</span>
             <span style={{
               ...styles.planningTabCount,
               ...(activeTab === 'dispatch' ? styles.planningTabCountActive : {})
             }}>{dispatchQueueCount}</span>
           </button>
           <div className="planning-tab-divider" />
-          <button
-            className={`planning-tab-style ${activeTab === 'escalated' ? 'active-tab-style' : ''}`}
-            style={{
-              ...styles.planningTab,
-              ...(activeTab === 'escalated' ? styles.planningTabActive : {}),
-              paddingLeft: "16px",
-              paddingRight: "16px",
-            }}
-            onClick={() => setActiveTab('escalated')}
-          >
-            <span
-              className="planning-tab-dot-style"
-              style={{
-                ...styles.planningTabDot,
-                backgroundColor: "#F59E0B",
-                boxShadow: "0 0 0 2px rgba(245,158,11,0.15)",
-              }}
-            />
-            <span>SLA Escalations</span>
-            <span style={{
-              ...styles.planningTabCount,
-              ...(activeTab === 'escalated' ? styles.planningTabCountActive : {})
-            }}>{escalatedJobs.length}</span>
-          </button>
+
+<button
+  className={`planning-tab-style ${
+    activeTab === "inprogress" ? "active-tab-style" : ""
+  }`}
+  style={{
+    ...styles.planningTab,
+    ...(activeTab === "inprogress"
+      ? styles.planningTabActive
+      : {}),
+    paddingLeft: "16px",
+    paddingRight: "16px",
+  }}
+  onClick={() => setActiveTab("inprogress")}
+>
+  <span
+    className="planning-tab-dot-style"
+    style={{
+      ...styles.planningTabDot,
+      backgroundColor: "#F59E0B",
+      boxShadow: "0 0 0 2px rgba(245,158,11,0.15)",
+    }}
+  />
+
+  <span>In Progress</span>
+
+  <span
+    style={{
+      ...styles.planningTabCount,
+      ...(activeTab === "inprogress"
+        ? styles.planningTabCountActive
+        : {}),
+    }}
+  >
+    {inProgressCount}
+  </span>
+</button>
+<div className="planning-tab-divider" />
+
+<button
+  className={`planning-tab-style ${
+    activeTab === "completed" ? "active-tab-style" : ""
+  }`}
+  style={{
+    ...styles.planningTab,
+    ...(activeTab === "completed"
+      ? styles.planningTabActive
+      : {}),
+    paddingLeft: "16px",
+    paddingRight: "16px",
+  }}
+  onClick={() => setActiveTab("completed")}
+>
+  <span
+    className="planning-tab-dot-style"
+    style={{
+      ...styles.planningTabDot,
+      backgroundColor: "#2563EB",
+      boxShadow: "0 0 0 2px rgba(37,99,235,0.15)",
+    }}
+  />
+
+  <span>Completed</span>
+
+  <span
+    style={{
+      ...styles.planningTabCount,
+      ...(activeTab === "completed"
+        ? styles.planningTabCountActive
+        : {}),
+    }}
+  >
+    {completedCount}
+  </span>
+</button>
+          
           <div className="planning-tab-divider" />
           <button
             className={`planning-tab-style ${activeTab === 'declined' ? 'active-tab-style' : ''}`}
@@ -2914,144 +3184,30 @@ function PlanningDashboard() {
               ...(activeTab === 'declined' ? styles.planningTabCountActive : {})
             }}>{declinedJobsList.length}</span>
           </button>
-        </div>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            marginLeft: "10px",
-            flexShrink: 0,
-          }}
-        >
-          <div
-            role="status"
-            aria-live="polite"
-            aria-label={`Live dashboard updates: ${
-              dispatchSocketStatus === "connected"
-                ? "Connected"
-                : dispatchSocketStatus === "connecting"
-                  ? "Connecting"
-                  : dispatchSocketStatus === "reconnecting"
-                    ? "Reconnecting"
-                    : "Unavailable"
-            }`}
-            title={
-              dispatchSocketError ||
-              "Dashboard data is refreshed from the authoritative backend after realtime events."
-            }
+          <div className="planning-tab-divider" />
+          <button
+            className={`planning-tab-style ${activeTab === 'escalated' ? 'active-tab-style' : ''}`}
             style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "6px",
-              padding: "7px 10px",
-              borderRadius: "8px",
-              border: "1px solid #E3ECE7",
-              background: "#FFFFFF",
-              color: "#475569",
-              fontSize: "11px",
-              fontWeight: 600,
-              whiteSpace: "nowrap",
+              ...styles.planningTab,
+              ...(activeTab === 'escalated' ? styles.planningTabActive : {}),
+              paddingLeft: "16px",
+              paddingRight: "16px",
             }}
+            onClick={() => setActiveTab('escalated')}
           >
             <span
-              aria-hidden="true"
+              className="planning-tab-dot-style"
               style={{
-                width: "7px",
-                height: "7px",
-                borderRadius: "50%",
-                background:
-                  dispatchSocketStatus === "connected"
-                    ? "#10B981"
-                    : dispatchSocketStatus === "connecting" ||
-                        dispatchSocketStatus === "reconnecting"
-                      ? "#F59E0B"
-                      : "#EF4444",
+                ...styles.planningTabDot,
+                backgroundColor: "#F59E0B",
+                boxShadow: "0 0 0 2px rgba(245,158,11,0.15)",
               }}
             />
-
-            {dispatchSocketStatus === "connected"
-              ? "Live"
-              : dispatchSocketStatus === "connecting"
-                ? "Connecting..."
-                : dispatchSocketStatus === "reconnecting"
-                  ? "Reconnecting..."
-                  : "Live unavailable"}
-          </div>
-
-          <button
-            type="button"
-            onClick={handleExport}
-            disabled={
-              exporting ||
-              !["pending", "planned"].includes(activeTab) ||
-              (activeTab === "pending"
-                ? paginatedPendingJobs.length === 0
-                : paginatedPlannedAssignments.length === 0)
-            }
-            style={{
-              ...styles.refreshIconBtn,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "6px",
-              opacity:
-                exporting ||
-                !["pending", "planned"].includes(activeTab) ||
-                (activeTab === "pending"
-                  ? paginatedPendingJobs.length === 0
-                  : paginatedPlannedAssignments.length === 0)
-                  ? 0.6
-                  : 1,
-              cursor:
-                exporting ||
-                !["pending", "planned"].includes(activeTab) ||
-                (activeTab === "pending"
-                  ? paginatedPendingJobs.length === 0
-                  : paginatedPlannedAssignments.length === 0)
-                  ? "not-allowed"
-                  : "pointer",
-              whiteSpace: "nowrap",
-            }}
-            aria-label="Export visible dispatcher data"
-            title={
-              !["pending", "planned"].includes(activeTab)
-                ? "Export is available for job and assignment tables"
-                : "Export currently visible filtered data"
-            }
-          >
-            <span aria-hidden="true">↓</span>
-            {exporting ? "Exporting..." : "Export"}
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowJobMap(true)}
-            disabled={!isRouteMapLoaded && !routeMapLoadError}
-            style={{
-              ...styles.refreshIconBtn,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "6px",
-              opacity:
-                isRouteMapLoaded || routeMapLoadError ? 1 : 0.6,
-              cursor:
-                isRouteMapLoaded || routeMapLoadError
-                  ? "pointer"
-                  : "not-allowed",
-              whiteSpace: "nowrap",
-            }}
-            aria-label="Open job map"
-            title={
-              isRouteMapLoaded
-                ? "View eligible jobs on map"
-                : routeMapLoadError
-                ? "Google Maps configuration error"
-                : "Loading Google Maps"
-            }
-          >
-            <MapPin size={15} />
-            Map View
+            <span>SLA Escalations</span>
+            <span style={{
+              ...styles.planningTabCount,
+              ...(activeTab === 'escalated' ? styles.planningTabCountActive : {})
+            }}>{escalatedJobs.length}</span>
           </button>
         </div>
       </div>
@@ -3712,11 +3868,31 @@ function PlanningDashboard() {
         </section>
       )}
 
-      {/* DISPATCH QUEUE TAB */}
-      {activeTab === 'dispatch' && (
-        <DispatchQueueTable onCountChange={setDispatchQueueCount} />
-      )}
+      {/* EN ROUTE JOBS TAB */}
+{activeTab === "dispatch" && (
+  <DispatchQueueTable
+    jobStatus="EN_ROUTE"
+    onCountChange={setDispatchQueueCount}
+    onViewJob={onViewCompletedJob}
+    visibleJobIds={filteredJobIds}
+  />
+)}
 
+{/* IN PROGRESS TAB */}
+{activeTab === "inprogress" && (
+  <InProgressJobsTable
+  onCountChange={setInProgressCount}
+  onViewJob={onViewCompletedJob}
+  filters={planningFilters}
+/>
+)}
+{activeTab === "completed" && (
+  <CompletedJobsTable
+  onCountChange={setCompletedCount}
+  onViewJob={onViewCompletedJob}
+  filters={planningFilters}
+/>
+)}
       {/* PLANNED ASSIGNMENTS TAB */}
       {activeTab === 'planned' && (
         <section style={{ ...styles.dashboardSection, marginBottom: "8px" }}>
@@ -3726,7 +3902,8 @@ function PlanningDashboard() {
             ) : (
               <>
                 <div style={styles.tableContainer}>
-                  {filteredPlannedAssignments.length === 0 ? (
+                  {filteredPlannedAssignments.length === 0 &&
+ metricFilteredPendingJobs.length === 0 ? (
                     <EmptyState
                       title={searchQuery.trim() ? "No assignments match your search" : "No planned assignments"}
                       description={searchQuery.trim() ? "Try adjusting your search terms." : "No jobs have been assigned to technicians yet."}
@@ -3752,117 +3929,182 @@ function PlanningDashboard() {
                           <th style={styles.dashboardTableTh}>Location</th>
                           <th style={styles.dashboardTableTh}>Priority</th>
                           <th style={styles.dashboardTableTh}>Status</th>
-                          <th style={styles.dashboardTableTh}>Workload</th>
-                          <th style={styles.dashboardTableTh}>Actions</th>
                         </tr>
                       </thead>
                       <tbody key={safePlannedPage} className="planning-table-body">
-                        {paginatedPlannedAssignments.map((item) => (
-                          <tr key={item.job_id} className="dashboard-table-row">
-                            <td style={{ ...styles.dashboardTableTd, ...styles.jobIdCell }}>#{item.job_id}</td>
-                            <td style={{ ...styles.dashboardTableTd, ...styles.techCell }}>
-                              <strong>{item.technician}</strong>
-                              <span style={styles.skillSub}>{item.skill}</span>
-                            </td>
-                            <td style={{ ...styles.dashboardTableTd, ...styles.customerCell }}>{item.customer}</td>
-                            <td style={styles.dashboardTableTd}>{item.location}</td>
-                            <td style={styles.dashboardTableTd}>
-                              <span style={getPriorityStyle(item.priority || "")}>
-                                {item.priority || "UNKNOWN"}
-                              </span>
-                            </td>
-                            <td style={styles.dashboardTableTd}>
-                              <span style={{
-                                ...styles.statusBadge,
-                                ...((item.status || "").toUpperCase() === "EN_ROUTE"
-                                  ? { background: "#EDE9FE", color: "#5B21B6", border: "1px solid #DDD6FE" }
-                                  : (item.status || "").toUpperCase() === "IN_PROGRESS"
-                                  ? { background: "#D1FAE5", color: "#065F46", border: "1px solid #A7F3D0" }
-                                  : { background: "#FEF3C7", color: "#92400E", border: "1px solid #FDE68A" })
-                              }}>
-                                {(item.status || "").toUpperCase() === "EN_ROUTE"
-                                  ? "EN ROUTE"
-                                  : (item.status || "").toUpperCase() === "IN_PROGRESS"
-                                  ? "IN PROGRESS"
-                                  : "WAITING FOR ACCEPT"}
-                              </span>
-                            </td>
-                            <td style={styles.dashboardTableTd}>
-                              <div style={styles.workloadInfo}>
-                                <div style={styles.workloadBar}>
-                                  <div
-                                    style={{
-                                      ...styles.workloadFill,
-                                      width: `${Math.min(
-                                        (item.current_jobs / (item.max_jobs || 5)) * 100,
-                                        100
-                                      )}%`,
-                                    }}
-                                  />
-                                </div>
-                                <span style={styles.workloadText}>
-                                  {item.current_jobs}/{item.max_jobs}
-                                </span>
-                              </div>
-                            </td>
-                            <td style={styles.dashboardTableTd}>
-                              <div style={styles.jobItemActions}>
-                                <button
-                                  className="icon-action-btn-style"
-                                  style={{ ...styles.iconActionBtn, color: '#16a34a' }}
-                                  onClick={() => setViewAssignment(item)}
-                                  title="View assignment"
-                                  aria-label="View assignment"
-                                >
-                                  <Eye size={15} />
-                                </button>
-                                <button
-                                  className="icon-action-btn-style"
-                                  style={{ ...styles.iconActionBtn, color: '#2563eb' }}
-                                  onClick={() => handleViewRoute(item)}
-                                  disabled={
-                                    routeLoading &&
-                                    routeAssignment?.job_id === item.job_id
-                                  }
-                                  title="View technician route"
-                                  aria-label="View technician route"
-                                >
-                                  {routeLoading &&
-                                  routeAssignment?.job_id === item.job_id ? (
-                                    <Loader2 size={15} className="animate-spin" />
-                                  ) : (
-                                    <MapPin size={15} />
-                                  )}
-                                </button>
-                                <ShareTrackingLinkButton jobId={item.job_id} />
-                                <button
-                                  className="icon-action-btn-style"
-                                  style={{ ...styles.iconActionBtn, color: '#475569' }}
-                                  onClick={() => {
-                                    setShowOverrideHistoryForJob({ id: item.job_id, title: `${item.customer}'s Job` });
-                                  }}
-                                  title="View Override History"
-                                  aria-label="View Override History"
-                                >
-                                  <History size={15} />
-                                </button>
-                                <button
-                                  className="icon-action-btn-style"
-                                  style={{ ...styles.iconActionBtn, color: '#dc2626' }}
-                                  onClick={() => {
-                                    if (window.confirm(`Are you sure you want to delete assignment for "${item.technician}" → "${item.customer}" (Job #${item.job_id})?`)) {
-                                      showSuccess(`Assignment for Job #${item.job_id} removed (connect API for persistence).`);
-                                    }
-                                  }}
-                                  title="Delete assignment"
-                                  aria-label="Delete assignment"
-                                >
-                                  <Trash2 size={15} />
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
+                       {metricFilteredPendingJobs.map((job) => {
+  const selectedTechnician = allTechsList.find(
+    (tech) =>
+      String(tech.technician_id) ===
+      String(selectedTechs[job.id]),
+  );
+
+  return (
+    <tr
+      key={`pending-${job.id}`}
+      className="dashboard-table-row"
+    >
+      {/* 1. Job ID */}
+      <td
+        style={{
+          ...styles.dashboardTableTd,
+          ...styles.jobIdCell,
+        }}
+      >
+        #{job.id}
+      </td>
+
+      {/* 2. Technician */}
+<td style={styles.dashboardTableTd}>
+  <strong
+    style={{
+      color: "#64748B",
+      fontSize: "12px",
+    }}
+  >
+    Not Assigned
+  </strong>
+</td>
+
+      {/* 3. Customer */}
+      <td
+        style={{
+          ...styles.dashboardTableTd,
+          ...styles.customerCell,
+        }}
+      >
+        <strong>{job.customer_name}</strong>
+
+        {job.issue_description && (
+          <span style={styles.issueSub}>
+            {job.issue_description}
+          </span>
+        )}
+      </td>
+
+      {/* 4. Location */}
+      <td style={styles.dashboardTableTd}>
+        {job.location || "—"}
+      </td>
+
+      {/* 5. Priority */}
+      <td style={styles.dashboardTableTd}>
+        <span
+          style={getPriorityStyle(job.priority || "UNKNOWN")}
+        >
+          {job.priority || "UNKNOWN"}
+        </span>
+      </td>
+
+      {/* 6. Status */}
+      <td style={styles.dashboardTableTd}>
+        <span
+          style={{
+            ...styles.statusBadge,
+            background: "#F3F4F6",
+            color: "#64748B",
+            border: "1px solid #E2E8F0",
+          }}
+        >
+          WAITING FOR ACCEPTANCE
+        </span>
+      </td>
+    </tr>
+  );
+})}
+                        {paginatedPlannedAssignments.map((item) => {
+  const normalizedStatus = (item.status || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, "_");
+
+  const isAccepted = [
+    "ACCEPTED",
+    "ACCEPTED_BY_TECHNICIAN",
+  ].includes(normalizedStatus);
+
+  return (
+    <tr
+      key={item.job_id}
+      className="dashboard-table-row"
+    >
+      {/* 1. Job ID */}
+      <td
+        style={{
+          ...styles.dashboardTableTd,
+          ...styles.jobIdCell,
+        }}
+      >
+        #{item.job_id}
+      </td>
+
+      {/* 2. Technician */}
+      <td style={styles.dashboardTableTd}>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "2px",
+          }}
+        >
+          <strong>{item.technician || "Not Assigned"}</strong>
+
+          {item.skill && (
+            <span style={styles.skillSub}>
+              {item.skill}
+            </span>
+          )}
+        </div>
+      </td>
+
+      {/* 3. Customer */}
+      <td
+        style={{
+          ...styles.dashboardTableTd,
+          ...styles.customerCell,
+        }}
+      >
+        {item.customer}
+      </td>
+
+      {/* 4. Location */}
+      <td style={styles.dashboardTableTd}>
+        {item.location || "—"}
+      </td>
+
+      {/* 5. Priority */}
+      <td style={styles.dashboardTableTd}>
+        <span style={getPriorityStyle(item.priority || "UNKNOWN")}>
+          {item.priority || "UNKNOWN"}
+        </span>
+      </td>
+
+      {/* 6. Status */}
+      <td style={styles.dashboardTableTd}>
+        <span
+          style={{
+            ...styles.statusBadge,
+            ...(isAccepted
+              ? {
+                  background: "#D1FAE5",
+                  color: "#065F46",
+                  border: "1px solid #A7F3D0",
+                }
+              : {
+                  background: "#FEF3C7",
+                  color: "#92400E",
+                  border: "1px solid #FDE68A",
+                }),
+          }}
+        >
+          {isAccepted
+            ? "ACCEPTED"
+            : "WAITING FOR ACCEPTANCE"}
+        </span>
+      </td>
+    </tr>
+  );
+})}
                       </tbody>
                     </table>
                   )}

@@ -16,11 +16,28 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "jobs",
-        sa.Column("work_started_at", sa.DateTime(timezone=True), nullable=True),
-        schema="public",
-    )
+    bind = op.get_bind()
+
+    inspector = sa.inspect(bind)
+
+    existing_columns = {
+        column["name"]
+        for column in inspector.get_columns(
+            "jobs",
+            schema="public",
+        )
+    }
+
+    if "work_started_at" not in existing_columns:
+        op.add_column(
+            "jobs",
+            sa.Column(
+                "work_started_at",
+                sa.DateTime(timezone=True),
+                nullable=True,
+            ),
+            schema="public",
+        )
 
 
 def downgrade() -> None:

@@ -66,22 +66,55 @@ export const startHeartbeatLoop = (
     clearInterval(heartbeatTimer);
   }
 
-  console.log(
-    "STARTING HEARTBEAT LOOP:",
-    techId
-  );
+  console.log("STARTING HEARTBEAT LOOP:", techId);
 
-  // Send immediately on start
-  void sendHeartbeat(
-    techId,
-    getLocation?.() ?? {}
-  );
+  const sendHeartbeatWithLocation = async () => {
+    let payload: HeartbeatPayload = {};
+
+    try {
+      if (getLocation) {
+        payload = getLocation();
+      } else if (
+        typeof navigator !== "undefined" &&
+        navigator.geolocation
+      ) {
+        payload = await new Promise<HeartbeatPayload>((resolve) => {
+          navigator.geolocation.getCurrentPosition(
+            (position) => {
+              resolve({
+                last_lat: position.coords.latitude,
+                last_lng: position.coords.longitude,
+              });
+            },
+            (error) => {
+              console.warn(
+                "Could not read technician GPS location:",
+                error.message
+              );
+              resolve({});
+            },
+            {
+              enableHighAccuracy: true,
+              maximumAge: 10000,
+              timeout: 10000,
+            }
+          );
+        });
+      }
+
+      console.log("HEARTBEAT GPS PAYLOAD:", payload);
+      await sendHeartbeat(techId, payload);
+    } catch (error) {
+      console.error("Heartbeat GPS error:", error);
+      await sendHeartbeat(techId, {});
+    }
+  };
+
+  // Send a heartbeat immediately, then at the configured interval.
+  void sendHeartbeatWithLocation();
 
   heartbeatTimer = setInterval(() => {
-    void sendHeartbeat(
-      techId,
-      getLocation?.() ?? {}
-    );
+    void sendHeartbeatWithLocation();
   }, intervalMs);
 };
 

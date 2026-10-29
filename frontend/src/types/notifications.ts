@@ -5,6 +5,7 @@ export interface JobNotificationDetail {
   description: string;
   location: string;
   priority: string;
+  superAdminMode?: boolean;
   customer_name: string;
   customer_phone: string;
   estimated_value: number;
@@ -79,6 +80,7 @@ export interface NotificationDetailProps {
 export interface NotificationDrawerProps {
   isOpen: boolean;
   onClose: () => void;
+  superAdminMode?: boolean;
   notifications: TechnicianNotification[];
   onNotificationClick: (
     notification: TechnicianNotification

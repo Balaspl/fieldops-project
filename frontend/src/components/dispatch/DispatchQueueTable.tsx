@@ -17,13 +17,12 @@ import {
   Loader2,
   Inbox,
   Share2,
+  Eye,
 } from "lucide-react";
 
 import { getDispatchQueue } from "../../services/dispatchQueueService";
 import type { DispatchQueueJob } from "../../types/dispatchQueue";
-import AcceptanceTimer from "./AcceptanceTimer";
 import StatusBadge from "./StatusBadge";
-import SLARiskBadge from "./SLARiskBadge";
 import EmptyState from "../ui/EmptyState";
 
 /* ─── Helpers ──────────────────────────────────────────────────────────────── */
@@ -191,12 +190,6 @@ const SkeletonRows = () => {
           <td style={{ ...tableStyles.td, padding: "12px" }}>
             <div style={{ ...skeletonBarBase, width: "50px" }} />
           </td>
-          <td style={{ ...tableStyles.td, padding: "12px" }}>
-            <div style={{ ...skeletonBarBase, width: "50px" }} />
-          </td>
-          <td style={{ ...tableStyles.td, padding: "12px" }}>
-            <div style={{ ...skeletonBarBase, width: "50px" }} />
-          </td>
         </tr>
       ))}
     </>
@@ -206,11 +199,18 @@ const SkeletonRows = () => {
 /* ─── Main Component ───────────────────────────────────────────────────────── */
 
 interface DispatchQueueTableProps {
-  /** Callback when a job count changes (for tab badge) */
   onCountChange?: (count: number) => void;
+  jobStatus?: "EN_ROUTE" | "IN_PROGRESS";
+  onViewJob?: (job: any) => void;
+  visibleJobIds?: Set<string> | null;
 }
 
-const DispatchQueueTable = ({ onCountChange }: DispatchQueueTableProps) => {
+const DispatchQueueTable = ({
+  onCountChange,
+  jobStatus = "EN_ROUTE",
+  onViewJob,
+  visibleJobIds,
+}: DispatchQueueTableProps) => {
   // Data
   const [jobs, setJobs] = useState<DispatchQueueJob[]>([]);
   const [loading, setLoading] = useState(true);
@@ -218,7 +218,6 @@ const DispatchQueueTable = ({ onCountChange }: DispatchQueueTableProps) => {
   const [error, setError] = useState<string | null>(null);
 
   // Filters
-  const [statusFilter, setStatusFilter] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("");
   const [searchText, setSearchText] = useState("");
 
@@ -254,13 +253,25 @@ const DispatchQueueTable = ({ onCountChange }: DispatchQueueTableProps) => {
         setError(null);
 
         const response = await getDispatchQueue({
-          ...(statusFilter && { status: statusFilter }),
-          ...(priorityFilter && { priority: priorityFilter }),
-          limit: 50,
-        });
+  status: jobStatus,
+  limit: 100,
+});
 
-        setJobs(response.data);
-        onCountChange?.(response.data.length);
+const stageJobs = (response.data || []).filter((job) => {
+  const normalizedStatus = (job.status || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, "_");
+
+  if (jobStatus === "IN_PROGRESS") {
+    return ["IN_PROGRESS", "ON_SITE"].includes(normalizedStatus);
+  }
+
+  return normalizedStatus === "EN_ROUTE";
+});
+
+setJobs(stageJobs);
+onCountChange?.(stageJobs.length);
       } catch (err) {
         console.error("Dispatch queue fetch error:", err);
         setError("Failed to load dispatch queue. Please try again.");
@@ -269,7 +280,7 @@ const DispatchQueueTable = ({ onCountChange }: DispatchQueueTableProps) => {
         setRefreshing(false);
       }
     },
-    [statusFilter, priorityFilter, onCountChange]
+    [onCountChange, jobStatus]
   );
 
   // Initial fetch + filter changes
@@ -291,17 +302,32 @@ const DispatchQueueTable = ({ onCountChange }: DispatchQueueTableProps) => {
   // ── Filtered data (client-side text search) ───────────────────────────────
 
   const filteredJobs = useMemo(() => {
-    if (!searchText.trim()) return jobs;
-    const q = searchText.toLowerCase().trim();
-    return jobs.filter(
-      (job) =>
-        job.job_id.toLowerCase().includes(q) ||
-        job.customer.toLowerCase().includes(q) ||
-        job.location.toLowerCase().includes(q) ||
-        job.title.toLowerCase().includes(q) ||
-        (job.technician?.name || "").toLowerCase().includes(q)
-    );
-  }, [jobs, searchText]);
+  const matchingJobs =
+    visibleJobIds == null
+      ? jobs
+      : jobs.filter((job) =>
+          visibleJobIds.has(String(job.job_id)),
+        );
+
+  const priorityFilteredJobs = priorityFilter
+    ? matchingJobs.filter((job) => job.priority === priorityFilter)
+    : matchingJobs;
+
+  if (!searchText.trim()) {
+    return priorityFilteredJobs;
+  }
+
+  const q = searchText.toLowerCase().trim();
+
+  return priorityFilteredJobs.filter(
+    (job) =>
+      job.job_id.toLowerCase().includes(q) ||
+      job.customer.toLowerCase().includes(q) ||
+      job.location.toLowerCase().includes(q) ||
+      job.title.toLowerCase().includes(q) ||
+      (job.technician?.name || "").toLowerCase().includes(q)
+  );
+},[jobs, searchText, priorityFilter, visibleJobIds]);
 
   // ── Column Definitions ────────────────────────────────────────────────────
 
@@ -334,27 +360,40 @@ const DispatchQueueTable = ({ onCountChange }: DispatchQueueTableProps) => {
           </div>
         ),
       },
+      ...(jobStatus === "EN_ROUTE"
+  ? [
       {
         accessorKey: "location",
         header: "Location",
         size: 200,
-        cell: ({ row }) => {
-          const isMapHovered = hoveredMaps === row.original.job_id;
+        cell: ({ row }: { row: any }) => {
+          const isMapHovered =
+            hoveredMaps === row.original.job_id;
+
           return (
             <div style={tableStyles.locationCell}>
-              <span style={tableStyles.locationText}>{row.original.location}</span>
+              <span style={tableStyles.locationText}>
+                {row.original.location}
+              </span>
+
               <a
                 href={googleMapsUrl(row.original.location)}
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{
                   ...tableStyles.mapLink,
-                  backgroundColor: isMapHovered ? "#EEF4F1" : "transparent",
-                  color: isMapHovered ? "#5C9470" : "#9CA3AF",
+                  backgroundColor: isMapHovered
+                    ? "#EEF4F1"
+                    : "transparent",
+                  color: isMapHovered
+                    ? "#5C9470"
+                    : "#9CA3AF",
                 }}
                 title="Open in Maps"
                 onClick={(e) => e.stopPropagation()}
-                onMouseEnter={() => setHoveredMaps(row.original.job_id)}
+                onMouseEnter={() =>
+                  setHoveredMaps(row.original.job_id)
+                }
                 onMouseLeave={() => setHoveredMaps(null)}
               >
                 <ExternalLink size={12} />
@@ -363,6 +402,8 @@ const DispatchQueueTable = ({ onCountChange }: DispatchQueueTableProps) => {
           );
         },
       },
+    ]
+  : []),
       {
         id: "technician",
         header: "Technician",
@@ -390,7 +431,7 @@ const DispatchQueueTable = ({ onCountChange }: DispatchQueueTableProps) => {
       },
       {
         accessorKey: "status",
-        header: "Status",
+        header: jobStatus === "IN_PROGRESS" ? "In Progress" : "Status",
         size: 110,
         cell: ({ row }) => <StatusBadge status={row.original.status} />,
       },
@@ -405,52 +446,46 @@ const DispatchQueueTable = ({ onCountChange }: DispatchQueueTableProps) => {
         ),
       },
       {
-        id: "sla",
-        header: "SLA Risk",
-        size: 130,
-        accessorFn: (row) => row.sla.minutes_remaining ?? 999999,
-        cell: ({ row }) => {
-          const deadline = row.original.sla.deadline;
-          if (!deadline) return <span style={tableStyles.unassigned}>—</span>;
-          return (
-            <SLARiskBadge
-              slaDeadline={deadline}
-              showMinutes={true}
-              enablePulse={true}
-            />
-          );
-        },
-      },
-      {
-        id: "timer",
-        header: "Timer",
-        size: 120,
-        accessorFn: (row) => {
-          if (row.status !== "ASSIGNED") return 999999;
-          if (row.acceptance_expires_at) {
-            return Math.max(
-              0,
-              (new Date(row.acceptance_expires_at).getTime() - Date.now()) /
-                1000
-            );
-          }
-          if (row.assigned_at) {
-            const expires =
-              new Date(row.assigned_at).getTime() + 10 * 60 * 1000;
-            return Math.max(0, (expires - Date.now()) / 1000);
-          }
-          return 999999;
-        },
-        cell: ({ row }) => (
-          <AcceptanceTimer
-            assignedAt={row.original.assigned_at}
-            expiresAt={row.original.acceptance_expires_at}
-            status={row.original.status}
-          />
-        ),
-      },
+  id: "actions",
+  header: "Actions",
+  size: 80,
+  enableSorting: false,
+  cell: ({ row }) => (
+    <button
+      type="button"
+      title="View job details and status history"
+      aria-label={`View job ${row.original.job_id} details`}
+      onClick={(event) => {
+        event.stopPropagation();
+
+        onViewJob?.({
+          id: row.original.job_id,
+          customer_name: row.original.customer,
+          issue_description: row.original.title,
+          location: row.original.location,
+          priority: row.original.priority,
+          status: row.original.status,
+        });
+      }}
+      style={{
+        width: "32px",
+        height: "32px",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        border: "1px solid #A7D9BF",
+        borderRadius: "8px",
+        background: "#FFFFFF",
+        color: "#059669",
+        cursor: "pointer",
+      }}
+    >
+      <Eye size={16} />
+    </button>
+  ),
+},
     ],
-    [hoveredMaps]
+    [hoveredMaps, jobStatus, onViewJob]
   );
 
   // ── Table Instance ────────────────────────────────────────────────────────
@@ -497,7 +532,7 @@ const DispatchQueueTable = ({ onCountChange }: DispatchQueueTableProps) => {
   };
 
   return (
-    <section style={tableStyles.section} aria-label="Dispatch Queue">
+    <section style={tableStyles.section} aria-label="En Route Jobs">
       <style>
         {`
           @keyframes shimmer {
@@ -519,21 +554,6 @@ const DispatchQueueTable = ({ onCountChange }: DispatchQueueTableProps) => {
 
       {/* Filter Bar */}
       <div style={filterBarResponsive}>
-        <select
-          style={filterSelectStyle("status")}
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          onFocus={() => setFocusedFilter("status")}
-          onBlur={() => setFocusedFilter(null)}
-          aria-label="Filter by status"
-          id="dq-status-filter"
-        >
-          <option value="">All Statuses</option>
-          <option value="QUEUED">Queued</option>
-          <option value="ASSIGNED">Assigned</option>
-          <option value="EN_ROUTE">En Route</option>
-          <option value="ON_SITE">On Site</option>
-        </select>
 
         <select
           style={filterSelectStyle("priority")}
@@ -661,12 +681,12 @@ const DispatchQueueTable = ({ onCountChange }: DispatchQueueTableProps) => {
                         title={
                           searchText.trim()
                              ? "No jobs match your search"
-                             : "No jobs in dispatch queue"
+                             : "No en route jobs"
                         }
                         description={
                           searchText.trim()
                             ? "Try adjusting your filters or search terms."
-                            : "All jobs have been dispatched or completed."
+                            : "Jobs appear here after the technician starts the journey."
                         }
                       />
                     </td>
@@ -713,8 +733,11 @@ const DispatchQueueTable = ({ onCountChange }: DispatchQueueTableProps) => {
 
 const tableStyles = {
   section: {
-    fontFamily: "'Inter', sans-serif",
-  } as React.CSSProperties,
+  fontFamily: "'Inter', sans-serif",
+  width: "100%",
+  minHeight: "420px",
+  boxSizing: "border-box",
+} as React.CSSProperties,
   
   filterBar: {
     display: "flex",

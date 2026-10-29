@@ -374,8 +374,8 @@ const TechnicianAvailabilityLocation = ({
         handleError,
         {
           enableHighAccuracy: true,
-          maximumAge: 5_000,
-          timeout: 15_000,
+          maximumAge: 0,
+          timeout: 30000,
         },
       );
 

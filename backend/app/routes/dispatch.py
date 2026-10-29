@@ -302,13 +302,17 @@ def technician_heartbeat(
 
         # Update database
 
+        # Update heartbeat and persist the latest valid GPS coordinates.
         now = datetime.now(timezone.utc)
 
-
+        if (
+            payload.last_lat is not None
+            and payload.last_lng is not None
+        ):
+            tech.latitude = float(payload.last_lat)
+            tech.longitude = float(payload.last_lng)
 
         tech.last_ping = now
-
-
 
         db.commit()
 

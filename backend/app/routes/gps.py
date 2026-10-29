@@ -1347,7 +1347,10 @@ async def gps_ping(
             user_agent=user_agent,
             correlation_id=correlation_id,
         )
-
+        # Persist the latest accepted GPS fix for organization-level tracking.
+        tech.latitude = payload.latitude
+        tech.longitude = payload.longitude
+        tech.last_ping = datetime.now(timezone.utc)
         db.add(db_ping)
 
         # Race-condition protection before committing history.
@@ -1505,6 +1508,7 @@ async def gps_batch(
         get_current_user
     ),
     _rate_limit: None = Depends(GPS_BATCH_RATE_LIMIT),
+    db: Session = Depends(get_db),
 ):
     if current_user.tenant_id != x_tenant_id:
         raise HTTPException(
@@ -2381,9 +2385,7 @@ async def update_technician_availability_location(
 ):
     """Store the technician's latest location before job assignment."""
 
-    if str(
-        current_user.tenant_id
-    ) != str(x_tenant_id):
+    if str(current_user.tenant_id) != str(x_tenant_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Tenant access denied",
@@ -2395,13 +2397,26 @@ async def update_technician_availability_location(
         current_user.role,
     )
 
-    if str(role_value).lower() != "technician":
+    if str(role_value).strip().lower() != "technician":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                "Only technicians can "
-                "update availability location"
-            ),
+            detail="Only technicians can update availability location",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant access denied",
+        )
+
+        role_value = getattr(
+        current_user.role,
+        "value",
+        current_user.role,
+    )
+
+    if str(role_value).strip().lower() != "technician":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only technicians can update availability location",
         )
 
     # Reuse the portal's tenant-scoped mapping, which resolves a technician
@@ -2506,6 +2521,35 @@ async def update_technician_availability_location(
     tenant_id = str(
         current_user.tenant_id
     )
+    # Find only the authenticated technician in the current tenant.
+    tech_query = db.query(models.Technician).filter(
+        models.Technician.tenant_id == tenant_id
+    )
+
+    if technician_id.isdigit():
+        tech = tech_query.filter(
+            (models.Technician.tech_id == technician_id)
+            | (
+                models.Technician.technician_id
+                == int(technician_id)
+            )
+        ).first()
+    else:
+        tech = tech_query.filter(
+            models.Technician.tech_id == technician_id
+        ).first()
+
+    if tech is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Technician not found",
+        )
+
+    tech.latitude = payload.latitude
+    tech.longitude = payload.longitude
+    tech.last_ping = datetime.now(timezone.utc)
+
+    db.commit()
 
     location_data = {
         "technician_id": technician_id,

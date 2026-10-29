@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import logo from "./assets/logo.png";
 import {
+  Search,
   ChevronsLeft,
   ChevronsRight,
   LayoutDashboard,
@@ -24,7 +25,7 @@ import {
   Wrench,
 } from "lucide-react";
 import useAuthStore from "./store/authStore";
-
+import NotificationBell from "./components/notifications/NotificationBell";
 // Import notification modules
 import NotificationDrawer from "./components/notifications/NotificationDrawer";
 import NotificationDetail from "./components/notifications/NotificationDetail";
@@ -68,13 +69,12 @@ const OrganizationOnboardingPage = lazy(
 );
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const JobsPage = lazy(() => import("./pages/JobsPage"));
-const TechDashboardPage = lazy(() => import("./pages/TechDashboardPage"));
-const DispatcherPage = lazy(
-  () => import("./pages/dispatcher/DispatcherPage"),
+const TechniciansDispatchersPage = lazy(
+  () => import("./pages/TechniciansDispatchersPage"),
 );
 const PlanningPage = lazy(() => import("./pages/PlanningPage"));
 const TrackingDashboardPage = lazy(
-  () => import("./pages/TrackingDashboardPage"),
+  () => import("./pages/OrganizationLiveTrackingPage"),
 );
 const ProfilePage = lazy(() => import("./pages/ProfilePage"));
 
@@ -152,22 +152,24 @@ interface NotificationItem {
 
 const styles = {
   appShell: {
-    display: "flex",
-    minHeight: "100vh",
-    height: "100vh",
-    fontFamily: "'Inter', sans-serif",
-  } as React.CSSProperties,
+  display: "flex",
+  minHeight: "100vh",
+  height: "100vh",
+  paddingTop: "72px",
+  boxSizing: "border-box",
+  overflow: "hidden",
+  fontFamily: "'Inter', sans-serif",
+} as React.CSSProperties,
 
   sidebar: {
     width: "220px",
     minWidth: "220px",
-    background: "#F3F8F5",
+    background: "#EAF4EE",
     borderRight: "1px solid #E3ECE7",
     display: "flex",
     flexDirection: "column",
-    position: "sticky",
-    top: 0,
-    height: "100vh",
+    position: "relative",
+    height: "calc(100vh - 72px)",
     zIndex: 200,
     boxShadow: "2px 0 8px rgba(47, 79, 62, 0.04)",
     transition:
@@ -197,8 +199,8 @@ const styles = {
     padding: "4px 6px",
     overflow: "hidden",
     boxShadow: "0 -2px 8px rgba(47, 79, 62, 0.06)",
-    zIndex: 200,
-    background: "#F3F8F5",
+    zIndex: 9999,
+    background: "#EAF4EE",
     boxSizing: "border-box",
   } as React.CSSProperties,
 
@@ -207,15 +209,15 @@ const styles = {
     flexDirection: "column",
     height: "100%",
     flex: 1,
-    padding: "16px 12px",
+    padding: "0px 12px",
     boxSizing: "border-box",
     overflowY: "auto",
     overflowX: "hidden",
   } as React.CSSProperties,
 
   sidebarContentCollapsed: {
-    padding: "12px 6px",
-  } as React.CSSProperties,
+  padding: "0px 6px",
+} as React.CSSProperties,
 
   sidebarContentMobile: {
     display: "flex",
@@ -254,12 +256,12 @@ const styles = {
   } as React.CSSProperties,
 
   sidebarNav: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "2px",
-    flex: 1,
-    marginTop: "16px",
-  } as React.CSSProperties,
+  display: "flex",
+  flexDirection: "column",
+  gap: "2px",
+  flex: 1,
+  marginTop: "0px",
+} as React.CSSProperties,
 
   sidebarNavMobile: {
     display: "flex",
@@ -394,7 +396,7 @@ const styles = {
 
   sidebarToggle: {
     position: "absolute",
-    top: "78px",
+    top: "8px",
     right: "12px",
     width: "30px",
     height: "30px",
@@ -411,9 +413,9 @@ const styles = {
       "color 0.2s ease, transform 0.2s ease",
   } as React.CSSProperties,
 
-  sidebarToggleCollapsed: {
+    sidebarToggleCollapsed: {
     right: "15px",
-    top: "40px",
+    top: "8px",
   } as React.CSSProperties,
 
   sidebarProfileMini: {
@@ -471,7 +473,7 @@ const styles = {
 
   mainArea: {
     flex: 1,
-    height: "100vh",
+    height: "calc(100vh - 72px)",
     display: "flex",
     flexDirection: "column",
     minWidth: 0,
@@ -480,7 +482,7 @@ const styles = {
   mainAreaMobile: {
     marginLeft: 0,
     marginBottom: "64px",
-    height: "calc(100vh - 64px)",
+    height: "calc(100vh - 72px - 64px)",
     width: "100%",
   } as React.CSSProperties,
 
@@ -686,6 +688,12 @@ function AppInner() {
   const [sidebarCollapsed, setSidebarCollapsed] =
     useState(false);
 
+  const [timeRange, setTimeRange] = useState("week");
+  const [
+  selectedCompletedJobForView,
+  setSelectedCompletedJobForView,
+] = useState<any | null>(null);
+
   const [isNavigating, setIsNavigating] =
     useState(false);
 
@@ -695,6 +703,10 @@ function AppInner() {
     let targetTab = tab;
     if (targetTab === "my_requests") {
       targetTab = "cust_requests";
+    }
+    // The standalone Jobs module is removed; use Planning for job workflows.
+    if (targetTab === "jobs") {
+      targetTab = "planning";
     }
     if (targetTab === activeTab) return;
 
@@ -967,7 +979,10 @@ function AppInner() {
       technicianId,
     );
 
-    startHeartbeatLoop(technicianId);
+    startHeartbeatLoop(
+      technicianId,
+      60000,
+    );
 
     return () => {
       console.log(
@@ -1099,50 +1114,56 @@ function AppInner() {
     }
   };
 
-  const handleNotificationClick =
-    async (
-      notif: NotificationItem,
-    ) => {
-      if (isCustomer) {
-        if (activeTab !== "cust_notifications") {
-          setPreviousCustomerTab(activeTab);
-        }
-        setSelectedCustomerNotificationId(String(notif.id));
-        setIsNotificationDrawerOpen(false);
-        handleTabChange("cust_notifications");
-        if (!notif.isRead) {
-          await handleMarkAsRead(notif.id);
-        }
-        return;
+  const handleNotificationClick = async (
+    notif: NotificationItem,
+  ) => {
+    // Customer: open the customer notifications page.
+    if (isCustomer) {
+      if (activeTab !== "cust_notifications") {
+        setPreviousCustomerTab(activeTab);
       }
 
-      if (isTechnician) {
-        setIsNotificationDrawerOpen(false);
-        handleTabChange("tech_notifications");
-        if (!notif.isRead) {
-          await handleMarkAsRead(notif.id);
-        }
-        return;
-      }
-
-      setSelectedNotification(
-        notif,
-      );
-
-      setSelectedJobDetail(
-        notif.job || null,
-      );
-
-      setIsNotificationDrawerOpen(
-        false,
-      );
+      setSelectedCustomerNotificationId(String(notif.id));
+      setIsNotificationDrawerOpen(false);
+      handleTabChange("cust_notifications");
 
       if (!notif.isRead) {
-        await handleMarkAsRead(
-          notif.id,
-        );
+        await handleMarkAsRead(notif.id);
       }
-    };
+
+      return;
+    }
+
+    // Technician: open technician notifications.
+    if (isTechnician) {
+      setIsNotificationDrawerOpen(false);
+      handleTabChange("tech_notifications");
+
+      if (!notif.isRead) {
+        await handleMarkAsRead(notif.id);
+      }
+
+      return;
+    }
+
+    // Super Admin: mark as read without opening job details.
+    if (isSuperAdmin) {
+      if (!notif.isRead) {
+        await handleMarkAsRead(notif.id);
+      }
+
+      return;
+    }
+
+    // Other roles: preserve the existing job-details behavior.
+    setSelectedNotification(notif);
+    setSelectedJobDetail(notif.job || null);
+    setIsNotificationDrawerOpen(false);
+
+    if (!notif.isRead) {
+      await handleMarkAsRead(notif.id);
+    }
+  };
 
   const handleMarkAsRead = async (notifId: string | number) => {
     try {
@@ -1317,20 +1338,254 @@ function AppInner() {
   return (
     <div
       style={
-        isCustomer
-          ? {
-              display: "flex",
-              flexDirection: "column",
-              height: "100vh",
-              overflow: "hidden",
-              fontFamily: "'Inter', sans-serif",
-            }
-          : styles.appShell
+  isCustomer
+    ? {
+        display: "flex",
+        flexDirection: "column",
+        height: "100vh",
+        overflow: "hidden",
+        fontFamily: "'Inter', sans-serif",
       }
+    : (isSuperAdmin || isDispatcher || isTechnician)
+      ? {
+          ...styles.appShell,
+          paddingTop: isTechnician ? "60px" : "72px",
+        }
+      : {
+          display: "flex",
+          minHeight: "100vh",
+          height: "100vh",
+          fontFamily: "'Inter', sans-serif",
+        }
+}
     >
       <style>
         {localCss}
       </style>
+      {(isSuperAdmin || isDispatcher) && (
+      <header
+  style={{
+    position: "fixed",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: "72px",
+    display: "flex",
+    alignItems: "center",
+    background: "#EAF4EE",
+    borderBottom: "1px solid #E3ECE7",
+    boxShadow: "0 1px 4px rgba(47, 79, 62, 0.05)",
+    zIndex: 1000,
+    boxSizing: "border-box",
+  }}
+>
+  {/* Fixed logo area — does not collapse */}
+  <div
+    style={{
+      width: isMobileLayout ? "104px" : "220px",
+      minWidth: isMobileLayout ? "104px" : "220px",
+      height: "100%",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      background: "#EAF4EE",
+      boxSizing: "border-box",
+    }}
+  >
+    <img
+      src={logo}
+      alt="FieldOps Commander"
+      style={{
+        width: isMobileLayout ? "84px" : "110px",
+        maxWidth: "calc(100% - 16px)",
+        objectFit: "contain",
+        display: "block",
+      }}
+    />
+  </div>
+
+  {/* Fixed search and profile controls */}
+  <div
+    style={{
+      flex: 1,
+      minWidth: 0,
+      height: "100%",
+      display: "flex",
+      alignItems: "center",
+      gap: "16px",
+      padding: "0 16px",
+      boxSizing: "border-box",
+    }}
+  >
+    {!isMobileLayout && (
+      <div
+        style={{
+          flex: "1 1 auto",
+          minWidth: 0,
+          display: "flex",
+          justifyContent: "center",
+        }}
+      >
+        <div
+          style={{
+            position: "relative",
+            width: "100%",
+            maxWidth: "520px",
+          }}
+        >
+          <Search
+            size={19}
+            style={{
+              position: "absolute",
+              left: "15px",
+              top: "50%",
+              transform: "translateY(-50%)",
+              color: "#94A3B8",
+              pointerEvents: "none",
+            }}
+          />
+
+          <input
+            type="search"
+            aria-label="Search by name, email, phone, or ID"
+            placeholder="Search by name, email, phone, or ID..."
+            style={{
+              width: "100%",
+              height: "44px",
+              boxSizing: "border-box",
+              padding: "0 18px 0 44px",
+              border: "1px solid #168653",
+              borderRadius: "24px",
+              outline: "none",
+              background: "#FFFFFF",
+              color: "#334155",
+              fontSize: "14px",
+              boxShadow: "0 0 0 3px rgba(22, 134, 83, 0.10)",
+            }}
+          />
+        </div>
+      </div>
+    )}
+
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: isMobileLayout ? "8px" : "14px",
+        flexShrink: 0,
+        marginLeft: "auto",
+      }}
+    >
+      {!isMobileLayout && (
+        <div style={{ position: "relative" }}>
+          <Calendar
+            size={14}
+            style={{
+              position: "absolute",
+              left: "10px",
+              top: "50%",
+              transform: "translateY(-50%)",
+              color: "#374151",
+              pointerEvents: "none",
+            }}
+          />
+
+          <select
+            value={timeRange}
+            onChange={(event) => setTimeRange(event.target.value)}
+            aria-label="Dashboard date range"
+            style={{
+              height: "38px",
+              padding: "0 12px 0 30px",
+              border: "1px solid #E2E8F0",
+              borderRadius: "8px",
+              background: "#FFFFFF",
+              color: "#374151",
+              fontSize: "12px",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            <option value="week">This Week</option>
+            <option value="month">This Month</option>
+            <option value="all">All Time</option>
+          </select>
+        </div>
+      )}
+            <NotificationBell
+  unreadCount={unreadCount}
+  onClick={() =>
+    setIsNotificationDrawerOpen((open) => !open)
+  }
+  isAnimated={isBellAnimated}
+  showSound={true}
+/>
+
+      {!isMobileLayout && (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "2px",
+            whiteSpace: "nowrap",
+          }}
+        >
+          <span
+            style={{
+              fontSize: "14px",
+              fontWeight: 700,
+              color: "#111827",
+            }}
+          >
+            {user?.first_name || "User"}
+          </span>
+
+          <span
+            style={{
+              fontSize: "12px",
+              color: "#64748B",
+            }}
+          >
+            {(user?.role || "USER").replace(/_/g, " ").toUpperCase()}
+          </span>
+        </div>
+      )}
+
+            <button
+        type="button"
+        aria-label="Open profile and settings"
+        title="Open Profile & Settings"
+        onClick={() =>
+          handleTabChange(
+            isTechnician
+              ? "tech_settings"
+              : isCustomer
+                ? "cust_profile"
+                : "profile",
+          )
+        }
+        style={{
+          width: "44px",
+          height: "44px",
+          minWidth: "44px",
+          borderRadius: "50%",
+          border: "none",
+          padding: 0,
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "#168653",
+          color: "#FFFFFF",
+          fontSize: "18px",
+          fontWeight: 600,
+        }}
+      >
+        {(user?.first_name?.trim()?.charAt(0) || "U").toUpperCase()}
+      </button>
+    </div>
+  </div>
+</header>  )}
 
       {/* Customer Top Navbar */}
       {isCustomer && (
@@ -1598,7 +1853,7 @@ function AppInner() {
           onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
           style={{
             position: "fixed",
-            top: 72,
+            top: 60,
             left: sidebarCollapsed ? 60 : 220,
             zIndex: 1001,
             width: 28,
@@ -1659,7 +1914,8 @@ function AppInner() {
                         ...styles.sidebarCollapsed,
                       }
                     : styles.sidebar),
-                  top: "60px",
+                  position: "relative",
+                  top: 0,
                   height: "calc(100vh - 60px)",
                 }
               : isMobileLayout
@@ -1801,26 +2057,21 @@ function AppInner() {
                   }
             }
           >
-            {/* Logo inside sidebar ONLY for non-customer */}
-            {!isCustomer && !isTechnicianShell && (
-              <div
-                style={
-                  isMobileLayout
-                    ? {
-                        display: "none",
-                      }
-                    : styles.sidebarBrand
-                }
-              >
-                <div style={styles.brandLogoWrap}>
-                  <img
-                    src={logo}
-                    alt="FieldOps Logo"
-                    style={styles.brandLogoImg}
-                  />
-                </div>
-              </div>
-            )}
+      {/* Compact spacer below the fixed header */}
+<div
+  aria-hidden="true"
+  style={
+    isMobileLayout || isTechnician
+      ? { display: "none" }
+      : {
+          height: "38px",
+          minHeight: "38px",
+          flexShrink: 0,
+          padding: 0,
+          margin: 0,
+        }
+  }
+/>
 
           {isTechnician ? (
             <nav
@@ -1975,6 +2226,26 @@ function AppInner() {
                   Billing Report
                 </span>
               </button>
+
+              {/* On mobile, keep Logout in the horizontal bottom navigation. */}
+              {isMobileLayout && (
+                <button
+                  type="button"
+                  className="nav-item-style"
+                  style={getItemStyle("logout")}
+                  onClick={() => logout()}
+                  title="Logout"
+                  aria-label="Logout"
+                >
+                  <LogOut size={18} style={{ flexShrink: 0 }} />
+                  <span
+                    className="nav-text"
+                    style={sidebarCollapsed ? { display: "none" } : {}}
+                  >
+                    Logout
+                  </span>
+                </button>
+              )}
             </nav>
           ) : isCustomer ? (
             <nav
@@ -2131,40 +2402,6 @@ function AppInner() {
               <button
                 className="nav-item-style"
                 style={getItemStyle(
-                  "jobs",
-                )}
-                onClick={() =>
-                  handleTabChange(
-                    "jobs",
-                  )
-                }
-              >
-                <Briefcase
-                  size={18}
-                  style={{
-                    flexShrink: 0,
-                  }}
-                />
-
-                <span
-                  className="nav-text"
-                  style={
-                    isMobileLayout ||
-                    sidebarCollapsed
-                      ? {
-                          display:
-                            "none",
-                        }
-                      : {}
-                  }
-                >
-                  Jobs
-                </span>
-              </button>
-
-              <button
-                className="nav-item-style"
-                style={getItemStyle(
                   "techboard",
                 )}
                 onClick={() =>
@@ -2199,31 +2436,16 @@ function AppInner() {
               {!isDispatcher && (
                 <button
                   className="nav-item-style"
-                  style={getItemStyle(
-                    "dispatchers",
-                  )}
-                  onClick={() =>
-                    handleTabChange(
-                      "dispatchers",
-                    )
-                  }
+                  style={getItemStyle("dispatchers")}
+                  onClick={() => handleTabChange("dispatchers")}
+                  title="Dispatchers"
                 >
-                  <Users
-                    size={18}
-                    style={{
-                      flexShrink: 0,
-                    }}
-                  />
-
+                  <Users size={18} style={{ flexShrink: 0 }} />
                   <span
                     className="nav-text"
                     style={
-                      isMobileLayout ||
-                      sidebarCollapsed
-                        ? {
-                            display:
-                              "none",
-                          }
+                      isMobileLayout || sidebarCollapsed
+                        ? { display: "none" }
                         : {}
                     }
                   >
@@ -2407,6 +2629,21 @@ function AppInner() {
                   </span>
                 </button>
               )}
+              {isMobileLayout && (isSuperAdmin || isDispatcher) && (
+                <button
+                  type="button"
+                  className="nav-item-style"
+                  style={getItemStyle("logout")}
+                  onClick={() => logout()}
+                  title="Logout"
+                  aria-label="Logout"
+                >
+                  <LogOut size={18} />
+                  <span className="nav-text" style={{ display: "none" }}>
+                    Logout
+                  </span>
+                </button>
+              )}
             </nav>
           )}
 
@@ -2451,12 +2688,61 @@ function AppInner() {
                 {!sidebarCollapsed && <span>Logout</span>}
               </button>
             </div>
-          ) : isTechnician ? (
+          ) : (isSuperAdmin || isDispatcher) ? (
             <div
               style={{
+                display: isMobileLayout ? "none" : "block",
                 marginTop: "auto",
                 padding: sidebarCollapsed ? "12px 6px" : "12px 14px",
                 borderTop: "1px solid #E2E8F0",
+                flexShrink: 0,
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => logout()}
+                title="Log out"
+                aria-label="Log out"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: sidebarCollapsed ? "center" : "flex-start",
+                  gap: sidebarCollapsed ? "0" : "10px",
+                  background: "transparent",
+                  border: "none",
+                  color: "#64748B",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  padding: "8px 10px",
+                  borderRadius: "8px",
+                  width: "100%",
+                  transition: "all 0.2s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = "#EF4444";
+                  e.currentTarget.style.background = "#FEF2F2";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = "#64748B";
+                  e.currentTarget.style.background = "transparent";
+                }}
+              >
+                <LogOut size={18} />
+                {!sidebarCollapsed && <span>Logout</span>}
+              </button>
+            </div>
+          ) : isTechnician ? (
+            <div
+              style={{
+                // Desktop: fixed footer at the bottom of the vertical sidebar.
+                // Mobile: Logout is rendered as the last item in the bottom nav.
+                display: isMobileLayout ? "none" : "block",
+                marginTop: "auto",
+                padding: sidebarCollapsed ? "12px 6px" : "12px 14px",
+                borderTop: "1px solid #E2E8F0",
+                flexShrink: 0,
+                boxSizing: "border-box",
               }}
             >
               <button
@@ -2495,17 +2781,15 @@ function AppInner() {
             </div>
           ) : (
             <div
-              style={
-                isMobileLayout
-                  ? {
-                      display:
-                        "none",
-                    }
-                  : sidebarCollapsed
-                    ? styles.sidebarProfileMiniCollapsed
-                    : styles.sidebarProfileMini
-              }
-            >
+  style={{
+    display: (isSuperAdmin || isDispatcher) ? "none" : "flex",
+    alignItems: "center",
+    gap: "10px",
+    padding: sidebarCollapsed ? "12px 6px" : "12px 14px",
+    borderTop: "1px solid #E2E8F0",
+    marginTop: "auto",
+  }}
+>
             <div
               onClick={() =>
                 handleTabChange(
@@ -2513,8 +2797,7 @@ function AppInner() {
                 )
               }
               style={{
-                display:
-                  "flex",
+                display: isSuperAdmin ? "flex" : "none",
                 alignItems:
                   "center",
                 gap: "10px",
@@ -2630,20 +2913,26 @@ function AppInner() {
               ? {
                   ...styles.mainArea,
                   ...styles.mainAreaMobile,
+                  height: isTechnician
+                    ? "calc(100vh - 60px - 64px)"
+                    : "calc(100vh - 72px - 64px)",
                 }
-              : styles.mainArea
+              : isTechnician
+                ? {
+                    ...styles.mainArea,
+                    height: "calc(100vh - 60px)",
+                  }
+                : styles.mainArea
         }
       >
         <main
           style={{
             ...styles.pageWrap,
-            ...(isTechnician
-              ? { paddingTop: "60px", boxSizing: "border-box" }
-              : {}),
             ...(isMobileLayout
               ? styles.pageWrapMobile
               : {}),
             overflowY: "auto",
+            minHeight: 0,
           }}
         >
           {isTechnician && (
@@ -2723,28 +3012,38 @@ function AppInner() {
                       true,
                     );
                   }}
+                  timeRange={timeRange}
+                  onTimeRangeChange={setTimeRange}
+                />
+              )}
+
+
+              {(activeTab === "techboard" || activeTab === "dispatchers") && (
+                <TechniciansDispatchersPage
+                  activeView={activeTab === "dispatchers" ? "dispatchers" : "technicians"}
+                  allowDispatcherToggle={isSuperAdmin}
+                  onViewChange={(view: "technicians" | "dispatchers") =>
+                    handleTabChange(view === "dispatchers" ? "dispatchers" : "techboard")
+                  }
                 />
               )}
 
               {activeTab ===
-                "jobs" && (
-                <JobsPage />
-              )}
-
-              {activeTab ===
-                "techboard" && (
-                <TechDashboardPage />
-              )}
-
-              {activeTab ===
-                "dispatchers" && (
-                <DispatcherPage />
-              )}
-
-              {activeTab ===
                 "planning" && (
-                <PlanningPage />
+                <PlanningPage
+  onViewCompletedJob={setSelectedCompletedJobForView}
+/>
               )}
+
+              {selectedCompletedJobForView && (
+  <JobsPage
+    initialViewJob={selectedCompletedJobForView}
+    modalOnly={true}
+    onViewJobClosed={() =>
+      setSelectedCompletedJobForView(null)
+    }
+  />
+)}
 
               {activeTab ===
                 "tracking" && (

@@ -120,6 +120,15 @@ interface Job {
   completed_at?: string;
   completed_by?: string;
 }
+type JobViewInput = Pick<Job, "id"> &
+  Partial<Omit<Job, "id">>;
+
+interface JobsPageProps {
+  modalOnly?: boolean;
+  onViewJobClosed?: () => void;
+  initialViewJob?: JobViewInput | null;
+  onInitialViewJobHandled?: () => void;
+}
 
 interface TechnicianOption {
   technician_id: number;
@@ -322,7 +331,12 @@ const CopyJobIdButton = ({
   );
 };
 
-function JobCreationForm() {
+function JobCreationForm({
+  initialViewJob,
+  onInitialViewJobHandled,
+  modalOnly = false,
+  onViewJobClosed,
+}: JobsPageProps) {
   const { user } = useAuthStore();
 
   const userRole = (
@@ -425,6 +439,31 @@ function JobCreationForm() {
 
   const [viewJob, setViewJob] =
     useState<Job | null>(null);
+  
+  useEffect(() => {
+  if (!initialViewJob) {
+    return;
+  }
+
+  setViewJob({
+    id: initialViewJob.id,
+    customer_name:
+      initialViewJob.customer_name || "Unknown customer",
+    location: initialViewJob.location || "",
+    issue_description: initialViewJob.issue_description,
+    priority: initialViewJob.priority || "MEDIUM",
+    service_type: initialViewJob.service_type || "Unknown",
+    contact_number: initialViewJob.contact_number,
+    preferred_service_date:
+      initialViewJob.preferred_service_date,
+    status: initialViewJob.status || "COMPLETED",
+    required_skill: initialViewJob.required_skill,
+    completed_at: initialViewJob.completed_at,
+    completed_by: initialViewJob.completed_by,
+  });
+
+  onInitialViewJobHandled?.();
+}, [initialViewJob, onInitialViewJobHandled]);
 
   const [isClosureModalOpen, setIsClosureModalOpen] =
     useState(false);
@@ -2277,6 +2316,7 @@ function JobCreationForm() {
       setIsClosureModalOpen(
         false
       );
+      onViewJobClosed?.();
     };
 
   const auditTotalPages =
@@ -2650,7 +2690,9 @@ function JobCreationForm() {
             grid-column: auto;
           }
         }
-      `}</style>
+      `}
+      </style>
+      <div style={{ display: modalOnly ? "none" : "contents" }}></div>
 
       {/* Success Popup */}
       {popup.show && (
@@ -4067,7 +4109,7 @@ function JobCreationForm() {
           )}
         </div>
       </div>
-
+    
       {/* View Job Modal */}
       {viewJob && (
         <div
