@@ -246,7 +246,7 @@ class DispatcherRuntime:
                 "Technician: none | Status: pending_no_candidates",
                 flush=True,
             )
-            pending_state = {
+            exhausted_state = {
                 "job_id": job_id,
                 "dispatch_attempt_id": dispatch_attempt_id,
                 "all_candidates": [],
@@ -259,21 +259,23 @@ class DispatcherRuntime:
                 "batch_exhausted": True,
                 "offer_status": None,
                 "last_offer_outcome": "NO_CANDIDATES",
-                "pending_retry": True,
-                "next_action": "NO_ELIGIBLE_TECHNICIAN",
+                "dispatch_exhausted": True,
+                "pending_retry": False,
+                "next_action": "DISPATCH_EXHAUSTED",
             }
-            pending_status = self._mark_pending_for_dispatch_retry(job_id, pending_state)
+            rejected = self._mark_dispatch_exhausted(job_id, exhausted_state)
             logger.warning(
-                "dispatch_pending_no_candidates job_id=%s technician_id=none dispatch_attempt_id=%s next_state=%s retryable=true outcome=pending",
+                "dispatch_exhausted_no_candidates job_id=%s technician_id=none dispatch_attempt_id=%s status=%s",
                 job_id,
                 dispatch_attempt_id,
-                pending_status,
+                "REJECTED_BY_TECHNICIAN" if rejected else "UNCHANGED",
             )
 
             return {
                 "job_id": job_id,
-                "status": "PENDING_RETRY" if pending_status else "NOT_RETRYABLE",
+                "status": "REJECTED_BY_TECHNICIAN" if rejected else "NOT_RETRYABLE",
                 "candidates": [],
+                "dispatch_exhausted": rejected,
             }
 
         # Preserve the complete pool separately from the active batch.
@@ -372,14 +374,16 @@ class DispatcherRuntime:
             self._mark_pending_for_dispatch_retry(job_id, result)
         return result
 
-    @staticmethod
-    def _persist_dispatch_state(job_id: int, state: dict[str, Any]) -> None:
+    def _persist_dispatch_state(self, job_id: int, state: dict[str, Any]) -> None:
         """Commit JSON-safe dispatch progress so worker restarts can recover."""
         if not state:
             return
+
         payload = DispatcherGraph._persistable_state(state)
+
         with SessionLocal() as db:
-            job = DispatcherRuntime._get_job(db, job_id)
+            job = self._get_job(db, job_id)
+
             if job is not None:
                 job.dispatch_state = payload
                 db.commit()
@@ -655,11 +659,15 @@ class DispatcherRuntime:
                     f"Job {job_id} not found while offering"
                 )
 
-            current_status = str(getattr(job, "status", "") or "").strip().upper()
-            if current_status not in OFFERABLE_JOB_STATUSES:
-                raise RuntimeError(f"job_not_dispatchable:{getattr(job, 'status', None)}")
+            # Reject duplicate assignment before checking job status.
             if getattr(job, "assigned_technician_id", None) is not None:
                 raise RuntimeError("job_already_assigned")
+
+            current_status = str(getattr(job, "status", "") or "").strip().upper()
+            if current_status not in OFFERABLE_JOB_STATUSES:
+                raise RuntimeError(
+                    f"job_not_dispatchable:{getattr(job, 'status', None)}"
+                )
 
             dispatch_state = job_state.get("_dispatch_state")
             if isinstance(dispatch_state, dict):

@@ -1420,7 +1420,15 @@ def accept_job(
         if hasattr(job, "accepted_at"):
             job.accepted_at = now
 
-        # Job acceptance does not change the technician's explicit availability.
+        # Normalize legacy status casing without changing availability.
+        technician_status = str(
+            getattr(technician, "technician_status", "") or ""
+        ).strip().upper()
+
+        if technician_status:
+            technician.technician_status = technician_status
+
+        # Job acceptance does not change the technician's logical availability.
 
         # -----------------------------------------------------
         # 12. Audit event
@@ -1641,6 +1649,23 @@ def reject_job(
         (tech.current_jobs or 0) - 1,
         0,
     )
+
+    # Release a busy technician when rejection leaves no active jobs.
+    # Preserve OFFLINE and other explicitly configured statuses.
+    current_technician_status = str(
+        tech.technician_status or ""
+    ).strip().upper()
+
+    if (
+        tech.current_jobs == 0
+        and current_technician_status in {
+            "BUSY",
+            "ON JOB",
+            "ON JOB / BUSY",
+            "EN_ROUTE",
+        }
+    ):
+        tech.technician_status = "AVAILABLE"
 
     ReDispatchQueueService.enqueue_failed_job(
         db=db,
@@ -1974,6 +1999,20 @@ async def assign_job(
                 ),
             )
 
+        # Only available or online technicians may receive assignments.
+        technician_status = str(
+            getattr(tech, "technician_status", "") or ""
+        ).strip().upper()
+
+        if technician_status not in {"AVAILABLE", "ONLINE"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Technician is unavailable. Busy or offline technicians "
+                    "cannot be assigned jobs."
+                ),
+            )
+
         recipient_tech_id = tech.tech_id
 
         if (
@@ -2016,7 +2055,9 @@ async def assign_job(
             tenant_id=effective_tenant_id,
             job_id=job.id,
             actor_name=str(current_user.user_id),
-            actor_role=current_user.role.value,
+            actor_role=str(
+                getattr(current_user.role, "value", current_user.role)
+            ),
             justification=req.justification,
             previous_technician_id=None,
             previous_technician_name="Unassigned",
@@ -2029,7 +2070,9 @@ async def assign_job(
         audit = OverrideAuditEvent(
             id=str(uuid.uuid4()),
             actor_id=str(current_user.user_id),
-            actor_role=current_user.role.value,
+            actor_role=str(
+                getattr(current_user.role, "value", current_user.role)
+            ),
             tenant_id=effective_tenant_id,
             job_id=job.id,
             action="force_assign",

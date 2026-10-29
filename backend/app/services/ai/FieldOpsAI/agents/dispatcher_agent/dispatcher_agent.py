@@ -77,6 +77,13 @@ class DispatcherState(TypedDict, total=False):
 
     job: dict[str, Any]
 
+    # Stable identity for recovering a dispatch after process restart.
+    dispatch_attempt_id: str
+
+    # The full ranked list from Planning, retained separately from the active
+    # batch so runtime handoff and recovery preserve the original ranking.
+    all_candidates: list[dict[str, Any]]
+
     # Current Planning batch.
     candidates: list[dict[str, Any]]
 
@@ -88,6 +95,13 @@ class DispatcherState(TypedDict, total=False):
 
     # Technician currently being offered the job.
     current_technician_id: int | None
+
+    # Retry and outcome state retained across LangGraph transitions.
+    batch_exhausted: bool
+    offer_status: str | None
+    last_offer_outcome: str | None
+    pending_retry: bool
+    dispatch_exhausted: bool
 
     # Every technician that has been attempted.
     #

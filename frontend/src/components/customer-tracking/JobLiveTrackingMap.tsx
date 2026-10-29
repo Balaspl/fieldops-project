@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { OlaMaps } from "olamaps-web-sdk";
+import api from "../../services/api";
 
 import { useTrackingStore } from "../../store/trackingStore";
 import { useTrackingWebSocket } from "../../hooks/useTrackingWebSocket";
@@ -42,10 +43,10 @@ const DEFAULT_CENTER: Point = {
 
 const DEFAULT_ZOOM = 14;
 
-const ROUTE_REFRESH_MS = 15_000;
-const ROUTE_MIN_MOVEMENT_METERS = 50;
+const ROUTE_REFRESH_MS = 1_500;
+const ROUTE_MIN_MOVEMENT_METERS = 5;
 
-const LIVE_LOCATION_CLOCK_REFRESH_MS = 5_000;
+const LIVE_LOCATION_CLOCK_REFRESH_MS = 1_000;
 
 const LIVE_LABEL_MAX_AGE_S = 10;
 const STALE_AFTER_S = 45;
@@ -136,6 +137,32 @@ function distanceBetweenPoints(
     latMeters,
     lngMeters,
   );
+}
+
+function normalizeAddressText(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function addressMatchScore(query: string, candidate: string): number {
+  const ignored = new Set([
+    "india", "street", "road", "near", "the", "and", "district",
+    "state", "city", "pin", "pincode", "county", "province",
+  ]);
+  const tokens = [...new Set(
+    normalizeAddressText(query)
+      .split(/\s+/)
+      .filter((token) => token.length >= 3 && !ignored.has(token) && !/^\d+$/.test(token)),
+  )];
+
+  if (tokens.length === 0) return 0;
+  const normalizedCandidate = normalizeAddressText(candidate);
+  const matched = tokens.filter((token) => normalizedCandidate.includes(token)).length;
+  return matched / tokens.length;
 }
 
 function recordTime(
@@ -378,8 +405,20 @@ export default function JobLiveTrackingMap({
   const lastMoveAtRef =
     useRef(0);
 
-  const hasFittedRef =
-    useRef(false);
+  const lastFittedDestinationRef =
+    useRef<string | null>(null);
+
+  const routeRequestControllerRef =
+    useRef<AbortController | null>(null);
+
+  const routeRequestIdRef =
+    useRef(0);
+
+  const routeRequestDestinationRef =
+    useRef<string | null>(null);
+
+  const lastRouteDestinationRef =
+    useRef<string | null>(null);
 
   const mapReadyRef =
     useRef(false);
@@ -461,6 +500,11 @@ export default function JobLiveTrackingMap({
     point: Point;
     accuracy: number | null;
   } | null>(null);
+
+  const [addressDestination, setAddressDestination] =
+    useState<Point | null>(null);
+  const [addressLookupDone, setAddressLookupDone] =
+    useState<boolean>(() => !buildingAddress?.trim());
 
   // ---------------------------------------------------------------------------
   // WebSocket
@@ -909,39 +953,92 @@ export default function JobLiveTrackingMap({
       ? ownPosition
       : streamedTechnician;
 
-  const destination =
-    useMemo<Point | null>(
-      () => {
-        const latitude =
-          toFiniteNumber(
-            customerLatitude,
-          );
+  const rawDestination = useMemo<Point | null>(() => {
+    const latitude = toFiniteNumber(customerLatitude);
+    const longitude = toFiniteNumber(customerLongitude);
+    const point = latitude === null || longitude === null
+      ? null
+      : { lat: latitude, lng: longitude };
 
-        const longitude =
-          toFiniteNumber(
-            customerLongitude,
-          );
+    return isValidPoint(point) ? point : null;
+  }, [customerLatitude, customerLongitude]);
 
-        const point =
-          latitude === null ||
-          longitude === null
-            ? null
-            : {
-                lat: latitude,
-                lng: longitude,
-              };
+  // Job records can contain stale but numerically valid coordinates. Resolve
+  // the service address through FieldOps' existing Ola Maps endpoint and only
+  // replace the stored point when the address match is credible and the two
+  // locations materially disagree. While checking, don't draw a false route.
+  useEffect(() => {
+    const address = buildingAddress?.trim();
+    let cancelled = false;
 
-        return isValidPoint(
-          point,
-        )
-          ? point
-          : DEFAULT_CENTER;
-      },
-      [
-        customerLatitude,
-        customerLongitude,
-      ],
-    );
+    setAddressDestination(null);
+    if (!address) {
+      setAddressLookupDone(true);
+      return;
+    }
+
+    setAddressLookupDone(false);
+    api.get<{
+      results?: Array<{
+        latitude?: number;
+        longitude?: number;
+        formatted_address?: string;
+        name?: string;
+      }>;
+    }>("/organizations/location-search", {
+      params: { q: address },
+      timeout: 5000,
+    })
+      .then(({ data }) => {
+        if (cancelled) return;
+
+        const candidates = (Array.isArray(data.results) ? data.results : [])
+          .map((result) => {
+            const latitude = toFiniteNumber(result.latitude);
+            const longitude = toFiniteNumber(result.longitude);
+            const point = latitude === null || longitude === null
+              ? null
+              : { lat: latitude, lng: longitude };
+            const candidateAddress = result.formatted_address || result.name || "";
+
+            return {
+              point: isValidPoint(point) ? point : null,
+              score: addressMatchScore(address, candidateAddress),
+            };
+          })
+          .filter((result) => result.point !== null)
+          .sort((left, right) => right.score - left.score);
+
+        const best = candidates[0];
+        if (!best?.point || best.score < 0.2) return;
+
+        const storedDistance = rawDestination
+          ? distanceBetweenPoints(rawDestination, best.point)
+          : Number.POSITIVE_INFINITY;
+
+        // Keep the stored coordinates when they already agree with the
+        // address geocode; correct only a materially wrong or missing point.
+        if (!rawDestination || storedDistance > 10_000) {
+          setAddressDestination(best.point);
+        }
+      })
+      .catch((error) => {
+        // Keep the existing backend coordinate as fallback if geocoding fails.
+        dbg("service-address geocoding failed; using stored coordinates", error);
+      })
+      .finally(() => {
+        if (!cancelled) setAddressLookupDone(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [buildingAddress, rawDestination]);
+
+  const destination = useMemo<Point | null>(() => {
+    if (buildingAddress?.trim() && !addressLookupDone) return null;
+    return addressDestination ?? rawDestination;
+  }, [buildingAddress, addressLookupDone, addressDestination, rawDestination]);
 
   // ---------------------------------------------------------------------------
   // Debug state
@@ -1190,8 +1287,8 @@ export default function JobLiveTrackingMap({
           handleError,
           {
             enableHighAccuracy: true,
-            maximumAge: 5_000,
-            timeout: 8_000,
+            maximumAge: 1_000,
+            timeout: 4_000,
           },
         );
 
@@ -1484,8 +1581,14 @@ export default function JobLiveTrackingMap({
         lastMoveAtRef.current =
           0;
 
-        hasFittedRef.current =
-          false;
+        lastFittedDestinationRef.current =
+          null;
+
+        routeRequestControllerRef.current?.abort();
+        routeRequestControllerRef.current = null;
+        routeRequestDestinationRef.current = null;
+        routeRequestIdRef.current += 1;
+        lastRouteDestinationRef.current = null;
 
         lastRouteRef.current =
           null;
@@ -1838,16 +1941,23 @@ useEffect(() => {
   );
 
   // ---------------------------------------------------------------------------
-  // Fit technician + customer once
+  // Fit technician + customer once, and refit if address verification corrects
+  // the destination. Technician GPS updates move the marker without resetting
+  // the user's current map view every second.
   // ---------------------------------------------------------------------------
 
-    useEffect(() => {
+  const destinationFitKey = destination
+    ? `${destination.lat.toFixed(5)},${destination.lng.toFixed(5)}`
+    : "";
+
+  useEffect(() => {
     if (
-      hasFittedRef.current ||
       !mapReady ||
       !mapRef.current ||
       !origin ||
-      !destination
+      !destination ||
+      !destinationFitKey ||
+      lastFittedDestinationRef.current === destinationFitKey
     ) {
       return;
     }
@@ -1869,9 +1979,9 @@ useEffect(() => {
               Math.max(origin.lat, destination.lat),
             ],
           ],
-          { padding: 90, maxZoom: 16, duration: 600 },
+          { padding: 90, maxZoom: 16, duration: 450 },
         );
-        hasFittedRef.current = true;
+        lastFittedDestinationRef.current = destinationFitKey;
       } catch (error) {
         console.warn("[LIVE MAP] fitBounds failed:", error);
       }
@@ -1884,6 +1994,7 @@ useEffect(() => {
     origin?.lng,
     destination?.lat,
     destination?.lng,
+    destinationFitKey,
   ]);
 
   // ---------------------------------------------------------------------------
@@ -1914,6 +2025,25 @@ useEffect(() => {
 
       const nowMs =
         Date.now();
+      const destinationKey =
+        `${destination.lat.toFixed(5)},${destination.lng.toFixed(5)}`;
+
+      if (lastRouteDestinationRef.current !== destinationKey) {
+        lastRouteRef.current = null;
+        lastRouteDestinationRef.current = destinationKey;
+      }
+
+      // If the service address was corrected while an old route was loading,
+      // cancel that route so it cannot replace the route to the correct site.
+      if (
+        routeRequestControllerRef.current &&
+        routeRequestDestinationRef.current !== destinationKey
+      ) {
+        routeRequestControllerRef.current.abort();
+        routeRequestControllerRef.current = null;
+        routeRequestDestinationRef.current = null;
+        routeRequestIdRef.current += 1;
+      }
 
       if (previous) {
         const movedMeters =
@@ -1927,81 +2057,68 @@ useEffect(() => {
           previous.at;
 
         if (
-          elapsed <
-            ROUTE_REFRESH_MS &&
-          movedMeters <
-            ROUTE_MIN_MOVEMENT_METERS
+          elapsed < ROUTE_REFRESH_MS &&
+          movedMeters < ROUTE_MIN_MOVEMENT_METERS
         ) {
           return;
         }
       }
 
-      lastRouteRef.current =
-        {
-          ...origin,
-          at: nowMs,
-        };
+      // Do not start parallel route requests while Ola Maps is still resolving
+      // the current route. The last response is kept visible until a fresher
+      // route arrives, rather than cancelling it on every GPS update.
+      if (routeRequestControllerRef.current) {
+        return;
+      }
 
-      let cancelled =
-        false;
+      lastRouteRef.current = {
+        ...origin,
+        at: nowMs,
+      };
 
-      const calculateRoute =
-        async () => {
-          try {
-            const result =
-              await getOlaRoute(
-                {
-                  originLat:
-                    origin.lat,
-                  originLng:
-                    origin.lng,
-                  destinationLat:
-                    destination.lat,
-                  destinationLng:
-                    destination.lng,
-                },
-              );
+      const controller = new AbortController();
+      const requestId = ++routeRequestIdRef.current;
+      routeRequestControllerRef.current = controller;
+      routeRequestDestinationRef.current = destinationKey;
 
-            if (
-              !cancelled
-            ) {
-              setRoute(
-                result,
-              );
+      const calculateRoute = async () => {
+        try {
+          const result = await getOlaRoute(
+            {
+              originLat: origin.lat,
+              originLng: origin.lng,
+              destinationLat: destination.lat,
+              destinationLng: destination.lng,
+            },
+            controller.signal,
+          );
 
-              dbg(
-                "route received",
-                {
-                  points:
-                    result
-                      ?.route_points
-                      ?.length ??
-                    0,
-                  distance_meters:
-                    result?.distance_meters,
-                },
-              );
-            }
-          } catch (
-            error
+          if (
+            !controller.signal.aborted &&
+            requestId === routeRequestIdRef.current
           ) {
-            if (
-              !cancelled
-            ) {
-              console.error(
-                "[LIVE MAP] Ola route error:",
-                error,
-              );
-            }
+            setRoute(result);
+            dbg("route received", {
+              points: result?.route_points?.length ?? 0,
+              distance_meters: result?.distance_meters,
+            });
           }
-        };
+        } catch (error) {
+          if (
+            !controller.signal.aborted &&
+            requestId === routeRequestIdRef.current
+          ) {
+            console.error("[LIVE MAP] Ola route error:", error);
+          }
+        } finally {
+          if (routeRequestControllerRef.current === controller) {
+            routeRequestControllerRef.current = null;
+            routeRequestDestinationRef.current = null;
+          }
+        }
+      };
 
       void calculateRoute();
-
-      return () => {
-        cancelled =
-          true;
-      };
     },
     [
       origin?.lat,

@@ -49,9 +49,17 @@ def evaluate_technician_dispatch_eligibility(
     status = str(getattr(technician, "technician_status", "") or "").strip().upper()
     reasons: list[str] = []
 
+    if status not in {"AVAILABLE", "ONLINE"}:
+        reasons.append("not_available")
+
     if job_tenant_id is not None and tenant_id != str(job_tenant_id):
         reasons.append("tenant_mismatch")
+
     heartbeat_age = _age_seconds(getattr(technician, "last_ping", None), now)
+    if heartbeat_age is None:
+        reasons.append("missing_or_future_heartbeat")
+    elif heartbeat_age > HEARTBEAT_MAX_AGE_SECONDS:
+        reasons.append("stale_heartbeat")
 
     location: dict[str, Any] | None = None
     location_lookup_failed = False
@@ -73,23 +81,57 @@ def evaluate_technician_dispatch_eligibility(
     location_age: float | None = None
     accuracy: float | None = None
     coordinates: tuple[float, float] | None = None
+
     if isinstance(location, dict):
         try:
             lat = float(location["latitude"])
             lng = float(location["longitude"])
-            if not (math.isfinite(lat) and math.isfinite(lng) and -90 <= lat <= 90 and -180 <= lng <= 180):
-                raise ValueError("invalid cached coordinates")
-            coordinates = (lat, lng)
-            raw_accuracy = location.get("accuracy")
-            accuracy = float(raw_accuracy) if raw_accuracy is not None else None
-            raw_timestamp = location.get("timestamp")
-            if raw_timestamp:
-                timestamp = datetime.fromisoformat(str(raw_timestamp).replace("Z", "+00:00"))
-                if timestamp.tzinfo is None:
-                    timestamp = timestamp.replace(tzinfo=timezone.utc)
-                location_age = (now - timestamp.astimezone(timezone.utc)).total_seconds()
         except (KeyError, TypeError, ValueError, OverflowError):
             location = None
+            reasons.append("invalid_location_coordinates")
+        else:
+            if not (
+                math.isfinite(lat)
+                and math.isfinite(lng)
+                and -90 <= lat <= 90
+                and -180 <= lng <= 180
+            ):
+                location = None
+                reasons.append("invalid_location_coordinates")
+            else:
+                coordinates = (lat, lng)
+
+                raw_accuracy = location.get("accuracy")
+                if raw_accuracy is not None:
+                    try:
+                        accuracy = float(raw_accuracy)
+                    except (TypeError, ValueError, OverflowError):
+                        reasons.append("invalid_location_accuracy")
+                    else:
+                        if not math.isfinite(accuracy) or accuracy < 0:
+                            reasons.append("invalid_location_accuracy")
+                        elif accuracy > LOCATION_MAX_ACCURACY_METERS:
+                            reasons.append("poor_location_accuracy")
+
+                raw_timestamp = location.get("timestamp")
+                if raw_timestamp:
+                    try:
+                        timestamp = datetime.fromisoformat(
+                            str(raw_timestamp).replace("Z", "+00:00")
+                        )
+                        if timestamp.tzinfo is None:
+                            timestamp = timestamp.replace(tzinfo=timezone.utc)
+
+                        location_age = (
+                            now - timestamp.astimezone(timezone.utc)
+                        ).total_seconds()
+                    except (TypeError, ValueError, OverflowError):
+                        reasons.append("invalid_location_timestamp")
+                    else:
+                        if location_age < -30:
+                            reasons.append("future_location_timestamp")
+                        elif location_age > LOCATION_MAX_AGE_SECONDS:
+                            reasons.append("stale_location")
 
     # Offline technicians may not have a current GPS fix. Use their saved
     # coordinates for planning instead of excluding them based on presence.

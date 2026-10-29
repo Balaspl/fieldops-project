@@ -9633,7 +9633,10 @@ def test_cov_create_job_kafka_publish_results(monkeypatch, publish_result):
         )
 
         assert result.customer_name == "Coverage Customer"
-        assert len(background_tasks.tasks) == 3
+
+        # With no SLA deadline, creation schedules the communication event
+        # and the job-created Kafka event. SLA_CREATED is conditional.
+        assert len(background_tasks.tasks) == 2
 
         task = next(
             task

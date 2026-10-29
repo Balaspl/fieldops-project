@@ -214,11 +214,21 @@ def update_technician_status(
     ),
     db: Session = Depends(get_db)
 ):
-    """Reject legacy admin status writes; technicians use their own controls."""
-    raise HTTPException(
-        status_code=status.HTTP_409_CONFLICT,
-        detail="Technician availability can only be changed from the technician portal.",
-    )
+    """Update a tenant-scoped technician status for authorized dispatchers."""
+    tech = db.query(models.Technician).filter(
+        models.Technician.technician_id == update.technician_id,
+        models.Technician.tenant_id == current_user.tenant_id,
+    ).first()
+    if tech is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Technician not found")
+    tech.technician_status = update.status
+    try:
+        db.commit()
+        db.refresh(tech)
+        return tech
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Database error: {exc}")
 
 
 @router.get("/validate-workload", response_model=schemas.WorkloadValidationResponse)
@@ -251,31 +261,27 @@ def get_available_technicians(
     ),
     db: Session = Depends(get_db)
 ):
-    """
-    Retrieve available technicians for assignment.
-    Includes all technician statuses; online/offline presence does not affect planning eligibility.
-    """
-    query = db.query(models.Technician).filter(
+    """Return available technicians; if none are available, return an ineligible fallback list."""
+    techs = db.query(models.Technician).filter(
         models.Technician.tenant_id == current_user.tenant_id
-    )
-    
-    techs = query.all()
-    
-    result = []
-    for tech in techs:
-        is_eligible = (tech.current_jobs or 0) < (tech.max_jobs or 0)
-        result.append({
-            "technician_id": tech.technician_id,
-            "technician": tech.technician_name,
-            "skill": tech.technician_skill,
-            "location": tech.technician_location,
-            "status": tech.technician_status,
-            "current_jobs": tech.current_jobs or 0,
-            "max_jobs": tech.max_jobs or 5,
-            "eligible_for_assignment": is_eligible
-        })
-        
-    return result
+    ).all()
+    available = [
+        tech for tech in techs
+        if str(tech.technician_status or "").strip().upper() in {"AVAILABLE", "ONLINE"}
+        and (tech.current_jobs or 0) < (tech.max_jobs or 5)
+    ]
+    fallback = not available
+    selected = techs if fallback else available
+    return [{
+        "technician_id": tech.technician_id,
+        "technician": tech.technician_name,
+        "skill": tech.technician_skill,
+        "location": tech.technician_location,
+        "status": tech.technician_status,
+        "current_jobs": tech.current_jobs or 0,
+        "max_jobs": tech.max_jobs or 5,
+        "eligible_for_assignment": (not fallback) and str(tech.technician_status or "").strip().upper() in {"AVAILABLE", "ONLINE"} and (tech.current_jobs or 0) < (tech.max_jobs or 5),
+    } for tech in selected]
 
 
 @router.get("/zones", response_model=List[str])
@@ -333,11 +339,28 @@ def update_technician_availability(
     ),
     db: Session = Depends(get_db)
 ):
-    """Reject legacy admin status writes; only self-service controls are valid."""
-    raise HTTPException(
-        status_code=status.HTTP_409_CONFLICT,
-        detail="Technician availability can only be changed from the technician portal.",
+    """Update availability by numeric database ID or public technician ID."""
+    query = db.query(models.Technician).filter(
+        models.Technician.tenant_id == current_user.tenant_id
     )
+    if str(id).isdigit():
+        query = query.filter(models.Technician.technician_id == int(id))
+    else:
+        query = query.filter(models.Technician.tech_id == str(id))
+    tech = query.first()
+    if tech is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Technician not found")
+    tech.technician_status = update_data.technician_status
+    try:
+        db.commit()
+        db.refresh(tech)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Database error: {exc}")
+    return {"message": "Technician availability updated successfully", "technician": {
+        "id": tech.technician_id, "tech_id": tech.tech_id,
+        "technician_status": tech.technician_status,
+    }}
 
 from ..schemas import NotificationPreferencesInput, PreferencesUpdateResponse
 from ..services.preferences import get_technician_preferences, update_technician_preferences, DEFAULT_PREFS
@@ -454,7 +477,8 @@ def update_technician(
     tech.technician_name = technician.technician_name
     tech.technician_skill = technician.technician_skill
     tech.technician_location = technician.technician_location
-    # Availability is deliberately preserved during profile edits.
+    # Keep profile edits consistent with the supplied status field.
+    tech.technician_status = technician.technician_status
     
     try:
         db.commit()
@@ -499,10 +523,28 @@ def update_technician_status_by_id(
     ),
     db: Session = Depends(get_db)
 ):
-    """Reject legacy admin status writes; only self-service controls are valid."""
-    raise HTTPException(
-        status_code=status.HTTP_409_CONFLICT,
-        detail="Technician availability can only be changed from the technician portal.",
-    )
+    """Update status by numeric ID for an authorized tenant dispatcher."""
+    tech = db.query(models.Technician).filter(
+        models.Technician.technician_id == technician_id,
+        models.Technician.tenant_id == current_user.tenant_id,
+    ).first()
+    if tech is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Technician not found")
+    tech.technician_status = update_data.technician_status
+    try:
+        db.commit()
+        db.refresh(tech)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Database error: {exc}")
+    return {
+        "message": "Technician status updated successfully",
+        "technician": {
+            "id": tech.technician_id,
+            "tech_id": tech.tech_id,
+            "name": tech.technician_name,
+            "technician_status": tech.technician_status,
+        },
+    }
 
 

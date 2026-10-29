@@ -27,7 +27,7 @@ from app.models import (
     User,
 )
 from app.models.technician_profile import TechnicianProfile
-from app.models_legacy import GPSPing
+from app.models_legacy import GPSPing, JobAssignment
 from app.portal_schemas import (
     CustomerFeedbackSubmitRequest,
     CustomerSupportRequestCreate,
@@ -39,6 +39,7 @@ from app.services.ai.FieldOpsAI.schemas.customer_profile import (
 )
 from app.routes import customer_portal
 from app.routes.customer_portal import (
+    CustomerCancellationRequest,
     cancel_service_request,
     create_customer_support_request,
     download_customer_job_report,
@@ -68,6 +69,7 @@ def customer_db():
         tables=[
             Organization.__table__,
             Job.__table__,
+            JobAssignment.__table__,
             ServiceRequest.__table__,
             JobClosure.__table__,
             JobPaymentStatus.__table__,
@@ -216,6 +218,7 @@ def customer_db():
         Base.metadata.drop_all(
             bind=engine,
             tables=[
+                JobAssignment.__table__,
                 JobClosure.__table__,
                 JobPaymentStatus.__table__,
                 CustomerSupportRequest.__table__,
@@ -427,7 +430,15 @@ def test_cancel_propagates_to_linked_job_using_job_state(customer_db, monkeypatc
     monkeypatch.setattr(Job, "transition", cancel_transition)
 
     result = asyncio.run(
-        cancel_service_request(1, None, _customer(), customer_db)
+        cancel_service_request(
+            1,
+            CustomerCancellationRequest(
+                reason="Customer requested cancellation"
+            ),
+            None,
+            _customer(),
+            customer_db,
+        )
     )
 
     service_request = customer_db.query(ServiceRequest).filter_by(id=1).one()
@@ -447,7 +458,17 @@ def test_cancel_denies_when_linked_job_has_progressed(customer_db, monkeypatch):
     customer_db.commit()
 
     with pytest.raises(HTTPException) as denied:
-        asyncio.run(cancel_service_request(1, None, _customer(), customer_db))
+        asyncio.run(
+            cancel_service_request(
+                1,
+                CustomerCancellationRequest(
+                    reason="Customer requested cancellation"
+                ),
+                None,
+                _customer(),
+                customer_db,
+            )
+        )
 
     assert denied.value.status_code == 400
     customer_db.refresh(job)

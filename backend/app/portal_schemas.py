@@ -4,7 +4,7 @@ Portal schemas for Technician and Customer portals.
 Pydantic models for request/response validation on portal-specific endpoints.
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, field_validator, ConfigDict, model_validator
 
@@ -215,11 +215,28 @@ class ServiceRequestCreate(BaseModel):
     issue: Optional[str] = None
     priority: str = Field(default="MEDIUM")
     preferred_visit_date: Optional[date] = None
+    preferred_service_time: Optional[time] = None
     images: Optional[List[str]] = Field(default_factory=list)
     location: Optional[str] = None
     contact_number: Optional[str] = None
     site_latitude: Optional[float] = Field(None, ge=-90, le=90)
     site_longitude: Optional[float] = Field(None, ge=-180, le=180)
+
+    @field_validator("preferred_service_time")
+    @classmethod
+    def validate_preferred_service_time(cls, value):
+        if value is None:
+            return value
+        valid_time = (
+            8 <= value.hour <= 18
+            and value.minute in {0, 30}
+            and value.second == 0
+        ) or (value.hour == 19 and value.minute == 0 and value.second == 0)
+        if not valid_time:
+            raise ValueError(
+                "Preferred service time must be between 08:00 and 19:00 in 30-minute intervals"
+            )
+        return value
 
     @model_validator(mode="after")
     def validate_site_coordinates(self):
@@ -415,9 +432,6 @@ class TechnicianJobResponse(BaseModel):
     updated_at: Optional[datetime] = None
     sla_deadline: Optional[datetime] = None
     assigned_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    rejected_at: Optional[datetime] = None
-    rejection_reason: Optional[str] = None
     site_address: Optional[str] = None
     site_latitude: Optional[float] = None
     site_longitude: Optional[float] = None
@@ -436,18 +450,7 @@ class TechnicianJobRejectRequest(BaseModel):
 class TechnicianJobCompleteRequest(BaseModel):
     completion_notes: Optional[str] = None
     photos: Optional[List[str]] = Field(default_factory=list)
-    before_images: Optional[List[str]] = Field(default_factory=list)
     signature: Optional[str] = None
-    signature_data: Optional[str] = Field(None, min_length=1, max_length=2_000_000)
-    payment_method: Optional[str] = None
-    payment_provider: Optional[str] = None
-    payment_demo: Optional[bool] = None
-    cash_amount: Optional[float] = Field(None, ge=0)
-    upi_amount: Optional[float] = Field(None, ge=0)
-    gst_amount: Optional[float] = Field(None, ge=0)
-    total_amount: Optional[float] = Field(None, ge=0)
-    labour_cost: Optional[float] = Field(None, ge=0)
-    material_cost: Optional[float] = Field(None, ge=0)
 
 
 # ──────────────────────────────────────────────────
@@ -479,7 +482,6 @@ class DeclinedJobReassignRequest(BaseModel):
 # ──────────────────────────────────────────────────
 
 class TechnicianDashboardResponse(BaseModel):
-    total_jobs: int = 0
     total_assigned: int = 0
     active_jobs: int = 0
     completed_today: int = 0
@@ -491,11 +493,11 @@ class TechnicianDashboardResponse(BaseModel):
 
 
 class TechnicianPerformanceReportResponse(BaseModel):
-    performance_period: str = "week"
+    performance_period: str
     period_completed_jobs: int = 0
     average_completion_minutes: Optional[float] = None
     customer_rating: Optional[float] = None
-    total_distance_km: Optional[float] = None
+    total_distance_km: float = 0.0
     completion_trend: List[Dict[str, Any]] = Field(default_factory=list)
     status_distribution: List[Dict[str, Any]] = Field(default_factory=list)
 
@@ -623,6 +625,14 @@ class CustomerJobTrackingResponse(BaseModel):
     assigned_technician_skills: Optional[List[str]] = None
     assigned_technician_experience: Optional[str] = None
     assigned_technician_certifications: Optional[List[str]] = None
+    technician_accepted: bool = False
+    accepted_at: Optional[datetime] = None
+    assigned_at: Optional[datetime] = None
+    en_route_at: Optional[datetime] = None
+    distance_travelled_km: Optional[float] = None
+    issue_description: Optional[str] = None
+    preferred_service_date: Optional[date] = None
+    preferred_service_time: Optional[time] = None
 
     # Customer-visible ETA contract. The backend remains authoritative for
     # calculation, caching, fallback selection, and access control.
@@ -771,6 +781,13 @@ class CustomerSupportRequestAdminResponse(BaseModel):
     subject: str
     description: str
     status: str
+    related_job_id: Optional[int] = None
+    resolution_note: Optional[str] = None
+    resolved_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+    customer: dict
+    job: Optional[dict] = None
     related_job_id: Optional[int] = None
     resolution_note: Optional[str] = None
     resolved_at: Optional[datetime] = None

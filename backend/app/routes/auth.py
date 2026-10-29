@@ -85,6 +85,7 @@ from ..models.user import (
     RefreshToken,
     User,
 )
+from ..models.customer_profile import CustomerProfileModel
 
 from ..models.trust_device import TrustedDevice
 
@@ -202,13 +203,19 @@ class RegisterRequest(BaseModel):
         max_length=100,
     )
 
-    tenant_id: str = Field(
-        ...,
-        min_length=1,
-        max_length=100,
-    )
+    # Phone is optional during signup; when supplied, accept international
+    # E.164-style values as well as local digits and normalize whitespace.
+    phone_number: Optional[str] = Field(default=None, min_length=7, max_length=20)
 
-    phone_number: Optional[str] = None
+    # Public signup is scoped to the organization selected by the client.
+    # The role is intentionally not accepted from the client.
+    tenant_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+
+    # Optional address fields collected by the customer registration screen.
+    address: Optional[str] = Field(default=None, max_length=1000)
+    city: Optional[str] = Field(default=None, max_length=100)
+    state: Optional[str] = Field(default=None, max_length=100)
+    pincode: Optional[str] = Field(default=None, max_length=10)
 
 
 class OrganizationOnboardRequest(BaseModel):
@@ -711,12 +718,21 @@ async def register(
             },
         )
 
-    tenant_id = payload.tenant_id
-
+    # Require an explicit organization scope. Never silently route a signup
+    # into a default tenant: that can place customers in the wrong organization.
+    raw_tenant_id = payload.tenant_id
+    tenant_id = raw_tenant_id.strip() if isinstance(raw_tenant_id, str) else ""
     if not tenant_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="tenant_id is required",
+        )
+
+    phone_number = payload.phone_number.strip() if payload.phone_number else None
+    if phone_number and (len(phone_number) < 7 or len(phone_number) > 20):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Phone number must contain 7 to 20 characters",
         )
 
     org = (
@@ -764,12 +780,30 @@ async def register(
         last_name=payload.last_name.strip(),
         role=role.value,
         tenant_id=tenant_id,
-        phone_number=payload.phone_number,
+        phone_number=phone_number,
         is_active=True,
         is_email_verified=False,
     )
 
     db.add(user)
+    db.flush()
+
+    # Save profile/address details as part of registration so they are not
+    # silently discarded. Coordinates are used for reverse-geocoding on the
+    # client; the current profile model stores the resolved address fields.
+    profile = CustomerProfileModel(
+        id=str(uuid.uuid4()),
+        user_id=user.id,
+        tenant_id=tenant_id,
+        full_name=f"{payload.first_name.strip()} {payload.last_name.strip()}".strip(),
+        mobile_number=phone_number or "",
+        address=payload.address.strip() if payload.address and payload.address.strip() else None,
+        city=payload.city.strip() if payload.city and payload.city.strip() else None,
+        state=payload.state.strip() if payload.state and payload.state.strip() else None,
+        pincode=payload.pincode.strip() if payload.pincode and payload.pincode.strip() else None,
+        profile_completed=True,
+    )
+    db.add(profile)
     db.flush()
 
     _log_audit(
