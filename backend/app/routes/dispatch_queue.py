@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, desc, asc
+from sqlalchemy import or_, desc, asc, func
 
 from app.database import get_db
 from app.models import Job, Technician
@@ -81,9 +81,51 @@ def get_dispatch_queue(
 ):
     start_time = time.time()
 
-    # Tenant is derived from the authenticated user.
+    # Match the organization visibility rules used by job statistics.
+    tenant_id = current_user.tenant_id
+
+    tenant_technician_ids = db.query(
+        Technician.technician_id
+    ).filter(
+        Technician.tenant_id == tenant_id
+    )
+
+    terminal_statuses = (
+        "COMPLETED",
+        "CLOSED",
+        "CANCELLED",
+        "CANCELED",
+    )
+
+    normalized_job_status = func.upper(
+        func.replace(
+            func.replace(Job.status, " ", ""),
+            "_",
+            "",
+        )
+    )
+
     query = db.query(Job).filter(
-        Job.tenant_id == current_user.tenant_id
+        or_(
+            # Jobs belonging to this organization's customers.
+            Job.customer_tenant_id == tenant_id,
+
+            # Jobs assigned to technicians in this organization.
+            Job.assigned_technician_id.in_(
+                tenant_technician_ids
+            ),
+
+            # Keep this organization's unassigned and terminal jobs.
+            (
+                (Job.tenant_id == tenant_id)
+                & (
+                    Job.assigned_technician_id.is_(None)
+                    | normalized_job_status.in_(
+                        terminal_statuses
+                    )
+                )
+            ),
+        )
     )
 
     if status:

@@ -8047,6 +8047,13 @@ def test_get_jobs_stats_other_count_clamped_to_zero():
         def filter(self, *args, **kwargs):
             return self
 
+        def with_entities(self, *args, **kwargs):
+            return self
+
+        def scalar(self):
+            # This test checks the category-count clamp, not job-card counts.
+            return 0
+
         def count(self):
             value = self.count_values[self.count_index]
             self.count_index += 1
@@ -11139,3 +11146,118 @@ def test_cov_get_customer_signature_final_forbidden():
 
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail == "You are not authorized to view customer signatures"
+
+def test_get_jobs_stats_job_card_counts_by_status(setup_db):
+    from datetime import datetime, timezone
+    from app.routes.jobs import get_jobs_stats
+    from app.models import Job
+    from app.auth.dependencies import AuthenticatedUser
+    from app.auth.rbac import UserRole
+
+    db = setup_db
+    now = datetime.now(timezone.utc)
+
+    # Add jobs for each technician workflow status.
+    extra_jobs = [
+        Job(
+            id=105,
+            tenant_id="tenant-1",
+            customer_name="Accepted Job",
+            status="accepted",
+            priority="HIGH",
+            service_type="HVAC Repair",
+            location="North Zone",
+            issue_description="Accepted by technician",
+            contact_number="9876543214",
+            preferred_service_date=now,
+            assigned_technician_id=1,
+        ),
+        Job(
+            id=106,
+            tenant_id="tenant-1",
+            customer_name="En Route Job",
+            status="en route",
+            priority="HIGH",
+            service_type="HVAC Repair",
+            location="North Zone",
+            issue_description="Technician travelling",
+            contact_number="9876543215",
+            preferred_service_date=now,
+            assigned_technician_id=1,
+        ),
+        Job(
+            id=107,
+            tenant_id="tenant-1",
+            customer_name="Rejected Job",
+            status="rejected_by_technician",
+            priority="MEDIUM",
+            service_type="Electrical Service",
+            location="South Zone",
+            issue_description="Technician rejected assignment",
+            contact_number="9876543216",
+            preferred_service_date=now,
+            assigned_technician_id=None,
+        ),
+        Job(
+            id=108,
+            tenant_id="tenant-1",
+            customer_name="On Site Job",
+            status="on site",
+            priority="HIGH",
+            service_type="Plumbing Service",
+            location="East Zone",
+            issue_description="Technician arrived",
+            contact_number="9876543217",
+            preferred_service_date=now,
+            assigned_technician_id=1,
+        ),
+        Job(
+            id=109,
+            tenant_id="tenant-1",
+            customer_name="Paused Job",
+            status="paused",
+            priority="MEDIUM",
+            service_type="Electrical Service",
+            location="West Zone",
+            issue_description="Work temporarily paused",
+            contact_number="9876543218",
+            preferred_service_date=now,
+            assigned_technician_id=1,
+        ),
+    ]
+
+    db.add_all(extra_jobs)
+    db.commit()
+
+    current_user = AuthenticatedUser(
+        user_id="test-user",
+        tenant_id="tenant-1",
+        role=UserRole.DISPATCHER,
+        jti="test-jti",
+        session_id="test-session",
+    )
+
+    result = get_jobs_stats(
+        time_range=None,
+        user_tenant=(current_user, "tenant-1"),
+        db=db,
+    )
+
+    cards = result["job_cards"]
+
+    # Four jobs already exist in the test fixture.
+    assert cards["total"] == 9
+
+    # Existing unassigned job with status "active".
+    assert cards["unassigned"] == 1
+
+    assert cards["accepted"] == 1
+    assert cards["en_route"] == 1
+    assert cards["rejected"] == 1
+
+    # Includes the existing IN_PROGRESS job,
+    # plus ON_SITE and PAUSED.
+    assert cards["in_progress"] == 3
+
+    # Existing completed job.
+    assert cards["completed"] == 1

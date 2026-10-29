@@ -996,7 +996,23 @@ async def create_org_admin(
 
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found or inactive")
+    # Allow only one dispatcher per organization.
+    if role == UserRole.DISPATCHER:
+        existing_dispatcher = (
+            db.query(User.id)
+            .filter(
+                User.tenant_id == org_id,
+                User.role == UserRole.DISPATCHER.value,
+                User.deleted_at.is_(None),
+            )
+            .first()
+        )
 
+        if existing_dispatcher:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="For one organization, only one dispatcher is allowed.",
+            )
     # Check user limit
     current_user_count = db.query(func.count(User.id)).filter(
         User.tenant_id == org_id,

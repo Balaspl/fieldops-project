@@ -184,7 +184,9 @@ class TechnicianResponse(BaseModel):
     max_jobs: int
     created_at: datetime
     updated_at: datetime
-
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    last_ping: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
 
 

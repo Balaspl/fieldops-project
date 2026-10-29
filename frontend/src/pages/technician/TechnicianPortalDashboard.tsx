@@ -72,6 +72,36 @@ const normalizeTechnicianStatus = (
   return map[value] ?? null;
 };
 
+// API endpoints may return a direct payload or a common wrapper. Normalize the
+// response before storing it so an unexpected object is never treated as a job array.
+const extractDashboardPayload = (
+  payload: unknown,
+): TechnicianDashboardResponse | null => {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+
+  const record = payload as Record<string, unknown>;
+  const nested = record.dashboard ?? record.data;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    return nested as TechnicianDashboardResponse;
+  }
+
+  return payload as TechnicianDashboardResponse;
+};
+
+const extractJobsPayload = (payload: unknown): any[] | null => {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return null;
+
+  const record = payload as Record<string, unknown>;
+  for (const key of ["jobs", "items", "results", "data"]) {
+    if (Array.isArray(record[key])) return record[key] as any[];
+  }
+
+  return null;
+};
+
 const s = {
   page: {
     padding: "24px",
@@ -222,6 +252,8 @@ export default function TechnicianPortalDashboard({
   const [recentJobs, setRecentJobs] = useState<any[]>([]);
   const [dashboardJobs, setDashboardJobs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [dashboardRefreshError, setDashboardRefreshError] =
+    useState<string | null>(null);
   const [offerActionLoading, setOfferActionLoading] = useState(false);
   const [offerError, setOfferError] = useState<string | null>(null);
   const [rejectingOffer, setRejectingOffer] = useState(false);
@@ -251,74 +283,129 @@ export default function TechnicianPortalDashboard({
   const dismissedOfferIds = useRef(new Set<number>());
 
   useEffect(() => {
+    let mounted = true;
+    let requestInFlight = false;
+    let refreshTimer: number | undefined;
+
     const loadDashboard = async () => {
+      // Use one request cycle at a time. A fixed setInterval can overlap slow
+      // API calls and let an older response overwrite newer data.
+      if (requestInFlight) return;
+      requestInFlight = true;
+
       try {
-        const [dashRes, jobsRes] = await Promise.all([
+        // Dashboard statistics and jobs are independent resources. Update the
+        // resource that succeeds instead of discarding both when one endpoint fails.
+        const [dashResult, jobsResult] = await Promise.allSettled([
           getTechnicianDashboard(),
           getTechnicianJobs(),
         ]);
 
-        setStats(dashRes.data);
+        if (!mounted) return;
 
-        const isProfileCompleted = Boolean(
-          dashRes.data?.profile_completed,
-        );
+        let dashboardUpdated = false;
+        let jobsUpdated = false;
 
-        setProfileCompleted(isProfileCompleted);
+        if (dashResult.status === "fulfilled") {
+          const dashboardData = extractDashboardPayload(dashResult.value.data);
 
-        if (isProfileCompleted) {
-          const authoritativeStatus =
-            normalizeTechnicianStatus(
-              dashRes.data?.technician_status,
+          if (dashboardData) {
+            dashboardUpdated = true;
+            setStats(dashboardData);
+
+            const isProfileCompleted = Boolean(
+              dashboardData.profile_completed,
             );
+            setProfileCompleted(isProfileCompleted);
 
-          if (authoritativeStatus) {
-            setTechnicianStatus(
-              authoritativeStatus,
-            );
-              onAvailabilityChange?.(authoritativeStatus,);
+            if (isProfileCompleted) {
+              const authoritativeStatus = normalizeTechnicianStatus(
+                dashboardData.technician_status,
+              );
 
-            setAttendanceError(null);
-            setLastAttendanceSync(new Date());
+              if (authoritativeStatus) {
+                setTechnicianStatus(authoritativeStatus);
+                onAvailabilityChange?.(authoritativeStatus);
+                setAttendanceError(null);
+                setLastAttendanceSync(new Date());
+              } else {
+                setTechnicianStatus("Not Available");
+                setAttendanceError(
+                  "Attendance and availability status is currently unavailable.",
+                );
+                setLastAttendanceSync(null);
+              }
+            } else {
+              setTechnicianStatus("Not Available");
+              onAvailabilityChange?.("Not Available");
+              setAttendanceError(null);
+              setLastAttendanceSync(null);
+            }
           } else {
-            setTechnicianStatus("Not Available");
-            setAttendanceError(
-              "Attendance and availability status is currently unavailable.",
+            console.error(
+              "Technician dashboard API returned an unexpected payload:",
+              dashResult.value.data,
             );
-            setLastAttendanceSync(null);
           }
         } else {
-          setTechnicianStatus("Not Available");
-          onAvailabilityChange?.("Not Available",);
-          setAttendanceError(null);
-          setLastAttendanceSync(null);
+          console.error(
+            "Failed to load technician dashboard statistics:",
+            dashResult.reason,
+          );
+          setAttendanceError(
+            "Unable to load your attendance and availability status.",
+          );
         }
 
-        const jobs = jobsRes.data || [];
-        setDashboardJobs(jobs);
-        setRecentJobs(jobs.slice(0, 5));
-      } catch (error) {
-        console.error(
-          "Failed to load dashboard:",
-          error,
-        );
+        if (jobsResult.status === "fulfilled") {
+          const jobs = extractJobsPayload(jobsResult.value.data);
+          if (jobs !== null) {
+            jobsUpdated = true;
+            setDashboardJobs(jobs);
+            setRecentJobs(jobs.slice(0, 5));
+          } else {
+            console.error(
+              "Technician jobs API returned an unexpected payload:",
+              jobsResult.value.data,
+            );
+          }
+        } else {
+          console.error("Failed to load technician jobs:", jobsResult.reason);
+        }
 
-        setAttendanceError(
-          "Unable to load your attendance and availability status.",
+        setDashboardRefreshError(
+          dashboardUpdated && jobsUpdated
+            ? null
+            : "Some dashboard data could not be refreshed. Showing the last available values.",
         );
+      } catch (error) {
+        console.error("Failed to refresh technician dashboard:", error);
+        if (mounted) {
+          setDashboardRefreshError(
+            "Dashboard data could not be refreshed. Showing the last available values.",
+          );
+          setAttendanceError(
+            "Unable to load your attendance and availability status.",
+          );
+        }
       } finally {
-        setLoading(false);
+        requestInFlight = false;
+        if (mounted) {
+          setLoading(false);
+          // Schedule the next refresh after the current one has finished.
+          refreshTimer = window.setTimeout(() => {
+            void loadDashboard();
+          }, 5000);
+        }
       }
     };
 
-    loadDashboard();
+    void loadDashboard();
 
-    const timer = setInterval(
-      loadDashboard,
-      5000,
-    );
-
-    return () => clearInterval(timer);
+    return () => {
+      mounted = false;
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
+    };
   }, []);
 
   useEffect(() => {
@@ -415,10 +502,55 @@ export default function TechnicianPortalDashboard({
   };
 
   const refreshDashboardJobs = async () => {
-    const response = await getTechnicianJobs();
-    const jobs = response.data || [];
-    setDashboardJobs(jobs);
-    setRecentJobs(jobs.slice(0, 5));
+    // Refresh both the job list and summary cards after accept/reject actions.
+    // A failure in one request must not prevent the other from updating.
+    const [dashboardResult, jobsResult] = await Promise.allSettled([
+      getTechnicianDashboard(),
+      getTechnicianJobs(),
+    ]);
+
+    let dashboardUpdated = false;
+    let jobsUpdated = false;
+
+    if (dashboardResult.status === "fulfilled") {
+      const dashboardData = extractDashboardPayload(dashboardResult.value.data);
+      if (dashboardData) {
+        setStats(dashboardData);
+        dashboardUpdated = true;
+      } else {
+        console.error(
+          "Technician dashboard API returned an unexpected payload:",
+          dashboardResult.value.data,
+        );
+      }
+    } else {
+      console.error(
+        "Failed to refresh technician dashboard statistics:",
+        dashboardResult.reason,
+      );
+    }
+
+    if (jobsResult.status === "fulfilled") {
+      const jobs = extractJobsPayload(jobsResult.value.data);
+      if (jobs !== null) {
+        setDashboardJobs(jobs);
+        setRecentJobs(jobs.slice(0, 5));
+        jobsUpdated = true;
+      } else {
+        console.error(
+          "Technician jobs API returned an unexpected payload:",
+          jobsResult.value.data,
+        );
+      }
+    } else {
+      console.error("Failed to refresh technician jobs:", jobsResult.reason);
+    }
+
+    setDashboardRefreshError(
+      dashboardUpdated && jobsUpdated
+        ? null
+        : "Some dashboard data could not be refreshed. Showing the last available values.",
+    );
   };
 
   const handleAssignedOfferAccept = async () => {
@@ -807,6 +939,22 @@ export default function TechnicianPortalDashboard({
   return (
     <div style={s.page}>
       {welcomeBanner}
+      {dashboardRefreshError && (
+        <div
+          role="alert"
+          style={{
+            marginBottom: 16,
+            padding: "10px 14px",
+            border: "1px solid #F3D19C",
+            borderRadius: 10,
+            background: "#FFF8E8",
+            color: "#8A4B08",
+            fontSize: 13,
+          }}
+        >
+          {dashboardRefreshError}
+        </div>
+      )}
       <div
         style={{
           ...s.header,

@@ -902,6 +902,22 @@
     },
     {
       "nodeid": "tests/agents/test_dispatcher_agent.py::test_dispatcher_all_candidates_rejected",
+      "outcome": "failed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_dispatcher_uses_planning_order_without_rechecking_eligibility",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_job_154_rejection_or_timeout_offers_rank_two_once[TECHNICIAN_REJECTED]",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_job_154_rejection_or_timeout_offers_rank_two_once[TECHNICIAN_TIMEOUT]",
+      "outcome": "passed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_graph.py::test_restart_recovery_advances_persisted_batch_without_duplicate_offer",
       "outcome": "passed"
     },
     {
@@ -954,7 +970,7 @@
     },
     {
       "nodeid": "tests/agents/test_dispatcher_graph.py::test_no_candidates_from_replanning_is_handled",
-      "outcome": "passed"
+      "outcome": "failed"
     },
     {
       "nodeid": "tests/agents/test_dispatcher_graph.py::test_timeout_and_reject_are_both_excluded_from_replanning",
