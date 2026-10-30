@@ -2579,6 +2579,10 @@ async def update_technician_availability_location(
             )
             for identity in cache_identities
         ]
+        try:
+            redis_client.set("dispatch:availability_changed", "1")
+        except Exception:
+            pass
     except Exception:
         cache_results = []
     if not cache_results or not all(result is not False and result is not None for result in cache_results):

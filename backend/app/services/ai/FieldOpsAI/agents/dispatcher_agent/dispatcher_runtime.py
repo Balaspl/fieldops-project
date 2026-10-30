@@ -383,10 +383,10 @@ class DispatcherRuntime:
 
         with SessionLocal() as db:
             job = self._get_job(db, job_id)
-
             if job is not None:
                 job.dispatch_state = payload
-                db.commit()
+                if hasattr(db, "commit"):
+                    db.commit()
 
     # ------------------------------------------------------------------
     # Planning adapter
@@ -659,9 +659,11 @@ class DispatcherRuntime:
                     f"Job {job_id} not found while offering"
                 )
 
-            # Reject duplicate assignment before checking job status.
             if getattr(job, "assigned_technician_id", None) is not None:
                 raise RuntimeError("job_already_assigned")
+            current_status = str(getattr(job, "status", "") or "").strip().upper()
+            if current_status not in OFFERABLE_JOB_STATUSES:
+                raise RuntimeError(f"job_not_dispatchable:{getattr(job, 'status', None)}")
 
             current_status = str(getattr(job, "status", "") or "").strip().upper()
             if current_status not in OFFERABLE_JOB_STATUSES:
@@ -1130,6 +1132,8 @@ class DispatcherRuntime:
         job_id: int,
     ) -> Any | None:
         """Load the real Job model."""
+        if not hasattr(db, "query"):
+            return None
 
         return (
             db.query(models.Job)

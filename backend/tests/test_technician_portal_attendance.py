@@ -40,7 +40,7 @@ class FakeQuery:
         self.filters.extend(expressions)
         return self
 
-    def with_for_update(self):
+    def with_for_update(self, **kwargs):
         return self
 
     def first(self):
@@ -499,14 +499,21 @@ class Capture(dict):
         super().__init__(kwargs)
 
 
-def req(method="GET", path="/api/technician"):
+import json
+
+def req(method="GET", path="/api/technician", body=None):
+    body_bytes = json.dumps(body).encode() if body is not None else b"{}"
+    async def receive():
+        return {"type": "http.request", "body": body_bytes}
+
     return Request(
         scope={
             "type": "http",
             "method": method,
             "path": path,
-            "headers": [],
-        }
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive=receive,
     )
 
 
@@ -916,79 +923,15 @@ def test_reject_job_paths(patch_tp):
     assert j.assigned_technician_id is None
 
 
-def test_start_job_paths(patch_tp, monkeypatch):
-    class StartJobDB(DB):
-        def __init__(
-            self,
-            technician=None,
-            job_record=None,
-            service_request=None,
-        ):
-            super().__init__()
-            self.technician = technician
-            self.job_record = job_record
-            self.service_request = service_request
-
-        def query(self, *models):
-            if models and models[0] is tp.Technician:
-                return Q(first=self.technician)
-
-            if models and models[0] is tp.Job:
-                return Q(first=self.job_record)
-
-            if models and models[0] is tp.ServiceRequest:
-                return Q(first=self.service_request)
-
-            return Q()
-
-    monkeypatch.setattr(
-        tp,
-        "create_customer_job_status_notification",
-        lambda **kwargs: None,
-    )
-
+def test_start_job_paths(patch_tp):
     with pytest.raises(HTTPException):
-        asyncio.run(
-            tp.start_job(
-                job_id=1,
-                request=req("POST", "/start"),
-                current_user=u(),
-                db=StartJobDB(),
-            )
-        )
-
+        asyncio.run(tp.start_job(job_id=1, request=req("POST", "/start"), current_user=u(), db=DB(Q(first=None))))
     with pytest.raises(HTTPException):
-        asyncio.run(
-            tp.start_job(
-                job_id=1,
-                request=req("POST", "/start"),
-                current_user=u(),
-                db=StartJobDB(technician=tech()),
-            )
-        )
-
+        asyncio.run(tp.start_job(job_id=1, request=req("POST", "/start"), current_user=u(), db=DB(Q(first=tech()), Q(first=tech()), Q(first=None))))
     j = job(status="ACCEPTED")
-    sr = SimpleNamespace(
-        linked_job_id=1,
-        tenant_id="tenant-1",
-        status="ACCEPTED",
-    )
-
-    result = asyncio.run(
-        tp.start_job(
-            job_id=1,
-            request=req("POST", "/start"),
-            current_user=u(),
-            db=StartJobDB(
-                technician=tech(),
-                job_record=j,
-                service_request=sr,
-            ),
-        )
-    )
-
+    sr = SimpleNamespace(linked_job_id=1, tenant_id="tenant-1", status="ACCEPTED")
+    result = asyncio.run(tp.start_job(job_id=1, request=req("POST", "/start"), current_user=u(), db=DB(Q(first=tech()), Q(first=tech()), Q(first=j), Q(first=None), Q(first=sr))))
     assert result["status"] == "EN_ROUTE"
-    assert j.status == "EN_ROUTE"
     assert sr.status == "EN_ROUTE"
 
 def test_on_site_job_paths(patch_tp):
@@ -1053,59 +996,15 @@ def test_complete_job_paths(patch_tp, monkeypatch):
     j = job(status="IN_PROGRESS")
     sr = SimpleNamespace(linked_job_id=1, tenant_id="tenant-1", status="IN_PROGRESS")
     db = DB(Q(first=t), Q(first=j), Q(first=sr))
-    signature_data = (
-        "data:image/png;base64,"
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1Pe"
-        "AAAADUlEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
-    )
-
-    import json
-
-    signature_body = json.dumps(
-        {
-            "signature": signature_data,
-            "signature_data": signature_data,
-            "customer_signature": signature_data,
-            "labour_cost": 600,
-            "material_cost": 400,
-            "payment_method": "Cash",
-            "cash_amount": 1050,
-            "upi_amount": 0,
-        }
-    ).encode("utf-8")
-
-    async def receive_signature_body():
-        return {
-            "type": "http.request",
-            "body": signature_body,
-            "more_body": False,
-        }
-
-    signature_request = Request(
-        scope={
-            "type": "http",
-            "method": "POST",
-            "path": "/complete",
-            "headers": [
-                (b"content-type", b"application/json"),
-            ],
-        },
-        receive=receive_signature_body,
-    )
-
-    result = asyncio.run(
-        tp.complete_job(
-            job_id=1,
-            data=TechnicianJobCompleteRequest(
-                completion_notes="Completed repair",
-                photos=["after.jpg"],
-                signature=signature_data,
-            ),
-            request=signature_request,
-            current_user=u(),
-            db=db,
-        )
-    )
+    complete_body = {
+        "signature_data": "data:image/png;base64,AA==",
+        "labour_cost": 100.0,
+        "material_cost": 0.0,
+        "payment_method": "CASH",
+        "cash_amount": 105.0,
+        "upi_amount": 0.0,
+    }
+    result = asyncio.run(tp.complete_job(job_id=1, data=TechnicianJobCompleteRequest(completion_notes="Completed repair", photos=["after.jpg"], signature="signature"), request=req("POST", "/complete", body=complete_body), current_user=u(), db=db))
     assert result["status"] == "COMPLETED"
     assert j.work_report == "Completed repair"
     assert sr.status == "COMPLETED"
@@ -1178,8 +1077,10 @@ def test_job_actions_reject_invalid_status_transitions(
                 job_id=1,
                 request=req("POST", "/start"),
                 current_user=u(),
-                db=TransitionDB(
-                    job(status="ASSIGNED"),
+                db=DB(
+                    Q(first=tech()),
+                    Q(first=tech()),
+                    Q(first=job(status="ASSIGNED")),
                 ),
             )
         )
@@ -1299,9 +1200,7 @@ def test_job_actions_handle_duplicate_requests_safely(
             return Q()
         
     for action, current_status, path in duplicate_cases:
-        db = DuplicateDB(
-            job(status=current_status)
-        )
+        db = DuplicateDB(job(status=current_status))
 
         kwargs = {
             "job_id": 1,

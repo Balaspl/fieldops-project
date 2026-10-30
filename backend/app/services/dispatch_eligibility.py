@@ -11,8 +11,6 @@ from typing import Any
 
 HEARTBEAT_MAX_AGE_SECONDS = int(os.getenv("DISPATCH_HEARTBEAT_MAX_AGE_SECONDS", "120"))
 LOCATION_MAX_AGE_SECONDS = int(os.getenv("DISPATCH_LOCATION_MAX_AGE_SECONDS", "120"))
-# Planning always accepts a non-negative fix through 150 m. Deployments may
-# configure a more permissive fallback for less accurate fixes (>150 m).
 MINIMUM_ACCEPTED_GPS_ACCURACY_METERS = 150.0
 LOCATION_MAX_ACCURACY_METERS = float(os.getenv("DISPATCH_MAX_GPS_ACCURACY_METERS", "150"))
 
@@ -36,12 +34,9 @@ def evaluate_technician_dispatch_eligibility(
     fallback_location: tuple[float, float] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Return authoritative eligibility and safe diagnostic fields.
+    """Return authoritative eligibility and safe diagnostic fields."""
+    import app.services.dispatch_eligibility as _this_mod
 
-    Technician presence, heartbeat freshness, and GPS freshness do not block
-    planning. Use cached technician coordinates when present, then saved
-    technician coordinates, and finally the organization's coordinates.
-    """
     now = now or datetime.now(timezone.utc)
     tenant_id = str(getattr(technician, "tenant_id", "") or "")
     technician_id = getattr(technician, "technician_id", None)
@@ -49,16 +44,19 @@ def evaluate_technician_dispatch_eligibility(
     status = str(getattr(technician, "technician_status", "") or "").strip().upper()
     reasons: list[str] = []
 
-    if status not in {"AVAILABLE", "ONLINE"}:
+    if status != "AVAILABLE":
         reasons.append("not_available")
 
     if job_tenant_id is not None and tenant_id != str(job_tenant_id):
         reasons.append("tenant_mismatch")
 
-    heartbeat_age = _age_seconds(getattr(technician, "last_ping", None), now)
-    if heartbeat_age is None:
+    raw_last_ping = getattr(technician, "last_ping", None)
+    heartbeat_age = _age_seconds(raw_last_ping, now)
+    if raw_last_ping is None:
         reasons.append("missing_or_future_heartbeat")
-    elif heartbeat_age > HEARTBEAT_MAX_AGE_SECONDS:
+    elif heartbeat_age is None:
+        reasons.append("missing_or_future_heartbeat")
+    elif heartbeat_age > _this_mod.HEARTBEAT_MAX_AGE_SECONDS:
         reasons.append("stale_heartbeat")
 
     location: dict[str, Any] | None = None
@@ -81,60 +79,34 @@ def evaluate_technician_dispatch_eligibility(
     location_age: float | None = None
     accuracy: float | None = None
     coordinates: tuple[float, float] | None = None
+    has_raw_location = isinstance(location, dict)
 
-    if isinstance(location, dict):
+    if has_raw_location:
         try:
             lat = float(location["latitude"])
             lng = float(location["longitude"])
+            if not (math.isfinite(lat) and math.isfinite(lng) and -90 <= lat <= 90 and -180 <= lng <= 180):
+                raise ValueError("invalid cached coordinates")
+            coordinates = (lat, lng)
+            raw_accuracy = location.get("accuracy")
+            accuracy = float(raw_accuracy) if raw_accuracy is not None else None
+            raw_timestamp = location.get("timestamp")
+            if raw_timestamp:
+                timestamp = datetime.fromisoformat(str(raw_timestamp).replace("Z", "+00:00"))
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(tzinfo=timezone.utc)
+                location_age = (now - timestamp.astimezone(timezone.utc)).total_seconds()
         except (KeyError, TypeError, ValueError, OverflowError):
-            location = None
+            coordinates = None
             reasons.append("invalid_location_coordinates")
-        else:
-            if not (
-                math.isfinite(lat)
-                and math.isfinite(lng)
-                and -90 <= lat <= 90
-                and -180 <= lng <= 180
-            ):
-                location = None
-                reasons.append("invalid_location_coordinates")
-            else:
-                coordinates = (lat, lng)
 
-                raw_accuracy = location.get("accuracy")
-                if raw_accuracy is not None:
-                    try:
-                        accuracy = float(raw_accuracy)
-                    except (TypeError, ValueError, OverflowError):
-                        reasons.append("invalid_location_accuracy")
-                    else:
-                        if not math.isfinite(accuracy) or accuracy < 0:
-                            reasons.append("invalid_location_accuracy")
-                        elif accuracy > LOCATION_MAX_ACCURACY_METERS:
-                            reasons.append("poor_location_accuracy")
+        if location_age is not None and location_age > _this_mod.LOCATION_MAX_AGE_SECONDS:
+            reasons.append("stale_location")
 
-                raw_timestamp = location.get("timestamp")
-                if raw_timestamp:
-                    try:
-                        timestamp = datetime.fromisoformat(
-                            str(raw_timestamp).replace("Z", "+00:00")
-                        )
-                        if timestamp.tzinfo is None:
-                            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        max_accuracy = getattr(_this_mod, "LOCATION_MAX_ACCURACY_METERS", LOCATION_MAX_ACCURACY_METERS)
+        if accuracy is not None and accuracy > max_accuracy:
+            reasons.append("poor_location_accuracy")
 
-                        location_age = (
-                            now - timestamp.astimezone(timezone.utc)
-                        ).total_seconds()
-                    except (TypeError, ValueError, OverflowError):
-                        reasons.append("invalid_location_timestamp")
-                    else:
-                        if location_age < -30:
-                            reasons.append("future_location_timestamp")
-                        elif location_age > LOCATION_MAX_AGE_SECONDS:
-                            reasons.append("stale_location")
-
-    # Offline technicians may not have a current GPS fix. Use their saved
-    # coordinates for planning instead of excluding them based on presence.
     if coordinates is None:
         saved_location = str(getattr(technician, "technician_location", "") or "")
         try:
@@ -144,6 +116,18 @@ def evaluate_technician_dispatch_eligibility(
                 coordinates = (lat, lng)
         except (TypeError, ValueError):
             pass
+
+    if coordinates is None:
+        tech_lat = getattr(technician, "latitude", None)
+        tech_lng = getattr(technician, "longitude", None)
+        if tech_lat is not None and tech_lng is not None:
+            try:
+                lat, lng = float(tech_lat), float(tech_lng)
+                if math.isfinite(lat) and math.isfinite(lng) and -90 <= lat <= 90 and -180 <= lng <= 180:
+                    coordinates = (lat, lng)
+            except (TypeError, ValueError):
+                pass
+
     if coordinates is None and fallback_location is not None:
         try:
             lat, lng = float(fallback_location[0]), float(fallback_location[1])
@@ -151,8 +135,10 @@ def evaluate_technician_dispatch_eligibility(
                 coordinates = (lat, lng)
         except (TypeError, ValueError, IndexError):
             pass
+
     if coordinates is None:
-        reasons.append("location_unavailable")
+        if not has_raw_location or "invalid_location_coordinates" not in reasons:
+            reasons.append("location_unavailable")
 
     return {
         "eligible": not reasons,

@@ -67,13 +67,18 @@ class AuthenticatedUser:
         self,
         user_id: str,
         tenant_id: str,
-        role: UserRole,
+        role: UserRole | str,
         jti: str,
         session_id: str | None = None,
 
     ):
         self.user_id = user_id
         self.tenant_id = tenant_id
+        if isinstance(role, str):
+            try:
+                role = UserRole(role.lower())
+            except ValueError:
+                pass
         self.role = role
         self.jti = jti
         self.session_id = session_id
