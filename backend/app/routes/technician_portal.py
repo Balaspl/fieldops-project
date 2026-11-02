@@ -285,7 +285,7 @@ def _build_technician_performance_report(
             category = "completed"
         elif status_value in {"accepted", "en_route", "in_progress", "paused"}:
             category = "active"
-        elif status_value in {"assigned", "active", "pending"}:
+        elif status_value in {"assigned", "active", "pending", "awaiting_acceptance", "awaiting acceptance", "queued", "planned"}:
             category = "pending"
         elif status_value in {"cancelled", "canceled"}:
             category = "cancelled"
@@ -3752,8 +3752,8 @@ async def get_technician_dashboard(
     ).count()
 
     pending = base.filter(
-        func.lower(Job.status).in_(
-            ["assigned", "active"]
+        func.upper(func.replace(func.trim(Job.status), " ", "_")).in_(
+            ["ASSIGNED", "AWAITING_ACCEPTANCE", "ACTIVE", "PENDING", "PLANNED", "QUEUED"]
         )
     ).count()
 

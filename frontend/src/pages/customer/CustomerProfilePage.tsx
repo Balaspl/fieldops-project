@@ -18,6 +18,7 @@ import {
   reverseLocation,
 } from "../../services/customerPortalService";
 import useAuthStore from "../../store/authStore";
+import LocationPickerMap from "../../components/customer-tracking/LocationPickerMap";
 
 const inputStyle = {
   width: "100%",
@@ -59,6 +60,9 @@ export default function CustomerProfilePage({ onClose, onNavigate }: CustomerPro
   const [saving, setSaving] = useState(false);
   const [locating, setLocating] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [showMapModal, setShowMapModal] = useState(false);
+  const [tempCoords, setTempCoords] = useState<{ lat?: number; lng?: number }>({ lat: 13.0827, lng: 80.2707 });
+  const [tempAddress, setTempAddress] = useState<string>("");
 
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -355,7 +359,7 @@ export default function CustomerProfilePage({ onClose, onNavigate }: CustomerPro
         padding: "32px 24px",
         height: "100%",
         overflowY: "auto",
-        background: "#F8FAFC",
+        background: "#EEF4F1",
         fontFamily: "'Inter', sans-serif",
         boxSizing: "border-box",
       }}
@@ -379,36 +383,61 @@ export default function CustomerProfilePage({ onClose, onNavigate }: CustomerPro
           </span>
         </div>
 
-        <button
-          type="button"
-          onClick={() => {
-            if (onClose) {
-              onClose();
-            } else if (onNavigate) {
-              onNavigate("cust_requests");
-            } else {
-              window.history.back();
-            }
-          }}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "6px",
-            padding: "8px 16px",
-            background: "#FFFFFF",
-            border: "1px solid #CBD5E1",
-            borderRadius: "10px",
-            fontSize: "13px",
-            fontWeight: 600,
-            color: "#475569",
-            cursor: "pointer",
-            boxShadow: "0 1px 2px rgba(0, 0, 0, 0.05)",
-            transition: "all 0.15s ease",
-          }}
-        >
-          <X size={16} />
-          <span>Close</span>
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <button
+            type="button"
+            onClick={handleOpenEdit}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "6px",
+              padding: "8px 16px",
+              background: "#059669",
+              border: "1px solid #059669",
+              borderRadius: "10px",
+              fontSize: "13px",
+              fontWeight: 700,
+              color: "#FFFFFF",
+              cursor: "pointer",
+              boxShadow: "0 1px 3px rgba(5, 150, 105, 0.25)",
+              transition: "all 0.15s ease",
+            }}
+          >
+            <Edit2 size={15} />
+            <span>Edit</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (onClose) {
+                onClose();
+              } else if (onNavigate) {
+                onNavigate("cust_create_request");
+              } else {
+                window.history.back();
+              }
+            }}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "6px",
+              padding: "8px 16px",
+              background: "#FFFFFF",
+              border: "1px solid #CBD5E1",
+              borderRadius: "10px",
+              fontSize: "13px",
+              fontWeight: 600,
+              color: "#475569",
+              cursor: "pointer",
+              boxShadow: "0 1px 2px rgba(0, 0, 0, 0.05)",
+              transition: "all 0.15s ease",
+            }}
+          >
+            <X size={16} />
+            <span>Close</span>
+          </button>
+        </div>
       </div>
 
       {/* Top success alert if recently updated */}
@@ -589,33 +618,7 @@ export default function CustomerProfilePage({ onClose, onNavigate }: CustomerPro
             </div>
           </div>
 
-          {/* Edit Profile Information Button */}
-          <button
-            type="button"
-            onClick={handleOpenEdit}
-            style={{
-              width: "100%",
-              padding: "12px 18px",
-              borderRadius: "10px",
-              background: "#127471",
-              color: "#FFFFFF",
-              border: "none",
-              fontSize: "14px",
-              fontWeight: 700,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "8px",
-              boxShadow: "0 2px 4px rgba(18, 116, 113, 0.2)",
-              transition: "background 0.2s",
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "#0E5E5B")}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "#127471")}
-          >
-            <Edit2 size={16} color="#FFFFFF" />
-            Edit Profile Information
-          </button>
+
         </div>
 
         {/* Right Card: Service Location Coordinates */}
@@ -761,6 +764,155 @@ export default function CustomerProfilePage({ onClose, onNavigate }: CustomerPro
           </div>
         </div>
       </div>
+
+      {/* Location Picker Map Modal for Customer Profile */}
+      {showMapModal && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(15, 23, 42, 0.65)",
+            backdropFilter: "blur(6px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "20px",
+            zIndex: 1300,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowMapModal(false);
+          }}
+        >
+          <div
+            style={{
+              background: "#FFFFFF",
+              borderRadius: "20px",
+              width: "100%",
+              maxWidth: "620px",
+              overflow: "hidden",
+              boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)",
+            }}
+          >
+            <div
+              style={{
+                padding: "16px 20px",
+                borderBottom: "1px solid #E2E8F0",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <MapPin size={20} color="#059669" />
+                <h3 style={{ margin: 0, fontSize: "16px", fontWeight: 800, color: "#0F172A" }}>
+                  Pick Service Location on Map
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowMapModal(false)}
+                style={{ background: "none", border: "none", cursor: "pointer", color: "#64748B" }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div style={{ padding: "16px" }}>
+              <LocationPickerMap
+                latitude={tempCoords.lat ?? 13.0827}
+                longitude={tempCoords.lng ?? 80.2707}
+                onChange={(lat, lng, address) => {
+                  setTempCoords({ lat, lng });
+                  if (address) {
+                    setTempAddress(address);
+                  } else {
+                    reverseLocation(lat, lng)
+                      .then((res) => {
+                        if (res?.data?.address) setTempAddress(res.data.address);
+                      })
+                      .catch(() => {});
+                  }
+                }}
+              />
+
+              {tempAddress && (
+                <div
+                  style={{
+                    marginTop: "12px",
+                    padding: "10px 14px",
+                    background: "#F8FAFC",
+                    border: "1px solid #E2E8F0",
+                    borderRadius: "10px",
+                    fontSize: "12.5px",
+                    color: "#334155",
+                    fontWeight: 600,
+                  }}
+                >
+                  📍 {tempAddress}
+                </div>
+              )}
+
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "16px" }}>
+                <button
+                  type="button"
+                  onClick={() => setShowMapModal(false)}
+                  style={{
+                    padding: "9px 18px",
+                    borderRadius: "10px",
+                    border: "1px solid #CBD5E1",
+                    background: "#FFFFFF",
+                    color: "#475569",
+                    fontSize: "13px",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (tempCoords.lat && tempCoords.lng) {
+                      try {
+                        const res = await reverseLocation(tempCoords.lat, tempCoords.lng);
+                        const addr = tempAddress || res?.data?.address || "";
+                        const pincode = res?.data?.pincode || addr.match(/\b\d{6}\b/)?.[0] || "";
+                        setEditForm((prev) => ({
+                          ...prev,
+                          address: addr || prev.address,
+                          city: res?.data?.city || prev.city,
+                          state: res?.data?.state || prev.state,
+                          pincode: pincode || prev.pincode,
+                        }));
+                      } catch {
+                        if (tempAddress) {
+                          setEditForm((prev) => ({ ...prev, address: tempAddress }));
+                        }
+                      }
+                    }
+                    setShowMapModal(false);
+                  }}
+                  style={{
+                    padding: "9px 20px",
+                    borderRadius: "10px",
+                    border: "none",
+                    background: "#059669",
+                    color: "#FFFFFF",
+                    fontSize: "13px",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  Confirm Location
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Edit Profile Modal Dialog */}
       {isEditing && (
@@ -916,26 +1068,51 @@ export default function CustomerProfilePage({ onClose, onNavigate }: CustomerPro
                     <span style={requiredStarStyle}>*</span>
                   </label>
 
-                  <button
-                    type="button"
-                    onClick={handleUseCurrentLocation}
-                    disabled={locating || saving}
-                    style={{
-                      background: "none",
-                      border: "none",
-                      color: "#127471",
-                      fontSize: "12px",
-                      fontWeight: 700,
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "4px",
-                      padding: 0,
-                    }}
-                  >
-                    <Compass size={14} color="#127471" />
-                    {locating ? "Detecting GPS..." : "Auto-Fill GPS"}
-                  </button>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <button
+                      type="button"
+                      onClick={handleUseCurrentLocation}
+                      disabled={locating || saving}
+                      style={{
+                        background: "#ECFDF5",
+                        border: "1px solid #A7F3D0",
+                        color: "#059669",
+                        fontSize: "11px",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "4px",
+                        padding: "3px 8px",
+                        borderRadius: "6px",
+                      }}
+                    >
+                      <Compass size={12} color="#059669" />
+                      {locating ? "Detecting..." : "Choose Current Location"}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowMapModal(true)}
+                      disabled={saving}
+                      style={{
+                        background: "#EFF6FF",
+                        border: "1px solid #BFDBFE",
+                        color: "#2563EB",
+                        fontSize: "11px",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "4px",
+                        padding: "3px 8px",
+                        borderRadius: "6px",
+                      }}
+                    >
+                      <MapPin size={12} color="#2563EB" />
+                      Pick on a Map
+                    </button>
+                  </div>
                 </div>
                 <input
                   type="text"

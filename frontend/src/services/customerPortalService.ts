@@ -316,6 +316,8 @@ export interface CustomerJobTrackingResponse {
   technician_last_ping: string | null;
   live_tracking: boolean;
   tracking_tenant_id: string | null;
+  preferred_service_date?: string | null;
+  preferred_service_time?: string | null;
 
   // Backend-authoritative customer ETA fields.
   estimated_arrival: string | null;

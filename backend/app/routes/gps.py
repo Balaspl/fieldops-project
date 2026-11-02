@@ -1352,6 +1352,10 @@ async def gps_ping(
         tech.longitude = payload.longitude
         tech.last_ping = datetime.now(timezone.utc)
         db.add(db_ping)
+        # Update technician's live coordinates & last ping
+        tech.latitude = float(payload.latitude)
+        tech.longitude = float(payload.longitude)
+        tech.last_ping = payload.timestamp
 
         # Race-condition protection before committing history.
         db.refresh(job)

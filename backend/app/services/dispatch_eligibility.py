@@ -451,20 +451,24 @@ def evaluate_technician_dispatch_eligibility(
     # Saved technician location fallback
     # -----------------------------------------------------------------
 
+    # Priority 1: Check live cached GPS from Redis availability (above)
+    # Priority 2: Check technician's live latitude & longitude from telemetry
+    # Note: Planning strictly relies on technician's current live location, NOT static house location.
     if coordinates is None:
-
-        coordinates = _parse_saved_location(
-            technician
-        )
-
-        if coordinates is not None:
-
-            location_source = "technician_saved_location"
+        tech_lat = getattr(technician, "latitude", None)
+        tech_lng = getattr(technician, "longitude", None)
+        if tech_lat is not None and tech_lng is not None:
+            try:
+                lat, lng = float(tech_lat), float(tech_lng)
+                if math.isfinite(lat) and math.isfinite(lng) and -90 <= lat <= 90 and -180 <= lng <= 180:
+                    coordinates = (lat, lng)
+                    location_source = "technician_telemetry_live"
+            except (TypeError, ValueError):
+                pass
 
     # -----------------------------------------------------------------
     # Organization location fallback
     # -----------------------------------------------------------------
-
     if coordinates is None:
 
         coordinates = _parse_fallback_location(

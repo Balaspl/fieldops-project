@@ -308,7 +308,7 @@ export default function CustomerServiceHistoryPage() {
         padding: "24px",
         height: "100%",
         overflowY: "auto",
-        background: "#F8FAFC",
+        background: "#EEF4F1",
         fontFamily: "'Inter', sans-serif",
       }}
     >

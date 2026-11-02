@@ -6,8 +6,6 @@ import {
   PackageSearch,
   X,
   MapPin,
-  Calendar,
-  Clock,
   Phone,
   CheckCircle2,
   AlertCircle,
@@ -16,6 +14,9 @@ import {
   Send,
   ArrowLeft,
   Sparkles,
+  Map as MapIcon,
+  Navigation,
+  Check,
 } from "lucide-react";
 import {
   getCustomerCatalog,
@@ -24,133 +25,103 @@ import {
 import {
   createServiceRequest,
   getCustomerProfile,
+  reverseLocation,
 } from "../../services/customerPortalService";
+import LocationPickerMap from "../customer-tracking/LocationPickerMap";
+import {
+  SERVICE_CATALOGUE_TAXONOMY,
+  type TaxonomyServiceType,
+  type TaxonomyCategory,
+} from "../../data/serviceCatalogueTaxonomy";
+import CategoryUniqueVisual from "./CategoryUniqueVisual";
+import { getCategoryCardImage, getIssueCardImage } from "../../data/categoryImages";
+import { getServiceTypeHdImage } from "../../data/serviceTypeHdImages";
+import { Lock, ShieldAlert, Filter } from "lucide-react";
 import { useToast } from "../../hooks/useToast";
 
 interface CustomerNewRequestMarketplaceProps {
   onNavigate?: (tab: string) => void;
 }
 
-interface ServiceCategory {
-  id: string;
-  name: string;
-  serviceType: string;
-  description: string;
-  image: string;
-  theme: {
-    bg: string;
-    color: string;
-  };
-}
-
-const SERVICE_CATEGORIES: ServiceCategory[] = [
-  {
-    id: "appliances",
-    name: "Home Appliances",
-    serviceType: "Home Appliances",
-    description: "AC, Refrigerator, Washing Machine...",
-    image: "/services/appliances.png",
-    theme: {
-      bg: "#EFF6FF",
-      color: "#2563EB",
-    },
-  },
-  {
-    id: "electrical",
-    name: "Electrical",
-    serviceType: "Electrical",
-    description: "Wiring, Fan, Switchboard, MCB, Inverter...",
-    image: "/services/electrical.png",
-    theme: {
-      bg: "#FEF3C7",
-      color: "#D97706",
-    },
-  },
-  {
-    id: "plumbing",
-    name: "Plumbing",
-    serviceType: "Plumbing",
-    description: "Leakage, Taps, Drainage, Water Pump...",
-    image: "/services/plumbing.png",
-    theme: {
-      bg: "#E0F2FE",
-      color: "#0284C7",
-    },
-  },
-  {
-    id: "security",
-    name: "Security & Smart Home",
-    serviceType: "Security & Smart Home",
-    description: "CCTV, WiFi, Smart Lock, Video Doorbell...",
-    image: "/services/security.png",
-    theme: {
-      bg: "#DCFCE7",
-      color: "#16A34A",
-    },
-  },
-  {
-    id: "carpentry",
-    name: "Carpentry & Woodwork",
-    serviceType: "Carpentry & Woodwork",
-    description: "Door Locks, Furniture, Modular Kitchen...",
-    image: "/services/carpentry.png",
-    theme: {
-      bg: "#FFEDD5",
-      color: "#EA580C",
-    },
-  },
-  {
-    id: "cleaning",
-    name: "Cleaning & Maintenance",
-    serviceType: "Cleaning & Maintenance",
-    description: "House Painting, Pest Control, Waterproofing...",
-    image: "/services/cleaning.png",
-    theme: {
-      bg: "#F3E8FF",
-      color: "#9333EA",
-    },
-  },
+// 30-minute interval slots from 08:00 AM to 07:00 PM
+const TIME_SLOTS = [
+  "08:00 AM",
+  "08:30 AM",
+  "09:00 AM",
+  "09:30 AM",
+  "10:00 AM",
+  "10:30 AM",
+  "11:00 AM",
+  "11:30 AM",
+  "12:00 PM",
+  "12:30 PM",
+  "01:00 PM",
+  "01:30 PM",
+  "02:00 PM",
+  "02:30 PM",
+  "03:00 PM",
+  "03:30 PM",
+  "04:00 PM",
+  "04:30 PM",
+  "05:00 PM",
+  "05:30 PM",
+  "06:00 PM",
+  "06:30 PM",
+  "07:00 PM",
 ];
 
-// Match item service_type to one of the 6 category cards
-const matchServiceTypeToCategory = (
-  itemServiceType: string,
-  catId: string,
-  catName?: string
-) => {
-  const st = (itemServiceType || "").trim().toLowerCase();
-  const cid = (catId || "").trim().toLowerCase();
-  const cname = (catName || "").trim().toLowerCase();
+// Helper to normalize strings for robust fuzzy matching
+const normalize = (s?: string) =>
+  (s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
 
-  if (cid === "electrical" || cname.includes("electr") || cid.includes("electr"))
-    return st.includes("electr");
-  if (cid === "plumbing" || cname.includes("plumb") || cid.includes("plumb"))
-    return st.includes("plumb");
+// Check if a catalog item matches a taxonomy service type
+const itemMatchesServiceType = (
+  item: ServiceCatalogItem,
+  sType: TaxonomyServiceType
+): boolean => {
+  if (!item.is_active) return false;
+  const itemStNorm = normalize(item.service_type);
+  const typeNameNorm = normalize(sType.name);
+  const typeIdNorm = normalize(sType.id);
+
+  if (itemStNorm === typeNameNorm || itemStNorm === typeIdNorm) return true;
+
   if (
-    cid === "appliances" ||
-    cname.includes("appliance") ||
-    cid.includes("appliance")
+    itemStNorm.includes(typeIdNorm) ||
+    typeNameNorm.includes(itemStNorm) ||
+    itemStNorm.includes(typeNameNorm)
   )
-    return st.includes("appliance") || st.includes("hvac") || st.includes("ac");
-  if (
-    cid === "security" ||
-    cname.includes("security") ||
-    cid.includes("security")
-  )
-    return (
-      st.includes("security") || st.includes("smart") || st.includes("cctv")
-    );
-  if (
-    cid === "carpentry" ||
-    cname.includes("carpent") ||
-    cid.includes("carpent")
-  )
-    return st.includes("carpent") || st.includes("wood");
-  if (cid === "cleaning" || cname.includes("clean") || cid.includes("clean"))
-    return (
-      st.includes("clean") || st.includes("paint") || st.includes("maintenance")
-    );
-  return st === cid || st === cname || st.includes(cid) || cid.includes(st);
+    return true;
+
+  // Also check if item's category matches any category under this service type
+  const itemCatNorm = normalize(item.category);
+  return sType.categories.some(
+    (cat) =>
+      normalize(cat.name) === itemCatNorm ||
+      normalize(cat.id) === itemCatNorm ||
+      normalize(cat.name).includes(itemCatNorm) ||
+      itemCatNorm.includes(normalize(cat.name))
+  );
+};
+
+// Check if a catalog item matches a specific category
+const itemMatchesCategory = (
+  item: ServiceCatalogItem,
+  cat: TaxonomyCategory
+): boolean => {
+  if (!item.is_active) return false;
+  const itemCatNorm = normalize(item.category);
+  const catNameNorm = normalize(cat.name);
+  const catIdNorm = normalize(cat.id);
+
+  return (
+    itemCatNorm === catNameNorm ||
+    itemCatNorm === catIdNorm ||
+    itemCatNorm.includes(catNameNorm) ||
+    catNameNorm.includes(itemCatNorm)
+  );
 };
 
 export default function CustomerNewRequestMarketplace({
@@ -171,25 +142,107 @@ export default function CustomerNewRequestMarketplace({
   // "No Services Found" modal for 0-count categories or failed search
   const [noServicesModalName, setNoServicesModalName] = useState<string | null>(null);
 
-  // Active Category being booked (when count > 0)
-  const [activeBookingCat, setActiveBookingCat] = useState<ServiceCategory | null>(null);
+  // Multi-level navigation state:
+  // LEVEL 1: SERVICES (all 16 service trade cards)
+  // LEVEL 2: CATEGORIES (image cards of selected service trade)
+  // LEVEL 3: ISSUES (image cards of selected category)
+  // LEVEL 4: BOOKING_FORM (date, time chips, address text only, map picker, contact)
+  type ViewLevel = "SERVICES" | "CATEGORIES" | "ISSUES" | "BOOKING_FORM";
+  const [viewLevel, setViewLevel] = useState<ViewLevel>("SERVICES");
 
-  // Booking Flow Steps:
-  // Step 1: SELECT_ISSUE (select Category ➔ select Issue)
-  // Step 2: BOOKING_FORM (only after issue selected ➔ preferred date, time, location, phone)
-  const [bookingStep, setBookingStep] = useState<"SELECT_ISSUE" | "BOOKING_FORM">("SELECT_ISSUE");
+  const [selectedServiceType, setSelectedServiceType] = useState<TaxonomyServiceType | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<TaxonomyCategory | null>(null);
+  const [selectedIssue, setSelectedIssue] = useState<string>("");
 
-  // Selected Category and Issue
-  const [selectedCategoryName, setSelectedCategoryName] = useState<string>("");
-  const [selectedIssueName, setSelectedIssueName] = useState<string>("");
+  // Category and Issue filtering switches: ALL | ACTIVE | INACTIVE
+  const [categoryFilter, setCategoryFilter] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
+  const [issueFilter, setIssueFilter] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
+  const [unavailableModalIssue, setUnavailableModalIssue] = useState<string | null>(null);
 
-  // Form Fields (editable by customer, prefilled from profile)
-  const [preferredDate, setPreferredDate] = useState<string>(() => {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    return tomorrow.toISOString().split("T")[0];
-  });
-  const [preferredTimeSlot, setPreferredTimeSlot] = useState<string>("Morning (09:00 AM - 12:00 PM)");
+  // 5-Day window options: Today (disabled) + Next 4 Days (selectable)
+  const dayOptions = useMemo(() => {
+    const options: {
+      dateStr: string;
+      dayLabel: string;
+      dateDisplay: string;
+      isToday: boolean;
+      isSelectable: boolean;
+    }[] = [];
+
+    const now = new Date();
+    for (let i = 0; i < 5; i++) {
+      const d = new Date(now);
+      d.setDate(now.getDate() + i);
+      const dateStr = d.toISOString().split("T")[0];
+
+      let dayLabel = "";
+      if (i === 0) dayLabel = "Today";
+      else if (i === 1) dayLabel = "Tomorrow";
+      else {
+        dayLabel = d.toLocaleDateString("en-US", { weekday: "short" });
+      }
+
+      const dateDisplay = d.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+      });
+
+      options.push({
+        dateStr,
+        dayLabel,
+        dateDisplay,
+        isToday: i === 0,
+        isSelectable: i > 0, // Today is disabled; only next 4 days are selectable
+      });
+    }
+    return options;
+  }, []);
+
+  // Priority Options
+  const PRIORITY_OPTIONS = [
+    {
+      value: "LOW",
+      label: "Low Priority",
+      desc: "Routine & Flexible",
+      icon: "🌱",
+      color: "#059669",
+      bg: "#ECFDF5",
+      border: "#A7F3D0",
+    },
+    {
+      value: "MEDIUM",
+      label: "Standard",
+      desc: "Normal Business Priority",
+      icon: "⚡",
+      color: "#2563EB",
+      bg: "#EFF6FF",
+      border: "#BFDBFE",
+    },
+    {
+      value: "HIGH",
+      label: "High Priority",
+      desc: "Urgent turnaround required",
+      icon: "🔥",
+      color: "#D97706",
+      bg: "#FFFBEB",
+      border: "#FDE68A",
+    },
+    {
+      value: "URGENT",
+      label: "Emergency",
+      desc: "Critical breakdown",
+      icon: "🚨",
+      color: "#DC2626",
+      bg: "#FEF2F2",
+      border: "#FECACA",
+    },
+  ];
+
+  // Form Fields
+  // Date and Time must be explicitly chosen by the customer (unselected initially)
+  const [preferredDate, setPreferredDate] = useState<string>("");
+  const [preferredTimeSlot, setPreferredTimeSlot] = useState<string>("");
+  const [priority, setPriority] = useState<string>("MEDIUM");
   const [contactNumber, setContactNumber] = useState<string>("");
   const [locationAddress, setLocationAddress] = useState<string>("");
   const [siteCoords, setSiteCoords] = useState<{ lat?: number; lng?: number }>({});
@@ -198,6 +251,14 @@ export default function CustomerNewRequestMarketplace({
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [submissionSuccess, setSubmissionSuccess] = useState<{ id: number } | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Map Picker Modal State
+  const [showMapModal, setShowMapModal] = useState<boolean>(false);
+  const [tempMarkerCoords, setTempMarkerCoords] = useState<{ lat: number; lng: number }>({
+    lat: 13.0827,
+    lng: 80.2707,
+  });
+  const [tempResolvedAddress, setTempResolvedAddress] = useState<string>("");
 
   // Fetch catalog function
   const fetchActiveCatalog = async () => {
@@ -231,7 +292,6 @@ export default function CustomerNewRequestMarketplace({
       })
       .catch(() => {});
 
-    // Live auto-refresh when tab gains focus or on interval so super admin publishes reflect instantly
     const onFocus = () => fetchActiveCatalog();
     window.addEventListener("focus", onFocus);
     const interval = setInterval(fetchActiveCatalog, 5000);
@@ -242,69 +302,85 @@ export default function CustomerNewRequestMarketplace({
     };
   }, []);
 
-  // Compute live issue counts per category card
-  const categoryCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const cat of SERVICE_CATEGORIES) {
-      const matchingItems = catalogItems.filter(
-        (it) => it.is_active && matchServiceTypeToCategory(it.service_type, cat.id, cat.name)
-      );
-      counts[cat.id] = matchingItems.length;
-    }
-    return counts;
-  }, [catalogItems]);
-
-  // Handle clicking a service card
-  const handleCategoryCardClick = (cat: ServiceCategory) => {
-    const count = categoryCounts[cat.id] || 0;
-    if (count === 0) {
-      // 0 services ➔ Show "No services found at this time" modal
-      setNoServicesModalName(cat.name);
-    } else {
-      // >0 services ➔ Open Step 1 (Select Category & Issue)
-      setActiveBookingCat(cat);
-      setBookingStep("SELECT_ISSUE");
-      setSelectedCategoryName("");
-      setSelectedIssueName("");
-      setSubmissionSuccess(null);
-      setSubmitError(null);
-
-      // Pre-fill profile contact and location if not yet populated
-      if (profileData) {
-        if (!contactNumber && profileData.mobile_number) {
-          setContactNumber(profileData.mobile_number);
-        }
-        if (!locationAddress) {
-          const fullAddr = [profileData.address, profileData.city, profileData.state, profileData.pincode]
-            .filter(Boolean)
-            .join(", ") || profileData.address || profileData.city || "";
-          if (fullAddr) setLocationAddress(fullAddr);
-        }
-      }
-    }
+  // Compute active item counts per service type
+  const getActiveItemsForType = (sType: TaxonomyServiceType) => {
+    return catalogItems.filter((item) => itemMatchesServiceType(item, sType));
   };
 
-  // Categories created by organization under the active service type
-  const availableCategories = useMemo(() => {
-    if (!activeBookingCat) return [];
-    const itemsForCat = catalogItems.filter(
-      (it) =>
-        it.is_active &&
-        matchServiceTypeToCategory(it.service_type, activeBookingCat.id, activeBookingCat.name)
-    );
-    return Array.from(new Set(itemsForCat.map((it) => it.category)));
-  }, [activeBookingCat, catalogItems]);
+  const getActiveCountForServiceType = (sType: TaxonomyServiceType) => {
+    return getActiveItemsForType(sType).length;
+  };
 
-  // Issues created under the chosen category
-  const availableIssues = useMemo(() => {
-    if (!activeBookingCat || !selectedCategoryName) return [];
+  // Compute active item counts per category
+  const getActiveItemsForCategory = (
+    sType: TaxonomyServiceType,
+    cat: TaxonomyCategory
+  ) => {
     return catalogItems.filter(
-      (it) =>
-        it.is_active &&
-        matchServiceTypeToCategory(it.service_type, activeBookingCat.id, activeBookingCat.name) &&
-        it.category.toLowerCase() === selectedCategoryName.toLowerCase()
+      (item) => itemMatchesServiceType(item, sType) && itemMatchesCategory(item, cat)
     );
-  }, [activeBookingCat, selectedCategoryName, catalogItems]);
+  };
+
+  const getActiveCountForCategory = (
+    sType: TaxonomyServiceType,
+    cat: TaxonomyCategory
+  ) => {
+    return getActiveItemsForCategory(sType, cat).length;
+  };
+
+  // Handle clicking a Service Type Card (Level 1 ➔ Level 2)
+  const handleServiceTypeClick = (sType: TaxonomyServiceType) => {
+    setSelectedServiceType(sType);
+    setSelectedCategory(null);
+    setSelectedIssue("");
+    setViewLevel("CATEGORIES");
+  };
+
+  // Helper to check if a specific issue is actively offered by organizations
+  const isIssueActive = (issueName: string): boolean => {
+    if (!selectedServiceType || !selectedCategory) return false;
+    const normIssue = normalize(issueName);
+    const normCat = normalize(selectedCategory.name);
+    const normType = normalize(selectedServiceType.name);
+
+    return catalogItems.some((item) => {
+      const itemType = normalize(item.service_type);
+      const itemCat = normalize(item.category);
+      const itemIssue = normalize(item.issue || item.title || item.name);
+
+      const matchesType = !itemType || itemType === normType;
+      const matchesCat = !itemCat || itemCat === normCat;
+      const matchesIssue =
+        itemIssue === normIssue ||
+        (normIssue && itemIssue.includes(normIssue)) ||
+        (normIssue && normIssue.includes(itemIssue));
+
+      return matchesType && matchesCat && matchesIssue;
+    });
+  };
+
+  // Handle clicking a Category Card (Always open Level 3 to explore all issues)
+  const handleCategoryClick = (cat: TaxonomyCategory) => {
+    if (!selectedServiceType) return;
+    setSelectedCategory(cat);
+    setSelectedIssue("");
+    setIssueFilter("ALL");
+    setViewLevel("ISSUES");
+  };
+
+  // Handle selecting an issue: Active issues proceed to Booking, Inactive issues trigger Unavailable modal
+  const handleIssueSelect = (issueName: string) => {
+    if (!isIssueActive(issueName)) {
+      setUnavailableModalIssue(issueName);
+      return;
+    }
+    setSelectedIssue(issueName);
+    setPreferredDate("");
+    setPreferredTimeSlot("");
+    setSubmissionSuccess(null);
+    setSubmitError(null);
+    setViewLevel("BOOKING_FORM");
+  };
 
   // Handle Search Submission in Hero Banner
   const handleSearchSubmit = (e: React.FormEvent) => {
@@ -325,17 +401,31 @@ export default function CustomerNewRequestMarketplace({
     );
 
     if (matchingItem) {
-      const targetCat = SERVICE_CATEGORIES.find((cat) =>
-        matchServiceTypeToCategory(matchingItem.service_type, cat.id, cat.name)
+      const matchedType = SERVICE_CATALOGUE_TAXONOMY.find((st) =>
+        itemMatchesServiceType(matchingItem, st)
       );
-      if (targetCat) {
-        setActiveBookingCat(targetCat);
-        setSelectedCategoryName(matchingItem.category);
-        setSelectedIssueName(matchingItem.issue);
-        setBookingStep("BOOKING_FORM");
+      if (matchedType) {
+        const matchedCat = matchedType.categories.find((cat) =>
+          itemMatchesCategory(matchingItem, cat)
+        );
+        setSelectedServiceType(matchedType);
+        setSelectedCategory(matchedCat || matchedType.categories[0]);
+        setSelectedIssue(matchingItem.issue);
+        setViewLevel("BOOKING_FORM");
         setSubmissionSuccess(null);
         setSubmitError(null);
         return;
+      }
+    }
+
+    // If query matches a taxonomy category name directly
+    for (const st of SERVICE_CATALOGUE_TAXONOMY) {
+      for (const cat of st.categories) {
+        if (cat.name.toLowerCase().includes(query)) {
+          setSelectedServiceType(st);
+          handleCategoryClick(cat);
+          return;
+        }
       }
     }
 
@@ -343,8 +433,8 @@ export default function CustomerNewRequestMarketplace({
     setNoServicesModalName(searchQuery.trim());
   };
 
-  // GPS Current Location helper
-  const handleGetLocation = () => {
+  // GPS "Use Current Location" button
+  const handleUseCurrentLocation = () => {
     if (!navigator.geolocation) {
       addToast({
         title: "GPS Not Supported",
@@ -356,43 +446,104 @@ export default function CustomerNewRequestMarketplace({
 
     setIsLocating(true);
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setIsLocating(false);
+      async (pos) => {
         const lat = pos.coords.latitude;
         const lng = pos.coords.longitude;
         setSiteCoords({ lat, lng });
-        if (!locationAddress.trim()) {
-          setLocationAddress(`GPS Coordinates: ${lat.toFixed(4)}, ${lng.toFixed(4)}`);
+
+        try {
+          const res = await reverseLocation(lat, lng);
+          const resolved =
+            res.data?.verified &&
+            (res.data.address || res.data.formatted_address || res.data.name);
+
+          if (resolved) {
+            setLocationAddress(resolved);
+            addToast({
+              title: "Location Acquired",
+              message: "Street address identified successfully.",
+              type: "success",
+            });
+          } else {
+            const osm = await fetch(
+              `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`
+            );
+            const osmData = await osm.json();
+            if (osmData?.display_name) {
+              setLocationAddress(osmData.display_name);
+              addToast({
+                title: "Location Acquired",
+                message: "Street address identified successfully.",
+                type: "success",
+              });
+            } else {
+              addToast({
+                title: "GPS Tagged",
+                message: "Coordinates captured for dispatch. Please confirm your street address text.",
+                type: "info",
+              });
+            }
+          }
+        } catch (e) {
+          addToast({
+            title: "GPS Tagged",
+            message: "Coordinates captured for dispatch. Please enter your street address.",
+            type: "info",
+          });
+        } finally {
+          setIsLocating(false);
         }
-        addToast({
-          title: "Location Acquired",
-          message: "GPS coordinates tagged successfully.",
-          type: "success",
-        });
       },
       (err) => {
         setIsLocating(false);
         addToast({
-          title: "Location Access Denied",
-          message: "Could not retrieve GPS coordinates. You can type your address manually.",
-          type: "info",
+          title: "GPS Access Denied",
+          message: "Could not retrieve GPS coordinates. Please enter your address manually.",
+          type: "error",
         });
       },
-      { timeout: 8000 }
+      { enableHighAccuracy: true, timeout: 10000 }
     );
+  };
+
+  // Open "Pick on a Map" Modal
+  const handleOpenMapPicker = () => {
+    const lat = siteCoords.lat || (profileData?.latitude ? Number(profileData.latitude) : 13.0827);
+    const lng = siteCoords.lng || (profileData?.longitude ? Number(profileData.longitude) : 80.2707);
+    setTempMarkerCoords({ lat, lng });
+    setTempResolvedAddress(locationAddress || "");
+    setShowMapModal(true);
+  };
+
+  // Confirm Location from Map Modal
+  const handleConfirmMapLocation = () => {
+    setSiteCoords(tempMarkerCoords);
+    if (tempResolvedAddress) {
+      setLocationAddress(tempResolvedAddress);
+    }
+    setShowMapModal(false);
+    addToast({
+      title: "Location Confirmed",
+      message: "Selected map location tagged successfully.",
+      type: "success",
+    });
   };
 
   // Submit booking form
   const handleBookingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeBookingCat) return;
+    if (!selectedServiceType || !selectedCategory) return;
 
-    if (!selectedCategoryName) {
-      setSubmitError("Please select a service category");
+    if (!selectedIssue) {
+      setSubmitError("Please select a diagnostic issue");
       return;
     }
-    if (!selectedIssueName) {
-      setSubmitError("Please select a diagnostic issue");
+    if (!preferredDate) {
+      setSubmitError("Please select your preferred appointment date from the available days");
+      return;
+    }
+    if (!preferredTimeSlot) {
+      setSubmitError("Please select your preferred appointment time slot");
       return;
     }
     if (!locationAddress.trim()) {
@@ -407,17 +558,17 @@ export default function CustomerNewRequestMarketplace({
     setSubmitting(true);
     setSubmitError(null);
 
-    const serviceType = activeBookingCat.serviceType;
-    const constructedDescription = `${selectedIssueName} - ${selectedCategoryName} (${serviceType} Service). ${additionalNotes.trim()}`.trim();
+    const constructedDescription = `${selectedIssue} - ${selectedCategory.name} (${selectedServiceType.name} Service). ${additionalNotes.trim()}`.trim();
 
     const payload = {
-      service_type: serviceType,
-      title: selectedCategoryName,
-      category: selectedCategoryName,
-      issue: selectedIssueName,
+      service_type: selectedServiceType.name,
+      title: selectedCategory.name,
+      category: selectedCategory.name,
+      issue: selectedIssue,
       description: constructedDescription,
-      priority: "MEDIUM",
+      priority: priority || "MEDIUM",
       preferred_visit_date: preferredDate || undefined,
+      preferred_visit_time: preferredTimeSlot || undefined,
       contact_number: contactNumber.trim(),
       location: locationAddress.trim(),
       site_latitude: siteCoords.lat,
@@ -430,7 +581,7 @@ export default function CustomerNewRequestMarketplace({
       setSubmissionSuccess({ id: createdId });
       addToast({
         title: "Request Submitted Successfully",
-        message: `Service request #${createdId} created. AI Planning Agent is matching eligible technicians.`,
+        message: `Service request #${createdId} created. AI Planning Agent is matching eligible technicians by live location.`,
         type: "success",
       });
     } catch (err: any) {
@@ -453,328 +604,2133 @@ export default function CustomerNewRequestMarketplace({
         padding: "20px 24px 40px 24px",
         height: "100%",
         overflowY: "auto",
-        background: "#F8FAFC",
+        background: "#EEF4F1",
         boxSizing: "border-box",
         fontFamily: "'Inter', sans-serif",
       }}
     >
-      <div style={{ maxWidth: "1140px", margin: "0 auto" }}>
-        {/* User-Provided Hero Banner with Crisp Text and Search Bar */}
-        <div
-          style={{
-            position: "relative",
-            width: "100%",
-            borderRadius: "16px",
-            overflow: "hidden",
-            boxShadow: "0 2px 10px rgba(0, 0, 0, 0.04)",
-            marginBottom: "20px",
-            border: "1px solid #E2E8F0",
-            backgroundImage: "url('/services/user_banner.png')",
-            backgroundSize: "cover",
-            backgroundPosition: "center",
-            backgroundRepeat: "no-repeat",
-            minHeight: "200px",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "28px 20px 24px 20px",
-            boxSizing: "border-box",
-            textAlign: "center",
-          }}
-        >
-          {/* 1. Title (Line 1 text) */}
-          <h1
-            style={{
-              fontSize: "27px",
-              fontWeight: 800,
-              color: "#0F172A",
-              margin: "0 0 6px 0",
-              letterSpacing: "-0.5px",
-              fontFamily: "'Inter', sans-serif",
-            }}
-          >
-            What service do you need today?
-          </h1>
-
-          {/* 2. Subtitle (Line 2 text) */}
-          <p
-            style={{
-              fontSize: "13.5px",
-              fontWeight: 600,
-              color: "#334155",
-              margin: "0 0 18px 0",
-              maxWidth: "540px",
-            }}
-          >
-            Search for a service or choose a category to get matched with a
-            technician
-          </p>
-
-          {/* 3. Search Bar */}
-          <form
-            onSubmit={handleSearchSubmit}
-            style={{
-              width: "100%",
-              maxWidth: "580px",
-              background: "#FFFFFF",
-              borderRadius: "999px",
-              border: "1.5px solid #CBD5E1",
-              boxShadow: "0 4px 16px rgba(0, 0, 0, 0.08)",
-              display: "flex",
-              alignItems: "center",
-              padding: "4px 6px 4px 18px",
-              gap: "10px",
-              boxSizing: "border-box",
-            }}
-          >
-            <Search size={18} color="#059669" style={{ flexShrink: 0 }} />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search for a service (e.g. AC repair, plumber, electrical, wiring...)"
-              style={{
-                flex: 1,
-                border: "none",
-                outline: "none",
-                fontSize: "13.5px",
-                fontWeight: 500,
-                color: "#0F172A",
-                background: "transparent",
-                minWidth: 0,
-              }}
-            />
-            <button
-              type="submit"
-              style={{
-                background: "#047857",
-                color: "#FFFFFF",
-                border: "none",
-                borderRadius: "999px",
-                padding: "9px 24px",
-                fontSize: "13.5px",
-                fontWeight: 700,
-                cursor: "pointer",
-                transition: "background 0.15s ease",
-                flexShrink: 0,
-                boxShadow: "0 2px 4px rgba(4, 120, 87, 0.2)",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = "#065F46";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "#047857";
-              }}
-            >
-              Search
-            </button>
-          </form>
-        </div>
-
-        {/* Browse Service Categories Section */}
-        <div
-          style={{
-            background: "#FFFFFF",
-            borderRadius: "16px",
-            border: "1px solid #E2E8F0",
-            padding: "20px 20px 24px 20px",
-            boxShadow: "0 1px 3px rgba(0, 0, 0, 0.03)",
-          }}
-        >
-          {/* Header Row */}
+      <div style={{ maxWidth: "1220px", margin: "0 auto" }}>
+        {/* User-Provided Hero Banner: ONLY displayed on LEVEL 1 Home View */}
+        {viewLevel === "SERVICES" ? (
           <div
             style={{
+              position: "relative",
+              width: "100%",
+              borderRadius: "16px",
+              overflow: "hidden",
+              boxShadow: "0 2px 10px rgba(0, 0, 0, 0.04)",
+              marginBottom: "22px",
+              border: "1px solid #E2E8F0",
+              backgroundImage: "url('/services/user_banner.png')",
+              backgroundSize: "cover",
+              backgroundPosition: "center",
+              backgroundRepeat: "no-repeat",
+              minHeight: "200px",
               display: "flex",
-              justifyContent: "space-between",
+              flexDirection: "column",
               alignItems: "center",
-              marginBottom: "18px",
+              justifyContent: "center",
+              padding: "28px 20px 24px 20px",
+              boxSizing: "border-box",
+              textAlign: "center",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-              <div
-                style={{
-                  width: "28px",
-                  height: "28px",
-                  borderRadius: "8px",
-                  background: "#ECFDF5",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                <LayoutGrid size={17} color="#059669" />
-              </div>
-              <h2
-                style={{
-                  fontSize: "17px",
-                  fontWeight: 800,
-                  color: "#0F172A",
-                  margin: 0,
-                }}
-              >
-                Browse Service Categories
-              </h2>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setNoServicesModalName("All Categories")}
+            {/* 1. Title */}
+            <h1
               style={{
-                background: "none",
-                border: "none",
-                color: "#059669",
-                fontSize: "13px",
-                fontWeight: 700,
-                cursor: "pointer",
+                fontSize: "27px",
+                fontWeight: 800,
+                color: "#0F172A",
+                margin: "0 0 6px 0",
+                letterSpacing: "-0.5px",
+                fontFamily: "'Inter', sans-serif",
+              }}
+            >
+              What service do you need today?
+            </h1>
+
+            {/* 2. Subtitle */}
+            <p
+              style={{
+                fontSize: "13.5px",
+                fontWeight: 600,
+                color: "#334155",
+                margin: "0 0 18px 0",
+                maxWidth: "540px",
+              }}
+            >
+              Search for a service or choose a category to get matched with a
+              technician
+            </p>
+
+            {/* 3. Search Bar */}
+            <form
+              onSubmit={handleSearchSubmit}
+              style={{
+                width: "100%",
+                maxWidth: "580px",
+                background: "#FFFFFF",
+                borderRadius: "999px",
+                border: "1.5px solid #CBD5E1",
+                boxShadow: "0 4px 16px rgba(0, 0, 0, 0.08)",
                 display: "flex",
                 alignItems: "center",
-                gap: "4px",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.textDecoration = "underline";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.textDecoration = "none";
+                padding: "4px 6px 4px 18px",
+                gap: "10px",
+                boxSizing: "border-box",
               }}
             >
-              <span>View All</span>
-              <ChevronRight size={14} />
-            </button>
+              <Search size={18} color="#059669" style={{ flexShrink: 0 }} />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search for a service (e.g. AC repair, plumber, electrical, wiring...)"
+                style={{
+                  flex: 1,
+                  border: "none",
+                  outline: "none",
+                  fontSize: "13.5px",
+                  fontWeight: 500,
+                  color: "#0F172A",
+                  background: "transparent",
+                  minWidth: 0,
+                }}
+              />
+              <button
+                type="submit"
+                style={{
+                  background: "#047857",
+                  color: "#FFFFFF",
+                  border: "none",
+                  borderRadius: "999px",
+                  padding: "9px 24px",
+                  fontSize: "13.5px",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  transition: "background 0.15s ease",
+                  flexShrink: 0,
+                  boxShadow: "0 2px 4px rgba(4, 120, 87, 0.2)",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "#065F46";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "#047857";
+                }}
+              >
+                Search
+              </button>
+            </form>
           </div>
+        ) : null}
 
-          {/* Cards Grid - 6 columns */}
+                {/* ─────────────────────────────────────────────────────────────
+            LEVEL 1: BROWSE SERVICE TYPES (High Contrast, Rich Real App Cards)
+            NO ELE, PLU, ACR BADGES!
+        ───────────────────────────────────────────────────────────── */}
+        {viewLevel === "SERVICES" && (
           <div
             style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(6, minmax(0, 1fr))",
-              gap: "14px",
+              background: "#FFFFFF",
+              borderRadius: "16px",
+              border: "1.5px solid #CBD5E1",
+              padding: "20px 22px 28px 22px",
+              boxShadow: "0 4px 18px rgba(15, 23, 42, 0.04)",
             }}
           >
-            {SERVICE_CATEGORIES.map((cat) => {
-              const liveCount = categoryCounts[cat.id] || 0;
-
-              return (
+            {/* Header Row */}
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "18px",
+                flexWrap: "wrap",
+                gap: "10px",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                 <div
-                  key={cat.id}
-                  onClick={() => handleCategoryCardClick(cat)}
                   style={{
-                    background: "#FFFFFF",
-                    border: "1px solid #E2E8F0",
-                    borderRadius: "14px",
-                    padding: "12px 10px 14px 10px",
+                    width: "34px",
+                    height: "34px",
+                    borderRadius: "10px",
+                    background: "#0F172A",
                     display: "flex",
-                    flexDirection: "column",
-                    justifyContent: "space-between",
-                    cursor: "pointer",
-                    transition: "all 0.2s ease",
-                    boxShadow: "0 1px 3px rgba(0, 0, 0, 0.02)",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = "translateY(-3px)";
-                    e.currentTarget.style.boxShadow =
-                      "0 8px 20px rgba(0, 0, 0, 0.06)";
-                    e.currentTarget.style.borderColor = "#CBD5E1";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = "translateY(0)";
-                    e.currentTarget.style.boxShadow =
-                      "0 1px 3px rgba(0, 0, 0, 0.02)";
-                    e.currentTarget.style.borderColor = "#E2E8F0";
+                    alignItems: "center",
+                    justifyContent: "center",
                   }}
                 >
-                  {/* Image */}
-                  <div
+                  <LayoutGrid size={18} color="#FFFFFF" />
+                </div>
+                <div>
+                  <h2
                     style={{
-                      height: "75px",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      marginBottom: "10px",
-                      background: "#F8FAFC",
-                      borderRadius: "10px",
-                      padding: "4px",
-                      overflow: "hidden",
+                      fontSize: "17.5px",
+                      fontWeight: 800,
+                      color: "#0F172A",
+                      margin: 0,
+                      letterSpacing: "-0.3px",
                     }}
                   >
-                    <img
-                      src={cat.image}
-                      alt={cat.name}
+                    Browse Service Categories
+                  </h2>
+                  <span style={{ fontSize: "12px", color: "#475569", fontWeight: 500 }}>
+                    Select a service category to view specialized diagnostic issues
+                  </span>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  fontSize: "12px",
+                  fontWeight: 700,
+                  color: "#0F172A",
+                  background: "#F1F5F9",
+                  border: "1px solid #CBD5E1",
+                  padding: "5px 12px",
+                  borderRadius: "999px",
+                }}
+              >
+                <Sparkles size={13} color="#059669" />
+                <span>16 Verified Trades</span>
+              </div>
+            </div>
+
+            {/* 16 Service Types Grid (Compact, Sleek, Proper Verified Cards) */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(195px, 1fr))",
+                gap: "14px",
+              }}
+            >
+              {SERVICE_CATALOGUE_TAXONOMY.map((sType) => {
+                const liveCount = getActiveCountForServiceType(sType);
+
+                return (
+                  <div
+                    key={sType.id}
+                    onClick={() => handleServiceTypeClick(sType)}
+                    style={{
+                      background: "#FFFFFF",
+                      border: "1.5px solid #E2E8F0",
+                      borderRadius: "14px",
+                      padding: "10px 10px 12px 10px",
+                      display: "flex",
+                      flexDirection: "column",
+                      justifyContent: "space-between",
+                      cursor: "pointer",
+                      transition: "all 0.2s ease",
+                      boxShadow: "0 2px 8px rgba(15, 23, 42, 0.03)",
+                      position: "relative",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = "translateY(-3px)";
+                      e.currentTarget.style.boxShadow =
+                        "0 10px 22px -4px rgba(15, 23, 42, 0.10)";
+                      e.currentTarget.style.borderColor = "#059669";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = "translateY(0)";
+                      e.currentTarget.style.boxShadow =
+                        "0 2px 8px rgba(15, 23, 42, 0.03)";
+                      e.currentTarget.style.borderColor = "#E2E8F0";
+                    }}
+                  >
+                    {/* Proper Verified Trade Illustration Container */}
+                    <div
                       style={{
-                        maxHeight: "100%",
-                        maxWidth: "100%",
-                        objectFit: "contain",
+                        height: "105px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        marginBottom: "8px",
+                        background: "#F8FAFC",
+                        borderRadius: "10px",
+                        border: "1px solid #E2E8F0",
+                        padding: "4px",
+                        overflow: "hidden",
+                        position: "relative",
+                      }}
+                    >
+                      <img
+                        src={sType.image}
+                        alt={sType.name}
+                        loading="lazy"
+                        style={{
+                          height: "95%",
+                          width: "95%",
+                          objectFit: "contain",
+                          transform: "scale(1.15)",
+                          filter: "drop-shadow(0 4px 8px rgba(0, 0, 0, 0.08))",
+                          transition: "transform 0.25s ease",
+                        }}
+                      />
+                      {liveCount > 0 && (
+                        <div
+                          style={{
+                            position: "absolute",
+                            top: "6px",
+                            right: "6px",
+                            background: "rgba(5, 150, 105, 0.95)",
+                            color: "#FFFFFF",
+                            fontSize: "10px",
+                            fontWeight: 700,
+                            padding: "2px 7px",
+                            borderRadius: "999px",
+                          }}
+                        >
+                          {liveCount} Active
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Service Name & Description (Compact, Crisp Dark Text) */}
+                    <div style={{ flex: 1, marginBottom: "10px", padding: "0 2px" }}>
+                      <h3
+                        style={{
+                          fontSize: "14px",
+                          fontWeight: 800,
+                          color: "#0F172A",
+                          margin: "0 0 4px 0",
+                          lineHeight: 1.25,
+                          letterSpacing: "-0.2px",
+                        }}
+                      >
+                        {sType.name}
+                      </h3>
+                      <p
+                        style={{
+                          fontSize: "11px",
+                          color: "#475569",
+                          fontWeight: 500,
+                          margin: 0,
+                          lineHeight: 1.4,
+                          display: "-webkit-box",
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: "vertical",
+                          overflow: "hidden",
+                        }}
+                      >
+                        {sType.description}
+                      </p>
+                    </div>
+
+                    {/* Compact Status Pill */}
+                    <div>
+                      {liveCount > 0 ? (
+                        <span
+                          style={{
+                            background: "#ECFDF5",
+                            border: "1.5px solid #059669",
+                            color: "#065F46",
+                            fontSize: "11px",
+                            fontWeight: 800,
+                            padding: "4px 10px",
+                            borderRadius: "999px",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "4px",
+                            boxShadow: "0 1px 3px rgba(5, 150, 105, 0.10)",
+                          }}
+                        >
+                          <span>{liveCount} {liveCount === 1 ? "Service" : "Services"} Available</span>
+                          <ChevronRight size={12} color="#059669" />
+                        </span>
+                      ) : (
+                        <span
+                          style={{
+                            background: "#F8FAFC",
+                            border: "1px solid #CBD5E1",
+                            color: "#475569",
+                            fontSize: "10.5px",
+                            fontWeight: 700,
+                            padding: "4px 8px",
+                            borderRadius: "999px",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "3px",
+                          }}
+                        >
+                          <span>Explore ({sType.categories.length} Categories)</span>
+                          <ChevronRight size={11} color="#94A3B8" />
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ─────────────────────────────────────────────────────────────
+            LEVEL 2: CATEGORIES VIEW WITH COMPACT HD CARDS & ACTIVE SWITCH
+        ───────────────────────────────────────────────────────────── */}
+        {viewLevel === "CATEGORIES" && selectedServiceType && (() => {
+          const allCategories = selectedServiceType.categories;
+          const activeCategoriesCount = allCategories.filter(
+            (c) => getActiveCountForCategory(selectedServiceType, c) > 0
+          ).length;
+          const inactiveCategoriesCount = allCategories.length - activeCategoriesCount;
+
+          const displayedCategories = allCategories.filter((cat) => {
+            const liveCount = getActiveCountForCategory(selectedServiceType, cat);
+            if (categoryFilter === "ACTIVE") return liveCount > 0;
+            if (categoryFilter === "INACTIVE") return liveCount === 0;
+            return true;
+          });
+
+          return (
+            <div
+              style={{
+                background: "#FFFFFF",
+                borderRadius: "16px",
+                border: "1.5px solid #CBD5E1",
+                padding: "20px 22px 28px 22px",
+                boxShadow: "0 4px 18px rgba(15, 23, 42, 0.04)",
+              }}
+            >
+              {/* Breadcrumb Navigation & Back Button */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: "16px",
+                  flexWrap: "wrap",
+                  gap: "10px",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setViewLevel("SERVICES")}
+                  style={{
+                    background: "#0F172A",
+                    border: "none",
+                    borderRadius: "8px",
+                    padding: "7px 14px",
+                    fontSize: "12.5px",
+                    fontWeight: 700,
+                    color: "#FFFFFF",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "5px",
+                    boxShadow: "0 2px 5px rgba(15, 23, 42, 0.2)",
+                  }}
+                >
+                  <ArrowLeft size={14} />
+                  <span>Back to All Services</span>
+                </button>
+
+                <div
+                  style={{
+                    fontSize: "13px",
+                    color: "#475569",
+                    fontWeight: 600,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "5px",
+                  }}
+                >
+                  <span>Services</span>
+                  <ChevronRight size={13} color="#94A3B8" />
+                  <strong style={{ color: "#0F172A" }}>
+                    {selectedServiceType.name}
+                  </strong>
+                </div>
+              </div>
+
+              {/* Trade Compact Header Banner */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "16px",
+                  marginBottom: "18px",
+                  background: "#F8FAFC",
+                  padding: "12px 16px",
+                  borderRadius: "12px",
+                  border: "1px solid #E2E8F0",
+                }}
+              >
+                <div
+                  style={{
+                    width: "52px",
+                    height: "52px",
+                    borderRadius: "10px",
+                    background: "#FFFFFF",
+                    border: "1px solid #CBD5E1",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    padding: "4px",
+                    flexShrink: 0,
+                  }}
+                >
+                  <img
+                    src={selectedServiceType.image}
+                    alt={selectedServiceType.name}
+                    style={{
+                      maxHeight: "90%",
+                      maxWidth: "90%",
+                      objectFit: "contain",
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <h2
+                    style={{
+                      fontSize: "17.5px",
+                      fontWeight: 800,
+                      color: "#0F172A",
+                      margin: "0 0 3px 0",
+                      letterSpacing: "-0.3px",
+                    }}
+                  >
+                    {selectedServiceType.name} Categories
+                  </h2>
+                  <p
+                    style={{
+                      fontSize: "12px",
+                      color: "#475569",
+                      fontWeight: 500,
+                      margin: 0,
+                    }}
+                  >
+                    {selectedServiceType.description}
+                  </p>
+                </div>
+              </div>
+
+              {/* Compact Filter Switcher: ALL | ACTIVE | INACTIVE */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  marginBottom: "18px",
+                  flexWrap: "wrap",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setCategoryFilter("ALL")}
+                  style={{
+                    padding: "6px 14px",
+                    borderRadius: "999px",
+                    fontSize: "12px",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    border: categoryFilter === "ALL" ? "2px solid #0F172A" : "1.5px solid #CBD5E1",
+                    background: categoryFilter === "ALL" ? "#0F172A" : "#FFFFFF",
+                    color: categoryFilter === "ALL" ? "#FFFFFF" : "#475569",
+                  }}
+                >
+                  All Categories ({allCategories.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCategoryFilter("ACTIVE")}
+                  style={{
+                    padding: "6px 14px",
+                    borderRadius: "999px",
+                    fontSize: "12px",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    border: categoryFilter === "ACTIVE" ? "2px solid #059669" : "1.5px solid #CBD5E1",
+                    background: categoryFilter === "ACTIVE" ? "#ECFDF5" : "#FFFFFF",
+                    color: categoryFilter === "ACTIVE" ? "#065F46" : "#475569",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "5px",
+                  }}
+                >
+                  <span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#059669" }} />
+                  <span>Active Services ({activeCategoriesCount})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCategoryFilter("INACTIVE")}
+                  style={{
+                    padding: "6px 14px",
+                    borderRadius: "999px",
+                    fontSize: "12px",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    border: categoryFilter === "INACTIVE" ? "2px solid #64748B" : "1.5px solid #CBD5E1",
+                    background: categoryFilter === "INACTIVE" ? "#F1F5F9" : "#FFFFFF",
+                    color: categoryFilter === "INACTIVE" ? "#1E293B" : "#475569",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "5px",
+                  }}
+                >
+                  <span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#94A3B8" }} />
+                  <span>Unavailable ({inactiveCategoriesCount})</span>
+                </button>
+              </div>
+
+              {/* Categories Grid (Compact HD Photographic Cards) */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+                  gap: "14px",
+                }}
+              >
+                {displayedCategories.map((cat) => {
+                  const catLiveCount = getActiveCountForCategory(
+                    selectedServiceType,
+                    cat
+                  );
+                  const catImg = getCategoryCardImage(cat.id, selectedServiceType.id);
+
+                  return (
+                    <div
+                      key={cat.id}
+                      onClick={() => handleCategoryClick(cat)}
+                      style={{
+                        background: "#FFFFFF",
+                        border: "1.5px solid #E2E8F0",
+                        borderRadius: "14px",
+                        overflow: "hidden",
+                        cursor: "pointer",
+                        display: "flex",
+                        flexDirection: "column",
+                        justifyContent: "space-between",
+                        transition: "all 0.2s ease",
+                        boxShadow: "0 2px 8px rgba(15, 23, 42, 0.04)",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.transform = "translateY(-3px)";
+                        e.currentTarget.style.boxShadow =
+                          "0 10px 22px -4px rgba(15, 23, 42, 0.12)";
+                        e.currentTarget.style.borderColor =
+                          catLiveCount > 0 ? "#059669" : "#0F172A";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.transform = "translateY(0)";
+                        e.currentTarget.style.boxShadow =
+                          "0 2px 8px rgba(15, 23, 42, 0.04)";
+                        e.currentTarget.style.borderColor = "#E2E8F0";
+                      }}
+                    >
+                      {/* Compact HD Photographic Image Container */}
+                      <div
+                        style={{
+                          height: "115px",
+                          width: "100%",
+                          position: "relative",
+                          overflow: "hidden",
+                          background: "#F1F5F9",
+                        }}
+                      >
+                        <img
+                          src={catImg}
+                          alt={cat.name}
+                          loading="lazy"
+                          style={{
+                            width: "100%",
+                            height: "100%",
+                            objectFit: "cover",
+                            transition: "transform 0.3s ease",
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.transform = "scale(1.05)";
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.transform = "scale(1.0)";
+                          }}
+                          onError={(e) => {
+                            e.currentTarget.src = selectedServiceType.image;
+                          }}
+                        />
+                        {catLiveCount > 0 && (
+                          <div
+                            style={{
+                              position: "absolute",
+                              top: "7px",
+                              right: "7px",
+                              background: "rgba(5, 150, 105, 0.95)",
+                              backdropFilter: "blur(4px)",
+                              color: "#FFFFFF",
+                              fontSize: "10px",
+                              fontWeight: 700,
+                              padding: "2px 8px",
+                              borderRadius: "999px",
+                            }}
+                          >
+                            ● {catLiveCount} Active
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Category Title & Information */}
+                      <div
+                        style={{
+                          padding: "12px",
+                          flex: 1,
+                          display: "flex",
+                          flexDirection: "column",
+                          justifyContent: "space-between",
+                        }}
+                      >
+                        <div style={{ marginBottom: "10px" }}>
+                          <h3
+                            style={{
+                              fontSize: "14px",
+                              fontWeight: 800,
+                              color: "#0F172A",
+                              margin: "0 0 3px 0",
+                              lineHeight: 1.25,
+                            }}
+                          >
+                            {cat.name}
+                          </h3>
+                          <p
+                            style={{
+                              fontSize: "11px",
+                              color: "#64748B",
+                              fontWeight: 500,
+                              margin: 0,
+                            }}
+                          >
+                            {cat.issues.length} Diagnostic Checks
+                          </p>
+                        </div>
+
+                        {/* Active count badge / action button */}
+                        <div>
+                          {catLiveCount > 0 ? (
+                            <span
+                              style={{
+                                background: "#ECFDF5",
+                                border: "1.5px solid #059669",
+                                color: "#065F46",
+                                fontSize: "11px",
+                                fontWeight: 800,
+                                padding: "4px 10px",
+                                borderRadius: "999px",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "4px",
+                              }}
+                            >
+                              <span>Explore ({catLiveCount} Active)</span>
+                              <ArrowRight size={11} color="#059669" />
+                            </span>
+                          ) : (
+                            <span
+                              style={{
+                                background: "#F8FAFC",
+                                border: "1px solid #CBD5E1",
+                                color: "#475569",
+                                fontSize: "11px",
+                                fontWeight: 700,
+                                padding: "4px 8px",
+                                borderRadius: "999px",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "3px",
+                              }}
+                            >
+                              <span>Explore Issues ({cat.issues.length})</span>
+                              <ChevronRight size={11} color="#94A3B8" />
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ─────────────────────────────────────────────────────────────
+            LEVEL 3: DIAGNOSTIC ISSUES WITH COMPACT IMAGE CARDS & ACTIVE SWITCH
+        ───────────────────────────────────────────────────────────── */}
+        {viewLevel === "ISSUES" && selectedServiceType && selectedCategory && (() => {
+          const allIssues = selectedCategory.issues;
+          const activeIssuesCount = allIssues.filter((iss) => isIssueActive(iss)).length;
+          const inactiveIssuesCount = allIssues.length - activeIssuesCount;
+
+          const displayedIssues = allIssues.filter((iss) => {
+            const active = isIssueActive(iss);
+            if (issueFilter === "ACTIVE") return active;
+            if (issueFilter === "INACTIVE") return !active;
+            return true;
+          });
+
+          return (
+            <div
+              style={{
+                background: "#FFFFFF",
+                borderRadius: "16px",
+                border: "1.5px solid #CBD5E1",
+                padding: "20px 22px 28px 22px",
+                boxShadow: "0 4px 18px rgba(15, 23, 42, 0.04)",
+              }}
+            >
+              {/* Breadcrumb Navigation & Back Button */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: "16px",
+                  flexWrap: "wrap",
+                  gap: "10px",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setViewLevel("CATEGORIES")}
+                  style={{
+                    background: "#0F172A",
+                    border: "none",
+                    borderRadius: "8px",
+                    padding: "7px 14px",
+                    fontSize: "12.5px",
+                    fontWeight: 700,
+                    color: "#FFFFFF",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "5px",
+                    boxShadow: "0 2px 5px rgba(15, 23, 42, 0.2)",
+                  }}
+                >
+                  <ArrowLeft size={14} />
+                  <span>Back to Categories</span>
+                </button>
+
+                <div
+                  style={{
+                    fontSize: "13px",
+                    color: "#475569",
+                    fontWeight: 600,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "5px",
+                  }}
+                >
+                  <span>{selectedServiceType.name}</span>
+                  <ChevronRight size={13} color="#94A3B8" />
+                  <strong style={{ color: "#0F172A" }}>
+                    {selectedCategory.name}
+                  </strong>
+                </div>
+              </div>
+
+              {/* Category Header */}
+              <div style={{ marginBottom: "16px" }}>
+                <h2
+                  style={{
+                    fontSize: "18px",
+                    fontWeight: 800,
+                    color: "#0F172A",
+                    margin: "0 0 4px 0",
+                    letterSpacing: "-0.3px",
+                  }}
+                >
+                  Select Diagnostic Issue in {selectedCategory.name}
+                </h2>
+                <p style={{ fontSize: "12.5px", color: "#475569", fontWeight: 500, margin: 0 }}>
+                  Choose the specific issue you are experiencing to proceed to appointment booking and scheduling.
+                </p>
+              </div>
+
+              {/* Compact Filter Switcher: ALL | ACTIVE | INACTIVE */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  marginBottom: "18px",
+                  flexWrap: "wrap",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setIssueFilter("ALL")}
+                  style={{
+                    padding: "6px 14px",
+                    borderRadius: "999px",
+                    fontSize: "12px",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    border: issueFilter === "ALL" ? "2px solid #0F172A" : "1.5px solid #CBD5E1",
+                    background: issueFilter === "ALL" ? "#0F172A" : "#FFFFFF",
+                    color: issueFilter === "ALL" ? "#FFFFFF" : "#475569",
+                  }}
+                >
+                  All Diagnostic Issues ({allIssues.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIssueFilter("ACTIVE")}
+                  style={{
+                    padding: "6px 14px",
+                    borderRadius: "999px",
+                    fontSize: "12px",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    border: issueFilter === "ACTIVE" ? "2px solid #059669" : "1.5px solid #CBD5E1",
+                    background: issueFilter === "ACTIVE" ? "#ECFDF5" : "#FFFFFF",
+                    color: issueFilter === "ACTIVE" ? "#065F46" : "#475569",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "5px",
+                  }}
+                >
+                  <span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#059669" }} />
+                  <span>Active Services ({activeIssuesCount})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIssueFilter("INACTIVE")}
+                  style={{
+                    padding: "6px 14px",
+                    borderRadius: "999px",
+                    fontSize: "12px",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    border: issueFilter === "INACTIVE" ? "2px solid #64748B" : "1.5px solid #CBD5E1",
+                    background: issueFilter === "INACTIVE" ? "#F1F5F9" : "#FFFFFF",
+                    color: issueFilter === "INACTIVE" ? "#1E293B" : "#475569",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "5px",
+                  }}
+                >
+                  <span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#94A3B8" }} />
+                  <span>Unavailable ({inactiveIssuesCount})</span>
+                </button>
+              </div>
+
+              {/* Issues Grid (ALL CARDS WITH COMPACT HD IMAGES, EVEN IF UNAVAILABLE!) */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(215px, 1fr))",
+                  gap: "14px",
+                }}
+              >
+                {displayedIssues.map((issueTitle, idx) => {
+                  const active = isIssueActive(issueTitle);
+                  const issueImg = getIssueCardImage(issueTitle, selectedCategory.id, selectedServiceType.id, idx);
+
+                  return (
+                    <div
+                      key={issueTitle}
+                      onClick={() => handleIssueSelect(issueTitle)}
+                      style={{
+                        background: "#FFFFFF",
+                        border: active ? "1.5px solid #A7F3D0" : "1.5px solid #E2E8F0",
+                        borderRadius: "14px",
+                        overflow: "hidden",
+                        cursor: "pointer",
+                        display: "flex",
+                        flexDirection: "column",
+                        justifyContent: "space-between",
+                        transition: "all 0.2s ease",
+                        boxShadow: active
+                          ? "0 2px 8px rgba(5, 150, 105, 0.08)"
+                          : "0 2px 6px rgba(15, 23, 42, 0.03)",
+                        opacity: active ? 1 : 0.9,
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.transform = "translateY(-3px)";
+                        if (active) {
+                          e.currentTarget.style.borderColor = "#059669";
+                          e.currentTarget.style.boxShadow =
+                            "0 10px 22px -4px rgba(5, 150, 105, 0.16)";
+                        } else {
+                          e.currentTarget.style.borderColor = "#94A3B8";
+                          e.currentTarget.style.boxShadow =
+                            "0 8px 16px -4px rgba(15, 23, 42, 0.08)";
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.transform = "translateY(0)";
+                        e.currentTarget.style.borderColor = active ? "#A7F3D0" : "#E2E8F0";
+                        e.currentTarget.style.boxShadow = active
+                          ? "0 2px 8px rgba(5, 150, 105, 0.08)"
+                          : "0 2px 6px rgba(15, 23, 42, 0.03)";
+                      }}
+                    >
+                      {/* Issue HD Image Header (ALL CARDS HAVE A UNIQUE IMAGE!) */}
+                      <div
+                        style={{
+                          height: "105px",
+                          width: "100%",
+                          position: "relative",
+                          overflow: "hidden",
+                          background: "#F1F5F9",
+                        }}
+                      >
+                        <img
+                          src={issueImg}
+                          alt={issueTitle}
+                          loading="lazy"
+                          style={{
+                            width: "100%",
+                            height: "100%",
+                            objectFit: "cover",
+                            transition: "transform 0.3s ease",
+                            filter: active ? "none" : "grayscale(25%)",
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.transform = "scale(1.05)";
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.transform = "scale(1.0)";
+                          }}
+                          onError={(e) => {
+                            e.currentTarget.src = selectedServiceType.image;
+                          }}
+                        />
+
+                        {/* Top-Left Diagnostic Badge */}
+                        <div
+                          style={{
+                            position: "absolute",
+                            top: "7px",
+                            left: "7px",
+                            width: "24px",
+                            height: "24px",
+                            borderRadius: "6px",
+                            background: active ? "#059669" : "rgba(15, 23, 42, 0.75)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            color: "#FFFFFF",
+                            boxShadow: "0 2px 4px rgba(0,0,0,0.15)",
+                          }}
+                        >
+                          <Wrench size={13} strokeWidth={2.2} />
+                        </div>
+
+                        {/* Top-Right Status Tag */}
+                        <div
+                          style={{
+                            position: "absolute",
+                            top: "7px",
+                            right: "7px",
+                            background: active
+                              ? "rgba(5, 150, 105, 0.95)"
+                              : "rgba(15, 23, 42, 0.75)",
+                            backdropFilter: "blur(4px)",
+                            color: "#FFFFFF",
+                            fontSize: "10px",
+                            fontWeight: 700,
+                            padding: "2px 7px",
+                            borderRadius: "999px",
+                          }}
+                        >
+                          {active ? "● Active Service" : "Unavailable"}
+                        </div>
+                      </div>
+
+                      {/* Issue Name & Description (Compact, Dark Text) */}
+                      <div
+                        style={{
+                          padding: "11px 12px 12px 12px",
+                          flex: 1,
+                          display: "flex",
+                          flexDirection: "column",
+                          justifyContent: "space-between",
+                        }}
+                      >
+                        <div style={{ marginBottom: "10px" }}>
+                          <h3
+                            style={{
+                              fontSize: "13.5px",
+                              fontWeight: 800,
+                              color: "#0F172A",
+                              margin: "0 0 3px 0",
+                              lineHeight: 1.25,
+                              display: "-webkit-box",
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: "vertical",
+                              overflow: "hidden",
+                            }}
+                          >
+                            {issueTitle}
+                          </h3>
+                          <p
+                            style={{
+                              fontSize: "11px",
+                              color: "#64748B",
+                              margin: 0,
+                              lineHeight: 1.35,
+                              display: "-webkit-box",
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: "vertical",
+                              overflow: "hidden",
+                            }}
+                          >
+                            Troubleshooting & verified repair for {issueTitle.toLowerCase()}.
+                          </p>
+                        </div>
+
+                        {/* Action Button */}
+                        <div>
+                          {active ? (
+                            <div
+                              style={{
+                                background: "#059669",
+                                color: "#FFFFFF",
+                                padding: "6px 12px",
+                                borderRadius: "8px",
+                                fontSize: "11.5px",
+                                fontWeight: 800,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                gap: "5px",
+                                boxShadow: "0 2px 5px rgba(5, 150, 105, 0.22)",
+                              }}
+                            >
+                              <span>Book This Issue</span>
+                              <ArrowRight size={13} color="#FFFFFF" />
+                            </div>
+                          ) : (
+                            <div
+                              style={{
+                                background: "#F1F5F9",
+                                border: "1px solid #CBD5E1",
+                                color: "#64748B",
+                                padding: "6px 12px",
+                                borderRadius: "8px",
+                                fontSize: "11.5px",
+                                fontWeight: 700,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                gap: "5px",
+                              }}
+                            >
+                              <Lock size={12} />
+                              <span>Currently Unavailable</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
+
+        {viewLevel === "BOOKING_FORM" &&
+          selectedServiceType &&
+          selectedCategory &&
+          selectedIssue && (
+            <div
+              style={{
+                background: "#FFFFFF",
+                borderRadius: "18px",
+                border: "1.5px solid #CBD5E1",
+                padding: "26px 30px",
+                boxShadow: "0 4px 20px rgba(15, 23, 42, 0.04)",
+              }}
+            >
+              {/* Breadcrumb Navigation & Back Button */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: "22px",
+                  borderBottom: "1px solid #E2E8F0",
+                  paddingBottom: "16px",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setViewLevel("ISSUES")}
+                  disabled={submitting}
+                  style={{
+                    background: "#0F172A",
+                    border: "none",
+                    borderRadius: "10px",
+                    padding: "8px 16px",
+                    fontSize: "13px",
+                    fontWeight: 700,
+                    color: "#FFFFFF",
+                    cursor: submitting ? "not-allowed" : "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    boxShadow: "0 2px 6px rgba(15, 23, 42, 0.2)",
+                  }}
+                >
+                  <ArrowLeft size={15} />
+                  <span>Back to Issues</span>
+                </button>
+
+                <div
+                  style={{
+                    fontSize: "13.5px",
+                    color: "#475569",
+                    fontWeight: 600,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                  }}
+                >
+                  <span>{selectedServiceType.name}</span>
+                  <ChevronRight size={14} color="#94A3B8" />
+                  <span>{selectedCategory.name}</span>
+                  <ChevronRight size={14} color="#94A3B8" />
+                  <strong style={{ color: "#0F172A" }}>Book Appointment</strong>
+                </div>
+              </div>
+
+              {/* The Booking Form */}
+              <form onSubmit={handleBookingSubmit}>
+                  {/* Selected Issue Summary Banner (NO CODE BADGES) */}
+                  <div
+                    style={{
+                      background: "#F0FDF4",
+                      border: "1.5px solid #BBF7D0",
+                      borderRadius: "14px",
+                      padding: "16px 20px",
+                      marginBottom: "24px",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <div>
+                      <div
+                        style={{
+                          fontSize: "11.5px",
+                          fontWeight: 800,
+                          color: "#166534",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.5px",
+                        }}
+                      >
+                        Selected Problem Details
+                      </div>
+                      <div
+                        style={{
+                          fontSize: "16px",
+                          fontWeight: 800,
+                          color: "#0F172A",
+                          marginTop: "2px",
+                        }}
+                      >
+                        {selectedServiceType.name} ➔ {selectedCategory.name} ➔{" "}
+                        <span style={{ color: "#059669" }}>{selectedIssue}</span>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setViewLevel("ISSUES")}
+                      style={{
+                        background: "#FFFFFF",
+                        border: "1px solid #059669",
+                        borderRadius: "8px",
+                        color: "#059669",
+                        fontSize: "12.5px",
+                        fontWeight: 700,
+                        padding: "6px 12px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Change Issue
+                    </button>
+                  </div>
+
+                  {submitError && (
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: "8px",
+                        background: "#FEF2F2",
+                        border: "1px solid #FCA5A5",
+                        borderRadius: "8px",
+                        padding: "12px 14px",
+                        marginBottom: "20px",
+                        color: "#991B1B",
+                        fontSize: "13px",
+                      }}
+                    >
+                      <AlertCircle
+                        size={17}
+                        style={{ flexShrink: 0, marginTop: "1px" }}
+                      />
+                      <span>{submitError}</span>
+                    </div>
+                  )}
+
+                  {/* 1. Preferred Appointment Date (5-Day Custom Box Chips: Today disabled, next 4 days selectable) */}
+                  <div style={{ marginBottom: "26px" }}>
+                    <div style={{ marginBottom: "10px" }}>
+                      <label
+                        style={{
+                          display: "block",
+                          fontSize: "14px",
+                          fontWeight: 800,
+                          color: "#0F172A",
+                        }}
+                      >
+                        1. Preferred Appointment Date{" "}
+                        <span style={{ color: "#EF4444" }}>*</span>
+                      </label>
+                      <span style={{ fontSize: "12.5px", color: "#64748B" }}>
+                        Choose an appointment date from the next 4 available days. Same-day booking is closed.
+                      </span>
+                    </div>
+
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
+                        gap: "12px",
+                      }}
+                    >
+                      {dayOptions.map((opt) => {
+                        const isSelected = preferredDate === opt.dateStr;
+
+                        if (opt.isToday) {
+                          // Day 0: Today is NOT selectable
+                          return (
+                            <div
+                              key={opt.dateStr}
+                              style={{
+                                padding: "14px 10px",
+                                borderRadius: "12px",
+                                background: "#F1F5F9",
+                                border: "1.5px solid #E2E8F0",
+                                textAlign: "center",
+                                opacity: 0.6,
+                                cursor: "not-allowed",
+                                userSelect: "none",
+                              }}
+                              title="Same-day booking unavailable"
+                            >
+                              <div
+                                style={{
+                                  fontSize: "12px",
+                                  fontWeight: 600,
+                                  color: "#64748B",
+                                }}
+                              >
+                                {opt.dayLabel}
+                              </div>
+                              <div
+                                style={{
+                                  fontSize: "15px",
+                                  fontWeight: 800,
+                                  color: "#475569",
+                                  margin: "2px 0 6px 0",
+                                }}
+                              >
+                                {opt.dateDisplay}
+                              </div>
+                              <span
+                                style={{
+                                  fontSize: "10px",
+                                  fontWeight: 700,
+                                  color: "#64748B",
+                                  background: "#E2E8F0",
+                                  padding: "2px 6px",
+                                  borderRadius: "4px",
+                                }}
+                              >
+                                Unavailable
+                              </span>
+                            </div>
+                          );
+                        }
+
+                        // Next 4 days: Clickable chips
+                        return (
+                          <div
+                            key={opt.dateStr}
+                            onClick={() => setPreferredDate(opt.dateStr)}
+                            style={{
+                              padding: "14px 10px",
+                              borderRadius: "12px",
+                              background: isSelected ? "#ECFDF5" : "#FFFFFF",
+                              border: isSelected
+                                ? "2px solid #059669"
+                                : "1.5px solid #CBD5E1",
+                              textAlign: "center",
+                              cursor: "pointer",
+                              transition: "all 0.15s ease",
+                              boxShadow: isSelected
+                                ? "0 4px 12px rgba(5, 150, 105, 0.2)"
+                                : "0 1px 3px rgba(0, 0, 0, 0.02)",
+                            }}
+                          >
+                            <div
+                              style={{
+                                fontSize: "12px",
+                                fontWeight: 700,
+                                color: isSelected ? "#059669" : "#475569",
+                              }}
+                            >
+                              {opt.dayLabel}
+                            </div>
+                            <div
+                              style={{
+                                fontSize: "15px",
+                                fontWeight: 800,
+                                color: isSelected ? "#065F46" : "#0F172A",
+                                margin: "2px 0 6px 0",
+                              }}
+                            >
+                              {opt.dateDisplay}
+                            </div>
+                            <span
+                              style={{
+                                fontSize: "10.5px",
+                                fontWeight: 800,
+                                color: isSelected ? "#059669" : "#0284C7",
+                                background: isSelected ? "#D1FAE5" : "#E0F2FE",
+                                padding: "3px 8px",
+                                borderRadius: "6px",
+                              }}
+                            >
+                              {isSelected ? "✓ Selected" : "Available"}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* 2. Preferred Time Slot (30-Minute Box Chips: 08:00 AM - 07:00 PM) */}
+                  <div style={{ marginBottom: "26px" }}>
+                    <div style={{ marginBottom: "10px" }}>
+                      <label
+                        style={{
+                          display: "block",
+                          fontSize: "14px",
+                          fontWeight: 800,
+                          color: "#0F172A",
+                        }}
+                      >
+                        2. Preferred Time Slot{" "}
+                        <span style={{ color: "#EF4444" }}>*</span>
+                      </label>
+                      <span style={{ fontSize: "12.5px", color: "#64748B" }}>
+                        Select a 30-minute appointment slot between 08:00 AM and 07:00 PM.
+                      </span>
+                    </div>
+
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns:
+                          "repeat(auto-fill, minmax(110px, 1fr))",
+                        gap: "10px",
+                      }}
+                    >
+                      {TIME_SLOTS.map((slot) => {
+                        const isSelected = preferredTimeSlot === slot;
+                        return (
+                          <button
+                            key={slot}
+                            type="button"
+                            onClick={() => setPreferredTimeSlot(slot)}
+                            style={{
+                              padding: "10px 8px",
+                              borderRadius: "10px",
+                              fontSize: "12.5px",
+                              fontWeight: isSelected ? 800 : 600,
+                              cursor: "pointer",
+                              border: isSelected
+                                ? "2px solid #059669"
+                                : "1.5px solid #CBD5E1",
+                              background: isSelected ? "#ECFDF5" : "#FFFFFF",
+                              color: isSelected ? "#065F46" : "#0F172A",
+                              textAlign: "center",
+                              transition: "all 0.12s ease",
+                              boxShadow: isSelected
+                                ? "0 2px 6px rgba(5, 150, 105, 0.15)"
+                                : "none",
+                            }}
+                          >
+                            {slot}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* 3. Service Priority Level */}
+                  <div style={{ marginBottom: "26px" }}>
+                    <div style={{ marginBottom: "10px" }}>
+                      <label
+                        style={{
+                          display: "block",
+                          fontSize: "14px",
+                          fontWeight: 800,
+                          color: "#0F172A",
+                        }}
+                      >
+                        3. Service Priority Level{" "}
+                        <span style={{ color: "#EF4444" }}>*</span>
+                      </label>
+                      <span style={{ fontSize: "12.5px", color: "#64748B" }}>
+                        Select the urgency level for this job to help technicians prioritize your request.
+                      </span>
+                    </div>
+
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
+                        gap: "10px",
+                      }}
+                    >
+                      {PRIORITY_OPTIONS.map((opt) => {
+                        const isSelected = priority === opt.value;
+                        return (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => setPriority(opt.value)}
+                            style={{
+                              padding: "12px 10px",
+                              borderRadius: "12px",
+                              fontSize: "13px",
+                              fontWeight: isSelected ? 800 : 600,
+                              cursor: "pointer",
+                              border: isSelected
+                                ? `2.5px solid ${opt.color}`
+                                : "1.5px solid #CBD5E1",
+                              background: isSelected ? opt.bg : "#FFFFFF",
+                              color: isSelected ? opt.color : "#1E293B",
+                              textAlign: "left",
+                              transition: "all 0.15s ease",
+                              boxShadow: isSelected
+                                ? `0 4px 12px ${opt.color}25`
+                                : "none",
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: "4px",
+                            }}
+                          >
+                            <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13.5px" }}>
+                              <span>{opt.icon}</span>
+                              <span style={{ fontWeight: 800 }}>{opt.label}</span>
+                            </div>
+                            <span style={{ fontSize: "11px", color: isSelected ? opt.color : "#64748B", fontWeight: 500 }}>
+                              {opt.desc}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* 4. Service Location Address (NO COORDINATES IN TEXT FIELD!) */}
+                  <div style={{ marginBottom: "26px" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        marginBottom: "8px",
+                        flexWrap: "wrap",
+                        gap: "8px",
+                      }}
+                    >
+                      <label
+                        style={{
+                          fontSize: "14px",
+                          fontWeight: 800,
+                          color: "#0F172A",
+                        }}
+                      >
+                        3. Service Location Address{" "}
+                        <span style={{ color: "#EF4444" }}>*</span>
+                      </label>
+
+                      {/* Location Tool Buttons */}
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                        {/* Use Current Location Button */}
+                        <button
+                          type="button"
+                          onClick={handleUseCurrentLocation}
+                          disabled={isLocating}
+                          style={{
+                            background: "#ECFDF5",
+                            border: "1.5px solid #059669",
+                            color: "#065F46",
+                            fontSize: "12.5px",
+                            fontWeight: 700,
+                            cursor: isLocating ? "not-allowed" : "pointer",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            padding: "7px 14px",
+                            borderRadius: "8px",
+                          }}
+                        >
+                          <Navigation size={14} />
+                          <span>
+                            {isLocating ? "Locating..." : "Use Current Location"}
+                          </span>
+                        </button>
+
+                        {/* Pick on a Map Button */}
+                        <button
+                          type="button"
+                          onClick={handleOpenMapPicker}
+                          style={{
+                            background: "#0F172A",
+                            border: "none",
+                            color: "#FFFFFF",
+                            fontSize: "12.5px",
+                            fontWeight: 700,
+                            cursor: "pointer",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            padding: "7px 14px",
+                            borderRadius: "8px",
+                            boxShadow: "0 2px 6px rgba(15, 23, 42, 0.2)",
+                          }}
+                        >
+                          <MapIcon size={14} color="#34D399" />
+                          <span>Pick on a Map</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Address Text Field - Address Name ONLY! Coordinates NEVER appear here! */}
+                    <div style={{ position: "relative" }}>
+                      <input
+                        type="text"
+                        required
+                        value={locationAddress}
+                        onChange={(e) => setLocationAddress(e.target.value)}
+                        placeholder="Enter door/building, street address, area and city (e.g. 12, Anna Salai, Chennai)"
+                        style={{
+                          width: "100%",
+                          padding: "12px 14px 12px 38px",
+                          borderRadius: "10px",
+                          border: "1.5px solid #CBD5E1",
+                          fontSize: "13.5px",
+                          color: "#0F172A",
+                          outline: "none",
+                          boxSizing: "border-box",
+                        }}
+                      />
+                      <MapPin
+                        size={17}
+                        color="#059669"
+                        style={{
+                          position: "absolute",
+                          left: "12px",
+                          top: "50%",
+                          transform: "translateY(-50%)",
+                        }}
+                      />
+                    </div>
+
+                    {siteCoords.lat && (
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "5px",
+                          fontSize: "12px",
+                          color: "#059669",
+                          fontWeight: 700,
+                          marginTop: "6px",
+                        }}
+                      >
+                        <CheckCircle2 size={14} />
+                        <span>
+                          Live GPS position tagged internally for nearest technician matching
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 5. Contact Phone Number (From Profile, Editable) */}
+                  <div style={{ marginBottom: "26px" }}>
+                    <label
+                      style={{
+                        display: "block",
+                        fontSize: "14px",
+                        fontWeight: 800,
+                        color: "#0F172A",
+                        marginBottom: "8px",
+                      }}
+                    >
+                      4. Contact Phone Number{" "}
+                      <span style={{ color: "#EF4444" }}>*</span>
+                    </label>
+                    <div style={{ position: "relative", maxWidth: "420px" }}>
+                      <input
+                        type="tel"
+                        required
+                        value={contactNumber}
+                        onChange={(e) => setContactNumber(e.target.value)}
+                        placeholder="e.g. 9876543210"
+                        maxLength={15}
+                        style={{
+                          width: "100%",
+                          padding: "12px 14px 12px 38px",
+                          borderRadius: "10px",
+                          border: "1.5px solid #CBD5E1",
+                          fontSize: "13.5px",
+                          color: "#0F172A",
+                          outline: "none",
+                          boxSizing: "border-box",
+                        }}
+                      />
+                      <Phone
+                        size={17}
+                        color="#64748B"
+                        style={{
+                          position: "absolute",
+                          left: "12px",
+                          top: "50%",
+                          transform: "translateY(-50%)",
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* 5. Additional Notes (Optional) */}
+                  <div style={{ marginBottom: "28px" }}>
+                    <label
+                      style={{
+                        display: "block",
+                        fontSize: "14px",
+                        fontWeight: 800,
+                        color: "#0F172A",
+                        marginBottom: "8px",
+                      }}
+                    >
+                      6. Additional Notes or Specific Instructions (Optional)
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={additionalNotes}
+                      onChange={(e) => setAdditionalNotes(e.target.value)}
+                      placeholder="Any specific symptoms, gate/parking instructions, or landmark..."
+                      style={{
+                        width: "100%",
+                        padding: "12px 14px",
+                        borderRadius: "10px",
+                        border: "1.5px solid #CBD5E1",
+                        fontSize: "13px",
+                        color: "#0F172A",
+                        outline: "none",
+                        boxSizing: "border-box",
+                        fontFamily: "inherit",
+                        resize: "vertical",
                       }}
                     />
                   </div>
 
-                  {/* Details */}
-                  <div style={{ flex: 1, marginBottom: "12px" }}>
-                    <h3
+                  {/* Form Submission Buttons */}
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      borderTop: "1px solid #E2E8F0",
+                      paddingTop: "22px",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setViewLevel("ISSUES")}
+                      disabled={submitting}
                       style={{
+                        padding: "12px 22px",
+                        borderRadius: "10px",
+                        border: "1.5px solid #CBD5E1",
+                        background: "#FFFFFF",
+                        color: "#334155",
                         fontSize: "14px",
-                        fontWeight: 800,
-                        color: "#0F172A",
-                        margin: "0 0 4px 0",
-                        lineHeight: 1.25,
-                      }}
-                    >
-                      {cat.name}
-                    </h3>
-                    <p
-                      style={{
-                        fontSize: "11px",
-                        color: "#64748B",
-                        margin: 0,
-                        lineHeight: 1.35,
-                        display: "-webkit-box",
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: "vertical",
-                        overflow: "hidden",
-                      }}
-                    >
-                      {cat.description}
-                    </p>
-                  </div>
-
-                  {/* Live Services Count Pill */}
-                  <div>
-                    <span
-                      style={{
-                        background: liveCount > 0 ? "#ECFDF5" : cat.theme.bg,
-                        color: liveCount > 0 ? "#059669" : cat.theme.color,
-                        fontSize: "11.5px",
                         fontWeight: 700,
-                        padding: "4px 10px",
-                        borderRadius: "999px",
-                        display: "inline-flex",
+                        cursor: submitting ? "not-allowed" : "pointer",
+                        display: "flex",
                         alignItems: "center",
-                        gap: "4px",
+                        gap: "6px",
                       }}
                     >
+                      <ArrowLeft size={16} />
+                      <span>Back to Issues</span>
+                    </button>
+
+                    <button
+                      type="submit"
+                      disabled={submitting}
+                      style={{
+                        padding: "12px 32px",
+                        borderRadius: "10px",
+                        border: "none",
+                        background: submitting ? "#94A3B8" : "#059669",
+                        color: "#FFFFFF",
+                        fontSize: "14.5px",
+                        fontWeight: 800,
+                        cursor: submitting ? "not-allowed" : "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        boxShadow: "0 3px 8px rgba(5, 150, 105, 0.3)",
+                      }}
+                    >
+                      <Send size={16} />
                       <span>
-                        {liveCount} {liveCount === 1 ? "Service" : "Services"}
+                        {submitting
+                          ? "Submitting..."
+                          : "Submit Service Request ➔"}
                       </span>
-                      <ChevronRight size={13} />
-                    </span>
+                    </button>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+                </form>
+            </div>
+          )}
       </div>
 
+      {/* Cute Below-Medium Submission Success Confirmation Modal */}
+      {submissionSuccess && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.65)",
+            backdropFilter: "blur(5px)",
+            WebkitBackdropFilter: "blur(5px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 9999,
+            padding: "16px",
+          }}
+          onClick={() => {
+            setSubmissionSuccess(null);
+            setViewLevel("SERVICES");
+          }}
+        >
+          <div
+            style={{
+              background: "#FFFFFF",
+              borderRadius: "20px",
+              boxShadow: "0 20px 45px rgba(0,0,0,0.22)",
+              width: "100%",
+              maxWidth: "420px",
+              padding: "24px 22px 20px",
+              position: "relative",
+              textAlign: "center",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Top-Right Close Button */}
+            <button
+              type="button"
+              onClick={() => {
+                setSubmissionSuccess(null);
+                setViewLevel("SERVICES");
+              }}
+              aria-label="Close"
+              style={{
+                position: "absolute",
+                top: "14px",
+                right: "14px",
+                width: "32px",
+                height: "32px",
+                borderRadius: "50%",
+                background: "#F1F5F9",
+                border: "none",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+                color: "#64748B",
+                transition: "all 0.15s ease",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "#E2E8F0";
+                e.currentTarget.style.color = "#0F172A";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "#F1F5F9";
+                e.currentTarget.style.color = "#64748B";
+              }}
+            >
+              <X size={18} />
+            </button>
+
+            {/* Cute Green Badge */}
+            <div
+              style={{
+                width: "56px",
+                height: "56px",
+                borderRadius: "50%",
+                background: "#ECFDF5",
+                border: "2px solid #A7F3D0",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                margin: "0 auto 12px auto",
+              }}
+            >
+              <CheckCircle2 size={32} color="#059669" />
+            </div>
+
+            <h3
+              style={{
+                fontSize: "19px",
+                fontWeight: 800,
+                color: "#0F172A",
+                margin: "0 0 6px 0",
+              }}
+            >
+              Service Request Submitted!
+            </h3>
+
+            <p
+              style={{
+                fontSize: "12.5px",
+                color: "#64748B",
+                margin: "0 auto 16px auto",
+                lineHeight: 1.45,
+              }}
+            >
+              Your request <strong style={{ color: "#059669" }}>#{submissionSuccess.id}</strong> has been logged. Our AI Planning Agent is actively dispatching nearby technicians based on live GPS location.
+            </p>
+
+            {/* Compact Summary */}
+            <div
+              style={{
+                background: "#F8FAFC",
+                border: "1px solid #E2E8F0",
+                borderRadius: "12px",
+                padding: "12px 14px",
+                marginBottom: "18px",
+                textAlign: "left",
+                fontSize: "12.5px",
+                lineHeight: "1.5",
+              }}
+            >
+              <div style={{ fontWeight: 700, color: "#0F172A", marginBottom: "4px" }}>
+                {selectedCategory?.name} <span style={{ color: "#059669" }}>➔</span> {selectedIssue}
+              </div>
+              <div style={{ color: "#475569" }}>
+                📅 <strong>Date:</strong> {preferredDate || "Not set"} ({preferredTimeSlot || "Not set"})
+              </div>
+              <div style={{ color: "#475569" }}>
+                ⚡ <strong>Priority:</strong> <span style={{ fontWeight: 700, color: priority === 'URGENT' ? '#DC2626' : priority === 'HIGH' ? '#D97706' : '#2563EB' }}>{priority}</span>
+              </div>
+              <div
+                style={{
+                  color: "#475569",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+                title={locationAddress}
+              >
+                📍 <strong>Address:</strong> {locationAddress}
+              </div>
+              <div style={{ color: "#475569" }}>
+                📞 <strong>Phone:</strong> {contactNumber}
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setSubmissionSuccess(null);
+                  if (onNavigate) onNavigate("cust_requests");
+                }}
+                style={{
+                  width: "100%",
+                  padding: "11px 18px",
+                  borderRadius: "10px",
+                  background: "#059669",
+                  color: "#FFFFFF",
+                  border: "none",
+                  fontSize: "13.5px",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "6px",
+                  boxShadow: "0 2px 8px rgba(5, 150, 105, 0.25)",
+                }}
+              >
+                <span>View in My Requests</span>
+                <ArrowRight size={15} />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSubmissionSuccess(null);
+                  setViewLevel("SERVICES");
+                }}
+                style={{
+                  width: "100%",
+                  padding: "9px 18px",
+                  borderRadius: "10px",
+                  background: "#FFFFFF",
+                  color: "#475569",
+                  border: "1px solid #CBD5E1",
+                  fontSize: "13px",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Book Another Service
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Service Currently Unavailable Alert Modal */}
+      {unavailableModalIssue && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.65)",
+            backdropFilter: "blur(4px)",
+            zIndex: 9999,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "20px",
+          }}
+          onClick={() => setUnavailableModalIssue(null)}
+        >
+          <div
+            style={{
+              background: "#FFFFFF",
+              borderRadius: "20px",
+              padding: "32px 28px",
+              maxWidth: "460px",
+              width: "100%",
+              boxShadow: "0 20px 40px rgba(0, 0, 0, 0.25)",
+              textAlign: "center",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                width: "60px",
+                height: "60px",
+                borderRadius: "50%",
+                background: "#FEF3C7",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                margin: "0 auto 16px auto",
+              }}
+            >
+              <ShieldAlert size={32} color="#D97706" />
+            </div>
+
+            <h3
+              style={{
+                fontSize: "20px",
+                fontWeight: 800,
+                color: "#0F172A",
+                margin: "0 0 10px 0",
+              }}
+            >
+              Service Currently Unavailable
+            </h3>
+
+            <p
+              style={{
+                fontSize: "14px",
+                color: "#475569",
+                lineHeight: 1.5,
+                margin: "0 0 24px 0",
+              }}
+            >
+              <strong>"{unavailableModalIssue}"</strong> cannot be booked at this time.
+              No registered service organization in your area currently provides this specific job.
+              Please choose an active service from the available services.
+            </p>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setIssueFilter("ACTIVE");
+                  setUnavailableModalIssue(null);
+                }}
+                style={{
+                  background: "#059669",
+                  color: "#FFFFFF",
+                  border: "none",
+                  borderRadius: "10px",
+                  padding: "12px",
+                  fontSize: "13.5px",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                Show Active Issues in this Category
+              </button>
+              <button
+                type="button"
+                onClick={() => setUnavailableModalIssue(null)}
+                style={{
+                  background: "#F1F5F9",
+                  color: "#0F172A",
+                  border: "none",
+                  borderRadius: "10px",
+                  padding: "12px",
+                  fontSize: "13.5px",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ─────────────────────────────────────────────────────────────
-          Modal 1: No Services Found (When Count === 0)
+          Modal 1: No Services Found (When Category count === 0)
       ───────────────────────────────────────────────────────────── */}
       {noServicesModalName && (
         <div
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(15, 23, 42, 0.45)",
-            backdropFilter: "blur(3px)",
+            background: "rgba(15, 23, 42, 0.55)",
+            backdropFilter: "blur(4px)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -786,11 +2742,11 @@ export default function CustomerNewRequestMarketplace({
           <div
             style={{
               background: "#FFFFFF",
-              borderRadius: "16px",
+              borderRadius: "18px",
               width: "100%",
-              maxWidth: "420px",
-              padding: "26px",
-              boxShadow: "0 20px 40px rgba(0, 0, 0, 0.15)",
+              maxWidth: "440px",
+              padding: "28px",
+              boxShadow: "0 25px 50px rgba(0, 0, 0, 0.2)",
               textAlign: "center",
               position: "relative",
             }}
@@ -801,8 +2757,8 @@ export default function CustomerNewRequestMarketplace({
               onClick={() => setNoServicesModalName(null)}
               style={{
                 position: "absolute",
-                top: "14px",
-                right: "14px",
+                top: "16px",
+                right: "16px",
                 background: "none",
                 border: "none",
                 cursor: "pointer",
@@ -814,13 +2770,13 @@ export default function CustomerNewRequestMarketplace({
                 justifyContent: "center",
               }}
             >
-              <X size={18} />
+              <X size={20} />
             </button>
 
             <div
               style={{
-                width: "56px",
-                height: "56px",
+                width: "60px",
+                height: "60px",
                 borderRadius: "50%",
                 background: "#F1F5F9",
                 display: "flex",
@@ -829,12 +2785,12 @@ export default function CustomerNewRequestMarketplace({
                 margin: "0 auto 16px auto",
               }}
             >
-              <PackageSearch size={28} color="#64748B" />
+              <PackageSearch size={30} color="#475569" />
             </div>
 
             <h3
               style={{
-                fontSize: "18px",
+                fontSize: "19px",
                 fontWeight: 800,
                 color: "#0F172A",
                 margin: "0 0 8px 0",
@@ -846,14 +2802,17 @@ export default function CustomerNewRequestMarketplace({
             <p
               style={{
                 fontSize: "13.5px",
-                color: "#64748B",
+                color: "#475569",
                 lineHeight: 1.5,
-                margin: "0 0 20px 0",
+                margin: "0 0 22px 0",
               }}
             >
               We are actively cataloging verified technicians and service
               packages for{" "}
-              <strong style={{ color: "#0F172A" }}>{noServicesModalName}</strong>.
+              <strong style={{ color: "#0F172A" }}>
+                {noServicesModalName}
+              </strong>
+              .
               <br />
               Please check back shortly or reach out through our Support page.
             </p>
@@ -863,7 +2822,7 @@ export default function CustomerNewRequestMarketplace({
               onClick={() => setNoServicesModalName(null)}
               style={{
                 width: "100%",
-                padding: "10px 18px",
+                padding: "12px 18px",
                 borderRadius: "10px",
                 background: "#059669",
                 color: "#FFFFFF",
@@ -887,848 +2846,164 @@ export default function CustomerNewRequestMarketplace({
       )}
 
       {/* ─────────────────────────────────────────────────────────────
-          Modal 2: Two-Step Booking Flow (When Count > 0)
-          Step 1: Select Category & Issue
-          Step 2 (ONLY after issue selected): Booking Form (Date, Time, Location, Phone)
+          Modal 2: Pick on a Map Modal (Google Maps with marker)
       ───────────────────────────────────────────────────────────── */}
-      {activeBookingCat && (
+      {showMapModal && (
         <div
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(15, 23, 42, 0.55)",
+            background: "rgba(15, 23, 42, 0.6)",
             backdropFilter: "blur(4px)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            zIndex: 9999,
+            zIndex: 10000,
             padding: "16px",
           }}
-          onClick={() => setActiveBookingCat(null)}
+          onClick={() => setShowMapModal(false)}
         >
           <div
             style={{
               background: "#FFFFFF",
               borderRadius: "18px",
               width: "100%",
-              maxWidth: "640px",
-              maxHeight: "90vh",
-              overflowY: "auto",
-              boxShadow: "0 25px 50px rgba(0, 0, 0, 0.2)",
+              maxWidth: "620px",
+              padding: "22px 26px",
+              boxShadow: "0 25px 50px rgba(0, 0, 0, 0.25)",
               position: "relative",
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Modal Header */}
             <div
               style={{
-                padding: "18px 24px",
-                borderBottom: "1px solid #E2E8F0",
                 display: "flex",
-                alignItems: "center",
                 justifyContent: "space-between",
-                background: "#F8FAFC",
-                borderTopLeftRadius: "18px",
-                borderTopRightRadius: "18px",
+                alignItems: "center",
+                marginBottom: "16px",
               }}
             >
-              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                <div
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <MapPin size={20} color="#059669" />
+                <h3
                   style={{
-                    width: "36px",
-                    height: "36px",
-                    borderRadius: "10px",
-                    background: activeBookingCat.theme.bg,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
+                    fontSize: "17px",
+                    fontWeight: 800,
+                    color: "#0F172A",
+                    margin: 0,
                   }}
                 >
-                  <Wrench size={18} color={activeBookingCat.theme.color} />
-                </div>
-                <div>
-                  <h3
-                    style={{
-                      fontSize: "16.5px",
-                      fontWeight: 800,
-                      color: "#0F172A",
-                      margin: 0,
-                    }}
-                  >
-                    {activeBookingCat.name}
-                  </h3>
-                  <span style={{ fontSize: "12px", color: "#64748B" }}>
-                    {bookingStep === "SELECT_ISSUE"
-                      ? "Step 1 of 2: Select service category and diagnostic issue"
-                      : "Step 2 of 2: Confirm appointment date, time, and address"}
-                  </span>
-                </div>
+                  Pick Service Location on Map
+                </h3>
               </div>
-
               <button
                 type="button"
-                onClick={() => setActiveBookingCat(null)}
+                onClick={() => setShowMapModal(false)}
                 style={{
                   background: "none",
                   border: "none",
                   cursor: "pointer",
                   color: "#64748B",
-                  padding: "6px",
-                  borderRadius: "8px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
                 }}
               >
                 <X size={20} />
               </button>
             </div>
 
-            {/* Submission Success Confirmation View */}
-            {submissionSuccess ? (
-              <div style={{ padding: "36px 28px", textAlign: "center" }}>
-                <div
-                  style={{
-                    width: "60px",
-                    height: "60px",
-                    borderRadius: "50%",
-                    background: "#ECFDF5",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    margin: "0 auto 16px auto",
-                  }}
-                >
-                  <CheckCircle2 size={32} color="#059669" />
-                </div>
-
-                <h3
-                  style={{
-                    fontSize: "20px",
-                    fontWeight: 800,
-                    color: "#0F172A",
-                    margin: "0 0 8px 0",
-                  }}
-                >
-                  Service Request Submitted!
-                </h3>
-
-                <p
-                  style={{
-                    fontSize: "13.5px",
-                    color: "#475569",
-                    margin: "0 0 16px 0",
-                    lineHeight: 1.5,
-                  }}
-                >
-                  Your request <strong>#{submissionSuccess.id}</strong> has been
-                  created.
-                  <br />
-                  Our AI Planning Agent is actively ranking eligible technicians
-                  for dispatch.
-                </p>
-
-                <div
-                  style={{
-                    background: "#F8FAFC",
-                    border: "1px solid #E2E8F0",
-                    borderRadius: "12px",
-                    padding: "14px 16px",
-                    marginBottom: "24px",
-                    textAlign: "left",
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: "12px",
-                      color: "#64748B",
-                      marginBottom: "4px",
-                    }}
-                  >
-                    Service Category & Issue:
-                  </div>
-                  <div
-                    style={{
-                      fontSize: "14px",
-                      fontWeight: 700,
-                      color: "#0F172A",
-                    }}
-                  >
-                    {selectedCategoryName} ➔ {selectedIssueName}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: "12px",
-                      color: "#475569",
-                      marginTop: "4px",
-                    }}
-                  >
-                    Scheduled: <strong>{preferredDate}</strong> ({preferredTimeSlot})
-                  </div>
-                  <div
-                    style={{
-                      fontSize: "12px",
-                      color: "#475569",
-                      marginTop: "2px",
-                    }}
-                  >
-                    Location: <strong>{locationAddress}</strong>
-                  </div>
-                </div>
-
-                <div style={{ display: "flex", gap: "10px" }}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveBookingCat(null);
-                      if (onNavigate) onNavigate("cust_requests");
-                    }}
-                    style={{
-                      flex: 1,
-                      padding: "12px 18px",
-                      borderRadius: "10px",
-                      background: "#059669",
-                      color: "#FFFFFF",
-                      border: "none",
-                      fontSize: "14px",
-                      fontWeight: 700,
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      gap: "6px",
-                    }}
-                  >
-                    <span>View in My Requests</span>
-                    <ArrowRight size={16} />
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setActiveBookingCat(null)}
-                    style={{
-                      padding: "12px 20px",
-                      borderRadius: "10px",
-                      background: "#F1F5F9",
-                      color: "#334155",
-                      border: "1px solid #CBD5E1",
-                      fontSize: "14px",
-                      fontWeight: 600,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Done
-                  </button>
-                </div>
-              </div>
-            ) : bookingStep === "SELECT_ISSUE" ? (
-              /* ─────────────────────────────────────────────────────────────
-                  STEP 1: SELECT CATEGORY & ISSUE
-                  User picks Category (e.g. Lighting) ➔ picks Issue (e.g. Bulb test)
-              ───────────────────────────────────────────────────────────── */
-              <div style={{ padding: "20px 24px" }}>
-                {/* 1. Category Selection */}
-                <div style={{ marginBottom: "18px" }}>
-                  <label
-                    style={{
-                      display: "block",
-                      fontSize: "13px",
-                      fontWeight: 700,
-                      color: "#0F172A",
-                      marginBottom: "8px",
-                    }}
-                  >
-                    1. Select Category <span style={{ color: "#EF4444" }}>*</span>
-                  </label>
-
-                  {availableCategories.length === 0 ? (
-                    <div
-                      style={{
-                        padding: "16px",
-                        background: "#F8FAFC",
-                        borderRadius: "8px",
-                        fontSize: "12.5px",
-                        color: "#64748B",
-                        textAlign: "center",
-                      }}
-                    >
-                      No categories configured under this service trade.
-                    </div>
-                  ) : (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                      {availableCategories.map((catName) => {
-                        const isSelected = selectedCategoryName === catName;
-                        return (
-                          <button
-                            key={catName}
-                            type="button"
-                            onClick={() => {
-                              setSelectedCategoryName(catName);
-                              setSelectedIssueName(""); // Reset issue on category switch
-                            }}
-                            style={{
-                              padding: "9px 16px",
-                              borderRadius: "10px",
-                              fontSize: "13px",
-                              fontWeight: 600,
-                              cursor: "pointer",
-                              border: isSelected
-                                ? "2px solid #059669"
-                                : "1px solid #CBD5E1",
-                              background: isSelected ? "#ECFDF5" : "#FFFFFF",
-                              color: isSelected ? "#065F46" : "#334155",
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: "6px",
-                              transition: "all 0.15s ease",
-                            }}
-                          >
-                            {isSelected && (
-                              <CheckCircle2 size={14} color="#059669" />
-                            )}
-                            <span>{catName}</span>
-                          </button>
+            {/* LocationPickerMap component */}
+            <LocationPickerMap
+              latitude={tempMarkerCoords.lat}
+              longitude={tempMarkerCoords.lng}
+              onChange={(lat, lng, address) => {
+                setTempMarkerCoords({ lat, lng });
+                if (address) {
+                  setTempResolvedAddress(address);
+                } else {
+                  reverseLocation(lat, lng)
+                    .then((res) => {
+                      if (
+                        res.data?.verified &&
+                        (res.data.address || res.data.formatted_address)
+                      ) {
+                        setTempResolvedAddress(
+                          res.data.address || res.data.formatted_address || ""
                         );
-                      })}
-                    </div>
-                  )}
-                </div>
+                      }
+                    })
+                    .catch(() => {});
+                }
+              }}
+            />
 
-                {/* 2. Issue Selection (shows issues under selected category) */}
-                <div style={{ marginBottom: "24px" }}>
-                  <label
-                    style={{
-                      display: "block",
-                      fontSize: "13px",
-                      fontWeight: 700,
-                      color: selectedCategoryName ? "#0F172A" : "#94A3B8",
-                      marginBottom: "8px",
-                    }}
-                  >
-                    2. Select Problem / Diagnostic Issue{" "}
-                    <span style={{ color: "#EF4444" }}>*</span>
-                  </label>
-
-                  {!selectedCategoryName ? (
-                    <div
-                      style={{
-                        padding: "16px",
-                        background: "#F8FAFC",
-                        borderRadius: "10px",
-                        border: "1px dashed #CBD5E1",
-                        fontSize: "12.5px",
-                        color: "#94A3B8",
-                        textAlign: "center",
-                      }}
-                    >
-                      Please select a category above to view diagnostic issues
-                    </div>
-                  ) : availableIssues.length === 0 ? (
-                    <div
-                      style={{
-                        padding: "16px",
-                        background: "#F8FAFC",
-                        borderRadius: "10px",
-                        fontSize: "12.5px",
-                        color: "#64748B",
-                        textAlign: "center",
-                      }}
-                    >
-                      No issues cataloged under "{selectedCategoryName}".
-                    </div>
-                  ) : (
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "1fr",
-                        gap: "8px",
-                        maxHeight: "220px",
-                        overflowY: "auto",
-                        border: "1px solid #E2E8F0",
-                        borderRadius: "12px",
-                        padding: "8px",
-                        background: "#F8FAFC",
-                      }}
-                    >
-                      {availableIssues.map((it) => {
-                        const isSelected = selectedIssueName === it.issue;
-                        return (
-                          <div
-                            key={it.id || it.issue}
-                            onClick={() => setSelectedIssueName(it.issue)}
-                            style={{
-                              padding: "12px 14px",
-                              borderRadius: "8px",
-                              fontSize: "13.5px",
-                              fontWeight: isSelected ? 700 : 500,
-                              cursor: "pointer",
-                              background: isSelected ? "#FFFFFF" : "#FFFFFF",
-                              border: isSelected
-                                ? "2px solid #059669"
-                                : "1px solid #E2E8F0",
-                              color: isSelected ? "#0F172A" : "#334155",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "space-between",
-                              boxShadow: isSelected
-                                ? "0 2px 8px rgba(5, 150, 105, 0.12)"
-                                : "none",
-                              transition: "all 0.15s ease",
-                            }}
-                          >
-                            <div>
-                              <div style={{ fontWeight: 700 }}>{it.issue}</div>
-                              {it.description && it.description !== it.issue && (
-                                <div
-                                  style={{
-                                    fontSize: "11.5px",
-                                    color: "#64748B",
-                                    marginTop: "2px",
-                                  }}
-                                >
-                                  {it.description}
-                                </div>
-                              )}
-                            </div>
-                            {isSelected && (
-                              <span
-                                style={{
-                                  fontSize: "12px",
-                                  color: "#059669",
-                                  fontWeight: 700,
-                                  background: "#ECFDF5",
-                                  padding: "3px 8px",
-                                  borderRadius: "6px",
-                                }}
-                              >
-                                ✓ Selected
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                {/* Step 1 Actions */}
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    borderTop: "1px solid #F1F5F9",
-                    paddingTop: "16px",
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setActiveBookingCat(null)}
-                    style={{
-                      padding: "10px 18px",
-                      borderRadius: "8px",
-                      border: "1px solid #CBD5E1",
-                      background: "#FFFFFF",
-                      color: "#475569",
-                      fontSize: "13px",
-                      fontWeight: 600,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Cancel
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={!selectedCategoryName || !selectedIssueName}
-                    onClick={() => setBookingStep("BOOKING_FORM")}
-                    style={{
-                      padding: "10px 24px",
-                      borderRadius: "8px",
-                      border: "none",
-                      background:
-                        selectedCategoryName && selectedIssueName
-                          ? "#059669"
-                          : "#94A3B8",
-                      color: "#FFFFFF",
-                      fontSize: "13px",
-                      fontWeight: 700,
-                      cursor:
-                        selectedCategoryName && selectedIssueName
-                          ? "pointer"
-                          : "not-allowed",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "6px",
-                      boxShadow:
-                        selectedCategoryName && selectedIssueName
-                          ? "0 2px 6px rgba(5, 150, 105, 0.25)"
-                          : "none",
-                    }}
-                  >
-                    <span>Proceed to Schedule & Location</span>
-                    <ArrowRight size={15} />
-                  </button>
-                </div>
+            {/* Resolved Address Display (Strictly Text ONLY) */}
+            {tempResolvedAddress && (
+              <div
+                style={{
+                  marginTop: "14px",
+                  padding: "12px 14px",
+                  background: "#F8FAFC",
+                  border: "1.5px solid #CBD5E1",
+                  borderRadius: "10px",
+                  fontSize: "13px",
+                  color: "#0F172A",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                }}
+              >
+                <MapPin size={16} color="#059669" style={{ flexShrink: 0 }} />
+                <span style={{ fontWeight: 700 }}>{tempResolvedAddress}</span>
               </div>
-            ) : (
-              /* ─────────────────────────────────────────────────────────────
-                  STEP 2: BOOKING FORM
-                  Opens ONLY after selecting Category & Issue!
-                  Asks: Date, Time, Location (from profile), Phone (from profile)
-              ───────────────────────────────────────────────────────────── */
-              <form onSubmit={handleBookingSubmit} style={{ padding: "20px 24px" }}>
-                {/* Selected Issue Summary Banner with Change Link */}
-                <div
-                  style={{
-                    background: "#F0FDF4",
-                    border: "1px solid #BBF7D0",
-                    borderRadius: "10px",
-                    padding: "12px 16px",
-                    marginBottom: "18px",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                  }}
-                >
-                  <div>
-                    <div style={{ fontSize: "11px", fontWeight: 700, color: "#166534", textTransform: "uppercase" }}>
-                      Selected Problem
-                    </div>
-                    <div style={{ fontSize: "14px", fontWeight: 700, color: "#0F172A", marginTop: "2px" }}>
-                      {selectedCategoryName} ➔ {selectedIssueName}
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => setBookingStep("SELECT_ISSUE")}
-                    style={{
-                      background: "none",
-                      border: "none",
-                      color: "#059669",
-                      fontSize: "12px",
-                      fontWeight: 700,
-                      cursor: "pointer",
-                      textDecoration: "underline",
-                    }}
-                  >
-                    Change Issue
-                  </button>
-                </div>
-
-                {submitError && (
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "flex-start",
-                      gap: "8px",
-                      background: "#FEF2F2",
-                      border: "1px solid #FCA5A5",
-                      borderRadius: "8px",
-                      padding: "10px 12px",
-                      marginBottom: "16px",
-                      color: "#991B1B",
-                      fontSize: "12.5px",
-                    }}
-                  >
-                    <AlertCircle size={16} style={{ flexShrink: 0, marginTop: "1px" }} />
-                    <span>{submitError}</span>
-                  </div>
-                )}
-
-                {/* 1. Schedule Grid (Date & Time) */}
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "1fr 1fr",
-                    gap: "12px",
-                    marginBottom: "16px",
-                  }}
-                >
-                  {/* Preferred Visit Date */}
-                  <div>
-                    <label
-                      style={{
-                        display: "block",
-                        fontSize: "12px",
-                        fontWeight: 600,
-                        color: "#475569",
-                        marginBottom: "4px",
-                      }}
-                    >
-                      Preferred Date <span style={{ color: "#EF4444" }}>*</span>
-                    </label>
-                    <input
-                      type="date"
-                      required
-                      value={preferredDate}
-                      onChange={(e) => setPreferredDate(e.target.value)}
-                      style={{
-                        width: "100%",
-                        padding: "8px 10px",
-                        borderRadius: "8px",
-                        border: "1px solid #CBD5E1",
-                        fontSize: "12.5px",
-                        color: "#1E293B",
-                        outline: "none",
-                        boxSizing: "border-box",
-                      }}
-                    />
-                  </div>
-
-                  {/* Preferred Time Slot */}
-                  <div>
-                    <label
-                      style={{
-                        display: "block",
-                        fontSize: "12px",
-                        fontWeight: 600,
-                        color: "#475569",
-                        marginBottom: "4px",
-                      }}
-                    >
-                      Preferred Time Slot <span style={{ color: "#EF4444" }}>*</span>
-                    </label>
-                    <select
-                      value={preferredTimeSlot}
-                      onChange={(e) => setPreferredTimeSlot(e.target.value)}
-                      style={{
-                        width: "100%",
-                        padding: "8px 10px",
-                        borderRadius: "8px",
-                        border: "1px solid #CBD5E1",
-                        fontSize: "12.5px",
-                        color: "#1E293B",
-                        outline: "none",
-                        boxSizing: "border-box",
-                        background: "#FFFFFF",
-                      }}
-                    >
-                      <option value="Morning (09:00 AM - 12:00 PM)">
-                        Morning (09:00 AM - 12:00 PM)
-                      </option>
-                      <option value="Afternoon (12:00 PM - 03:00 PM)">
-                        Afternoon (12:00 PM - 03:00 PM)
-                      </option>
-                      <option value="Evening (03:00 PM - 06:00 PM)">
-                        Evening (03:00 PM - 06:00 PM)
-                      </option>
-                      <option value="Night (06:00 PM - 09:00 PM)">
-                        Night (06:00 PM - 09:00 PM)
-                      </option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* 2. Contact Phone Number (From Profile, Editable) */}
-                <div style={{ marginBottom: "16px" }}>
-                  <label
-                    style={{
-                      display: "block",
-                      fontSize: "12px",
-                      fontWeight: 600,
-                      color: "#475569",
-                      marginBottom: "4px",
-                    }}
-                  >
-                    Contact Phone Number (From Profile, Editable) <span style={{ color: "#EF4444" }}>*</span>
-                  </label>
-                  <div style={{ position: "relative" }}>
-                    <input
-                      type="tel"
-                      required
-                      value={contactNumber}
-                      onChange={(e) => setContactNumber(e.target.value)}
-                      placeholder="e.g. 9876543210"
-                      maxLength={15}
-                      style={{
-                        width: "100%",
-                        padding: "8px 12px 8px 34px",
-                        borderRadius: "8px",
-                        border: "1px solid #CBD5E1",
-                        fontSize: "12.5px",
-                        color: "#1E293B",
-                        outline: "none",
-                        boxSizing: "border-box",
-                      }}
-                    />
-                    <Phone
-                      size={15}
-                      color="#64748B"
-                      style={{
-                        position: "absolute",
-                        left: "10px",
-                        top: "50%",
-                        transform: "translateY(-50%)",
-                      }}
-                    />
-                  </div>
-                </div>
-
-                {/* 3. Service Address / Location (From Profile, Editable) */}
-                <div style={{ marginBottom: "16px" }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      marginBottom: "4px",
-                    }}
-                  >
-                    <label
-                      style={{
-                        fontSize: "12px",
-                        fontWeight: 600,
-                        color: "#475569",
-                      }}
-                    >
-                      Service Location (From Profile, Editable) <span style={{ color: "#EF4444" }}>*</span>
-                    </label>
-                    <button
-                      type="button"
-                      onClick={handleGetLocation}
-                      disabled={isLocating}
-                      style={{
-                        background: "none",
-                        border: "none",
-                        color: "#059669",
-                        fontSize: "11.5px",
-                        fontWeight: 700,
-                        cursor: "pointer",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "4px",
-                        padding: 0,
-                      }}
-                    >
-                      <MapPin size={13} />
-                      <span>{isLocating ? "Locating..." : "Use Current Location"}</span>
-                    </button>
-                  </div>
-
-                  <input
-                    type="text"
-                    required
-                    value={locationAddress}
-                    onChange={(e) => setLocationAddress(e.target.value)}
-                    placeholder="Enter door/building, street address and landmark"
-                    style={{
-                      width: "100%",
-                      padding: "8px 12px",
-                      borderRadius: "8px",
-                      border: "1px solid #CBD5E1",
-                      fontSize: "12.5px",
-                      color: "#1E293B",
-                      outline: "none",
-                      boxSizing: "border-box",
-                    }}
-                  />
-                  {siteCoords.lat && (
-                    <span
-                      style={{
-                        fontSize: "11px",
-                        color: "#059669",
-                        marginTop: "2px",
-                        display: "block",
-                      }}
-                    >
-                      ✓ GPS coordinates tagged ({siteCoords.lat.toFixed(4)}, {siteCoords.lng?.toFixed(4)})
-                    </span>
-                  )}
-                </div>
-
-                {/* 4. Additional Notes (Optional) */}
-                <div style={{ marginBottom: "20px" }}>
-                  <label
-                    style={{
-                      display: "block",
-                      fontSize: "12px",
-                      fontWeight: 600,
-                      color: "#475569",
-                      marginBottom: "4px",
-                    }}
-                  >
-                    Additional Notes (Optional)
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={additionalNotes}
-                    onChange={(e) => setAdditionalNotes(e.target.value)}
-                    placeholder="Any specific instructions or symptom description..."
-                    style={{
-                      width: "100%",
-                      padding: "8px 12px",
-                      borderRadius: "8px",
-                      border: "1px solid #CBD5E1",
-                      fontSize: "12px",
-                      color: "#1E293B",
-                      outline: "none",
-                      boxSizing: "border-box",
-                      fontFamily: "inherit",
-                      resize: "vertical",
-                    }}
-                  />
-                </div>
-
-                {/* Form Actions */}
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    borderTop: "1px solid #F1F5F9",
-                    paddingTop: "16px",
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setBookingStep("SELECT_ISSUE")}
-                    disabled={submitting}
-                    style={{
-                      padding: "10px 18px",
-                      borderRadius: "8px",
-                      border: "1px solid #CBD5E1",
-                      background: "#FFFFFF",
-                      color: "#475569",
-                      fontSize: "13px",
-                      fontWeight: 600,
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "6px",
-                    }}
-                  >
-                    <ArrowLeft size={14} />
-                    <span>Back to Issues</span>
-                  </button>
-
-                  <button
-                    type="submit"
-                    disabled={submitting || !selectedCategoryName || !selectedIssueName}
-                    style={{
-                      padding: "10px 24px",
-                      borderRadius: "8px",
-                      border: "none",
-                      background: submitting ? "#94A3B8" : "#059669",
-                      color: "#FFFFFF",
-                      fontSize: "13px",
-                      fontWeight: 700,
-                      cursor: submitting ? "not-allowed" : "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "6px",
-                      boxShadow: "0 2px 6px rgba(5, 150, 105, 0.25)",
-                    }}
-                  >
-                    <Send size={14} />
-                    <span>
-                      {submitting ? "Submitting..." : "Submit Service Request ➔"}
-                    </span>
-                  </button>
-                </div>
-              </form>
             )}
+
+            {/* Modal Actions */}
+            <div
+              style={{
+                marginTop: "20px",
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: "10px",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setShowMapModal(false)}
+                style={{
+                  padding: "10px 20px",
+                  borderRadius: "8px",
+                  border: "1.5px solid #CBD5E1",
+                  background: "#FFFFFF",
+                  color: "#475569",
+                  fontSize: "13.5px",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={handleConfirmMapLocation}
+                style={{
+                  padding: "10px 24px",
+                  borderRadius: "8px",
+                  border: "none",
+                  background: "#059669",
+                  color: "#FFFFFF",
+                  fontSize: "13.5px",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  boxShadow: "0 2px 6px rgba(5, 150, 105, 0.25)",
+                }}
+              >
+                <CheckCircle2 size={16} />
+                <span>Confirm Location</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
