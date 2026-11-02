@@ -44,7 +44,7 @@ const styles = {
   page: {
     minHeight: "100%",
     padding: "28px",
-    background: "#F8FAF9",
+    background: "#EEF4F1",
     boxSizing: "border-box",
   } as React.CSSProperties,
 

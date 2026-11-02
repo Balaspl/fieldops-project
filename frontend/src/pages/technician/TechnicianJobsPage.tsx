@@ -82,6 +82,7 @@ import useAuthStore from "../../store/authStore";
 import {
   formatAcceptanceCountdown,
   useAcceptanceCountdowns,
+  isAwaitingAcceptance,
 } from "../../hooks/useAcceptanceCountdown";
 import TechnicianJobAssignmentPopup from "../../components/technician/TechnicianJobAssignmentPopup";
 import {
@@ -421,13 +422,14 @@ const normalizeStatus = (status: unknown): string =>
   String(status ?? "").trim().toUpperCase();
 
 const getStatusLabel = (status: unknown): string => {
-
-  switch (normalizeStatus(status)) {
-
+  const normalized = normalizeStatus(status).replace(/[-\s]+/g, "_");
+  switch (normalized) {
     case "ASSIGNED":
-
     case "ACTIVE":
-
+    case "AWAITING_ACCEPTANCE":
+    case "PENDING":
+    case "QUEUED":
+    case "PLANNED":
       return "AWAITING ACCEPTANCE";
 
     case "ACCEPTED":
@@ -614,11 +616,10 @@ export default function TechnicianJobsPage() {
       const list = Array.isArray(response?.data) ? response.data : [];
 
       const assignedJob = list.find((job: any) => {
-        const status = normalizeStatus(job?.status);
         const jobId = Number(job?.id);
 
         return (
-          status === "ASSIGNED" &&
+          isAwaitingAcceptance(job) &&
           !rejectedPopupJobIdsRef.current.has(jobId)
         );
       });
@@ -654,11 +655,10 @@ export default function TechnicianJobsPage() {
       }
 
       const pendingAssigned = list.find((job: any) => {
-        const status = normalizeStatus(job?.status);
         const jobId = Number(job?.id);
 
         return (
-          (status === "ASSIGNED" || status === "ACTIVE") &&
+          isAwaitingAcceptance(job) &&
           !rejectedPopupJobIdsRef.current.has(jobId)
         );
       });
@@ -678,6 +678,17 @@ export default function TechnicianJobsPage() {
       setLoading(false);
     }
   };
+
+  // When timer expires, close the assignment popup automatically for this technician
+  useEffect(() => {
+    if (assignedPopupJob && timerSeconds !== null && timerSeconds <= 0) {
+      const jobId = Number(assignedPopupJob.id);
+      rejectedPopupJobIdsRef.current.add(jobId);
+      assignedPopupJobIdRef.current = null;
+      setAssignedPopupJob(null);
+      void loadJobs();
+    }
+  }, [assignedPopupJob, timerSeconds]);
 
  useEffect(() => {
 

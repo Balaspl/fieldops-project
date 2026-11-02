@@ -8,6 +8,7 @@ import {
   User,
   Wrench,
   X,
+  AlertTriangle,
 } from "lucide-react";
 import { formatAcceptanceCountdown } from "../../hooks/useAcceptanceCountdown";
 import "./TechnicianJobAssignmentPopup.css";
@@ -16,8 +17,10 @@ interface TechnicianJob {
   id: number | string;
   customer_name?: string | null;
   contact_number?: string | null;
+  priority?: string | null;
   preferred_service_date?: string | null;
   preferred_service_time?: string | null;
+  preferred_visit_time?: string | null;
   site_address?: string | null;
   location?: string | null;
   service_type?: string | null;
@@ -39,11 +42,69 @@ interface TechnicianJobAssignmentPopupProps {
   onCancelReject?: () => void;
 }
 
+const formatTime = (timeStr?: string | null): string => {
+  if (!timeStr) return "";
+  const trimmed = String(timeStr).trim();
+  if (/am|pm/i.test(trimmed)) return trimmed;
+  const parts = trimmed.split(":");
+  if (parts.length >= 2) {
+    const hours = parseInt(parts[0], 10);
+    const minutes = parts[1];
+    if (!isNaN(hours)) {
+      const ampm = hours >= 12 ? "PM" : "AM";
+      const h12 = hours % 12 || 12;
+      return `${String(h12).padStart(2, "0")}:${minutes} ${ampm}`;
+    }
+  }
+  return trimmed;
+};
+
 const formatSchedule = (job: TechnicianJob): string => {
   const date = job.preferred_service_date;
-  const time = job.preferred_service_time;
-  if (date && time) return `${date} ${time}`;
+  const rawTime = job.preferred_service_time || job.preferred_visit_time;
+  const time = formatTime(rawTime);
+  if (date && time) return `${date} at ${time}`;
   return date || time || "N/A";
+};
+
+const getPriorityTheme = (p?: string | null) => {
+  const norm = String(p || "MEDIUM").toUpperCase().trim();
+  switch (norm) {
+    case "URGENT":
+    case "CRITICAL":
+      return {
+        label: "EMERGENCY / CRITICAL",
+        color: "#DC2626",
+        bg: "#FEF2F2",
+        border: "#FCA5A5",
+        iconBg: "#FEE2E2",
+      };
+    case "HIGH":
+      return {
+        label: "HIGH PRIORITY",
+        color: "#D97706",
+        bg: "#FFFBEB",
+        border: "#FDE68A",
+        iconBg: "#FEF3C7",
+      };
+    case "LOW":
+      return {
+        label: "LOW PRIORITY",
+        color: "#059669",
+        bg: "#ECFDF5",
+        border: "#A7F3D0",
+        iconBg: "#D1FAE5",
+      };
+    case "MEDIUM":
+    default:
+      return {
+        label: "STANDARD PRIORITY",
+        color: "#2563EB",
+        bg: "#EFF6FF",
+        border: "#BFDBFE",
+        iconBg: "#DBEAFE",
+      };
+  }
 };
 
 export default function TechnicianJobAssignmentPopup({
@@ -61,6 +122,7 @@ export default function TechnicianJobAssignmentPopup({
   onCancelReject,
 }: TechnicianJobAssignmentPopupProps) {
   const expired = countdownSeconds !== null && countdownSeconds <= 0;
+  const priorityTheme = getPriorityTheme(job.priority);
 
   return (
     <div className="technician-job-assignment-modal">
@@ -76,9 +138,29 @@ export default function TechnicianJobAssignmentPopup({
       >
         <header className="technician-job-assignment-header">
           <div>
-            <span className="technician-job-assignment-id">
-              Job ID: #{job.id}
-            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+              <span className="technician-job-assignment-id">
+                Job ID: #{job.id}
+              </span>
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  padding: "3px 9px",
+                  borderRadius: "12px",
+                  fontSize: "11px",
+                  fontWeight: 800,
+                  letterSpacing: "0.5px",
+                  background: priorityTheme.bg,
+                  color: priorityTheme.color,
+                  border: `1px solid ${priorityTheme.border}`,
+                }}
+              >
+                <AlertTriangle size={12} />
+                {priorityTheme.label}
+              </span>
+            </div>
             <h3
               className="technician-job-assignment-title"
               id="technician-job-assignment-title"
@@ -196,10 +278,36 @@ export default function TechnicianJobAssignmentPopup({
               </span>
               <div className="technician-job-assignment-info-content">
                 <span className="technician-job-assignment-eyebrow">
-                  SCHEDULE
+                  APPOINTMENT DATE
                 </span>
                 <div className="technician-job-assignment-info-value">
-                  {formatSchedule(job)}
+                  {job.preferred_service_date || "Today"}
+                </div>
+              </div>
+            </article>
+            <article className="technician-job-assignment-info-card" style={{ border: "1.5px solid #93C5FD", background: "#F0F9FF" }}>
+              <span className="technician-job-assignment-info-icon is-blue" style={{ background: "#DBEAFE", color: "#1D4ED8" }}>
+                <Clock size={16} />
+              </span>
+              <div className="technician-job-assignment-info-content">
+                <span className="technician-job-assignment-eyebrow" style={{ color: "#1E40AF", fontWeight: 700 }}>
+                  PREFERRED TIME
+                </span>
+                <div className="technician-job-assignment-info-value" style={{ fontWeight: 800, color: "#1E3A8A", fontSize: "14px" }}>
+                  {formatTime(job.preferred_service_time || job.preferred_visit_time) || "09:00 AM"}
+                </div>
+              </div>
+            </article>
+            <article className="technician-job-assignment-info-card" style={{ border: `1.5px solid ${priorityTheme.border}`, background: priorityTheme.bg }}>
+              <span className="technician-job-assignment-info-icon" style={{ background: priorityTheme.iconBg, color: priorityTheme.color }}>
+                <AlertTriangle size={16} />
+              </span>
+              <div className="technician-job-assignment-info-content">
+                <span className="technician-job-assignment-eyebrow" style={{ color: priorityTheme.color, fontWeight: 700 }}>
+                  JOB PRIORITY
+                </span>
+                <div className="technician-job-assignment-info-value" style={{ fontWeight: 800, color: priorityTheme.color, fontSize: "14px" }}>
+                  {job.priority ? job.priority.toUpperCase() : "MEDIUM"}
                 </div>
               </div>
             </article>
@@ -250,6 +358,30 @@ export default function TechnicianJobAssignmentPopup({
                 {job.service_type || "Service Request"}
               </div>
             </div>
+          </div>
+          {/* Prominent Appointment Date & Time Banner */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              background: "#F0FDF4",
+              border: "1.5px solid #BBF7D0",
+              borderRadius: "10px",
+              padding: "10px 14px",
+              margin: "12px 0",
+              fontSize: "13px",
+              color: "#166534",
+            }}
+          >
+            <Clock size={16} color="#16A34A" />
+            <span>
+              Appointment Time:{" "}
+              <strong style={{ color: "#15803D", fontSize: "14px" }}>
+                {formatTime(job.preferred_service_time || job.preferred_visit_time) || "09:00 AM"}
+              </strong>
+              {job.preferred_service_date ? ` on ${job.preferred_service_date}` : ""}
+            </span>
           </div>
           <p className="technician-job-assignment-service-description">
             {job.issue_description ||

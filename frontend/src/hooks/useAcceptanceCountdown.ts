@@ -12,12 +12,17 @@ export interface AcceptanceCountdownJob {
 export const isAwaitingAcceptance = (
   job: AcceptanceCountdownJob | null | undefined,
 ): boolean => {
-  const status = String(job?.status ?? "").trim().toUpperCase();
+  const status = String(job?.status ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[-\s]+/g, "_");
   return [
     "ASSIGNED",
     "ACTIVE",
     "PENDING",
     "AWAITING_ACCEPTANCE",
+    "QUEUED",
+    "PLANNED",
   ].includes(status);
 };
 

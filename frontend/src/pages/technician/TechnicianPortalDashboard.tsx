@@ -29,7 +29,6 @@ import {
   isAwaitingAcceptance,
   useAcceptanceCountdowns,
 } from "../../hooks/useAcceptanceCountdown";
-import TechnicianJobAssignmentPopup from "../../components/technician/TechnicianJobAssignmentPopup";
 import {
   TECHNICIAN_GPS_MAX_AGE_MS,
   isValidTechnicianGpsFix,
@@ -555,7 +554,9 @@ export default function TechnicianPortalDashboard({
 
     {
       label: "Pending Acceptance",
-      value: stats?.pending_acceptance ?? 0,
+      value: (stats?.pending_acceptance && stats.pending_acceptance > 0)
+        ? stats.pending_acceptance
+        : dashboardJobs.filter(isAwaitingAcceptance).length,
       icon: "🔔",
       watermark: "🔔",
       theme: {
@@ -799,8 +800,10 @@ export default function TechnicianPortalDashboard({
           .map((c, i) => (
           <div
             key={i}
+            onClick={() => onNavigate("tech_jobs")}
             style={{
               ...s.card,
+              cursor: "pointer",
               background: c.theme.background,
               borderColor: c.theme.border,
               boxShadow: c.theme.shadow,
@@ -925,278 +928,8 @@ export default function TechnicianPortalDashboard({
           ))}
         </section>
       </div>
-      {assignedOffer && (
-        <TechnicianJobAssignmentPopup
-          job={assignedOffer}
-          countdownSeconds={assignedOfferSeconds}
-          distanceDisplay={offerDistanceDisplay}
-          loading={offerActionLoading}
-          rejecting={rejectingOffer}
-          rejectReason={rejectReason}
-          onClose={dismissAssignedOffer}
-          onAccept={() => void handleAssignedOfferAccept()}
-          onReject={() => setRejectingOffer(true)}
-          onRejectReasonChange={setRejectReason}
-          onCancelReject={() => {
-            setRejectingOffer(false);
-            setRejectReason("");
-            setOfferError(null);
-          }}
-          onConfirmReject={() => void handleAssignedOfferReject()}
-        />
-      )}
-      {false && assignedOffer && (
-        <div
-          data-testid="dashboard-assignment-popup-backdrop"
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 1000,
-            display: "grid",
-            placeItems: "center",
-            padding: 16,
-            background: "rgba(15, 23, 42, 0.56)",
-            backdropFilter: "blur(4px)",
-          }}
-        >
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="dashboard-assignment-popup-title"
-            style={{
-              width: "min(100%, 520px)",
-              maxHeight: "min(90vh, 680px)",
-              overflowY: "auto",
-              boxSizing: "border-box",
-              padding: 28,
-              borderRadius: 20,
-              background: "#FFFFFF",
-              boxShadow: "0 24px 70px rgba(15, 23, 42, 0.3)",
-              color: "#14213D",
-            }}
-          >
-            <header style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
-              <div>
-                <span style={{ color: "#078A4D", fontSize: 12, fontWeight: 700 }}>
-                  JOB #{assignedOffer.id}
-                </span>
-                <h2
-                  id="dashboard-assignment-popup-title"
-                  style={{ margin: "5px 0", fontSize: 25 }}
-                >
-                  Job Assigned
-                </h2>
-                <p style={{ margin: 0, color: "#64748B", fontSize: 14 }}>
-                  Review the service request and respond before the deadline.
-                </p>
-              </div>
-              <button
-                type="button"
-                aria-label="Close assigned job popup"
-                onClick={dismissAssignedOffer}
-                style={{
-                  width: 36,
-                  height: 36,
-                  border: "1px solid #E2E8F0",
-                  borderRadius: 10,
-                  background: "#FFFFFF",
-                  color: "#475569",
-                  cursor: "pointer",
-                  flex: "0 0 auto",
-                }}
-              >
-                <X size={18} />
-              </button>
-            </header>
 
-            {rejectingOffer ? (
-              <div style={{ marginTop: 24 }}>
-                <label
-                  htmlFor="dashboard-reject-reason"
-                  style={{ display: "block", marginBottom: 8, fontWeight: 700 }}
-                >
-                  Why are you rejecting this job?
-                </label>
-                <textarea
-                  id="dashboard-reject-reason"
-                  value={rejectReason}
-                  onChange={(event) => setRejectReason(event.target.value)}
-                  placeholder="Explain why you're rejecting this job..."
-                  rows={4}
-                  style={{
-                    boxSizing: "border-box",
-                    width: "100%",
-                    resize: "vertical",
-                    padding: 12,
-                    border: "1px solid #CBD5E1",
-                    borderRadius: 10,
-                    font: "inherit",
-                  }}
-                />
-              </div>
-            ) : (
-              <>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                    gap: 12,
-                    marginTop: 22,
-                    padding: 16,
-                    border: "1px solid #BBF7D0",
-                    borderRadius: 14,
-                    background: "#F0FDF4",
-                  }}
-                >
-                  <div>
-                    <span style={{ color: "#64748B", fontSize: 11, fontWeight: 700 }}>
-                      TIME TO ACCEPT
-                    </span>
-                    <strong
-                      data-testid="dashboard-popup-acceptance-countdown"
-                      style={{
-                        display: "block",
-                        marginTop: 5,
-                        color:
-                          legacyAssignedOfferSeconds <= 30
-                            ? "#DC2626"
-                            : legacyAssignedOfferSeconds <= 120
-                              ? "#D97706"
-                              : "#078A4D",
-                        fontSize: 22,
-                      }}
-                    >
-                      {legacyAssignedOfferSeconds === 0
-                        ? "Deadline reached"
-                        : formatAcceptanceCountdown(legacyAssignedOfferSeconds)}
-                    </strong>
-                  </div>
-                  <div>
-                    <span style={{ color: "#64748B", fontSize: 11, fontWeight: 700 }}>
-                      SERVICE TYPE
-                    </span>
-                    <strong style={{ display: "block", marginTop: 5, fontSize: 16 }}>
-                      {assignedOffer.service_type || "Service"}
-                    </strong>
-                  </div>
-                </div>
-                <div style={{ display: "grid", gap: 13, marginTop: 20 }}>
-                  <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-                    <UserRound size={18} color="#078A4D" />
-                    <strong>{assignedOffer.customer_name || "Customer"}</strong>
-                  </div>
-                  {assignedOffer.contact_number && (
-                    <a
-                      href={`tel:${String(assignedOffer.contact_number).replace(/[^+\d]/g, "")}`}
-                      style={{ display: "flex", gap: 10, color: "#1769E8", textDecoration: "none" }}
-                    >
-                      <Phone size={18} />
-                      {assignedOffer.contact_number}
-                    </a>
-                  )}
-                  <div style={{ display: "flex", gap: 10, alignItems: "flex-start", color: "#475569" }}>
-                    <MapPin size={18} color="#078A4D" style={{ flex: "0 0 auto" }} />
-                    <span>{assignedOffer.location || assignedOffer.site_address || "Service location unavailable"}</span>
-                  </div>
-                  <p style={{ margin: 0, padding: 13, borderRadius: 10, background: "#F8FAFC", color: "#475569", lineHeight: 1.5 }}>
-                    {assignedOffer.issue_description || "No additional service details provided."}
-                  </p>
-                </div>
-              </>
-            )}
-
-            {offerError && (
-              <p role="alert" style={{ margin: "14px 0 0", color: "#B91C1C" }}>
-                {offerError}
-              </p>
-            )}
-            <div style={{ display: "flex", gap: 10, marginTop: 24 }}>
-              {rejectingOffer ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRejectingOffer(false);
-                      setRejectReason("");
-                      setOfferError(null);
-                    }}
-                    disabled={offerActionLoading}
-                    style={{
-                      flex: 1,
-                      minHeight: 44,
-                      border: "1px solid #CBD5E1",
-                      borderRadius: 10,
-                      background: "#FFFFFF",
-                      color: "#334155",
-                      fontWeight: 700,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Back
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleAssignedOfferReject()}
-                    disabled={offerActionLoading || rejectReason.trim().length < 10}
-                    style={{
-                      flex: 1,
-                      minHeight: 44,
-                      border: 0,
-                      borderRadius: 10,
-                      background: "#DC2626",
-                      color: "#FFFFFF",
-                      fontWeight: 700,
-                      cursor: "pointer",
-                      opacity: offerActionLoading || rejectReason.trim().length < 10 ? 0.6 : 1,
-                    }}
-                  >
-                    {offerActionLoading ? "Rejecting..." : "Confirm Reject"}
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setRejectingOffer(true)}
-                    disabled={offerActionLoading}
-                    style={{
-                      flex: 1,
-                      minHeight: 46,
-                      border: "1px solid #FECACA",
-                      borderRadius: 10,
-                      background: "#FEF2F2",
-                      color: "#B91C1C",
-                      fontWeight: 700,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Reject
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleAssignedOfferAccept()}
-                    disabled={offerActionLoading || legacyAssignedOfferSeconds <= 0}
-                    style={{
-                      flex: 1,
-                      minHeight: 46,
-                      border: 0,
-                      borderRadius: 10,
-                      background: "#078A4D",
-                      color: "#FFFFFF",
-                      fontWeight: 700,
-                      cursor: "pointer",
-                      opacity: offerActionLoading || legacyAssignedOfferSeconds <= 0 ? 0.6 : 1,
-                    }}
-                  >
-                    <CheckCircle size={16} style={{ verticalAlign: "middle", marginRight: 6 }} />
-                    {offerActionLoading ? "Accepting..." : "Accept Job"}
-                  </button>
-                </>
-              )}
-            </div>
-          </section>
-        </div>
-      )}
+      
     </div>
   );
 }

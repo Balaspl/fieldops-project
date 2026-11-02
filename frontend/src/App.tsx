@@ -600,7 +600,7 @@ function AppInner() {
         return "tech_dashboard";
 
       if (isCustomer)
-        return "cust_requests";
+        return "cust_create_request";
 
       return "dashboard";
     });
@@ -618,7 +618,7 @@ function AppInner() {
   }, [isCustomer]);
 
   const [previousCustomerTab, setPreviousCustomerTab] =
-    useState<string>("cust_requests");
+    useState<string>("cust_create_request");
   const [selectedCustomerNotificationId, setSelectedCustomerNotificationId] =
     useState<string | null>(null);
 

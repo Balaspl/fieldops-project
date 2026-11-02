@@ -26,16 +26,7 @@ interface SkillComboSelectProps {
   name?: string;
 }
 
-const DEFAULT_SUGGESTIONS = [
-  "HVAC Repair",
-  "Electrical",
-  "Plumbing",
-  "Network Support",
-  "General Maintenance",
-  "Appliance Repair",
-  "CCTV & Security",
-  "Roofing & Carpentry",
-];
+// Organization-published services only (strictly no hardcoded default skills)
 
 export const SkillComboSelect: React.FC<SkillComboSelectProps> = ({
   value,
@@ -106,10 +97,20 @@ export const SkillComboSelect: React.FC<SkillComboSelectProps> = ({
 
   // Dynamic lists from taxonomy
   const availableServiceTypes = useMemo(() => {
-    if (taxonomy && taxonomy.service_types && taxonomy.service_types.length > 0) {
-      return taxonomy.service_types;
+    return taxonomy?.service_types || [];
+  }, [taxonomy]);
+
+  // All published skills from organization catalog
+  const orgPublishedSkills = useMemo(() => {
+    if (!taxonomy) return [];
+    const set = new Set<string>();
+    (taxonomy.service_types || []).forEach((st) => set.add(st));
+    if (taxonomy.categories_by_type) {
+      Object.values(taxonomy.categories_by_type).forEach((cats) => {
+        cats.forEach((c) => set.add(c));
+      });
     }
-    return ["Electrical", "Plumbing", "AC & HVAC", "Home Appliances", "Carpentry & Woodwork", "Security & Smart Home", "Cleaning & Maintenance"];
+    return Array.from(set);
   }, [taxonomy]);
 
   const availableCategories = useMemo(() => {
@@ -516,7 +517,12 @@ export const SkillComboSelect: React.FC<SkillComboSelectProps> = ({
             >
               Suggested Skills
             </div>
-            {DEFAULT_SUGGESTIONS.map((s) => {
+            {orgPublishedSkills.length === 0 ? (
+              <div style={{ padding: "10px 14px", fontSize: "12px", color: "#64748B" }}>
+                No services published for this organization yet. Create services in the Services Catalog first.
+              </div>
+            ) : (
+              orgPublishedSkills.map((s) => {
               const isSelected = currentSkills.includes(s);
 
               return (
@@ -555,7 +561,8 @@ export const SkillComboSelect: React.FC<SkillComboSelectProps> = ({
                   )}
                 </div>
               );
-            })}
+              })
+            )}
           </div>
         )}
       </div>

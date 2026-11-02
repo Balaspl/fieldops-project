@@ -1160,24 +1160,35 @@ class DispatcherRuntime:
 
     @classmethod
     def _mark_dispatch_exhausted(cls, job_id: int, dispatch_state: dict[str, Any]) -> bool:
-        """Persist the final rejected status after every planned offer fails."""
+        """Persist the final cancelled status after every ranked offer fails or times out."""
         with SessionLocal() as db:
             job = cls._get_job(db, job_id)
             if job is None:
                 return False
             status = str(getattr(job, "status", "") or "").strip().upper()
             if status in NON_DISPATCHABLE_STATUSES and status not in {
-                "REJECTED_BY_TECHNICIAN"
+                "REJECTED_BY_TECHNICIAN", "CANCELLED", "QUEUED"
             }:
                 return False
             if getattr(job, "assigned_technician_id", None) is not None:
                 return False
-            job.status = "REJECTED_BY_TECHNICIAN"
+            job.status = "CANCELLED"
+            job.cancellation_reason = "All ranked eligible technicians exhausted / timed out / rejected offer"
+            job.cancelled_at = datetime.now(timezone.utc)
             job.assigned_technician_id = None
             job.dispatch_state = DispatcherGraph._persistable_state(dispatch_state)
+
+            try:
+                from app.models_legacy import ServiceRequest
+                sr = db.query(ServiceRequest).filter(ServiceRequest.linked_job_id == job.id).first()
+                if sr:
+                    sr.status = "CANCELLED"
+            except Exception as sr_err:
+                logger.warning("Failed to set linked ServiceRequest to CANCELLED: %s", sr_err)
+
             db.commit()
             logger.info(
-                "dispatch_exhausted job_id=%s status=REJECTED_BY_TECHNICIAN attempted_technician_ids=%s",
+                "dispatch_exhausted job_id=%s status=CANCELLED attempted_technician_ids=%s",
                 job_id,
                 dispatch_state.get("attempted_technician_ids", []),
             )

@@ -69,6 +69,7 @@ const styles = {
     alignItems: "center",
     justifyContent: "space-between",
     padding: "16px 20px",
+    backgroundColor: "#ffffff",
     borderBottom: "1px solid #e2e8f0",
   } as React.CSSProperties,
 
@@ -98,6 +99,7 @@ const styles = {
     flex: 1,
     overflowY: "auto",
     padding: "16px 20px",
+    backgroundColor: "#ffffff",
   } as React.CSSProperties,
 
   empty: {

@@ -5,7 +5,7 @@ Pydantic models for request/response validation on portal-specific endpoints.
 """
 
 from datetime import date, datetime, time
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from pydantic import BaseModel, Field, field_validator, ConfigDict, model_validator
 
 
@@ -216,6 +216,7 @@ class ServiceRequestCreate(BaseModel):
     priority: str = Field(default="MEDIUM")
     preferred_visit_date: Optional[date] = None
     preferred_service_time: Optional[time] = None
+    preferred_visit_time: Optional[str] = None
     images: Optional[List[str]] = Field(default_factory=list)
     location: Optional[str] = None
     contact_number: Optional[str] = None
@@ -267,6 +268,7 @@ class ServiceRequestUpdate(BaseModel):
     service_type: Optional[str] = None
     priority: Optional[str] = None
     preferred_visit_date: Optional[date] = None
+    preferred_visit_time: Optional[str] = None
     images: Optional[List[str]] = None
     location: Optional[str] = None
     contact_number: Optional[str] = None
@@ -371,6 +373,7 @@ class ServiceRequestResponse(BaseModel):
     service_type: Optional[str] = None
     priority: str
     preferred_visit_date: Optional[date] = None
+    preferred_visit_time: Optional[str] = None
     images: Optional[List[str]] = None
     location: Optional[str] = None
     contact_number: Optional[str] = None
@@ -425,7 +428,8 @@ class TechnicianJobResponse(BaseModel):
     priority: Optional[str] = None
     service_type: Optional[str] = None
     contact_number: Optional[str] = None
-    preferred_service_date: Optional[date] = None
+    preferred_service_date: Optional[Union[date, str]] = None
+    preferred_service_time: Optional[Union[time, str]] = None
     status: Optional[str] = None
     required_skill: Optional[str] = None
     created_at: Optional[datetime] = None
@@ -631,8 +635,8 @@ class CustomerJobTrackingResponse(BaseModel):
     en_route_at: Optional[datetime] = None
     distance_travelled_km: Optional[float] = None
     issue_description: Optional[str] = None
-    preferred_service_date: Optional[date] = None
-    preferred_service_time: Optional[time] = None
+    preferred_service_date: Optional[Union[date, str]] = None
+    preferred_service_time: Optional[Union[time, str]] = None
 
     # Customer-visible ETA contract. The backend remains authoritative for
     # calculation, caching, fallback selection, and access control.
