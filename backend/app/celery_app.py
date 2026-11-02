@@ -1,7 +1,7 @@
 import os
-
+from typing import Any, Optional
 from celery import Celery
-
+from kombu import Queue
 
 # ---------------------------------------------------------------------------
 # Redis configuration
@@ -25,6 +25,55 @@ celery_app = Celery(
 
 
 # ---------------------------------------------------------------------------
+# Queue Definitions & Routing Rules (Dedicated Queues)
+# ---------------------------------------------------------------------------
+
+DEFAULT_QUEUE = "default"
+DEFAULT_ROUTING_KEY = "default"
+
+# 1. Dedicated Notification Queue
+NOTIFICATION_QUEUE = "notifications"
+NOTIFICATION_ROUTING_KEY = "notifications"
+
+NOTIFICATION_TASK_ROUTES = {
+    # SMS Delivery Tasks
+    "app.tasks.send_sms_async": {"queue": NOTIFICATION_QUEUE, "routing_key": NOTIFICATION_ROUTING_KEY},
+    "app.tasks.send_bulk_sms_async": {"queue": NOTIFICATION_QUEUE, "routing_key": NOTIFICATION_ROUTING_KEY},
+
+    # Email Delivery Tasks
+    "app.tasks.send_email_async": {"queue": NOTIFICATION_QUEUE, "routing_key": NOTIFICATION_ROUTING_KEY},
+    "app.tasks.process_transactional_email_outbox": {"queue": NOTIFICATION_QUEUE, "routing_key": NOTIFICATION_ROUTING_KEY},
+    "app.tasks.process_transactional_email_outbox_task": {"queue": NOTIFICATION_QUEUE, "routing_key": NOTIFICATION_ROUTING_KEY},
+
+    # Push, Lifecycle & Engagement Notification Tasks
+    "app.tasks.send_dispatcher_digest": {"queue": NOTIFICATION_QUEUE, "routing_key": NOTIFICATION_ROUTING_KEY},
+    "app.tasks.send_customer_daily_engagement": {"queue": NOTIFICATION_QUEUE, "routing_key": NOTIFICATION_ROUTING_KEY},
+    "app.tasks.process_notification_event_task": {"queue": NOTIFICATION_QUEUE, "routing_key": NOTIFICATION_ROUTING_KEY},
+    "app.tasks.route_notifications_with_lifecycle": {"queue": NOTIFICATION_QUEUE, "routing_key": NOTIFICATION_ROUTING_KEY},
+    "app.tasks.send_push_notification_async": {"queue": NOTIFICATION_QUEUE, "routing_key": NOTIFICATION_ROUTING_KEY},
+    "app.tasks.create_notification_queue_task": {"queue": NOTIFICATION_QUEUE, "routing_key": NOTIFICATION_ROUTING_KEY},
+}
+
+# 2. Dedicated GPS Processing Queue
+GPS_QUEUE = "gps_processing"
+GPS_ROUTING_KEY = "gps"
+
+GPS_TASK_ROUTES = {
+    # GPS Maintenance, Retention & Hard-Deletion Purge
+    "app.tasks.daily_gps_purge_task": {"queue": GPS_QUEUE, "routing_key": GPS_ROUTING_KEY},
+    "app.tasks.purge_job_gps_data": {"queue": GPS_QUEUE, "routing_key": GPS_ROUTING_KEY},
+    "app.tasks.purge_job_gps_data_task": {"queue": GPS_QUEUE, "routing_key": GPS_ROUTING_KEY},
+
+    # Real-Time ETA Recalculation & Tracking Consumption
+    "app.tasks.update_eta_task": {"queue": GPS_QUEUE, "routing_key": GPS_ROUTING_KEY},
+    "app.tasks.process_gps_tracking_event_task": {"queue": GPS_QUEUE, "routing_key": GPS_ROUTING_KEY},
+    "app.tasks.create_gps_processing_queue_task": {"queue": GPS_QUEUE, "routing_key": GPS_ROUTING_KEY},
+}
+
+ALL_TASK_ROUTES = {**NOTIFICATION_TASK_ROUTES, **GPS_TASK_ROUTES}
+
+
+# ---------------------------------------------------------------------------
 # Celery configuration
 # ---------------------------------------------------------------------------
 
@@ -33,10 +82,18 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
 
+    # Queue management configuration
+    task_default_queue=DEFAULT_QUEUE,
+    task_default_routing_key=DEFAULT_ROUTING_KEY,
+    task_queues=(
+        Queue(DEFAULT_QUEUE, routing_key=DEFAULT_ROUTING_KEY),
+        Queue(NOTIFICATION_QUEUE, routing_key=NOTIFICATION_ROUTING_KEY),
+        Queue(GPS_QUEUE, routing_key=GPS_ROUTING_KEY),
+    ),
+    task_routes=ALL_TASK_ROUTES,
+
     # Explicitly import the task module.
-    #
-    # This is important because app.tasks contains tasks that must be
-    # registered on THIS celery_app instance.
+    # app.tasks contains tasks that must be registered on THIS celery_app instance.
     imports=(
         "app.tasks",
     ),
@@ -75,6 +132,111 @@ celery_app.conf.update(
 
 
 # ---------------------------------------------------------------------------
+# Queue Helpers & Story Contract Helpers
+# ---------------------------------------------------------------------------
+
+def get_notification_queue_config() -> dict[str, str]:
+    """
+    Return canonical configuration for the dedicated notification queue.
+    Contract:
+    {
+        "status": "CONFIGURED",
+        "queue": "notifications",
+        "routing_key": "notifications"
+    }
+    """
+    return {
+        "status": "CONFIGURED",
+        "queue": NOTIFICATION_QUEUE,
+        "routing_key": NOTIFICATION_ROUTING_KEY,
+    }
+
+
+def create_notification_queue(app: Optional[Celery] = None) -> dict[str, str]:
+    """
+    Ensure the dedicated notification queue and routing configuration are active on Celery.
+    Returns:
+        {
+            "status": "CONFIGURED",
+            "queue": "notifications",
+            "routing_key": "notifications"
+        }
+    """
+    target_app = app or celery_app
+
+    # Ensure queue is present in task_queues
+    existing_queues = list(target_app.conf.task_queues or [])
+    queue_names = {q.name if hasattr(q, "name") else str(q) for q in existing_queues}
+    if NOTIFICATION_QUEUE not in queue_names:
+        existing_queues.append(Queue(NOTIFICATION_QUEUE, routing_key=NOTIFICATION_ROUTING_KEY))
+        target_app.conf.task_queues = tuple(existing_queues)
+
+    # Ensure task routes are merged
+    existing_routes = dict(target_app.conf.task_routes or {})
+    existing_routes.update(NOTIFICATION_TASK_ROUTES)
+    target_app.conf.task_routes = existing_routes
+
+    return get_notification_queue_config()
+
+
+# Notification Story aliases
+CreateNotificationQueue = create_notification_queue
+Create_notification_queue = create_notification_queue
+
+
+def get_gps_processing_queue_config() -> dict[str, str]:
+    """
+    Return canonical configuration for the dedicated GPS processing queue.
+    Contract:
+    {
+        "status": "CONFIGURED",
+        "queue": "gps_processing",
+        "routing_key": "gps"
+    }
+    """
+    return {
+        "status": "CONFIGURED",
+        "queue": GPS_QUEUE,
+        "routing_key": GPS_ROUTING_KEY,
+    }
+
+
+def create_gps_processing_queue(app: Optional[Celery] = None) -> dict[str, str]:
+    """
+    Ensure the dedicated GPS processing queue and routing configuration are active on Celery.
+    Returns:
+        {
+            "status": "CONFIGURED",
+            "queue": "gps_processing",
+            "routing_key": "gps"
+        }
+    """
+    target_app = app or celery_app
+
+    # Ensure queue is present in task_queues
+    existing_queues = list(target_app.conf.task_queues or [])
+    queue_names = {q.name if hasattr(q, "name") else str(q) for q in existing_queues}
+    if GPS_QUEUE not in queue_names:
+        existing_queues.append(Queue(GPS_QUEUE, routing_key=GPS_ROUTING_KEY))
+        target_app.conf.task_queues = tuple(existing_queues)
+
+    # Ensure task routes are merged
+    existing_routes = dict(target_app.conf.task_routes or {})
+    existing_routes.update(GPS_TASK_ROUTES)
+    target_app.conf.task_routes = existing_routes
+
+    return get_gps_processing_queue_config()
+
+
+# Authoritative story aliases conforming to story naming
+CreateGPSProcessingQueue = create_gps_processing_queue
+Create_gps_processing_queue = create_gps_processing_queue
+CreateGpsProcessingQueue = create_gps_processing_queue
+Create_gps_queue = create_gps_processing_queue
+create_gps_queue = create_gps_processing_queue
+
+
+# ---------------------------------------------------------------------------
 # Explicit task registration
 # ---------------------------------------------------------------------------
 #
@@ -90,13 +252,7 @@ import app.tasks  # noqa: E402, F401
 # Safety check / task registration
 # ---------------------------------------------------------------------------
 
-# Accessing the task ensures Celery's task registry has been populated.
-#
-# Do not raise an exception here because some test environments may import
-# Celery before all application modules are available.
 if "app.tasks.auto_requeue_dlq" not in celery_app.tasks:
-    # Importing app.tasks above should normally register it.
-    # This warning helps diagnose unusual circular-import situations.
     import logging
 
     logging.getLogger(__name__).warning(

@@ -288,7 +288,7 @@ def execute_job_gps_purge_sync(db: Session, job_id: int, tenant_id: str, purge_t
     return deleted_count
 
 
-@celery_app.task(name="app.tasks.daily_gps_purge_task")
+@celery_app.task(name="app.tasks.daily_gps_purge_task", queue="gps_processing", routing_key="gps")
 def daily_gps_purge_task(correlation_id: str = None):
     db = SessionLocal()
     try:
@@ -297,7 +297,7 @@ def daily_gps_purge_task(correlation_id: str = None):
         db.close()
 
 
-@celery_app.task(bind=True, max_retries=3, name="app.tasks.purge_job_gps_data_task")
+@celery_app.task(bind=True, max_retries=3, name="app.tasks.purge_job_gps_data_task", queue="gps_processing", routing_key="gps")
 def purge_job_gps_data(self, job_id: int, tenant_id: str, purge_type: str = "event_based", correlation_id: str = None):
     import json
     import time
@@ -403,7 +403,7 @@ def purge_job_gps_data(self, job_id: int, tenant_id: str, purge_type: str = "eve
 purge_job_gps_data_task = purge_job_gps_data
 
 
-@celery_app.task(bind=True, max_retries=2, name="app.tasks.update_eta_task")
+@celery_app.task(bind=True, max_retries=2, name="app.tasks.update_eta_task", queue="gps_processing", routing_key="gps")
 def update_eta_task(self, technician_id: str, job_id, ping_id: str = None, correlation_id: str = None):
     """
     Recalculate ETA for a technician/job pair and broadcast the result to job WebSocket subscribers.
@@ -2794,6 +2794,34 @@ def test_kafka_failure_recovery_task(
     )
 
 
+@celery_app.task(
+    name="app.tasks.create_notification_queue_task",
+    queue="notifications",
+    routing_key="notifications",
+)
+def create_notification_queue_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, str]:
+    """Celery task to verify and activate dedicated notification queue."""
+    from app.celery_app import create_notification_queue
+    return create_notification_queue()
+
+
+@celery_app.task(
+    name="app.tasks.create_gps_processing_queue_task",
+    queue="gps_processing",
+    routing_key="gps",
+)
+def create_gps_processing_queue_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, str]:
+    """Celery task to verify and activate dedicated GPS processing queue."""
+    from app.celery_app import create_gps_processing_queue
+    return create_gps_processing_queue()
+
+
 
 
 
@@ -3141,6 +3169,8 @@ def auto_requeue_dlq(limit: int = 100):
     autoretry_for=(Exception,),
     retry_backoff=True,
     max_retries=3,
+    queue="notifications",
+    routing_key="notifications",
 )
 def send_sms_async(
     self,
@@ -3148,6 +3178,9 @@ def send_sms_async(
     body: str,
     from_number: str | None = None,
     delivery_id: int | None = None,
+    tenant_id: str | None = None,
+    correlation_id: str | None = None,
+    **kwargs,
 ):
     # Send SMS in a Celery worker so the API request remains non-blocking.
     service = TwilioSMSService()
@@ -3293,6 +3326,9 @@ def send_bulk_sms_async(
     recipients: list[str],
     body: str,
     from_number: str | None = None,
+    tenant_id: str | None = None,
+    correlation_id: str | None = None,
+    **kwargs,
 ):
     # Process bulk SMS delivery in a Celery worker.
     # Each recipient is handled independently by the SMS service.
@@ -3322,6 +3358,9 @@ def send_email_async(
     delivery_id: int | None = None,
     invoice_job_id: int | None = None,
     invoice_closure_id: int | None = None,
+    tenant_id: str | None = None,
+    correlation_id: str | None = None,
+    **kwargs,
 ):
     """
     Send an email asynchronously through the configured SMTP relay.

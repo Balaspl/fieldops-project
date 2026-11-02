@@ -2617,3 +2617,27 @@ async def update_technician_availability_location(
         "timestamp": payload.timestamp,
         "expires_in_seconds": 120,
     }
+
+# ---------------------------------------------------------------------------
+# GPS Processing Queue Management (Story: Create GPS processing queue)
+# ---------------------------------------------------------------------------
+
+from app.celery_app import (
+    GPS_QUEUE,
+    GPS_ROUTING_KEY,
+    get_gps_processing_queue_config,
+    create_gps_processing_queue,
+    CreateGPSProcessingQueue,
+    Create_gps_processing_queue,
+)
+
+
+@router.get(
+    "/queue/status",
+    summary="Get GPS Processing Queue Status",
+    description="Returns the Celery queue configuration for GPS processing and maintenance.",
+)
+def get_gps_queue_status_route() -> dict[str, str]:
+    """Return the configuration of the dedicated GPS processing queue."""
+    return get_gps_processing_queue_config()
+

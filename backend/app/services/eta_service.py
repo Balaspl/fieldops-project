@@ -437,3 +437,17 @@ class ETAService:
                     results[idx] = fallback_res
 
         return results
+
+# ---------------------------------------------------------------------------
+# GPS Processing Queue Management (Story: Create GPS processing queue)
+# ---------------------------------------------------------------------------
+
+from app.celery_app import (
+    GPS_QUEUE,
+    GPS_ROUTING_KEY,
+    get_gps_processing_queue_config,
+    create_gps_processing_queue,
+    CreateGPSProcessingQueue,
+    Create_gps_processing_queue,
+)
+
