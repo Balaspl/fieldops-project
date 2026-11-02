@@ -1845,35 +1845,6 @@ function AppInner() {
         </header>
       )}
 
-      {isTechnician && !isMobileLayout && (
-        <button
-          type="button"
-          aria-label={sidebarCollapsed ? "Expand technician sidebar" : "Collapse technician sidebar"}
-          title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-          style={{
-            position: "fixed",
-            top: 60,
-            left: sidebarCollapsed ? 60 : 220,
-            zIndex: 1001,
-            width: 28,
-            height: 28,
-            padding: 0,
-            border: "1px solid #D7E3DC",
-            borderRadius: "0 8px 8px 0",
-            background: "#FFFFFF",
-            color: "#475569",
-            boxShadow: "2px 2px 8px rgba(15, 23, 42, 0.10)",
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Menu size={16} />
-        </button>
-      )}
-
       {/* Main Body Layout (Sidebar + Main Area) */}
       <div
         style={
@@ -2057,21 +2028,62 @@ function AppInner() {
                   }
             }
           >
-      {/* Compact spacer below the fixed header */}
-<div
-  aria-hidden="true"
-  style={
-    isMobileLayout || isTechnician
-      ? { display: "none" }
-      : {
-          height: "38px",
-          minHeight: "38px",
-          flexShrink: 0,
-          padding: 0,
-          margin: 0,
-        }
-  }
-/>
+          {isTechnician && !isMobileLayout ? (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "flex-end",
+                height: 32,
+                minHeight: 32,
+                flexShrink: 0,
+              }}
+            >
+              <button
+                type="button"
+                aria-label={
+                  sidebarCollapsed
+                    ? "Expand technician sidebar"
+                    : "Collapse technician sidebar"
+                }
+                title={
+                  sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"
+                }
+                onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+                style={{
+                  width: 28,
+                  height: 28,
+                  padding: 0,
+                  border: "1px solid #D7E3DC",
+                  borderRadius: 8,
+                  background: "#FFFFFF",
+                  color: "#475569",
+                  boxShadow: "2px 2px 8px rgba(15, 23, 42, 0.10)",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Menu size={16} />
+              </button>
+            </div>
+          ) : (
+            <div
+              aria-hidden="true"
+              style={
+                isMobileLayout || isTechnician
+                  ? { display: "none" }
+                  : {
+                      height: "38px",
+                      minHeight: "38px",
+                      flexShrink: 0,
+                      padding: 0,
+                      margin: 0,
+                    }
+              }
+            />
+          )}
 
           {isTechnician ? (
             <nav
@@ -2081,20 +2093,6 @@ function AppInner() {
                   : styles.sidebarNav
               }
             >
-              <span
-                style={
-                  isMobileLayout ||
-                  sidebarCollapsed
-                    ? {
-                        display:
-                          "none",
-                      }
-                    : styles.navGroupLabel
-                }
-              >
-                TECHNICIAN
-              </span>
-
               <button
                 className="nav-item-style"
                 style={getItemStyle(
