@@ -5,7 +5,6 @@ import {
   Briefcase,
   ArrowRight,
   CheckCircle,
-  CheckCircle2,
   Clock3,
   MapPin,
   Phone,
@@ -18,14 +17,12 @@ import {
   getTechnicianJobs,
   acceptTechnicianJob,
   rejectTechnicianJob,
-  updateTechnicianStatus,
 } from "../../services/technicianPortalService";
 import type {
   TechnicianDashboardResponse,
   TechnicianPerformanceReportResponse,
 } from "../../services/technicianPortalService";
 import TechnicianPerformanceReport from "../../components/technician/TechnicianPerformanceReport";
-import { sendTechnicianAvailabilityLocation } from "../../services/gpsService";
 import useAuthStore from "../../store/authStore";
 import {
   formatAcceptanceCountdown,
@@ -42,13 +39,6 @@ import {
   haversineDistanceKm,
   parseCoordinates,
 } from "../../utils/geo";
-import {
-  GeolocationAcquisitionError,
-  GPS_AVAILABILITY_MAX_ACCURACY_METERS,
-  getTechnicianLocation,
-} from "../../services/geolocationService";
-
-const AVAILABILITY_STALE_AFTER_MS = 15000;
 
 const normalizeTechnicianStatus = (
   status?: string | null,
@@ -109,28 +99,6 @@ const s = {
     overflowY: "auto" as const,
     background: "#EEF4F1",
     fontFamily: "'Inter', sans-serif",
-  },
-
-  header: {
-    background: "#fff",
-    borderRadius: "14px",
-    padding: "24px",
-    marginBottom: "24px",
-    boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
-    border: "1px solid #E3ECE7",
-  },
-
-  title: {
-    fontSize: "24px",
-    fontWeight: 700,
-    color: "#1F2933",
-    margin: 0,
-  },
-
-  subtitle: {
-    fontSize: "14px",
-    color: "#6B7280",
-    marginTop: "4px",
   },
 
   grid: {
@@ -259,27 +227,11 @@ export default function TechnicianPortalDashboard({
   const [rejectingOffer, setRejectingOffer] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
 
-  const [technicianStatus, setTechnicianStatus] =
-    useState("Not Available");
-
-  const [savingStatus, setSavingStatus] = useState(false);
-  const [profileCompleted, setProfileCompleted] = useState(false);
-  const [showProfileMessage, setShowProfileMessage] =
-    useState(false);
-
-  const [attendanceError, setAttendanceError] =
-    useState<string | null>(null);
-
-  const [lastAttendanceSync, setLastAttendanceSync] =
-    useState<Date | null>(null);
-  const [gpsError, setGpsError] = useState<string | null>(null);
-  const tenantId = useAuthStore((state) => state.user?.tenant_id);
   const authUser = useAuthStore((state) => state.user);
   const technicianGpsLocation = useTechnicianGpsStore(
     (state) => state.location,
   );
   const [gpsFreshnessNow, setGpsFreshnessNow] = useState(Date.now());
-  const transitionInFlight = useRef(false);
   const dismissedOfferIds = useRef(new Set<number>());
 
   useEffect(() => {
@@ -313,34 +265,13 @@ export default function TechnicianPortalDashboard({
             dashboardUpdated = true;
             setStats(dashboardData);
 
-            const isProfileCompleted = Boolean(
-              dashboardData.profile_completed,
+            const authoritativeStatus = normalizeTechnicianStatus(
+              dashboardData.technician_status,
             );
-            setProfileCompleted(isProfileCompleted);
 
-            if (isProfileCompleted) {
-              const authoritativeStatus = normalizeTechnicianStatus(
-                dashboardData.technician_status,
-              );
-
-              if (authoritativeStatus) {
-                setTechnicianStatus(authoritativeStatus);
-                onAvailabilityChange?.(authoritativeStatus);
-                setAttendanceError(null);
-                setLastAttendanceSync(new Date());
-              } else {
-                setTechnicianStatus("Not Available");
-                setAttendanceError(
-                  "Attendance and availability status is currently unavailable.",
-                );
-                setLastAttendanceSync(null);
-              }
-            } else {
-              setTechnicianStatus("Not Available");
-              onAvailabilityChange?.("Not Available");
-              setAttendanceError(null);
-              setLastAttendanceSync(null);
-            }
+            onAvailabilityChange?.(
+              authoritativeStatus ?? "Not Available",
+            );
           } else {
             console.error(
               "Technician dashboard API returned an unexpected payload:",
@@ -351,9 +282,6 @@ export default function TechnicianPortalDashboard({
           console.error(
             "Failed to load technician dashboard statistics:",
             dashResult.reason,
-          );
-          setAttendanceError(
-            "Unable to load your attendance and availability status.",
           );
         }
 
@@ -383,9 +311,6 @@ export default function TechnicianPortalDashboard({
         if (mounted) {
           setDashboardRefreshError(
             "Dashboard data could not be refreshed. Showing the last available values.",
-          );
-          setAttendanceError(
-            "Unable to load your attendance and availability status.",
           );
         }
       } finally {
@@ -597,90 +522,6 @@ export default function TechnicianPortalDashboard({
     }
   };
 
-  const handleAvailabilityChange = async () => {
-    if (transitionInFlight.current) return;
-    const goingOnline = technicianStatus.toLowerCase() !== "available";
-    transitionInFlight.current = true;
-    try {
-      setSavingStatus(true);
-      setAttendanceError(null);
-      setGpsError(null);
-
-      if (goingOnline) {
-        if (!tenantId) throw new Error("Your account is missing its organization context.");
-        try {
-          const position = await getTechnicianLocation({
-            timeoutMs: 30_000,
-            maximumAgeMs: 15_000,
-            maxAccuracyMeters: GPS_AVAILABILITY_MAX_ACCURACY_METERS,
-          });
-          await sendTechnicianAvailabilityLocation(tenantId, {
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-            accuracy: position.coords.accuracy,
-            timestamp: new Date(position.timestamp).toISOString(),
-          });
-        } catch (error) {
-          if (error instanceof GeolocationAcquisitionError) {
-            setGpsError(error.message);
-          } else {
-            const detail = (error as any)?.response?.data?.detail;
-            setGpsError(typeof detail === "string"
-              ? `Location was not accepted: ${detail}`
-              : "Could not send your location. Check your connection and retry.");
-          }
-          return;
-        }
-      }
-
-      const response =
-        await updateTechnicianStatus(
-          goingOnline ? "Available" : "Offline",
-        );
-
-      const authoritativeStatus =
-        normalizeTechnicianStatus(
-          response.data?.technician_status,
-        );
-
-      if (!authoritativeStatus) {
-        throw new Error(
-          "Backend returned an invalid technician status.",
-        );
-      }
-
-      // Update only after backend confirmation.
-      setTechnicianStatus(
-        authoritativeStatus,
-      );
-      onAvailabilityChange?.(
-      authoritativeStatus,);
-
-      setStats((previous: any) =>
-        previous
-          ? {
-              ...previous,
-              technician_status:
-                authoritativeStatus,
-            }
-          : previous,
-      );
-
-      setLastAttendanceSync(new Date());
-    } catch (error) {
-      console.error(
-        "Failed to update technician attendance status:",
-        error,
-      );
-
-      setAttendanceError(
-        "Unable to update your availability. Please check your connection and try again.",
-      );
-    } finally {
-      setSavingStatus(false);
-      transitionInFlight.current = false;
-    }
-  };
 
   const cards = [
     {
@@ -821,12 +662,6 @@ export default function TechnicianPortalDashboard({
     }
   };
 
-  const availabilityStale =
-    profileCompleted &&
-    (!lastAttendanceSync ||
-      Date.now() -
-        lastAttendanceSync.getTime() >
-        AVAILABILITY_STALE_AFTER_MS);
 
   const activeStatuses = new Set([
     "ACCEPTED",
@@ -900,7 +735,7 @@ export default function TechnicianPortalDashboard({
         overflow: "hidden",
         borderRadius: 14,
         boxSizing: "border-box",
-        backgroundImage: "url('/services/technician_banner.jpeg')",
+        backgroundImage: "url('/services/technician_banner.png')",
         backgroundSize: "cover",
         backgroundPosition: "center 48%",
         boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
@@ -955,199 +790,6 @@ export default function TechnicianPortalDashboard({
           {dashboardRefreshError}
         </div>
       )}
-      <div
-        style={{
-          ...s.header,
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-start",
-        }}
-      >
-        <div>
-          <h1 style={s.title}>
-            Technician Dashboard
-          </h1>
-
-          <p style={s.subtitle}>
-            Your work overview at a glance
-          </p>
-        </div>
-
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "10px",
-          }}
-        >
-          <span
-            style={{
-              fontSize: "13px",
-              fontWeight: 600,
-              color: "#6B7280",
-            }}
-          >
-            Availability
-          </span>
-          <button
-            type="button"
-            aria-label={technicianStatus.toLowerCase() === "available" ? "Go Offline" : "Go Online"}
-            data-testid="technician-availability-toggle"
-            disabled={savingStatus || !profileCompleted}
-            onClick={() => {
-              if (!profileCompleted) { setShowProfileMessage(true); return; }
-              void handleAvailabilityChange();
-            }}
-            style={{
-              minWidth: "130px",
-              height: "40px",
-              padding: "0 12px",
-              border: "0",
-              borderRadius: "8px",
-              background: technicianStatus.toLowerCase() === "available" ? "#B91C1C" : "#15803D",
-              color: "#FFFFFF",
-              fontSize: "14px",
-              fontWeight: 600,
-              cursor: savingStatus ? "wait" : "pointer",
-              opacity: savingStatus ? 0.7 : 1,
-            }}
-          >
-            {savingStatus ? "Updating…" : technicianStatus.toLowerCase() === "available" ? "Go Offline" : "Go Online"}
-          </button>
-
-          <div
-            style={{
-              display: "flex",
-              flexDirection:
-                "column",
-              gap: "2px",
-              minWidth: "235px",
-            }}
-          >
-            {gpsError && (
-              <span role="alert" style={{ fontSize: "12px", color: "#B91C1C" }}>
-                {gpsError}{" "}
-                <button
-                  type="button"
-                  onClick={() => void handleAvailabilityChange()}
-                  disabled={savingStatus}
-                  style={{ border: 0, background: "transparent", color: "#1D4ED8", textDecoration: "underline", cursor: savingStatus ? "wait" : "pointer", padding: 0, font: "inherit" }}
-                >
-                  Retry
-                </button>
-              </span>
-            )}
-            {attendanceError ? (
-              <span
-                role="alert"
-                style={{
-                  fontSize: "12px",
-                  color: "#B91C1C",
-                }}
-              >
-                {attendanceError}
-              </span>
-            ) : availabilityStale ? (
-              <>
-                <span
-                  data-testid="technician-availability-state"
-                  aria-live="polite"
-                  style={{
-                    fontSize: "12px",
-                    color: "#B45309",
-                    fontWeight: 600,
-                  }}
-                >
-                  Availability data is stale
-                </span>
-
-                {lastAttendanceSync && (
-                  <span
-                    style={{
-                      fontSize: "11px",
-                      color: "#6B7280",
-                    }}
-                  >
-                    Last synced{" "}
-                    {lastAttendanceSync.toLocaleTimeString()}
-                  </span>
-                )}
-              </>
-            ) : lastAttendanceSync ? (
-              <>
-                <span
-                  data-testid="technician-availability-state"
-                  aria-live="polite"
-                  style={{
-                    fontSize: "12px",
-                    color: "#4B5563",
-                    fontWeight: 600,
-                  }}
-                >
-                  Current availability:{" "}
-                  {technicianStatus}
-                </span>
-
-                <span
-                  style={{
-                    fontSize: "11px",
-                    color: "#6B7280",
-                  }}
-                >
-                  Last synced{" "}
-                  {lastAttendanceSync.toLocaleTimeString()}
-                </span>
-              </>
-            ) : profileCompleted ? (
-              <span
-                data-testid="technician-availability-state"
-                aria-live="polite"
-                style={{
-                  fontSize: "11px",
-                  color: "#6B7280",
-                }}
-              >
-                Waiting for availability status...
-              </span>
-            ) : null}
-          </div>
-
-          {showProfileMessage &&
-            !profileCompleted && (
-              <div
-                style={{
-                  marginTop: "8px",
-                  fontSize: "13px",
-                  color: "#B45309",
-                }}
-              >
-                Please complete your profile
-                to change technician status.
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    onNavigate(
-                      "/technician/profile",
-                    )
-                  }
-                  style={{
-                    marginLeft: "8px",
-                    border: "none",
-                    background: "none",
-                    textDecoration:
-                      "underline",
-                    cursor: "pointer",
-                    fontWeight: 600,
-                  }}
-                >
-                  Complete Profile
-                </button>
-              </div>
-            )}
-        </div>
-      </div>
-
       <div style={s.grid}>
         {[...cards]
           .sort((a, b) => {

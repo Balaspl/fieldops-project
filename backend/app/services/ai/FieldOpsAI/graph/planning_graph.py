@@ -5,8 +5,9 @@ planning_graph.py
 LangGraph workflow for the FieldOps Planning Agent.
 
 Features:
-- Considers technicians regardless of AVAILABLE, BUSY, or OFFLINE status.
-- Does not exclude technicians based on current workload.
+- Considers AVAILABLE, BUSY, and OFFLINE technicians.
+- Excludes technicians with current workload >= MAX_TECHNICIAN_WORKLOAD.
+- Does not use online presence or heartbeat as planning eligibility criteria.
 - Matches skills such as HVAC with HVAC Repair.
 - Ranks organizations by distance to the customer.
 - Ranks technicians within each organization by distance.
@@ -34,6 +35,7 @@ from app.services.ai.FieldOpsAI.graph.state import PlanningGraphState
 logger = logging.getLogger(__name__)
 
 DEFAULT_CUSTOMER_COORDINATES = (13.0827, 80.2707)
+MAX_TECHNICIAN_WORKLOAD = 5
 
 
 # ---------------------------------------------------------
@@ -269,7 +271,8 @@ def find_nearest_organizations_node(
     Find active organizations with coordinates and at least
     one technician matching the job skill.
 
-    Technician status and workload do not affect eligibility.
+    Technician presence status does not affect eligibility. Workload must be
+    below MAX_TECHNICIAN_WORKLOAD.
     """
 
     job_req = state.get("job_requirement") or {}
@@ -450,10 +453,13 @@ def find_and_rank_technicians_node(
 
     Eligibility:
     - Required skill must match.
+    - Current workload must be below MAX_TECHNICIAN_WORKLOAD.
+    - AVAILABLE, BUSY, and OFFLINE technicians are all considered.
+    - Online status, heartbeat age, and last-seen do not block planning.
     - Previously attempted technician IDs are excluded.
 
-    Dispatch eligibility comes from the authoritative technician row,
-    skill, workload capacity, and a usable saved or cached location.
+    The dispatch/acceptance path must re-check workload atomically before
+    committing an assignment, because workload can change after planning.
     """
 
     job_req = state.get("job_requirement") or {}
@@ -528,6 +534,7 @@ def find_and_rank_technicians_node(
                     invalid_id_count += 1
                     continue
 
+                # Do not retry a technician already attempted in this cycle.
                 if technician_id in excluded_ids:
                     excluded_count += 1
                     excluded_reasons.append({
@@ -537,6 +544,7 @@ def find_and_rank_technicians_node(
                     })
                     continue
 
+                # Skill/taxonomy matching remains mandatory.
                 match_lvl = check_skill_match_level(
                     tech.technician_skill,
                     required_skill,
@@ -553,92 +561,136 @@ def find_and_rank_technicians_node(
                     })
                     continue
 
-                eligibility = evaluate_technician_dispatch_eligibility(
-                    tech,
-                    # Cross-organization dispatch is supported. The
-                    # planner's organization join establishes the candidate
-                    # tenant; runtime revalidates that identity before offer.
-                    job_tenant_id=None,
-                    redis_client=redis_client,
-                    fallback_location=(
-                        float(org["site_latitude"]),
-                        float(org["site_longitude"]),
-                    ),
-                )
-                logger.info(
-                    "planning_candidate_eligibility job_id=%s technician_id=%s availability=%s heartbeat_age_seconds=%s location_age_seconds=%s location_accuracy_meters=%s eligible=%s exclusion_reason=%s",
-                    state.get("job_id"), technician_id,
-                    eligibility["availability"], eligibility["heartbeat_age_seconds"],
-                    eligibility["location_age_seconds"], eligibility["accuracy_meters"],
-                    eligibility["eligible"], eligibility["reason"],
-                )
-                if not eligibility["eligible"]:
+                # Workload is the only availability-related planning limit.
+                try:
+                    workload = int(tech.current_jobs or 0)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Invalid technician workload; excluding candidate | technician_id=%s value=%r",
+                        technician_id,
+                        tech.current_jobs,
+                    )
                     excluded_reasons.append({
                         "technician_id": technician_id,
                         "eligible": False,
-                        "exclusion_reason": eligibility["reason"],
-                        "availability": eligibility["availability"],
-                        "heartbeat_age_seconds": eligibility["heartbeat_age_seconds"],
-                        "location_age_seconds": eligibility["location_age_seconds"],
-                        "location_accuracy_meters": eligibility["accuracy_meters"],
+                        "exclusion_reason": "invalid_workload_value",
+                        "workload": tech.current_jobs,
                     })
                     continue
 
-                workload = (
-                    tech.current_jobs
-                    if tech.current_jobs is not None
-                    else 0
-                )
+                if workload < 0:
+                    excluded_reasons.append({
+                        "technician_id": technician_id,
+                        "eligible": False,
+                        "exclusion_reason": "invalid_negative_workload",
+                        "workload": workload,
+                    })
+                    continue
 
-                # Rank from the best available coordinate. Offline technicians
-                # may rely on their saved location rather than a live GPS fix.
-                tech_lat, tech_lng = eligibility["location_coordinates"]
+                if workload >= MAX_TECHNICIAN_WORKLOAD:
+                    excluded_reasons.append({
+                        "technician_id": technician_id,
+                        "eligible": False,
+                        "exclusion_reason": "maximum_workload_reached",
+                        "workload": workload,
+                    })
+                    logger.info(
+                        "TECHNICIAN SKIPPED | job_id=%s | technician_id=%s | workload=%s | limit=%s",
+                        state.get("job_id"),
+                        technician_id,
+                        workload,
+                        MAX_TECHNICIAN_WORKLOAD,
+                    )
+                    continue
+
+                # Resolve a usable location without using the helper's
+                # eligible/online/heartbeat result as a rejection decision.
+                # The helper may provide a recent/cached technician location;
+                # if it cannot, use the organization's saved coordinates.
+                fallback_location = (
+                    float(org["site_latitude"]),
+                    float(org["site_longitude"]),
+                )
+                location_result: Dict[str, Any] = {}
+                try:
+                    location_result = evaluate_technician_dispatch_eligibility(
+                        tech,
+                        job_tenant_id=None,
+                        redis_client=redis_client,
+                        fallback_location=fallback_location,
+                    ) or {}
+                except Exception:
+                    logger.exception(
+                        "Technician location lookup failed; using organization location | job_id=%s technician_id=%s",
+                        state.get("job_id"),
+                        technician_id,
+                    )
+
+                tech_coordinates = location_result.get("location_coordinates")
+                try:
+                    if (
+                        not tech_coordinates
+                        or len(tech_coordinates) != 2
+                        or tech_coordinates[0] is None
+                        or tech_coordinates[1] is None
+                    ):
+                        tech_lat, tech_lng = fallback_location
+                    else:
+                        tech_lat = float(tech_coordinates[0])
+                        tech_lng = float(tech_coordinates[1])
+
+                    if not (-90 <= tech_lat <= 90 and -180 <= tech_lng <= 180):
+                        raise ValueError("Coordinates are outside valid latitude/longitude ranges")
+                except (TypeError, ValueError, IndexError):
+                    logger.warning(
+                        "Invalid technician location; using organization location | technician_id=%s",
+                        technician_id,
+                    )
+                    tech_lat, tech_lng = fallback_location
+
+                # Distance and ETA ranking.
                 distance = float(
                     haversine_distance(
-                        customer_coords[0], customer_coords[1],
-                        tech_lat, tech_lng,
+                        customer_coords[0],
+                        customer_coords[1],
+                        tech_lat,
+                        tech_lng,
                     )
                 )
-
                 distance = max(0.0, distance)
-
-                # Approximate ETA: average urban speed of 30 km/h.
                 estimated_eta = int(round(distance * 2))
 
-                eligible_for_org.append(
-                    {
-                        "technician_id": technician_id,
-                        "technician_name": (
-                            tech.technician_name
-                            or f"Technician {technician_id}"
-                        ),
-                        "organization_id": org_id,
-                        "organization_name": org_name,
-                        "technician_status": (
-                            tech.technician_status
-                        ),
-                        "confidence": 1.0,
-                        "estimated_eta": estimated_eta,
-                        "organization_distance": org_distance,
-                        "technician_distance": distance,
-                        "distance_km": round(distance, 2),
-                        "workload": workload,
-                        "technician_skill": tech.technician_skill,
-                        "match_level": match_lvl,
-                        "eligible": True,
-                        "exclusion_reason": None,
-                        "availability": eligibility["availability"],
-                        "heartbeat_age_seconds": eligibility["heartbeat_age_seconds"],
-                        "location_age_seconds": eligibility["location_age_seconds"],
-                        "location_accuracy_meters": eligibility["accuracy_meters"],
-                    }
-                )
+                eligible_for_org.append({
+                    "technician_id": technician_id,
+                    "technician_name": (
+                        tech.technician_name or f"Technician {technician_id}"
+                    ),
+                    "organization_id": org_id,
+                    "organization_name": org_name,
+                    "technician_status": tech.technician_status,
+                    "confidence": 1.0,
+                    "estimated_eta": estimated_eta,
+                    "organization_distance": org_distance,
+                    "technician_distance": distance,
+                    "distance_km": round(distance, 2),
+                    "workload": workload,
+                    "technician_skill": tech.technician_skill,
+                    "match_level": match_lvl,
+                    "eligible": True,
+                    "exclusion_reason": None,
+                    # Informational only: these values must not determine
+                    # whether an AVAILABLE/BUSY/OFFLINE technician is ranked.
+                    "availability": location_result.get("availability"),
+                    "heartbeat_age_seconds": location_result.get("heartbeat_age_seconds"),
+                    "location_age_seconds": location_result.get("location_age_seconds"),
+                    "location_accuracy_meters": location_result.get("accuracy_meters"),
+                })
 
             logger.info(
                 "PLANNING FILTER RESULTS | job_id=%s | "
                 "org_id=%s | fetched=%s | eligible=%s | "
                 "excluded_attempted=%s | invalid_id=%s | "
-                "skill_rejected=%s",
+                "skill_rejected=%s | workload_limit=%s",
                 state.get("job_id"),
                 org_id,
                 len(technicians),
@@ -646,6 +698,7 @@ def find_and_rank_technicians_node(
                 excluded_count,
                 invalid_id_count,
                 skill_rejected_count,
+                MAX_TECHNICIAN_WORKLOAD,
             )
 
             # Rank technicians within this organization by taxonomy match level then distance.
@@ -766,7 +819,7 @@ def build_planning_response_node(
         "action": "manual_review" if not all_ranked else "ranked_candidates",
         "reason": (
             None if all_ranked
-            else "No technician met the current skill, organization, workload, and location requirements."
+            else "No technician met the skill, active-organization, workload, and location requirements."
         ),
         "total_eligible_technicians": total_count,
         "top_3": top_3,

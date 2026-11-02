@@ -300,8 +300,7 @@ def _build_technician_performance_report(
             round(sum(durations) / len(durations), 1) if durations else None
         ),
         "customer_rating": round(sum(ratings) / len(ratings), 1) if ratings else None,
-        "total_distance_km": round(_gps_distance_km(gps_points), 1) if gps_points else None,
-        "completion_trend": trend,
+        "total_distance_km": round(float(_gps_distance_km(gps_points) or 0.0), 1),        "completion_trend": trend,
         "status_distribution": [
             {"status": status, "count": count}
             for status, count in status_counts.items()
