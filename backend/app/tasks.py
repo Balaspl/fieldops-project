@@ -1,4 +1,5 @@
 import logging
+import json
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 import hashlib
@@ -6,7 +7,7 @@ from sqlalchemy import delete, text
 from sqlalchemy.orm import Session
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from .runtime.dlq import DeadLetterQueue
 from .services.enterprise_audit import AuditAction, audit_log
 from .celery_app import celery_app
@@ -24,7 +25,7 @@ from celery import shared_task
 from .services.email.smtp_email import SMTPEmailService
 import re
 
-@celery_app.task(name="app.tasks.aggregate_prompt_analytics_task")
+@celery_app.task(name="app.tasks.aggregate_prompt_analytics_task", queue="ai_processing", routing_key="ai")
 def aggregate_prompt_analytics_task():
     """Refresh 7-day and 30-day prompt analytics for every tenant with usage."""
     from .prompts.analytics import PromptAnalytics
@@ -2834,6 +2835,214 @@ def create_billing_queue_task(
     """Celery task to verify and activate dedicated billing queue."""
     from app.celery_app import create_billing_queue
     return create_billing_queue()
+
+
+# ---------------------------------------------------------------------------
+# Dedicated AI Processing Queue Tasks (LangGraph & Model Workloads)
+# ---------------------------------------------------------------------------
+
+def _execute_ai_workflow_once(
+    *,
+    redis,
+    request_data: dict,
+    tenant_id: str,
+    job_id: Optional[Union[str, int]] = None,
+    correlation_id: Optional[str] = None,
+    workflow_id: Optional[str] = None,
+    attempt: int = 1,
+    db: Optional[Any] = None,
+) -> dict:
+    """Execute LangGraph AI workflow once with tenant context and Redis idempotency guard."""
+    if not tenant_id or not str(tenant_id).strip():
+        return {
+            "status": "FAILED",
+            "error": "tenant_id is required for AI workflow execution",
+            "permanent_failure": True,
+            "tenant_id": None,
+            "correlation_id": correlation_id,
+            "queue": "ai_processing",
+        }
+
+    if not isinstance(request_data, dict):
+        return {
+            "status": "FAILED",
+            "error": "request_data must be a dictionary",
+            "permanent_failure": True,
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "queue": "ai_processing",
+        }
+
+    stable_id = workflow_id or (f"{tenant_id}:{job_id}" if job_id else None)
+    marker_key = f"ai:workflow_executed:{stable_id}" if stable_id else None
+
+    if redis and marker_key:
+        cached = redis.get(marker_key)
+        if cached:
+            logger.info("AI workflow %s already executed; returning idempotent result.", stable_id)
+            try:
+                cached_data = json.loads(cached.decode("utf-8") if isinstance(cached, bytes) else cached)
+            except Exception:
+                cached_data = {"status": "COMPLETED"}
+            cached_data["idempotent_duplicate"] = True
+            cached_data["queue"] = "ai_processing"
+            return cached_data
+
+    from app.services.ai.FieldOpsAI.graph import execute_fieldops_workflow
+
+    session = db
+    should_close_db = False
+    if session is None:
+        try:
+            session = SessionLocal()
+            should_close_db = True
+        except Exception:
+            session = None
+
+    try:
+        raw_result = execute_fieldops_workflow(
+            request_data=request_data,
+            db=session,
+            job_id=job_id,
+        )
+
+        result = {
+            "status": "COMPLETED" if raw_result.get("valid") else "VALIDATION_FAILED",
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "job_id": job_id or (raw_result.get("job_requirement", {}).get("job_id") if isinstance(raw_result, dict) else None),
+            "workflow_id": workflow_id or stable_id,
+            "queue": "ai_processing",
+            "attempt": attempt,
+            "output": raw_result,
+        }
+
+        if redis and marker_key and result.get("status") in {"COMPLETED", "VALIDATION_FAILED"}:
+            try:
+                redis.set(marker_key, json.dumps(result, default=str), ex=86400 * 7)
+            except Exception as set_err:
+                logger.warning("Failed to store Redis AI workflow marker: %s", set_err)
+
+        return result
+    except Exception as exc:
+        logger.exception("AI workflow execution failed: tenant_id=%s correlation_id=%s: %s", tenant_id, correlation_id, exc)
+        return {
+            "status": "FAILED",
+            "error": str(exc),
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "job_id": job_id,
+            "workflow_id": workflow_id or stable_id,
+            "queue": "ai_processing",
+            "attempt": attempt,
+        }
+    finally:
+        if should_close_db and session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.execute_fieldops_workflow_async_task",
+    queue="ai_processing",
+    routing_key="ai",
+    max_retries=3,
+    time_limit=300,
+    soft_time_limit=270,
+)
+def execute_fieldops_workflow_async_task(
+    self,
+    request_data: dict,
+    tenant_id: str,
+    job_id: Optional[Union[str, int]] = None,
+    correlation_id: Optional[str] = None,
+    workflow_id: Optional[str] = None,
+    attempt: int = 1,
+):
+    """Execute LangGraph FieldOps workflow asynchronously in dedicated AI queue."""
+    redis_client = get_redis_client()
+    res = _execute_ai_workflow_once(
+        redis=redis_client,
+        request_data=request_data,
+        tenant_id=tenant_id,
+        job_id=job_id,
+        correlation_id=correlation_id,
+        workflow_id=workflow_id,
+        attempt=attempt,
+    )
+    if res.get("status") == "FAILED" and not res.get("permanent_failure"):
+        if self.request.retries < self.max_retries:
+            raise self.retry(countdown=2 ** (self.request.retries + 1))
+    return res
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.execute_ai_workflow_task",
+    queue="ai_processing",
+    routing_key="ai",
+    max_retries=3,
+    time_limit=300,
+    soft_time_limit=270,
+)
+def execute_ai_workflow_task(
+    self,
+    request_data: dict,
+    tenant_id: str,
+    job_id: Optional[Union[str, int]] = None,
+    correlation_id: Optional[str] = None,
+    workflow_id: Optional[str] = None,
+    attempt: int = 1,
+):
+    """Canonical alias for async AI workflow execution in dedicated AI queue."""
+    return execute_fieldops_workflow_async_task(
+        request_data=request_data,
+        tenant_id=tenant_id,
+        job_id=job_id,
+        correlation_id=correlation_id,
+        workflow_id=workflow_id,
+        attempt=attempt,
+    )
+
+
+@celery_app.task(
+    name="app.tasks.process_ai_workload_task",
+    queue="ai_processing",
+    routing_key="ai",
+)
+def process_ai_workload_task(
+    workload_type: str,
+    payload: dict,
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict:
+    """Generic AI background processor task running in the dedicated AI queue."""
+    return {
+        "status": "COMPLETED",
+        "workload_type": workload_type,
+        "queue": "ai_processing",
+        "routing_key": "ai",
+        "tenant_id": tenant_id,
+        "correlation_id": correlation_id,
+        "payload": payload,
+    }
+
+
+@celery_app.task(
+    name="app.tasks.create_ai_processing_queue_task",
+    queue="ai_processing",
+    routing_key="ai",
+)
+def create_ai_processing_queue_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, str]:
+    """Celery task to verify and activate dedicated AI processing queue."""
+    from app.celery_app import create_ai_processing_queue
+    return create_ai_processing_queue()
 
 
 

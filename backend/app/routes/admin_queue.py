@@ -137,3 +137,34 @@ def configure_billing_queue_endpoint() -> dict:
     from app.celery_app import create_billing_queue
     return create_billing_queue()
 
+@router.get(
+    "/ai",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_ai_queue_status() -> dict:
+    """Return the configuration and status of the dedicated AI processing Celery queue."""
+    from app.celery_app import get_ai_processing_queue_config
+    return get_ai_processing_queue_config()
+
+
+@router.post(
+    "/ai/configure",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def configure_ai_queue_endpoint() -> dict:
+    """Ensure the AI processing queue is configured on the Celery application."""
+    from app.celery_app import create_ai_processing_queue
+    return create_ai_processing_queue()
+

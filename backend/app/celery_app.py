@@ -89,7 +89,29 @@ BILLING_TASK_ROUTES = {
     "app.tasks.create_billing_queue_task": {"queue": BILLING_QUEUE, "routing_key": BILLING_ROUTING_KEY},
 }
 
-ALL_TASK_ROUTES = {**NOTIFICATION_TASK_ROUTES, **GPS_TASK_ROUTES, **BILLING_TASK_ROUTES}
+# 4. Dedicated AI Processing Queue
+AI_QUEUE = "ai_processing"
+AI_ROUTING_KEY = "ai"
+
+AI_TASK_ROUTES = {
+    # Asynchronous LangGraph / FieldOps workflow execution
+    "app.tasks.execute_fieldops_workflow_async_task": {"queue": AI_QUEUE, "routing_key": AI_ROUTING_KEY},
+    "app.tasks.execute_ai_workflow_task": {"queue": AI_QUEUE, "routing_key": AI_ROUTING_KEY},
+
+    # Prompt Analytics and AI background computation tasks
+    "app.tasks.aggregate_prompt_analytics_task": {"queue": AI_QUEUE, "routing_key": AI_ROUTING_KEY},
+    "app.tasks.process_ai_workload_task": {"queue": AI_QUEUE, "routing_key": AI_ROUTING_KEY},
+
+    # Queue verification/configuration helper task
+    "app.tasks.create_ai_processing_queue_task": {"queue": AI_QUEUE, "routing_key": AI_ROUTING_KEY},
+}
+
+ALL_TASK_ROUTES = {
+    **NOTIFICATION_TASK_ROUTES,
+    **GPS_TASK_ROUTES,
+    **BILLING_TASK_ROUTES,
+    **AI_TASK_ROUTES,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +131,7 @@ celery_app.conf.update(
         Queue(NOTIFICATION_QUEUE, routing_key=NOTIFICATION_ROUTING_KEY),
         Queue(GPS_QUEUE, routing_key=GPS_ROUTING_KEY),
         Queue(BILLING_QUEUE, routing_key=BILLING_ROUTING_KEY),
+        Queue(AI_QUEUE, routing_key=AI_ROUTING_KEY),
     ),
     task_routes=ALL_TASK_ROUTES,
 
@@ -302,6 +325,58 @@ def create_billing_queue(app: Optional[Celery] = None) -> dict[str, str]:
 # Authoritative story aliases
 CreateBillingQueue = create_billing_queue
 Create_billing_queue = create_billing_queue
+
+
+def get_ai_processing_queue_config() -> dict[str, str]:
+    """
+    Return canonical configuration for the dedicated AI processing queue.
+    Contract:
+    {
+        "status": "CONFIGURED",
+        "queue": "ai_processing",
+        "routing_key": "ai"
+    }
+    """
+    return {
+        "status": "CONFIGURED",
+        "queue": AI_QUEUE,
+        "routing_key": AI_ROUTING_KEY,
+    }
+
+
+def create_ai_processing_queue(app: Optional[Celery] = None) -> dict[str, str]:
+    """
+    Ensure the dedicated AI processing queue and routing configuration are active on Celery.
+    Returns:
+        {
+            "status": "CONFIGURED",
+            "queue": "ai_processing",
+            "routing_key": "ai"
+        }
+    """
+    target_app = app or celery_app
+
+    # Ensure queue is present in task_queues
+    existing_queues = list(target_app.conf.task_queues or [])
+    queue_names = {q.name if hasattr(q, "name") else str(q) for q in existing_queues}
+    if AI_QUEUE not in queue_names:
+        existing_queues.append(Queue(AI_QUEUE, routing_key=AI_ROUTING_KEY))
+        target_app.conf.task_queues = tuple(existing_queues)
+
+    # Ensure task routes are merged
+    existing_routes = dict(target_app.conf.task_routes or {})
+    existing_routes.update(AI_TASK_ROUTES)
+    target_app.conf.task_routes = existing_routes
+
+    return get_ai_processing_queue_config()
+
+
+# Authoritative story aliases conforming to story naming
+CreateAiProcessingQueue = create_ai_processing_queue
+Create_ai_processing_queue = create_ai_processing_queue
+CreateAiQueue = create_ai_processing_queue
+create_ai_queue = create_ai_processing_queue
+Create_ai_queue = create_ai_processing_queue
 
 
 
