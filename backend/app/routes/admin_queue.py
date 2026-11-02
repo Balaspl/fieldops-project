@@ -168,3 +168,63 @@ def configure_ai_queue_endpoint() -> dict:
     from app.celery_app import create_ai_processing_queue
     return create_ai_processing_queue()
 
+@router.get(
+    "/high-priority",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_high_priority_queue_status() -> dict:
+    """Return the configuration and status of the dedicated high-priority Celery queue."""
+    from app.celery_app import get_high_priority_queue_config
+    return get_high_priority_queue_config()
+
+
+@router.post(
+    "/high-priority/configure",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def configure_high_priority_queue_endpoint() -> dict:
+    """Ensure the high-priority queue is configured on the Celery application."""
+    from app.celery_app import create_high_priority_queue
+    return create_high_priority_queue()
+
+
+# Aliases for /priority
+@router.get(
+    "/priority",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_priority_queue_status_alias() -> dict:
+    return get_high_priority_queue_status()
+
+
+@router.post(
+    "/priority/configure",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def configure_priority_queue_endpoint_alias() -> dict:
+    return configure_high_priority_queue_endpoint()
+

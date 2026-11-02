@@ -3045,6 +3045,246 @@ def create_ai_processing_queue_task(
     return create_ai_processing_queue()
 
 
+# ---------------------------------------------------------------------------
+# Dedicated High-Priority Queue Tasks (Emergency Dispatch & Urgent SLA)
+# ---------------------------------------------------------------------------
+
+ELIGIBLE_HIGH_PRIORITY_LEVELS = {"EMERGENCY", "CRITICAL", "HIGH", "URGENT"}
+
+
+def _process_emergency_dispatch_once(
+    *,
+    redis,
+    job_id: Union[str, int],
+    tenant_id: str,
+    priority: str = "EMERGENCY",
+    correlation_id: Optional[str] = None,
+    reason: Optional[str] = None,
+    payload: Optional[dict] = None,
+    attempt: int = 1,
+    db: Optional[Any] = None,
+) -> dict:
+    """Execute emergency dispatch with strict priority eligibility, tenant validation,
+    and Redis marker idempotency to prevent duplicate operational actions."""
+    normalized_priority = str(priority).upper().strip() if priority else "EMERGENCY"
+
+    # 1. Prevent priority traffic from becoming an uncontrolled bypass
+    if normalized_priority not in ELIGIBLE_HIGH_PRIORITY_LEVELS:
+        logger.warning(
+            "Rejected unauthorized bypass attempt to high_priority queue: job_id=%s priority=%s",
+            job_id,
+            priority,
+        )
+        return {
+            "status": "REJECTED_UNAUTHORIZED_BYPASS",
+            "error": "Task is not eligible for high_priority queue; routine workloads must use standard queues",
+            "permanent_failure": True,
+            "priority": priority,
+            "job_id": job_id,
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "queue": "high_priority",
+        }
+
+    # 2. Strict tenant context check
+    if not tenant_id or not str(tenant_id).strip():
+        return {
+            "status": "FAILED",
+            "error": "tenant_id is required for high-priority dispatch execution",
+            "permanent_failure": True,
+            "priority": normalized_priority,
+            "job_id": job_id,
+            "tenant_id": None,
+            "correlation_id": correlation_id,
+            "queue": "high_priority",
+        }
+
+    # 3. Idempotency Check to prevent duplicate operational side effects
+    marker_key = f"dispatch:emergency_processed:{tenant_id}:{job_id}:{correlation_id or 'default'}"
+    if redis and redis.get(marker_key):
+        logger.info(
+            "Emergency dispatch for job %s already processed; skipping duplicate.",
+            job_id,
+        )
+        return {
+            "status": "PROCESSED",
+            "job_id": job_id,
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "priority": normalized_priority,
+            "queue": "high_priority",
+            "routing_key": "priority",
+            "idempotent_duplicate": True,
+            "attempt": attempt,
+        }
+
+    session = db
+    should_close_db = False
+    if session is None:
+        try:
+            session = SessionLocal()
+            should_close_db = True
+        except Exception:
+            session = None
+
+    try:
+        if session is not None:
+            try:
+                from .models import Job, AuditEvent
+                target_job = (
+                    session.query(Job)
+                    .filter(Job.id == int(job_id) if str(job_id).isdigit() else Job.id == job_id)
+                    .first()
+                )
+                if target_job:
+                    audit = AuditEvent(
+                        event_type="EMERGENCY_DISPATCH",
+                        tech_id=str(target_job.assigned_technician_id) if target_job.assigned_technician_id else "system",
+                        tenant_id=tenant_id,
+                        old_status=target_job.status,
+                        new_status=target_job.status,
+                        reason=reason or f"Urgent priority dispatch: {normalized_priority}",
+                        job_id=str(job_id),
+                        details={
+                            "priority": normalized_priority,
+                            "correlation_id": correlation_id,
+                            "reason": reason,
+                        },
+                    )
+                    session.add(audit)
+                    session.commit()
+            except Exception as db_err:
+                logger.warning("Audit recording for emergency dispatch encountered: %s", db_err)
+                if session:
+                    session.rollback()
+
+        result = {
+            "status": "PROCESSED",
+            "job_id": job_id,
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "priority": normalized_priority,
+            "reason": reason,
+            "queue": "high_priority",
+            "routing_key": "priority",
+            "attempt": attempt,
+        }
+
+        if redis:
+            try:
+                redis.set(marker_key, json.dumps(result, default=str), ex=86400 * 7)
+            except Exception as set_err:
+                logger.warning("Failed to store emergency dispatch Redis marker: %s", set_err)
+
+        return result
+    except Exception as exc:
+        logger.exception(
+            "Emergency dispatch processing failed: job_id=%s tenant_id=%s: %s",
+            job_id,
+            tenant_id,
+            exc,
+        )
+        return {
+            "status": "FAILED",
+            "error": str(exc),
+            "priority": normalized_priority,
+            "job_id": job_id,
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "queue": "high_priority",
+            "routing_key": "priority",
+            "attempt": attempt,
+        }
+    finally:
+        if should_close_db and session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.process_emergency_dispatch_task",
+    queue="high_priority",
+    routing_key="priority",
+    max_retries=3,
+    time_limit=60,
+    soft_time_limit=50,
+)
+def process_emergency_dispatch_task(
+    self,
+    job_id: Union[str, int],
+    tenant_id: str,
+    priority: str = "EMERGENCY",
+    correlation_id: Optional[str] = None,
+    reason: Optional[str] = None,
+    payload: Optional[dict] = None,
+    attempt: int = 1,
+):
+    """Celery background task for urgent emergency dispatch running in high_priority queue."""
+    redis_client = get_redis_client()
+    res = _process_emergency_dispatch_once(
+        redis=redis_client,
+        job_id=job_id,
+        tenant_id=tenant_id,
+        priority=priority,
+        correlation_id=correlation_id,
+        reason=reason,
+        payload=payload,
+        attempt=attempt,
+    )
+    if res.get("status") == "FAILED" and not res.get("permanent_failure"):
+        if self.request.retries < self.max_retries:
+            raise self.retry(countdown=2 ** (self.request.retries + 1))
+    return res
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.emergency_dispatch_task",
+    queue="high_priority",
+    routing_key="priority",
+    max_retries=3,
+    time_limit=60,
+    soft_time_limit=50,
+)
+def emergency_dispatch_task(
+    self,
+    job_id: Union[str, int],
+    tenant_id: str,
+    priority: str = "EMERGENCY",
+    correlation_id: Optional[str] = None,
+    reason: Optional[str] = None,
+    payload: Optional[dict] = None,
+    attempt: int = 1,
+):
+    """Canonical alias conforming to story naming: Emergency dispatch task."""
+    return process_emergency_dispatch_task(
+        job_id=job_id,
+        tenant_id=tenant_id,
+        priority=priority,
+        correlation_id=correlation_id,
+        reason=reason,
+        payload=payload,
+        attempt=attempt,
+    )
+
+
+@celery_app.task(
+    name="app.tasks.create_high_priority_queue_task",
+    queue="high_priority",
+    routing_key="priority",
+)
+def create_high_priority_queue_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, str]:
+    """Celery task to verify and activate dedicated high-priority queue."""
+    from app.celery_app import create_high_priority_queue
+    return create_high_priority_queue()
+
+
 
 
 

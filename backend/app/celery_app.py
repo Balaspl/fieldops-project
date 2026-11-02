@@ -106,11 +106,32 @@ AI_TASK_ROUTES = {
     "app.tasks.create_ai_processing_queue_task": {"queue": AI_QUEUE, "routing_key": AI_ROUTING_KEY},
 }
 
+# 5. Dedicated High-Priority Queue (Emergency Dispatch & Urgent SLA Processing)
+HIGH_PRIORITY_QUEUE = "high_priority"
+HIGH_PRIORITY_ROUTING_KEY = "priority"
+PRIORITY_QUEUE = HIGH_PRIORITY_QUEUE
+PRIORITY_ROUTING_KEY = HIGH_PRIORITY_ROUTING_KEY
+
+HIGH_PRIORITY_TASK_ROUTES = {
+    # Emergency dispatch tasks
+    "app.tasks.process_emergency_dispatch_task": {"queue": HIGH_PRIORITY_QUEUE, "routing_key": HIGH_PRIORITY_ROUTING_KEY},
+    "app.tasks.emergency_dispatch_task": {"queue": HIGH_PRIORITY_QUEUE, "routing_key": HIGH_PRIORITY_ROUTING_KEY},
+
+    # Urgent dispatch and SLA lifecycle processing tasks
+    "app.tasks.process_dispatch_event_task": {"queue": HIGH_PRIORITY_QUEUE, "routing_key": HIGH_PRIORITY_ROUTING_KEY},
+    "app.tasks.process_sla_monitoring_event_task": {"queue": HIGH_PRIORITY_QUEUE, "routing_key": HIGH_PRIORITY_ROUTING_KEY},
+    "app.tasks.broadcast_sla_countdown": {"queue": HIGH_PRIORITY_QUEUE, "routing_key": HIGH_PRIORITY_ROUTING_KEY},
+
+    # High-priority queue configuration/verification task
+    "app.tasks.create_high_priority_queue_task": {"queue": HIGH_PRIORITY_QUEUE, "routing_key": HIGH_PRIORITY_ROUTING_KEY},
+}
+
 ALL_TASK_ROUTES = {
     **NOTIFICATION_TASK_ROUTES,
     **GPS_TASK_ROUTES,
     **BILLING_TASK_ROUTES,
     **AI_TASK_ROUTES,
+    **HIGH_PRIORITY_TASK_ROUTES,
 }
 
 
@@ -132,6 +153,7 @@ celery_app.conf.update(
         Queue(GPS_QUEUE, routing_key=GPS_ROUTING_KEY),
         Queue(BILLING_QUEUE, routing_key=BILLING_ROUTING_KEY),
         Queue(AI_QUEUE, routing_key=AI_ROUTING_KEY),
+        Queue(HIGH_PRIORITY_QUEUE, routing_key=HIGH_PRIORITY_ROUTING_KEY),
     ),
     task_routes=ALL_TASK_ROUTES,
 
@@ -377,6 +399,58 @@ Create_ai_processing_queue = create_ai_processing_queue
 CreateAiQueue = create_ai_processing_queue
 create_ai_queue = create_ai_processing_queue
 Create_ai_queue = create_ai_processing_queue
+
+
+def get_high_priority_queue_config() -> dict[str, str]:
+    """
+    Return canonical configuration for the dedicated high-priority queue.
+    Contract:
+    {
+        "status": "CONFIGURED",
+        "queue": "high_priority",
+        "routing_key": "priority"
+    }
+    """
+    return {
+        "status": "CONFIGURED",
+        "queue": HIGH_PRIORITY_QUEUE,
+        "routing_key": HIGH_PRIORITY_ROUTING_KEY,
+    }
+
+
+def create_high_priority_queue(app: Optional[Celery] = None) -> dict[str, str]:
+    """
+    Ensure the dedicated high-priority queue and routing configuration are active on Celery.
+    Returns:
+        {
+            "status": "CONFIGURED",
+            "queue": "high_priority",
+            "routing_key": "priority"
+        }
+    """
+    target_app = app or celery_app
+
+    # Ensure queue is present in task_queues
+    existing_queues = list(target_app.conf.task_queues or [])
+    queue_names = {q.name if hasattr(q, "name") else str(q) for q in existing_queues}
+    if HIGH_PRIORITY_QUEUE not in queue_names:
+        existing_queues.append(Queue(HIGH_PRIORITY_QUEUE, routing_key=HIGH_PRIORITY_ROUTING_KEY))
+        target_app.conf.task_queues = tuple(existing_queues)
+
+    # Ensure task routes are merged
+    existing_routes = dict(target_app.conf.task_routes or {})
+    existing_routes.update(HIGH_PRIORITY_TASK_ROUTES)
+    target_app.conf.task_routes = existing_routes
+
+    return get_high_priority_queue_config()
+
+
+# Authoritative story aliases conforming to story naming
+CreateHighPriorityQueue = create_high_priority_queue
+Create_high_priority_queue = create_high_priority_queue
+CreatePriorityQueue = create_high_priority_queue
+create_priority_queue = create_high_priority_queue
+Create_priority_queue = create_high_priority_queue
 
 
 
