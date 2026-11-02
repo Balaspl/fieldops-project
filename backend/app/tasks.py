@@ -2711,6 +2711,89 @@ def test_consumer_recovery_task(
     )
 
 
+def _process_kafka_failure_recovery_once(
+    event_payload: Any = None,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+    redis: Optional[Any] = None,
+    redis_client: Optional[Any] = None,
+    raw_message: Any = None,
+    simulate_failure_mode: Optional[str] = None,
+) -> dict:
+    """Process an event with Kafka failure recovery coordinator."""
+    import asyncio
+    from .services.kafka_failure_recovery import KafkaFailureRecoveryCoordinator
+
+    r_client = redis if redis is not None else redis_client
+    msg = event_payload if event_payload is not None else raw_message
+    if isinstance(msg, str):
+        try:
+            msg = json.loads(msg)
+        except Exception:
+            pass
+
+    coordinator = KafkaFailureRecoveryCoordinator(redis_client=r_client)
+    result = asyncio.run(
+        coordinator.process_event(
+            message=msg,
+            topic=topic,
+            partition=partition,
+            offset=offset,
+            attempt=attempt,
+            simulate_failure_mode=simulate_failure_mode,
+        )
+    )
+    return dict(result)
+
+
+@celery_app.task(name="app.tasks.process_kafka_failure_recovery_task")
+def process_kafka_failure_recovery_task(
+    event_payload: Any = None,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+    raw_message: Any = None,
+    simulate_failure_mode: Optional[str] = None,
+):
+    """Celery background task to process event during Kafka failure recovery."""
+    redis_client = get_redis_client()
+    return _process_kafka_failure_recovery_once(
+        event_payload=event_payload,
+        raw_message=raw_message,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        attempt=attempt,
+        redis=redis_client,
+        simulate_failure_mode=simulate_failure_mode,
+    )
+
+
+@celery_app.task(name="app.tasks.test_kafka_failure_recovery_task")
+def test_kafka_failure_recovery_task(
+    event_payload: Any = None,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+    raw_message: Any = None,
+    simulate_failure_mode: Optional[str] = None,
+):
+    """Celery task alias conforming to story naming: Test Kafka failure recovery."""
+    return process_kafka_failure_recovery_task(
+        event_payload=event_payload,
+        raw_message=raw_message,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        attempt=attempt,
+        simulate_failure_mode=simulate_failure_mode,
+    )
+
+
 
 
 
