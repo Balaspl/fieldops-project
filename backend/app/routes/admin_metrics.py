@@ -287,6 +287,33 @@ async def simulate_kafka_broker_restart() -> dict:
     coordinator = BrokerRestartRecovery()
     return await coordinator.simulate_broker_restart()
 
+@router.get(
+    "/kafka/consumer-recovery/metrics",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def get_kafka_consumer_recovery_metrics() -> dict:
+    from app.services.consumer_recovery import ConsumerRecoveryCoordinator
+    return ConsumerRecoveryCoordinator.get_recovery_metrics()
 
 
+@router.post(
+    "/kafka/consumer-recovery/simulate",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def simulate_kafka_consumer_recovery() -> dict:
+    from app.services.consumer_recovery import ConsumerRecoveryCoordinator
+    coordinator = ConsumerRecoveryCoordinator()
+    return await coordinator.simulate_consumer_recovery()
 

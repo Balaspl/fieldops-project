@@ -2634,6 +2634,83 @@ def test_broker_restart_task(
     )
 
 
+def _process_consumer_recovery_once(
+    event_payload: Any = None,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+    redis: Optional[Any] = None,
+    redis_client: Optional[Any] = None,
+    raw_message: Any = None,
+) -> dict:
+    """Process an event with Kafka consumer recovery coordinator."""
+    import asyncio
+    from .services.consumer_recovery import ConsumerRecoveryCoordinator
+
+    r_client = redis if redis is not None else redis_client
+    msg = event_payload if event_payload is not None else raw_message
+    if isinstance(msg, str):
+        try:
+            msg = json.loads(msg)
+        except Exception:
+            pass
+
+    coordinator = ConsumerRecoveryCoordinator(redis_client=r_client)
+    result = asyncio.run(
+        coordinator.process_event(
+            message=msg,
+            topic=topic,
+            partition=partition,
+            offset=offset,
+            attempt=attempt,
+        )
+    )
+    return dict(result)
+
+
+@celery_app.task(name="app.tasks.process_consumer_recovery_task")
+def process_consumer_recovery_task(
+    event_payload: Any = None,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+    raw_message: Any = None,
+):
+    """Celery background task to process event during consumer recovery."""
+    redis_client = get_redis_client()
+    return _process_consumer_recovery_once(
+        event_payload=event_payload,
+        raw_message=raw_message,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        attempt=attempt,
+        redis=redis_client,
+    )
+
+
+@celery_app.task(name="app.tasks.test_consumer_recovery_task")
+def test_consumer_recovery_task(
+    event_payload: Any = None,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+    raw_message: Any = None,
+):
+    """Celery task alias conforming to story naming: Test consumer recovery."""
+    return process_consumer_recovery_task(
+        event_payload=event_payload,
+        raw_message=raw_message,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        attempt=attempt,
+    )
+
+
 
 
 
