@@ -70,7 +70,26 @@ GPS_TASK_ROUTES = {
     "app.tasks.create_gps_processing_queue_task": {"queue": GPS_QUEUE, "routing_key": GPS_ROUTING_KEY},
 }
 
-ALL_TASK_ROUTES = {**NOTIFICATION_TASK_ROUTES, **GPS_TASK_ROUTES}
+# 3. Dedicated Billing Queue
+BILLING_QUEUE = "billing"
+BILLING_ROUTING_KEY = "billing"
+
+BILLING_TASK_ROUTES = {
+    # Invoice lifecycle and publishing tasks
+    "app.tasks.publish_invoice_event_task": {"queue": BILLING_QUEUE, "routing_key": BILLING_ROUTING_KEY},
+
+    # Payment lifecycle and publishing tasks
+    "app.tasks.publish_payment_event_task": {"queue": BILLING_QUEUE, "routing_key": BILLING_ROUTING_KEY},
+
+    # Consumed billing & payment background processing tasks
+    "app.tasks.process_billing_event_task": {"queue": BILLING_QUEUE, "routing_key": BILLING_ROUTING_KEY},
+    "app.tasks.process_payment_event_task": {"queue": BILLING_QUEUE, "routing_key": BILLING_ROUTING_KEY},
+
+    # Queue verification/configuration helper task
+    "app.tasks.create_billing_queue_task": {"queue": BILLING_QUEUE, "routing_key": BILLING_ROUTING_KEY},
+}
+
+ALL_TASK_ROUTES = {**NOTIFICATION_TASK_ROUTES, **GPS_TASK_ROUTES, **BILLING_TASK_ROUTES}
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +108,7 @@ celery_app.conf.update(
         Queue(DEFAULT_QUEUE, routing_key=DEFAULT_ROUTING_KEY),
         Queue(NOTIFICATION_QUEUE, routing_key=NOTIFICATION_ROUTING_KEY),
         Queue(GPS_QUEUE, routing_key=GPS_ROUTING_KEY),
+        Queue(BILLING_QUEUE, routing_key=BILLING_ROUTING_KEY),
     ),
     task_routes=ALL_TASK_ROUTES,
 
@@ -234,6 +254,55 @@ Create_gps_processing_queue = create_gps_processing_queue
 CreateGpsProcessingQueue = create_gps_processing_queue
 Create_gps_queue = create_gps_processing_queue
 create_gps_queue = create_gps_processing_queue
+
+def get_billing_queue_config() -> dict[str, str]:
+    """
+    Return canonical configuration for the dedicated billing queue.
+    Contract:
+    {
+        "status": "CONFIGURED",
+        "queue": "billing",
+        "routing_key": "billing"
+    }
+    """
+    return {
+        "status": "CONFIGURED",
+        "queue": BILLING_QUEUE,
+        "routing_key": BILLING_ROUTING_KEY,
+    }
+
+
+def create_billing_queue(app: Optional[Celery] = None) -> dict[str, str]:
+    """
+    Ensure the dedicated billing queue and routing configuration are active on Celery.
+    Returns:
+        {
+            "status": "CONFIGURED",
+            "queue": "billing",
+            "routing_key": "billing"
+        }
+    """
+    target_app = app or celery_app
+
+    # Ensure queue is present in task_queues
+    existing_queues = list(target_app.conf.task_queues or [])
+    queue_names = {q.name if hasattr(q, "name") else str(q) for q in existing_queues}
+    if BILLING_QUEUE not in queue_names:
+        existing_queues.append(Queue(BILLING_QUEUE, routing_key=BILLING_ROUTING_KEY))
+        target_app.conf.task_queues = tuple(existing_queues)
+
+    # Ensure task routes are merged
+    existing_routes = dict(target_app.conf.task_routes or {})
+    existing_routes.update(BILLING_TASK_ROUTES)
+    target_app.conf.task_routes = existing_routes
+
+    return get_billing_queue_config()
+
+
+# Authoritative story aliases
+CreateBillingQueue = create_billing_queue
+Create_billing_queue = create_billing_queue
+
 
 
 # ---------------------------------------------------------------------------

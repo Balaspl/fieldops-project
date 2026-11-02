@@ -174,3 +174,17 @@ def render_invoice_pdf(job, closure, signature=None) -> bytes:
     pdf.showPage()
     pdf.save()
     return buffer.getvalue()
+
+# ---------------------------------------------------------------------------
+# Billing Queue Management (Story: Create billing queue)
+# ---------------------------------------------------------------------------
+
+from app.celery_app import (
+    BILLING_QUEUE,
+    BILLING_ROUTING_KEY,
+    get_billing_queue_config,
+    create_billing_queue,
+    CreateBillingQueue,
+    Create_billing_queue,
+)
+

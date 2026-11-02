@@ -106,3 +106,34 @@ def configure_gps_queue_endpoint() -> dict:
     from app.celery_app import create_gps_processing_queue
     return create_gps_processing_queue()
 
+@router.get(
+    "/billing",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_billing_queue_status() -> dict:
+    """Return the configuration and status of the dedicated billing Celery queue."""
+    from app.celery_app import get_billing_queue_config
+    return get_billing_queue_config()
+
+
+@router.post(
+    "/billing/configure",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def configure_billing_queue_endpoint() -> dict:
+    """Ensure the billing queue is configured on the Celery application."""
+    from app.celery_app import create_billing_queue
+    return create_billing_queue()
+

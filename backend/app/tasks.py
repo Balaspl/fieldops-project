@@ -2822,6 +2822,20 @@ def create_gps_processing_queue_task(
     return create_gps_processing_queue()
 
 
+@celery_app.task(
+    name="app.tasks.create_billing_queue_task",
+    queue="billing",
+    routing_key="billing",
+)
+def create_billing_queue_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, str]:
+    """Celery task to verify and activate dedicated billing queue."""
+    from app.celery_app import create_billing_queue
+    return create_billing_queue()
+
+
 
 
 
