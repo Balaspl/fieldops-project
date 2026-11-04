@@ -24,8 +24,13 @@ router = APIRouter(
     tags=["In-App Notifications"]
 )
 
+# Kept separate from notification delivery/read APIs so the admin
+# Communication Center endpoint can be disabled without affecting push or
+# in-app notifications.
+communication_center_router = APIRouter(tags=["Communication Center"])
 
-@router.get("/admin/communication-center")
+
+@communication_center_router.get("/admin/communication-center")
 async def get_admin_communication_center(
     search: Optional[str] = Query(None, max_length=200),
     channel: str = Query("all", pattern="^(all|in_app|sms|email|push)$"),

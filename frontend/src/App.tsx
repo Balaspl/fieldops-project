@@ -23,8 +23,7 @@ import {
   Menu,
   MapPin,
   Wrench,
-  Sparkles,
-  MessageSquareText,
+  Workflow,
 } from "lucide-react";
 import useAuthStore from "./store/authStore";
 import NotificationBell from "./components/notifications/NotificationBell";
@@ -70,8 +69,7 @@ const OrganizationOnboardingPage = lazy(
   () => import("./pages/OrganizationOnboardingPage"),
 );
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
-const SentimentIntelligencePage = lazy(() => import("./pages/SentimentIntelligencePage"));
-const CommunicationCenterPage = lazy(() => import("./pages/CommunicationCenterPage"));
+const AgentTrackingPage = lazy(() => import("./pages/AgentTrackingPage"));
 const JobsPage = lazy(() => import("./pages/JobsPage"));
 const TechniciansDispatchersPage = lazy(
   () => import("./pages/TechniciansDispatchersPage"),
@@ -645,6 +643,12 @@ function AppInner() {
       return "dashboard";
     });
 
+  useEffect(() => {
+    if (activeTab === "sentiment" || activeTab === "communication_center") {
+      setActiveTab("dashboard");
+    }
+  }, [activeTab]);
+
   const isTechnicianShell = isTechnician;
 
   useEffect(() => {
@@ -780,8 +784,8 @@ function AppInner() {
       case "planning":
         return "Loading Planning Board...";
 
-      case "sentiment":
-        return "Loading Sentiment Intelligence...";
+      case "agent_tracking":
+        return "Loading Agent Tracking...";
 
       case "services":
         return "Loading Services Catalog...";
@@ -2476,23 +2480,16 @@ function AppInner() {
                 </span>
               </button>
 
-              {(isSuperAdmin || isDispatcher) && (
-                <button className="nav-item-style" style={getItemStyle("sentiment")} onClick={() => handleTabChange("sentiment")} title="Sentiment Intelligence">
-                  <Sparkles size={18} style={{ flexShrink: 0 }} />
-                  <span className="nav-text" style={isMobileLayout || sidebarCollapsed ? { display: "none" } : {}}>Sentiment Intelligence</span>
-                </button>
-              )}
-
-              {(isSuperAdmin || isDispatcher) && (
+              {isSuperAdmin && (
                 <button
                   className="nav-item-style"
-                  style={getItemStyle("communication_center")}
-                  onClick={() => handleTabChange("communication_center")}
-                  title="Communication Center"
+                  style={getItemStyle("agent_tracking")}
+                  onClick={() => handleTabChange("agent_tracking")}
+                  title="Agent Tracking"
                 >
-                  <MessageSquareText size={18} style={{ flexShrink: 0 }} />
+                  <Workflow size={18} style={{ flexShrink: 0 }} />
                   <span className="nav-text" style={isMobileLayout || sidebarCollapsed ? { display: "none" } : {}}>
-                    Communication Center
+                    Agent Tracking
                   </span>
                 </button>
               )}
@@ -3061,9 +3058,7 @@ function AppInner() {
                 <TrackingDashboardPage />
               )}
 
-              {activeTab === "sentiment" && (isSuperAdmin || isDispatcher) && <SentimentIntelligencePage />}
-
-              {activeTab === "communication_center" && (isSuperAdmin || isDispatcher) && <CommunicationCenterPage />}
+              {activeTab === "agent_tracking" && isSuperAdmin && <AgentTrackingPage />}
 
               {activeTab ===
                 "profile" && (
