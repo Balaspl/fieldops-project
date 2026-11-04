@@ -229,6 +229,56 @@ describe("JobClosureModal - Photo Upload Screen", () => {
     expect(mockedCloseJob).not.toHaveBeenCalled();
   });
 
+  it("requires review of a follow-up recommendation before payment", async () => {
+    const followUpDecision = {
+      work_summary: "The repair was completed with the provided parts.",
+      customer_summary: "The reported service work has been completed.",
+      invoice_description: "Completed service repair work.",
+      follow_up_required: true,
+      follow_up_reason: "The customer requested a callback.",
+    };
+
+    render(
+      <JobClosureModal
+        jobId={1010}
+        isOpen
+        paymentFlow
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+        onGenerateClosure={async () => followUpDecision}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId("work-report-summary"), {
+      target: { value: "Replaced faulty component and verified operation." },
+    });
+    fireEvent.change(screen.getByTestId("work-report-duration"), {
+      target: { value: "45" },
+    });
+
+    fireEvent.change(getFileInputs()[1], {
+      target: { files: [createImageFile()] },
+    });
+    expect(await screen.findByAltText("After 1")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Generate Closure Summary" }));
+    expect(
+      await screen.findByText("Follow-up Recommendation: Required"),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("submit-job-closure"));
+    expect(
+      await screen.findByText(
+        "Review the follow-up recommendation and confirm the job is ready to close before continuing.",
+      ),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByTestId("submit-job-closure"));
+
+    expect(await screen.findByText("Review Payment")).toBeTruthy();
+  });
+
   it("maps prepared before and after photos into the existing completion payload", async () => {
     const onSuccess = vi.fn();
     const onClose = vi.fn();

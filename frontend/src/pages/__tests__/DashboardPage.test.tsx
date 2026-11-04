@@ -54,15 +54,28 @@ const dashboardStats = {
   },
 };
 
-const renderDashboard = () =>
-  render(
+const DashboardHarness = () => {
+  const [timeRange, setTimeRange] = React.useState("week");
+  const [dateRange, setDateRange] = React.useState<{
+    start_date: string;
+    end_date: string;
+  } | null>(null);
+
+  return (
     <Dashboard
       onViewTab={vi.fn()}
+      timeRange={timeRange}
+      onTimeRangeChange={setTimeRange}
+      dateRange={dateRange}
+      onDateRangeChange={setDateRange}
       unreadCount={0}
       isBellAnimated={false}
       onOpenBellDrawer={vi.fn()}
     />
   );
+};
+
+const renderDashboard = () => render(<DashboardHarness />);
 
 describe("Dashboard KPI Cards - Task 7", () => {
   beforeEach(() => {
@@ -106,7 +119,7 @@ describe("Dashboard KPI Cards - Task 7", () => {
     renderDashboard();
 
     await waitFor(() => {
-      expect(mockedGetDashboardStats).toHaveBeenCalledWith("week");
+      expect(mockedGetDashboardStats).toHaveBeenCalledWith("week", null);
     });
 
     expect(mockedGetJobs).toHaveBeenCalledTimes(1);
@@ -119,14 +132,16 @@ describe("Dashboard KPI Cards - Task 7", () => {
       expect(screen.getByText("TOTAL JOBS")).toBeTruthy();
     });
 
-    const timeRangeSelect = screen.getAllByDisplayValue("This Week")[0];
-
-    fireEvent.change(timeRangeSelect, {
-      target: { value: "month" },
+    fireEvent.click(screen.getByRole("button", { name: "Choose month" }));
+    fireEvent.change(screen.getByLabelText("Select dashboard month"), {
+      target: { value: "2026-10" },
     });
 
     await waitFor(() => {
-      expect(mockedGetDashboardStats).toHaveBeenCalledWith("month");
+      expect(mockedGetDashboardStats).toHaveBeenCalledWith("month", {
+        start_date: "2026-10-01",
+        end_date: "2026-10-31",
+      });
     });
   });
 
@@ -155,6 +170,43 @@ describe("Dashboard KPI Cards - Task 7", () => {
       expect(
         screen.getByText("Failed to load dashboard data")
       ).toBeTruthy();
+    });
+  });
+
+  it("renders the four date filter choices below the banner", async () => {
+    renderDashboard();
+
+    await waitFor(() => {
+      expect(screen.getByText("TOTAL JOBS")).toBeTruthy();
+    });
+
+    expect(screen.getByRole("button", { name: "Today" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /This Week/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Choose month" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Custom Date" })).toBeTruthy();
+  });
+
+  it("applies a custom date range to dashboard statistics", async () => {
+    renderDashboard();
+
+    await waitFor(() => {
+      expect(screen.getByText("TOTAL JOBS")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Custom Date" }));
+    fireEvent.change(screen.getByLabelText("From date"), {
+      target: { value: "2026-11-01" },
+    });
+    fireEvent.change(screen.getByLabelText("To date"), {
+      target: { value: "2026-11-07" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    await waitFor(() => {
+      expect(mockedGetDashboardStats).toHaveBeenLastCalledWith("custom", {
+        start_date: "2026-11-01",
+        end_date: "2026-11-07",
+      });
     });
   });
 

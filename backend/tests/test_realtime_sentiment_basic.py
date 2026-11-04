@@ -350,7 +350,7 @@ async def test_unsupported_sentiment_channel_rejected():
             reply_text="I need help with my service.",
             customer_id="customer-1",
             job_id=1,
-            channel="WHATSAPP",
+            channel="FAX",
             language="en",
             context=[],
         )
@@ -552,7 +552,8 @@ async def test_escalation_with_customer_notifies_customer_and_manager(monkeypatc
     scorer.escalation_service.create_escalation.assert_called_once()
 
     scorer.escalation_service.send_auto_response.assert_awaited_once_with(
-        customer_phone="9876543210"
+        customer_phone="9876543210",
+        escalation=escalation,
     )
 
     scorer.escalation_service.notify_manager.assert_awaited_once_with(

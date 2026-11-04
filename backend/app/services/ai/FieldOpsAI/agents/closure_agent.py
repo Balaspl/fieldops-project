@@ -10,13 +10,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from app.services.ai.FieldOpsAI.agents.base import BaseAgent
-from app.services.ai.FieldOpsAI.runtime.orchestrator import (
-    AIOrchestrator,
-    ai_orchestrator,
-)
+
+if TYPE_CHECKING:
+    from app.services.ai.FieldOpsAI.runtime.orchestrator import AIOrchestrator
 from app.services.ai.FieldOpsAI.schemas.agent_config import AgentConfig
 from app.services.ai.FieldOpsAI.schemas.ai_task import AITask
 from app.services.ai.FieldOpsAI.schemas.closure import (
@@ -49,11 +48,7 @@ class ClosureAgent(BaseAgent[ClosureDecision]):
 
         super().__init__(config)
 
-        self.orchestrator = (
-            ai_orchestrator
-            if orchestrator is None
-            else orchestrator
-        )
+        self.orchestrator = orchestrator
 
     async def run(
         self,
@@ -72,10 +67,25 @@ class ClosureAgent(BaseAgent[ClosureDecision]):
 
         closure_context = ClosureContext.model_validate(context)
 
+        orchestrator_context = closure_context.model_dump(
+            mode="json"
+        )
+        orchestrator_context["tenant_id"] = self.tenant_id
+
+        orchestrator = self.orchestrator
+
+        if orchestrator is None:
+            from app.services.ai.FieldOpsAI.runtime.orchestrator import (
+                ai_orchestrator,
+            )
+
+            orchestrator = ai_orchestrator
+            self.orchestrator = orchestrator
+
         decision = await asyncio.to_thread(
-            self.orchestrator.execute,
+            orchestrator.execute,
             task=AITask.CLOSURE,
-            context=closure_context.model_dump(mode="json"),
+            context=orchestrator_context,
             response_schema=ClosureDecision,
         )
 

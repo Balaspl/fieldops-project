@@ -125,13 +125,34 @@ export const cancelJobsBulk = async (
   }
 };
 
+/** Convert a local calendar date to an ISO timestamp at local midnight. */
+const localMidnightIso = (dateValue: string, nextDay = false): string => {
+  const [year, month, day] = dateValue.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  if (nextDay) {
+    date.setDate(date.getDate() + 1);
+  }
+  return date.toISOString();
+};
+
 /**
  * Fetch dashboard stats.
  */
-export const getDashboardStats = async (timeRange?: string): Promise<any> => {
+export const getDashboardStats = async (
+  timeRange?: string,
+  dateRange?: { start_date: string; end_date: string } | null,
+): Promise<any> => {
   try {
     return await api.get("/jobs/stats", {
-      params: timeRange ? { time_range: timeRange } : undefined
+      params: {
+        ...(timeRange ? { time_range: timeRange } : {}),
+        ...(dateRange
+          ? {
+              start_datetime: localMidnightIso(dateRange.start_date),
+              end_datetime: localMidnightIso(dateRange.end_date, true),
+            }
+          : {}),
+      },
     });
   } catch (error) {
     handleApiError(error);
@@ -414,6 +435,41 @@ export interface JobClosureData {
   gst_amount?: number;
   total_amount?: number;
 }
+
+export interface ClosureAgentInput {
+  technician_notes: string;
+  parts_used: string[];
+  duration_minutes: number;
+}
+
+export interface ClosureAgentDecision {
+  work_summary: string;
+  customer_summary: string;
+  invoice_description: string;
+  follow_up_required: boolean;
+  follow_up_reason: string | null;
+  confidence: number;
+}
+
+/**
+ * Generate draft closure text. This endpoint does not close the job or
+ * persist the generated decision.
+ */
+export const generateClosureSummary = async (
+  jobId: string | number,
+  data: ClosureAgentInput,
+): Promise<ClosureAgentDecision> => {
+  try {
+    const response = await api.post<ClosureAgentDecision>(
+      `/jobs/${jobId}/closure/summary`,
+      data,
+    );
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
 
 /**
   Submit job closure details.
