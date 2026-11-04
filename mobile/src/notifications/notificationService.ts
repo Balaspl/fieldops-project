@@ -122,9 +122,9 @@ export async function registerPushTokenForTechnician(
   // Create the Android notification channel before registration.
   if (deviceType === "android") {
     await Notifications.setNotificationChannelAsync(
-      "fieldops_updates",
+      "fieldops_job_assignments_v2",
       {
-        name: "FieldOps updates",
+        name: "FieldOps job assignments",
         importance: Notifications.AndroidImportance.HIGH,
         vibrationPattern: [0, 250, 250, 250],
         lightColor: "#0F766E"

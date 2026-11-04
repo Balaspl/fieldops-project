@@ -2170,8 +2170,17 @@ def reassign_job(
         )
 
     if background_tasks is not None:
+        from app.services.assignment_push import send_assignment_push
         from app.services.ai.FieldOpsAI.agents.communication_agent.events import JobEvent
 
+        background_tasks.add_task(
+            send_assignment_push,
+            job_id=job.id,
+            tenant_id=str(new_technician.tenant_id),
+            technician_id=str(new_technician.tech_id),
+            job_title=job.service_type,
+            location=job.location,
+        )
         background_tasks.add_task(
             _dispatch_communication_event,
             int(job.id),
@@ -2408,6 +2417,18 @@ async def assign_job(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Unable to assign job",
+            )
+
+        if background_tasks is not None:
+            from app.services.assignment_push import send_assignment_push
+
+            background_tasks.add_task(
+                send_assignment_push,
+                job_id=job.id,
+                tenant_id=str(tech.tenant_id),
+                technician_id=str(tech.tech_id),
+                job_title=job.service_type,
+                location=job.location,
             )
 
         # Kafka job-assigned event is published only after

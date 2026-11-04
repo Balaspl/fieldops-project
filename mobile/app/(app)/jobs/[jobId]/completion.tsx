@@ -1213,7 +1213,7 @@ export default function JobCompletionScreen() {
       logEvent("customer_signature.saved_with_completion", {});
       logEvent("completion.job_and_signature_succeeded", {});
 
-      router.replace("/(app)/jobs");
+      router.replace("/(app)/history");
     } catch (submissionError: unknown) {
       logError(
         "completion_photo.job_submission_failed",

@@ -59,13 +59,35 @@ export function logError(
   metadata?: LogMetadata
 ): void {
   if (__DEV__) {
-    const safeError =
-      error instanceof Error
-        ? {
-            name: error.name,
-            message: "An error occurred."
+    const candidate =
+      typeof error === "object" && error !== null
+        ? error as {
+            name?: unknown;
+            code?: unknown;
+            response?: { status?: unknown } | null;
           }
-        : { message: "An unexpected error occurred." };
+        : null;
+    const safeError: Record<string, unknown> = {
+      name:
+        typeof candidate?.name === "string"
+          ? candidate.name
+          : "Error",
+      message: "An error occurred."
+    };
+
+    if (
+      typeof candidate?.code === "string" &&
+      /^[A-Z0-9_]+$/i.test(candidate.code)
+    ) {
+      safeError.code = candidate.code;
+    }
+
+    if (
+      typeof candidate?.response?.status === "number" &&
+      Number.isInteger(candidate.response.status)
+    ) {
+      safeError.httpStatus = candidate.response.status;
+    }
 
     console.error(
       `[FieldOps] ${event}`,

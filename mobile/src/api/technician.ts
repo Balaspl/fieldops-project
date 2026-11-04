@@ -2,6 +2,12 @@ import { apiClient } from "./client";
 
 export interface TechnicianJob {
   id: string | number;
+  images?: string[];
+  payment_status?: string | null;
+  payment_amount?: number | null;
+  payment_method?: string | null;
+  payment_provider?: string | null;
+  payment_updated_at?: string | null;
   job_number?: string;
   title?: string;
   description?: string;
@@ -9,6 +15,15 @@ export interface TechnicianJob {
   priority?: string;
   scheduled_at?: string;
   assigned_at?: string | null;
+  en_route_at?: string | null;
+  on_site_at?: string | null;
+  work_started_at?: string | null;
+  completed_at?: string | null;
+  closed_at?: string | null;
+  cancelled_at?: string | null;
+  rejected_at?: string | null;
+  rejection_reason?: string | null;
+  created_at?: string | null;
   customer_name?: string;
   address?: string;
   service_type?: string;
@@ -18,6 +33,7 @@ export interface TechnicianJob {
   site_latitude?: number | null;
   site_longitude?: number | null;
   preferred_service_date?: string;
+  preferred_service_time?: string | null;
   contact_number?: string;
   required_skill?: string;
   sla_deadline?: string;
@@ -41,6 +57,12 @@ export interface TechnicianJobQuery {
 
 interface TechnicianJobApiResponse {
   id: string | number;
+  images?: string[] | null;
+  payment_status?: string | null;
+  payment_amount?: number | null;
+  payment_method?: string | null;
+  payment_provider?: string | null;
+  payment_updated_at?: string | null;
   job_number?: string | number | null;
   title?: string | null;
   description?: string | null;
@@ -48,6 +70,10 @@ interface TechnicianJobApiResponse {
   priority?: string | null;
   scheduled_at?: string | null;
   assigned_at?: string | null;
+  en_route_at?: string | null;
+  on_site_at?: string | null;
+  work_started_at?: string | null;
+  completed_at?: string | null;
   customer_name?: string | null;
   address?: string | null;
   service_type?: string | null;
@@ -57,6 +83,7 @@ interface TechnicianJobApiResponse {
   site_latitude?: number | null;
   site_longitude?: number | null;
   preferred_service_date?: string | null;
+  preferred_service_time?: string | null;
   contact_number?: string | null;
   required_skill?: string | null;
   sla_deadline?: string | null;
@@ -80,6 +107,12 @@ function normalizeTechnicianJob(
 ): TechnicianJob {
   return {
     ...job,
+    images: Array.isArray(job.images) ? job.images : undefined,
+    payment_status: job.payment_status,
+    payment_amount: job.payment_amount,
+    payment_method: job.payment_method,
+    payment_provider: job.payment_provider,
+    payment_updated_at: job.payment_updated_at,
     id: job.id,
     job_number: String(job.job_number ?? job.id),
     title: firstText(job.title, job.service_type) ?? "Service job",
