@@ -1,3 +1,4 @@
+import { useActiveAutoRefresh } from "../../hooks/useActiveAutoRefresh";
 import { useEffect, useMemo, useState } from "react";
 import {
   CalendarDays,
@@ -67,27 +68,28 @@ export default function TechnicianBillingReportPage() {
   const [sortOrder, setSortOrder] = useState("newest");
   const [viewMode, setViewMode] = useState<"list" | "grid">("list");
 
-  const loadReports = async () => {
-    setLoading(true);
-    setError(null);
+  const loadReports = async (silent = false) => {
+    if (!silent) setLoading(true);
+    if (!silent) setError(null);
 
     try {
       const response = await getTechnicianBillingReports();
 
       setReports(response.data?.reports || []);
     } catch (err: any) {
-      setError(
+      if (!silent) setError(
         err?.response?.data?.detail ||
           "Failed to load billing reports."
       );
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
     void loadReports();
   }, []);
+  useActiveAutoRefresh(() => loadReports(true), downloading === null);
 
   const customers = useMemo(
     () => Array.from(new Set(reports.map((report) => report.customer_name).filter(Boolean))).sort(),

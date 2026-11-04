@@ -14,7 +14,9 @@ from sqlalchemy.pool import StaticPool
 
 from app.main import app
 from app.database import get_db
-from app.models import User, EnterpriseAuditLog, Job
+from app.models import User, EnterpriseAuditLog, Job, Technician, SentimentThreadMessage, SentimentEscalation, SentimentAuditRecord, InAppNotification
+from app.models.customer_chat import CustomerChatConversation, CustomerChatMessage, CustomerSupportFAQ
+from app.models_legacy import NotificationChannelDelivery
 from app.services.enterprise_audit import AuditAction
 
 
@@ -42,6 +44,28 @@ EnterpriseAuditLog.__table__.create(
 Job.__table__.create(
     bind=TestingEngine
 )
+
+Technician.__table__.create(
+    bind=TestingEngine
+)
+
+SentimentThreadMessage.__table__.create(
+    bind=TestingEngine
+)
+
+SentimentEscalation.__table__.create(
+    bind=TestingEngine
+)
+
+SentimentAuditRecord.__table__.create(
+    bind=TestingEngine
+)
+
+CustomerChatConversation.__table__.create(bind=TestingEngine)
+CustomerChatMessage.__table__.create(bind=TestingEngine)
+NotificationChannelDelivery.__table__.create(bind=TestingEngine)
+InAppNotification.__table__.create(bind=TestingEngine)
+CustomerSupportFAQ.__table__.create(bind=TestingEngine)
 
 TestingSessionLocal = sessionmaker(
     bind=TestingEngine,
@@ -124,6 +148,7 @@ def create_customer(
 def test_twilio_inbound_customer_intent_is_classified_and_audited(
     client: TestClient,
     db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
     Verify that an inbound Twilio customer message:
@@ -133,6 +158,14 @@ def test_twilio_inbound_customer_intent_is_classified_and_audited(
     3. creates INTENT_CLASSIFIED audit entry
     4. returns successful webhook response
     """
+
+    async def score_without_escalation(self, **kwargs):
+        return type("SentimentResult", (), {"sentiment": "NEUTRAL", "confidence": 0.5})()
+
+    monkeypatch.setattr(
+        "app.routes.notifications.RealTimeSentimentScorer.score_reply",
+        score_without_escalation,
+    )
 
     customer = create_customer(
         db_session
@@ -154,7 +187,7 @@ def test_twilio_inbound_customer_intent_is_classified_and_audited(
     # Webhook response
     # ------------------------------------------------------
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
 
     data = response.json()
 

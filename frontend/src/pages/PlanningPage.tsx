@@ -1,3 +1,4 @@
+import { useActiveAutoRefresh } from "../hooks/useActiveAutoRefresh";
 import React, {
   useEffect,
   useState,
@@ -1437,15 +1438,15 @@ function PlanningDashboard({
     }
   };
 
-  const fetchDeclinedJobsList = async () => {
+  const fetchDeclinedJobsList = async (silent = false) => {
     try {
-      setDeclinedLoading(true);
+      if (!silent) setDeclinedLoading(true);
       const res = await getDeclinedJobs();
       setDeclinedJobsList(res.data || []);
     } catch (err) {
       console.error(err);
     } finally {
-      setDeclinedLoading(false);
+      if (!silent) setDeclinedLoading(false);
     }
   };
 
@@ -1605,9 +1606,9 @@ useEffect(() => {
       : "All jobs are either assigned or completed.";
   };
 
-  const fetchPendingJobs = async (search?: string) => {
+  const fetchPendingJobs = async (search?: string, silent = false) => {
     try {
-      setJobsLoading(true);
+      if (!silent) setJobsLoading(true);
       const [res] = await Promise.all([
         getPendingJobs({
           search: search || undefined,
@@ -1615,21 +1616,21 @@ useEffect(() => {
           limit: PAGE_SIZE,
           active_filter: activeMetricFilter !== "all" && activeMetricFilter !== "dispatched" && activeMetricFilter !== "pending" ? activeMetricFilter : undefined
         }),
-        new Promise(resolve => setTimeout(resolve, 1000))
+        silent ? Promise.resolve() : silent ? Promise.resolve() : new Promise(resolve => setTimeout(resolve, 1000))
       ]);
       setPendingJobs(res.data);
       const totalHeader = res.headers["x-total-count"] || res.headers["X-Total-Count"];
       setTotalPendingCount(totalHeader ? parseInt(totalHeader, 10) : res.data.length);
     } catch {
-      setError("Failed to load unassigned jobs. Please try again.");
+      if (!silent) setError("Failed to load unassigned jobs. Please try again.");
     } finally {
-      setJobsLoading(false);
+      if (!silent) setJobsLoading(false);
     }
   };
 
-  const fetchPlannedAssignments = async (search?: string) => {
+  const fetchPlannedAssignments = async (search?: string, silent = false) => {
     try {
-      setAssignmentsLoading(true);
+      if (!silent) setAssignmentsLoading(true);
       const [res] = await Promise.all([
         getPlannedAssignments({
           search: search || undefined,
@@ -1642,9 +1643,9 @@ useEffect(() => {
       const totalHeader = res.headers["x-total-count"] || res.headers["X-Total-Count"];
       setTotalPlannedCount(totalHeader ? parseInt(totalHeader, 10) : res.data.length);
     } catch {
-      setError("Failed to load planned assignments. Please try again.");
+      if (!silent) setError("Failed to load planned assignments. Please try again.");
     } finally {
-      setAssignmentsLoading(false);
+      if (!silent) setAssignmentsLoading(false);
     }
   };
 
@@ -1741,27 +1742,27 @@ const fetchCompletedCount = async () => {
   }
 };
 
-  const fetchAllData = () => {
-    setError("");
-    setSuccessMsg("");
-    fetchPendingJobs(debSearchQuery);
-    fetchPlannedAssignments(debSearchQuery);
-    fetchTechniciansList();
-    fetchDispatchQueueCount();
-    fetchInProgressCount();
-    fetchCompletedCount();
-    fetchDeclinedJobsList();
+  const fetchAllData = async (silent = false) => {
+    if (!silent) {
+      setError("");
+      setSuccessMsg("");
+    }
+    await Promise.all([
+      fetchPendingJobs(debSearchQuery, silent),
+      fetchPlannedAssignments(debSearchQuery, silent),
+      fetchTechniciansList(),
+      fetchDispatchQueueCount(),
+      fetchInProgressCount(),
+      fetchCompletedCount(),
+      fetchDeclinedJobsList(silent),
+    ]);
   };
 
   const refreshDashboardFromRealtime = () => {
-    fetchPendingJobs(debSearchQuery);
-    fetchPlannedAssignments(debSearchQuery);
-    fetchTechniciansList();
-    fetchDispatchQueueCount();
-    fetchInProgressCount();
-    fetchCompletedCount();
-    fetchDeclinedJobsList();
+    fetchAllData(true);
   };
+
+  useActiveAutoRefresh(() => fetchAllData(true));
 
   refreshDashboardFromRealtimeRef.current =
     refreshDashboardFromRealtime;
@@ -2849,7 +2850,7 @@ const fetchCompletedCount = async () => {
     completedCount +
     declinedJobsList.length
   }
-  onRefresh={fetchAllData}
+  onRefresh={() => fetchAllData()}
   onFiltersChange={setPlanningFilters}
 />
 

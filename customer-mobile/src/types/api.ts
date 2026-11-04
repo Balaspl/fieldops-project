@@ -283,10 +283,14 @@ export interface SupportRequest {
   description: string;
   related_job_id: number | null;
   status: string;
+  category: string;
+  priority: string;
+  assigned_staff_name: string | null;
   resolution_note: string | null;
   resolved_at: string | null;
   created_at: string;
   updated_at: string;
+  updates: Array<{ id: number; author_role: string; author_name: string; message: string; created_at: string }>;
 }
 
 export interface LocationSearchResult {

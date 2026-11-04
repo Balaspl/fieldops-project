@@ -11,7 +11,7 @@ import dispatcherService, {
 } from "../../services/dispatcherService";
 
 const PAGE_SIZE = 8;
-const REFRESH_MS = 60_000;
+const REFRESH_MS = 3000;
 
 
 const styles = {
@@ -661,7 +661,9 @@ export default function DispatcherPage() {
 
   useEffect(() => {
     const timer = setInterval(() => {
-      fetchDispatchers(true);
+      if (document.visibilityState === "visible" && document.hasFocus()) {
+        fetchDispatchers(true);
+      }
     }, REFRESH_MS);
 
     return () => clearInterval(timer);

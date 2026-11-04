@@ -1147,16 +1147,27 @@ interface DashboardProps {
 
     // Refresh the job counts without showing the full-page
     // loading screen every time.
+    let refreshInFlight = false;
     const refreshStats = async () => {
+      if (refreshInFlight || document.visibilityState !== "visible" || !document.hasFocus()) return;
+      refreshInFlight = true;
       try {
-        const statsRes = await getDashboardStats(timeRange);
+        const [statsRes, jobsRes] = await Promise.all([
+          getDashboardStats(timeRange),
+          getJobs(),
+        ]);
 
         if (isMounted && statsRes?.data) {
           setStats(statsRes.data);
           setStatsError(false);
         }
+        if (isMounted && jobsRes?.data) {
+          setRecentJobs(jobsRes.data.slice(0, 5));
+        }
       } catch (err) {
-        console.error("Dashboard stats refresh failed:", err);
+        console.error("Dashboard refresh failed:", err);
+      } finally {
+        refreshInFlight = false;
       }
     };
 
@@ -1164,7 +1175,7 @@ interface DashboardProps {
 
     const intervalId = window.setInterval(() => {
       void refreshStats();
-    }, 15_000);
+    }, 3000);
 
     const handleWindowFocus = () => {
       void refreshStats();

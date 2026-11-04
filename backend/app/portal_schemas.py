@@ -730,12 +730,26 @@ class CustomerSupportRequestResponse(BaseModel):
     description: str
     related_job_id: Optional[int] = None
     status: str
+    category: str = "OTHER"
+    priority: str = "MEDIUM"
+    assigned_staff_name: Optional[str] = None
     resolution_note: Optional[str] = None
     resolved_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+    updates: list[dict] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class CustomerSupportReopenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    message: Optional[str] = Field(default=None, max_length=1000)
+
+    @field_validator("message")
+    @classmethod
+    def clean_message(cls, value):
+        return value.strip() if value else None
 
 
 class CustomerSupportRequestUpdate(BaseModel):
@@ -753,6 +767,9 @@ class CustomerSupportRequestUpdate(BaseModel):
         default=None,
         max_length=5000,
     )
+    category: Optional[str] = Field(default=None, min_length=2, max_length=40)
+    priority: Optional[str] = Field(default=None, min_length=3, max_length=20)
+    assign_to_me: bool = False
 
     @field_validator("status")
     @classmethod
@@ -765,6 +782,26 @@ class CustomerSupportRequestUpdate(BaseModel):
                 "Status must be OPEN, IN_PROGRESS, RESOLVED, or CLOSED"
             )
 
+        return normalized
+
+    @field_validator("priority")
+    @classmethod
+    def validate_priority(cls, v):
+        if v is None:
+            return None
+        normalized = v.strip().upper()
+        if normalized not in {"LOW", "MEDIUM", "HIGH", "URGENT"}:
+            raise ValueError("Priority must be LOW, MEDIUM, HIGH, or URGENT")
+        return normalized
+
+    @field_validator("category")
+    @classmethod
+    def validate_category(cls, v):
+        if v is None:
+            return None
+        normalized = v.strip().upper()
+        if normalized not in {"GENERAL", "BILLING", "SERVICE_QUALITY", "TECHNICIAN", "SCHEDULING", "ACCOUNT", "OTHER"}:
+            raise ValueError("Choose a supported customer support category")
         return normalized
 
     @field_validator("resolution_note")
@@ -785,6 +822,11 @@ class CustomerSupportRequestAdminResponse(BaseModel):
     subject: str
     description: str
     status: str
+    category: str = "OTHER"
+    priority: str = "MEDIUM"
+    assigned_staff_id: Optional[str] = None
+    assigned_staff_name: Optional[str] = None
+    source_chat_conversation_id: Optional[str] = None
     related_job_id: Optional[int] = None
     resolution_note: Optional[str] = None
     resolved_at: Optional[datetime] = None
@@ -792,10 +834,6 @@ class CustomerSupportRequestAdminResponse(BaseModel):
     updated_at: datetime
     customer: dict
     job: Optional[dict] = None
-    related_job_id: Optional[int] = None
-    resolution_note: Optional[str] = None
-    resolved_at: Optional[datetime] = None
-    created_at: datetime
-    updated_at: datetime
-    customer: dict
-    job: Optional[dict] = None
+    updates: list[dict] = Field(default_factory=list)
+    chat_transcript: list[dict] = Field(default_factory=list)
+    sentiment_triage: Optional[dict] = None

@@ -636,8 +636,8 @@ export default function TechnicianJobsPage() {
     }
   };
 
-  const loadJobs = async () => {
-    setLoading(true);
+  const loadJobs = async (silent = false) => {
+    if (!silent) setLoading(true);
 
     try {
       const response = await getTechnicianJobs();
@@ -673,9 +673,9 @@ export default function TechnicianJobsPage() {
       }
     } catch (error) {
       console.error("Failed to load technician jobs:", error);
-      setJobsError("Unable to load your assigned jobs. Please try again.");
+      if (!silent) setJobsError("Unable to load your assigned jobs. Please try again.");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -695,9 +695,10 @@ export default function TechnicianJobsPage() {
   void loadJobs();
 
   const interval = window.setInterval(() => {
-
-    void checkForAssignedJob();
-
+    if (document.visibilityState === "visible") {
+      void loadJobs(true);
+      void checkForAssignedJob();
+    }
   }, 3000);
 
   return () => {

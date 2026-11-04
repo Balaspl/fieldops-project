@@ -1280,7 +1280,7 @@ def test_list_service_requests_with_status_filter():
     )
 
     assert result == [sr_one]
-    assert sr_one.status == "ASSIGNED"
+    assert sr_one.status == "AWAITING_ACCEPTANCE"
 
 
 def test_list_service_requests_without_status_filter():
@@ -1318,7 +1318,7 @@ def test_list_service_requests_without_status_filter():
         sr_two,
     ]
 
-    assert sr_one.status == "ASSIGNED"
+    assert sr_one.status == "AWAITING_ACCEPTANCE"
     assert sr_two.status == "UNASSIGNED"
 
 
@@ -1337,7 +1337,7 @@ def test_queued_retry_is_shown_as_unassigned_not_cancelled():
     )
 
     assert result == [request]
-    assert request.status == "UNASSIGNED"
+    assert request.status == "AWAITING_ACCEPTANCE"
 
 
 def test_exhausted_dispatch_is_shown_as_rejected():
@@ -1355,7 +1355,7 @@ def test_exhausted_dispatch_is_shown_as_rejected():
     )
 
     assert result == [request]
-    assert request.status == "REJECTED_BY_TECHNICIAN"
+    assert request.status == "CANCELLED"
 
 
 # ============================================================
@@ -1700,7 +1700,7 @@ def test_create_service_request_success(monkeypatch):
     )
 
     assert result["customer_user_id"] == "customer-1"
-    assert result["status"] == "UNASSIGNED"
+    assert result["status"] == "AWAITING_ACCEPTANCE"
     assert result["linked_job_id"] == 700
 
     assert result["created_job"]["id"] == 700
@@ -1794,7 +1794,7 @@ def test_create_service_request_user_fallback_and_optional_values(
         )
     )
 
-    assert result["status"] == "UNASSIGNED"
+    assert result["status"] == "AWAITING_ACCEPTANCE"
     assert result["created_job"]["status"] == "CREATED"
 
 

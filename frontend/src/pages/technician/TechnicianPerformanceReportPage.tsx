@@ -1,3 +1,4 @@
+import { useActiveAutoRefresh } from "../../hooks/useActiveAutoRefresh";
 import { useCallback, useEffect, useState } from "react";
 import {
   Activity,
@@ -345,9 +346,9 @@ export default function TechnicianPerformanceReportPage() {
   const [lastUpdated, setLastUpdated] =
     useState<Date | null>(null);
 
-  const loadReport = useCallback(async () => {
-    setState("loading");
-    setError(null);
+  const loadReport = useCallback(async (silent = false) => {
+    if (!silent) setState("loading");
+    if (!silent) setError(null);
 
     try {
       const response =
@@ -366,7 +367,7 @@ export default function TechnicianPerformanceReportPage() {
       }
 
       setReport(data);
-      setState("ready");
+      if (!silent) setState("ready");
       setLastUpdated(new Date());
     } catch (requestError) {
       console.error(
@@ -374,19 +375,18 @@ export default function TechnicianPerformanceReportPage() {
         requestError,
       );
 
-      setReport(null);
-      setState("error");
-      setError(
-        getPerformanceErrorMessage(
-          requestError,
-        ),
-      );
+      if (!silent) {
+        setReport(null);
+        setState("error");
+        setError(getPerformanceErrorMessage(requestError));
+      }
     }
   }, []);
 
   useEffect(() => {
     void loadReport();
   }, [loadReport]);
+  useActiveAutoRefresh(() => loadReport(true), state !== "loading");
 
   const handleRefresh = () => {
     if (state === "loading") {

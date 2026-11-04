@@ -59,7 +59,7 @@ from .job_message import JobMessage  # noqa: F401
 from .payment_status import JobPaymentStatus  # noqa: F401
 
 from .customer_feedback import CustomerFeedback  # noqa: F401
-from .customer_support_request import CustomerSupportRequest  # noqa: F401
+from .customer_support_request import CustomerSupportCaseUpdate, CustomerSupportRequest  # noqa: F401
 from .customer_chat import (  # noqa: F401
     CustomerChatConversation,
     CustomerChatMessage,

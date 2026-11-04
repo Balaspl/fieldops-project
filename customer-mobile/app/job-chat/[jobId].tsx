@@ -25,8 +25,7 @@ import type {
   JobMessage,
 } from "../../src/types/api";
 import { colors } from "../../src/theme";
-
-const REFRESH_INTERVAL_MS = 10000;
+import { useFocusedAutoRefresh } from "../../src/hooks/useFocusedAutoRefresh";
 
 function messageTime(value: string | null): string {
   if (!value) return "Sending…";
@@ -122,16 +121,9 @@ export default function CustomerJobChatScreen() {
   useFocusEffect(
     useCallback(() => {
       void loadConversation(true);
-
-      const interval = setInterval(() => {
-        void loadConversation(false);
-      }, REFRESH_INTERVAL_MS);
-
-      return () => {
-        clearInterval(interval);
-      };
     }, [loadConversation]),
   );
+  useFocusedAutoRefresh(() => loadConversation(false), !sending);
 
   useEffect(() => {
     messageListRef.current?.scrollToEnd({

@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { useFocusedAutoRefresh } from "../../src/hooks/useFocusedAutoRefresh";
 import { Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -14,14 +15,16 @@ export default function CustomerTrackingScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
-  const load = useCallback(async (pull = false) => {
-    if (pull) setRefreshing(true); else setLoading(true);
-    setError("");
+  const load = useCallback(async (pull = false, silent = false) => {
+    if (pull) setRefreshing(true); else if (!silent) setLoading(true);
+    if (!silent) setError("");
     try { setJobs(await customerApi.jobs()); }
-    catch (e) { setError(getApiErrorMessage(e, "Could not load job tracking.")); }
+    catch (e) { if (!silent) setError(getApiErrorMessage(e, "Could not load job tracking.")); }
     finally { setLoading(false); setRefreshing(false); }
   }, []);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
+  useFocusedAutoRefresh(() => load(false, true));
+
   const active = jobs.filter((job) => !["COMPLETED", "CLOSED", "CANCELLED"].includes(String(job.status ?? "").toUpperCase()));
   const past = jobs.filter((job) => ["COMPLETED", "CLOSED", "CANCELLED"].includes(String(job.status ?? "").toUpperCase()));
   return <Screen scroll={false} contentStyle={{ paddingHorizontal: 0, paddingTop: 0, paddingBottom: 0 }}>

@@ -1,6 +1,7 @@
 """Authenticated, per-job customer/technician messaging API."""
 
 from datetime import datetime, timezone
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -16,6 +17,7 @@ from ..services.socket_manager import sio
 
 
 router = APIRouter(prefix="/api/v1/job-messages", tags=["Job Messages"])
+logger = logging.getLogger(__name__)
 TERMINAL_READ_ONLY = {"COMPLETED", "CLOSED", "CANCELLED", "CANCELED"}
 CHAT_ENABLED_STATUSES = {
     # ASSIGNED means the technician has been selected but has not accepted yet.
@@ -219,6 +221,14 @@ async def send_job_message(job_id: int, payload: MessageCreate, user: Authentica
     db.add(message)
     db.commit()
     db.refresh(message)
+    if role == "CUSTOMER":
+        try:
+            from app.sentiment.job_message_tasks import analyze_customer_job_message
+
+            analyze_customer_job_message.delay(message.id)
+        except Exception:
+            # Sending a job chat message must not depend on the AI queue being available.
+            logger.exception("Could not queue sentiment analysis for message %s", message.id)
     event = _message_json(message, user.user_id)
     event["is_mine"] = False
     recipient_id = technician_id if role == "CUSTOMER" else customer_id

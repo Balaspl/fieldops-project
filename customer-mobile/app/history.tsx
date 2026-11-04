@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { useFocusedAutoRefresh } from "../src/hooks/useFocusedAutoRefresh";
 import { Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -17,16 +18,18 @@ export default function CustomerHistoryScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState("ALL");
   const [error, setError] = useState("");
-  const load = useCallback(async (pull = false) => {
-    if (pull) setRefreshing(true); else setLoading(true);
-    setError("");
+  const load = useCallback(async (pull = false, silent = false) => {
+    if (pull) setRefreshing(true); else if (!silent) setLoading(true);
+    if (!silent) setError("");
     try {
       const [h, r, j] = await Promise.all([customerApi.history(), customerApi.requests(), customerApi.jobs()]);
       setHistory(h); setRequests(r); setJobs(j);
-    } catch (e) { setError(getApiErrorMessage(e, "Could not load service history.")); }
+    } catch (e) { if (!silent) setError(getApiErrorMessage(e, "Could not load service history.")); }
     finally { setLoading(false); setRefreshing(false); }
   }, []);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
+  useFocusedAutoRefresh(() => load(false, true));
+
   const completedJobs = jobs.filter((job) => ["COMPLETED", "CLOSED"].includes(String(job.status ?? "").toUpperCase()));
   const cancelledRequests = requests.filter((request) => ["CANCELLED", "REJECTED_BY_TECHNICIAN", "QUEUED"].includes(String(request.status).toUpperCase()));
   const source = history.length ? history : requests.map((request) => ({ linked_job_id: request.linked_job_id ?? null, title: request.title, service_type: request.service_type, status: request.status, created_at: request.created_at }));

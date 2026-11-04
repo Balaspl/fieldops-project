@@ -1,3 +1,4 @@
+import { useActiveAutoRefresh } from "../hooks/useActiveAutoRefresh";
 import React, { useState, useEffect, useMemo } from "react";
 import {
   Wrench,
@@ -71,15 +72,15 @@ export default function SuperAdminServicesPage() {
   const [issueSearch, setIssueSearch] = useState<string>("");
 
   // Load organization-scoped services
-  const loadServices = async () => {
+  const loadServices = async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const data = await getAdminServices();
       setServices(Array.isArray(data) ? data : []);
     } catch (err: any) {
-      addToast(err?.response?.data?.detail || "Failed to load services catalog", "error");
+      if (!silent) addToast(err?.response?.data?.detail || "Failed to load services catalog", "error");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -89,6 +90,7 @@ export default function SuperAdminServicesPage() {
       .then((data) => setTaxonomySuggestions(data))
       .catch((err) => console.warn("Failed to load taxonomy suggestions", err));
   }, []);
+  useActiveAutoRefresh(() => loadServices(true), !isModalOpen && !submitting);
 
   // Compute Metrics dynamically for logged-in organization
   const totalCount = (services || []).length;

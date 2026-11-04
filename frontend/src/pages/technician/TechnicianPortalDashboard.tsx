@@ -242,6 +242,12 @@ export default function TechnicianPortalDashboard({
       // Use one request cycle at a time. A fixed setInterval can overlap slow
       // API calls and let an older response overwrite newer data.
       if (requestInFlight) return;
+      if (document.visibilityState !== "visible") {
+        refreshTimer = window.setTimeout(() => {
+          void loadDashboard();
+        }, 3000);
+        return;
+      }
       requestInFlight = true;
 
       try {
@@ -319,7 +325,7 @@ export default function TechnicianPortalDashboard({
           // Schedule the next refresh after the current one has finished.
           refreshTimer = window.setTimeout(() => {
             void loadDashboard();
-          }, 5000);
+          }, 3000);
         }
       }
     };
@@ -355,7 +361,9 @@ export default function TechnicianPortalDashboard({
     };
 
     void loadPerformanceReport();
-    const timer = setInterval(loadPerformanceReport, 60_000);
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void loadPerformanceReport();
+    }, 3000);
     return () => {
       active = false;
       clearInterval(timer);

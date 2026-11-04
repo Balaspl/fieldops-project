@@ -248,6 +248,38 @@ class CommunicationContext(BaseModel):
     )
 
 
+class AgentCommunicationRequest(BaseModel):
+    """Typed internal contract for another FieldOps agent to request copy.
+
+    This carries no authority to change jobs or choose arbitrary recipients;
+    the calling business service supplies a validated CommunicationContext.
+    Delivery remains the responsibility of the existing channel layer.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    requester_agent: Literal[
+        "SENTIMENT_AGENT",
+        "SUPPORT_AGENT",
+        "SCHEDULING_AGENT",
+        "DISPATCH_AGENT",
+        "SLA_AGENT",
+    ]
+    request_id: str = Field(min_length=1, max_length=100)
+    context: CommunicationContext
+
+    @model_validator(mode="after")
+    def validate_context(self) -> Self:
+        if self.context.recipient_type == CommunicationRecipient.SYSTEM:
+            raise ValueError("Agent communication requests need a human recipient.")
+        if (
+            self.context.correlation_id
+            and self.context.correlation_id != self.request_id
+        ):
+            raise ValueError("Request ID and context correlation ID must match.")
+        return self
+
+
 # ==========================================================
 # Communication Output Schemas
 # ==========================================================

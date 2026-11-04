@@ -2,9 +2,7 @@
 Authoritative, fail-closed technician eligibility checks for dispatch.
 
 Rules:
-- AVAILABLE, BUSY, and OFFLINE technicians can be considered.
-- Presence status does not block dispatch planning.
-- Heartbeat freshness does not block dispatch planning.
+- Only AVAILABLE technicians with a fresh heartbeat are dispatch eligible.
 - Maximum workload is 5 active jobs.
 - Technicians with current_jobs >= 5 are excluded.
 - Tenant validation remains mandatory when job_tenant_id is provided.
@@ -338,13 +336,7 @@ def evaluate_technician_dispatch_eligibility(
     2. Technician workload must be below 5.
     3. A valid location must be available.
 
-    The following are informational only and never block eligibility:
-
-    - AVAILABLE status
-    - BUSY status
-    - OFFLINE status
-    - Missing heartbeat
-    - Stale heartbeat
+    Presence and heartbeat checks protect the final dispatch decision.
     """
 
     now = now or datetime.now(timezone.utc)
@@ -374,6 +366,9 @@ def evaluate_technician_dispatch_eligibility(
     ).strip().upper()
 
     reasons: list[str] = []
+
+    if status != "AVAILABLE":
+        reasons.append("not_available")
 
     # -----------------------------------------------------------------
     # Tenant validation
@@ -421,9 +416,12 @@ def evaluate_technician_dispatch_eligibility(
         now,
     )
 
-    # IMPORTANT:
-    # Do not add a blocking reason for missing or stale heartbeat.
-    # Offline technicians are valid dispatch candidates.
+    if heartbeat_age is None:
+        reasons.append("missing_or_future_heartbeat")
+    elif heartbeat_age > HEARTBEAT_MAX_AGE_SECONDS:
+        reasons.append("stale_heartbeat")
+
+    # Heartbeat age is checked for the final dispatch decision.
 
     # -----------------------------------------------------------------
     # Location lookup
@@ -484,7 +482,8 @@ def evaluate_technician_dispatch_eligibility(
     # -----------------------------------------------------------------
 
     if coordinates is None:
-
+        if gps_result.get("reason"):
+            reasons.append(gps_result["reason"])
         reasons.append("location_unavailable")
 
     # -----------------------------------------------------------------

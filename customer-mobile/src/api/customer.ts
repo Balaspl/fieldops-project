@@ -61,6 +61,7 @@ export type CustomerChatComponent = {
     | "service_requests"
     | "tracking"
     | "support"
+    | "create_support_case"
     | "download_report"
     | null;
 };
@@ -345,6 +346,15 @@ export const customerApi = {
       )
     ).data,
 
+  registerNotificationDevice: async (token: string, deviceType: "android" | "ios") =>
+    (await apiClient.put("/api/customer/notification-device", {
+      token,
+      device_type: deviceType,
+    })).data,
+
+  unregisterNotificationDevice: async () =>
+    (await apiClient.delete("/api/customer/notification-device")).data,
+
   notificationPreferences: async () =>
     (
       await apiClient.get<NotificationPreferences>(
@@ -380,6 +390,14 @@ export const customerApi = {
       await apiClient.post<SupportRequest>(
         "/api/customer/support-requests",
         payload,
+      )
+    ).data,
+
+  reopenSupportRequest: async (id: number) =>
+    (
+      await apiClient.post<SupportRequest>(
+        `/api/customer/support-requests/${id}/reopen`,
+        {},
       )
     ).data,
 
@@ -461,6 +479,18 @@ export const customerApi = {
         message,
         client_message_id: clientMessageId,
       })
+    ).data,
+
+  createSupportCaseFromChat: async (conversationId: string) =>
+    (
+      await apiClient.post<{
+        id: number;
+        request_number: string;
+        status: string;
+        priority: string;
+        created: boolean;
+        message: string;
+      }>(`/api/v1/customer/chat/conversations/${encodeURIComponent(conversationId)}/support-case`, {})
     ).data,
 };
 

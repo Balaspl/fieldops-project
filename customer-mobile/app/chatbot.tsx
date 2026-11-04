@@ -1,6 +1,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Alert,
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
@@ -16,6 +17,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { customerApi } from "../src/api/customer";
+import { useFocusedAutoRefresh } from "../src/hooks/useFocusedAutoRefresh";
 import type {
   CustomerChatComponent,
   CustomerChatMessage,
@@ -53,9 +55,9 @@ export default function CustomerChatbotScreen() {
   const [error, setError] = useState("");
   const scrollRef = useRef<ScrollView>(null);
 
-  const loadConversation = useCallback(async () => {
-    setLoading(true);
-    setError("");
+  const loadConversation = useCallback(async (showLoading = true) => {
+    if (showLoading) setLoading(true);
+    if (showLoading) setError("");
 
     try {
       const conversations = await customerApi.listChatConversations();
@@ -83,13 +85,14 @@ export default function CustomerChatbotScreen() {
         ),
       );
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    void loadConversation();
+    void loadConversation(true);
   }, [loadConversation]);
+  useFocusedAutoRefresh(() => loadConversation(false), !sending);
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -179,6 +182,28 @@ export default function CustomerChatbotScreen() {
       case "support":
         router.push("/support");
         break;
+      case "create_support_case":
+        if (!conversationId) {
+          Alert.alert("Support request unavailable", "Please try again or open Customer Support from your account.");
+          break;
+        }
+        Alert.alert(
+          "Send chat to support?",
+          "The FieldOps support team will be able to review this conversation and follow up on a trackable request.",
+          [
+            { text: "Not now", style: "cancel" },
+            { text: "Create request", onPress: () => {
+              void customerApi.createSupportCaseFromChat(conversationId).then((supportCase) => {
+                Alert.alert("Support request created", `Your reference is ${supportCase.request_number}.`, [
+                  { text: "View request", onPress: () => router.push("/support") },
+                ]);
+              }).catch((err) => {
+                Alert.alert("Couldn't create request", getApiErrorMessage(err, "Please try again or use Customer Support from your account."));
+              });
+            } },
+          ],
+        );
+        break;
       default:
         break;
     }
@@ -247,6 +272,8 @@ export default function CustomerChatbotScreen() {
               ? "View my requests"
               : component.action === "tracking"
                 ? "Open tracking"
+                : component.action === "create_support_case"
+                  ? "Create support request"
                 : "Contact support"}
           </Text>
           <Ionicons name="arrow-forward" size={16} color={GREEN} />

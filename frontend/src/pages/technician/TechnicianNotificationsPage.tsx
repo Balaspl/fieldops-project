@@ -1,3 +1,4 @@
+import { useActiveAutoRefresh } from "../../hooks/useActiveAutoRefresh";
 import { useState, useEffect } from "react";
 import {
   Bell,
@@ -46,9 +47,9 @@ export default function TechnicianNotificationsPage() {
     return "Unable to load notifications. Please try again.";
   };
 
-  const loadNotifications = async () => {
-    setLoading(true);
-    setError(null);
+  const loadNotifications = async (silent = false) => {
+    if (!silent) setLoading(true);
+    if (!silent) setError(null);
 
     try {
       const response = await getTechnicianNotifications();
@@ -62,11 +63,10 @@ export default function TechnicianNotificationsPage() {
       setLastUpdated(new Date());
     } catch (loadError) {
       console.error("Failed to load technician notifications:", loadError);
-      setError(getNotificationErrorMessage(loadError));
-      // Preserve already-rendered notifications so a refresh failure is explicit
-      // without replacing known-good data with an empty state.
+      if (!silent) setError(getNotificationErrorMessage(loadError));
+      // Preserve already-rendered notifications when a background refresh fails.
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -91,6 +91,11 @@ export default function TechnicianNotificationsPage() {
       );
     };
   }, []);
+
+  useActiveAutoRefresh(
+    () => loadNotifications(true),
+    !actionLoading && rejectModalJobId === null,
+  );
 
   const markRead = async (id: string) => {
     const notification = notifications.find(

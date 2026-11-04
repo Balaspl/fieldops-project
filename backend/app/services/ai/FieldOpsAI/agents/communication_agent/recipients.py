@@ -14,7 +14,7 @@ from ......models_legacy import (
 )
 from app.auth.rbac import UserRole
 from app.models.user import User
-from .events import EMAIL, IN, RECIPIENT_RULES, SMS, JobEvent
+from .events import EMAIL, IN, PUSH, RECIPIENT_RULES, SMS, JobEvent
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +108,11 @@ def _customer(
             if profile
             else True
         ) and bool(customer_email),
+        PUSH: (
+            getattr(profile, "push_enabled", False)
+            if profile
+            else False
+        ) and bool(registered_user and registered_user.fcm_token),
     }
 
     channels = [channel for channel in wanted if allowed.get(channel, False)]
@@ -152,6 +157,10 @@ def _technician(
             and bool(getattr(technician, "phone_number", None))
         ),
         EMAIL: False,  # Technician model has no email field in this workflow.
+        PUSH: (
+            preferences.get("push_enabled", True)
+            and bool(getattr(technician, "fcm_token", None))
+        ),
     }
 
     return [

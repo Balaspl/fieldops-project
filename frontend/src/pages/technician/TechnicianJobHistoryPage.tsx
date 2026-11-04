@@ -1,3 +1,4 @@
+import { useActiveAutoRefresh } from "../../hooks/useActiveAutoRefresh";
 import { useEffect, useMemo, useState } from "react";
 import {
   CalendarDays,
@@ -75,12 +76,22 @@ export default function TechnicianJobHistoryPage() {
   const [statusFilter, setStatusFilter] =
     useState<HistoryStatusFilter>("completed");
 
+  const refreshHistory = async (silent = false) => {
+    if (!silent) setLoading(true);
+    try {
+      const response = await getTechnicianJobHistory();
+      setJobs(Array.isArray(response.data) ? response.data : []);
+    } catch {
+      if (!silent) setJobs([]);
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    getTechnicianJobHistory()
-      .then((response) => setJobs(Array.isArray(response.data) ? response.data : []))
-      .catch(() => setJobs([]))
-      .finally(() => setLoading(false));
+    void refreshHistory();
   }, []);
+  useActiveAutoRefresh(() => refreshHistory(true));
 
   const filteredJobs = useMemo(() => {
     const query = search.trim().toLowerCase();

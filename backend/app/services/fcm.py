@@ -2,6 +2,8 @@ import firebase_admin
 from firebase_admin import credentials, messaging
 import asyncio
 import uuid
+import os
+import requests
 from sqlalchemy.orm import Session
 from ..logger import logger
 from ..models import Technician, NotificationDelivery
@@ -170,6 +172,93 @@ async def send_job_assignment_notification(
 
     sent_count = 0
     delivery_ids = []
+
+    expo_tokens = [
+        token for token in current_tokens
+        if token.startswith(("ExponentPushToken[", "ExpoPushToken["))
+    ]
+    for token in expo_tokens:
+        tech_id = tech_map[token]
+        try:
+            headers = {"Accept": "application/json", "Content-Type": "application/json"}
+            expo_access_token = os.getenv("EXPO_ACCESS_TOKEN")
+            if expo_access_token:
+                headers["Authorization"] = f"Bearer {expo_access_token}"
+            response = await asyncio.to_thread(
+                requests.post,
+                "https://exp.host/--/api/v2/push/send",
+                json={
+                    "to": token,
+                    "title": safe_title,
+                    "body": safe_body,
+                    "sound": "default",
+                    "priority": "high" if safe_priority == "HIGH" else "default",
+                    "channelId": "fieldops_updates",
+                    "data": data_payload,
+                    "categoryId": (
+                        "JOB_ASSIGNMENT"
+                        if safe_notification_type in {"job_assignment", "technician_job_assigned"}
+                        else "JOB_UPDATE"
+                    ),
+                },
+                headers=headers,
+                timeout=10,
+            )
+            response.raise_for_status()
+            ticket = response.json().get("data", {})
+            if ticket.get("status") != "ok":
+                error_code = (ticket.get("details") or {}).get("error")
+                if error_code == "DeviceNotRegistered":
+                    db.query(Technician).filter(
+                        Technician.tech_id == tech_id,
+                        Technician.tenant_id == tenant_id,
+                        Technician.fcm_token == token,
+                    ).update({"fcm_token": None, "device_type": None}, synchronize_session=False)
+                    db.commit()
+                failed_count += 1
+                delivery = NotificationDelivery(
+                    tenant_id=tenant_id,
+                    tech_id=tech_id,
+                    job_id=str(job_id),
+                    status="failed",
+                    error_message="Expo push provider rejected the notification",
+                )
+                db.add(delivery)
+                db.commit()
+                db.refresh(delivery)
+                delivery_ids.append(delivery.id)
+                continue
+            sent_count += 1
+            delivery = NotificationDelivery(
+                tenant_id=tenant_id,
+                tech_id=tech_id,
+                job_id=str(job_id),
+                status="delivered",
+                fcm_message_id=ticket.get("id"),
+            )
+            db.add(delivery)
+            db.commit()
+            db.refresh(delivery)
+            delivery_ids.append(delivery.id)
+        except Exception as exc:
+            failed_count += 1
+            logger.warning(
+                "Expo push delivery failed",
+                extra={**log_extra, "tech_id": tech_id, "error_type": type(exc).__name__},
+            )
+            delivery = NotificationDelivery(
+                tenant_id=tenant_id,
+                tech_id=tech_id,
+                job_id=str(job_id),
+                status="failed",
+                error_message=f"Expo provider error: {type(exc).__name__}",
+            )
+            db.add(delivery)
+            db.commit()
+            db.refresh(delivery)
+            delivery_ids.append(delivery.id)
+
+    current_tokens = [token for token in current_tokens if token not in set(expo_tokens)]
 
     for attempt in range(max_retries):
         if not current_tokens:

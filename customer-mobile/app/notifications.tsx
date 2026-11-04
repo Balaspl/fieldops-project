@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { useFocusedAutoRefresh } from "../src/hooks/useFocusedAutoRefresh";
 import { Alert, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -17,14 +18,16 @@ export default function CustomerNotificationsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [busyId, setBusyId] = useState("");
   const [error, setError] = useState("");
-  const load = useCallback(async (pull = false) => {
-    if (pull) setRefreshing(true); else setLoading(true);
-    setError("");
+  const load = useCallback(async (pull = false, silent = false) => {
+    if (pull) setRefreshing(true); else if (!silent) setLoading(true);
+    if (!silent) setError("");
     try { setFeed(readNotificationFeed(await customerApi.notificationFeed())); }
-    catch (e) { setError(getApiErrorMessage(e, "Could not load customer notifications.")); }
+    catch (e) { if (!silent) setError(getApiErrorMessage(e, "Could not load customer notifications.")); }
     finally { setLoading(false); setRefreshing(false); }
   }, []);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
+  useFocusedAutoRefresh(() => load(false, true), !busyId);
+
   const open = async (item: CustomerNotification) => {
     if (!item.isRead && item.status?.toUpperCase() === "UNREAD") {
       setBusyId(item.id);
@@ -53,7 +56,7 @@ export default function CustomerNotificationsScreen() {
           <View style={{ flexDirection: "row", gap: 12, alignItems: "flex-start" }}><View style={{ width: 42, height: 42, borderRadius: 14, backgroundColor: unread ? colors.brand : "#EEF2EF", alignItems: "center", justifyContent: "center" }}><Ionicons name={unread ? "notifications" : "notifications-outline"} size={20} color={unread ? "white" : colors.muted} /></View><View style={{ flex: 1, gap: 6 }}><View style={sharedStyles.spaceBetween}><Text style={{ flex: 1, color: colors.text, fontSize: 14, fontWeight: unread ? "900" : "700" }}>{item.title || "FieldOps update"}</Text>{unread ? <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: colors.brandMid }} /> : null}</View><Text style={{ color: colors.muted, fontSize: 13, lineHeight: 20 }}>{item.message || "You have a new service update."}</Text><Text style={{ color: colors.muted, fontSize: 11 }}>{formatDateTime(item.createdAt)}</Text>{item.jobId ? <Text style={{ color: colors.brandMid, fontSize: 12, fontWeight: "800" }}>Open job #{item.jobId} ›</Text> : null}</View></View>
         </Card></Pressable>;
       })}
-      <Text style={{ fontSize: 11, color: colors.muted, lineHeight: 17 }}>This screen uses the existing authenticated in-app notification feed. Native push delivery is not enabled until a customer device-registration endpoint is available.</Text>
+      <Text style={{ fontSize: 11, color: colors.muted, lineHeight: 17 }}>In-app updates are always available here. Enable push in Settings and allow notifications on this device to receive job updates while the app is closed.</Text>
     </ScrollView>
   </Screen>;
 }
