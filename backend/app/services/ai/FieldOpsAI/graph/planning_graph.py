@@ -6,7 +6,7 @@ LangGraph workflow for the FieldOps Planning Agent.
 
 Features:
 - Considers AVAILABLE, BUSY, and OFFLINE technicians.
-- Excludes technicians with current workload >= MAX_TECHNICIAN_WORKLOAD.
+- Includes workload in ranking context; final dispatch checks capacity atomically.
 - Does not use online presence or heartbeat as planning eligibility criteria.
 - Matches skills such as HVAC with HVAC Repair.
 - Ranks organizations by distance to the customer.
@@ -35,7 +35,6 @@ from app.services.ai.FieldOpsAI.graph.state import PlanningGraphState
 logger = logging.getLogger(__name__)
 
 DEFAULT_CUSTOMER_COORDINATES = (13.0827, 80.2707)
-MAX_TECHNICIAN_WORKLOAD = 5
 
 
 # ---------------------------------------------------------
@@ -453,7 +452,7 @@ def find_and_rank_technicians_node(
 
     Eligibility:
     - Required skill must match.
-    - Current workload must be below MAX_TECHNICIAN_WORKLOAD.
+    - Workload is retained as context; final dispatch checks current capacity.
     - AVAILABLE, BUSY, and OFFLINE technicians are all considered.
     - Online status, heartbeat age, and last-seen do not block planning.
     - Previously attempted technician IDs are excluded.
@@ -561,7 +560,8 @@ def find_and_rank_technicians_node(
                     })
                     continue
 
-                # Workload is the only availability-related planning limit.
+                # Preserve workload as ranking context. The dispatch acceptance
+                # path re-checks capacity atomically before creating an assignment.
                 try:
                     workload = int(tech.current_jobs or 0)
                 except (TypeError, ValueError):
@@ -585,22 +585,6 @@ def find_and_rank_technicians_node(
                         "exclusion_reason": "invalid_negative_workload",
                         "workload": workload,
                     })
-                    continue
-
-                if workload >= MAX_TECHNICIAN_WORKLOAD:
-                    excluded_reasons.append({
-                        "technician_id": technician_id,
-                        "eligible": False,
-                        "exclusion_reason": "maximum_workload_reached",
-                        "workload": workload,
-                    })
-                    logger.info(
-                        "TECHNICIAN SKIPPED | job_id=%s | technician_id=%s | workload=%s | limit=%s",
-                        state.get("job_id"),
-                        technician_id,
-                        workload,
-                        MAX_TECHNICIAN_WORKLOAD,
-                    )
                     continue
 
                 # Resolve a usable location without using the helper's
@@ -690,7 +674,7 @@ def find_and_rank_technicians_node(
                 "PLANNING FILTER RESULTS | job_id=%s | "
                 "org_id=%s | fetched=%s | eligible=%s | "
                 "excluded_attempted=%s | invalid_id=%s | "
-                "skill_rejected=%s | workload_limit=%s",
+                "skill_rejected=%s",
                 state.get("job_id"),
                 org_id,
                 len(technicians),
@@ -698,7 +682,6 @@ def find_and_rank_technicians_node(
                 excluded_count,
                 invalid_id_count,
                 skill_rejected_count,
-                MAX_TECHNICIAN_WORKLOAD,
             )
 
             # Rank technicians within this organization by taxonomy match level then distance.
@@ -819,7 +802,7 @@ def build_planning_response_node(
         "action": "manual_review" if not all_ranked else "ranked_candidates",
         "reason": (
             None if all_ranked
-            else "No technician met the skill, active-organization, workload, and location requirements."
+            else "No technician met the skill and active-organization requirements."
         ),
         "total_eligible_technicians": total_count,
         "top_3": top_3,

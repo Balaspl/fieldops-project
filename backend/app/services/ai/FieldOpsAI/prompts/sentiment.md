@@ -53,8 +53,13 @@ Supported channels:
 - SMS
 - CHAT
 - WHATSAPP
+- PORTAL
 - SUPPORT_TICKET
 - DISPATCH_NOTE
+- JOB_CHAT
+- SUPPORT_CHAT
+- JOB_FEEDBACK
+- SUPPORT_CASE
 
 ---
 
@@ -103,6 +108,21 @@ Allowed values:
 - LOW
 - MEDIUM
 - HIGH
+- CRITICAL
+
+Urgency describes how soon attention is needed. Severity describes the impact
+of the issue; do not infer critical severity from anger alone. Return both.
+
+## Issue Categories
+
+Return zero to five applicable values from: `TECHNICIAN_DELAY`,
+`TECHNICIAN_BEHAVIOR`, `SERVICE_QUALITY`, `COMMUNICATION`, `SCHEDULING`,
+`PRICING_BILLING`, `UNRESOLVED_ISSUE`, `SAFETY`, `GENERAL_FEEDBACK`, `OTHER`.
+
+## Recommended Action
+
+Provide one concise, factual next-step suggestion for a human operator.
+This is advice only: do not send a reply, change a job, or perform the action.
 
 Examples
 
@@ -208,9 +228,12 @@ Example:
   "sentiment": "NEGATIVE",
   "emotion": "FRUSTRATED",
   "urgency": "HIGH",
+  "severity": "HIGH",
+  "issue_categories": ["UNRESOLVED_ISSUE"],
   "requires_human": true,
   "confidence": 0.96,
-  "summary": "Customer reports repeated AC failures and requests urgent service."
+  "summary": "Customer reports repeated AC failures and requests urgent service.",
+  "recommended_action": "Review the job history and contact the customer with an update."
 }
 
 ---

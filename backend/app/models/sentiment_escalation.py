@@ -44,7 +44,7 @@ class SentimentEscalation(Base):
             "jobs.id",
             ondelete="RESTRICT",
         ),
-        nullable=False,
+        nullable=True,
         index=True,
     )
 

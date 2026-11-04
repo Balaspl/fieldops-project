@@ -23,6 +23,8 @@ import {
   Menu,
   MapPin,
   Wrench,
+  Sparkles,
+  MessageSquareText,
 } from "lucide-react";
 import useAuthStore from "./store/authStore";
 import NotificationBell from "./components/notifications/NotificationBell";
@@ -68,6 +70,8 @@ const OrganizationOnboardingPage = lazy(
   () => import("./pages/OrganizationOnboardingPage"),
 );
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
+const SentimentIntelligencePage = lazy(() => import("./pages/SentimentIntelligencePage"));
+const CommunicationCenterPage = lazy(() => import("./pages/CommunicationCenterPage"));
 const JobsPage = lazy(() => import("./pages/JobsPage"));
 const TechniciansDispatchersPage = lazy(
   () => import("./pages/TechniciansDispatchersPage"),
@@ -737,6 +741,9 @@ function AppInner() {
       case "planning":
         return "Loading Planning Board...";
 
+      case "sentiment":
+        return "Loading Sentiment Intelligence...";
+
       case "services":
         return "Loading Services Catalog...";
 
@@ -909,10 +916,11 @@ function AppInner() {
 
     void checkCustomerSupportRequests();
 
-    const interval = setInterval(
-      checkCustomerSupportRequests,
-      10000,
-    );
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void checkCustomerSupportRequests();
+      }
+    }, 3000);
 
     return () =>
       clearInterval(interval);
@@ -2486,6 +2494,27 @@ function AppInner() {
                 </span>
               </button>
 
+              {(isSuperAdmin || isDispatcher) && (
+                <button className="nav-item-style" style={getItemStyle("sentiment")} onClick={() => handleTabChange("sentiment")} title="Sentiment Intelligence">
+                  <Sparkles size={18} style={{ flexShrink: 0 }} />
+                  <span className="nav-text" style={isMobileLayout || sidebarCollapsed ? { display: "none" } : {}}>Sentiment Intelligence</span>
+                </button>
+              )}
+
+              {(isSuperAdmin || isDispatcher) && (
+                <button
+                  className="nav-item-style"
+                  style={getItemStyle("communication_center")}
+                  onClick={() => handleTabChange("communication_center")}
+                  title="Communication Center"
+                >
+                  <MessageSquareText size={18} style={{ flexShrink: 0 }} />
+                  <span className="nav-text" style={isMobileLayout || sidebarCollapsed ? { display: "none" } : {}}>
+                    Communication Center
+                  </span>
+                </button>
+              )}
+
               <button
                 className="nav-item-style"
                 style={getItemStyle(
@@ -3047,6 +3076,10 @@ function AppInner() {
                 "tracking" && (
                 <TrackingDashboardPage />
               )}
+
+              {activeTab === "sentiment" && (isSuperAdmin || isDispatcher) && <SentimentIntelligencePage />}
+
+              {activeTab === "communication_center" && (isSuperAdmin || isDispatcher) && <CommunicationCenterPage />}
 
               {activeTab ===
                 "profile" && (

@@ -42,8 +42,8 @@ def _enqueue_task_with_retry(task: Any, *, kwargs: dict[str, Any], task_id: str)
 # ---------------------------------------------------------------------------
 
 def external_channels_enabled() -> set[str]:
-    """Return configured channels; email is enabled for lifecycle notices."""
-    raw = os.getenv("COMM_AGENT_CHANNELS", "in_app,email")
+    """Return globally enabled external channels for lifecycle notices."""
+    raw = os.getenv("COMM_AGENT_CHANNELS", "in_app,email,push")
     return {
         channel.strip().lower()
         for channel in raw.split(",")
@@ -242,6 +242,21 @@ def enqueue_email(
             "invoice_closure_id": invoice_closure_id,
         },
         task_id=f"communication-email-delivery-{int(delivery_id)}",
+    )
+
+
+def enqueue_push(title: str, body: str, delivery_id: int) -> None:
+    """Queue an FCM/Expo push delivery using the tracked delivery identity."""
+    from app.tasks import send_push_async
+
+    _enqueue_task_with_retry(
+        send_push_async,
+        kwargs={
+            "title": title,
+            "body": body,
+            "delivery_id": int(delivery_id),
+        },
+        task_id=f"communication-push-delivery-{int(delivery_id)}",
     )
 
 

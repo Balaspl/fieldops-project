@@ -1,3 +1,4 @@
+import { useActiveAutoRefresh } from "../../hooks/useActiveAutoRefresh";
 import { useState, useEffect } from "react";
 import {
   FileText,
@@ -21,9 +22,9 @@ export default function CustomerPortalDashboard({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const loadDashboard = async () => {
-    setLoading(true);
-    setError(null);
+  const loadDashboard = async (silent = false) => {
+    if (!silent) setLoading(true);
+    if (!silent) setError(null);
 
     try {
       // Both values come from the backend's authenticated customer scope.
@@ -42,31 +43,26 @@ export default function CustomerPortalDashboard({
     } catch (err: any) {
       const status = err?.response?.status;
 
-      if (status === 401) {
-        setError(
-          "Your session has expired. Please sign in again.",
-        );
-      } else if (status === 403) {
-        setError(
-          "You do not have permission to access the customer portal.",
-        );
-      } else {
-        setError(
-          "We couldn't load your customer dashboard. Please try again.",
-        );
+      if (!silent) {
+        if (status === 401) {
+          setError("Your session has expired. Please sign in again.");
+        } else if (status === 403) {
+          setError("You do not have permission to access the customer portal.");
+        } else {
+          setError("We couldn't load your customer dashboard. Please try again.");
+        }
+        setStats(null);
+        setRecent([]);
       }
-
-      // Avoid displaying stale data after an unsuccessful refresh.
-      setStats(null);
-      setRecent([]);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
     void loadDashboard();
   }, []);
+  useActiveAutoRefresh(() => loadDashboard(true));
 
   const cards = [
     {

@@ -62,16 +62,18 @@ class SentimentEscalationService:
             triggers.append("COMPLAINT_KEYWORD")
 
         # 3. Two or more negative replies in the same job/thread
-        negative_count = (
-            self.db.query(SentimentThreadMessage)
-            .filter(
-                and_(
-                    SentimentThreadMessage.job_id == message.job_id,
-                    SentimentThreadMessage.sentiment.ilike("NEGATIVE"),
+        negative_count = 0
+        if message.job_id is not None:
+            negative_count = (
+                self.db.query(SentimentThreadMessage)
+                .filter(
+                    and_(
+                        SentimentThreadMessage.job_id == message.job_id,
+                        SentimentThreadMessage.sentiment.ilike("NEGATIVE"),
+                    )
                 )
+                .count()
             )
-            .count()
-        )
 
         if negative_count >= 2:
             triggers.append("REPEATED_NEGATIVE")
@@ -97,7 +99,7 @@ class SentimentEscalationService:
 
         return triggers
 
-    def is_suppressed(self, job_id: int) -> bool:
+    def is_suppressed(self, job_id: int | None, customer_id: str | None = None) -> bool:
         """
         Prevent re-escalation for the same job within 30 minutes.
         """
@@ -106,12 +108,14 @@ class SentimentEscalationService:
             minutes=self.SUPPRESSION_MINUTES
         )
 
+        query = self.db.query(SentimentEscalation.id).filter(
+            SentimentEscalation.job_id == job_id,
+            SentimentEscalation.created_at >= cutoff,
+        )
+        if job_id is None and customer_id is not None:
+            query = query.filter(SentimentEscalation.customer_id == customer_id)
         existing = (
-            self.db.query(SentimentEscalation.id)
-            .filter(
-                SentimentEscalation.job_id == job_id,
-                SentimentEscalation.created_at >= cutoff,
-            )
+            query
             .first()
         )
 
@@ -233,7 +237,7 @@ class SentimentEscalationService:
         if not triggers:
             return None
 
-        if self.is_suppressed(message.job_id):
+        if self.is_suppressed(message.job_id, message.customer_id):
             return None
 
         manager = self.assign_manager(message.tenant_id)
@@ -312,6 +316,7 @@ class SentimentEscalationService:
     async def send_auto_response(
         self,
         customer_phone: str | None,
+        escalation: SentimentEscalation | None = None,
     ) -> bool:
         if not customer_phone:
             return False
@@ -319,8 +324,46 @@ class SentimentEscalationService:
         try:
             from app.services.twilio_sms import dispatch_twilio_message
 
+            response_text = self.generate_auto_response()
+            if escalation is not None:
+                try:
+                    response_text = self._generate_communication_agent_response(
+                        escalation
+                    )
+                except Exception:
+                    # A safe, factual response keeps escalation acknowledgements
+                    # available if AI configuration or guardrail auditing fails.
+                    logger.exception(
+                        "Communication Agent unavailable for sentiment escalation %s",
+                        escalation.id,
+                    )
+                    response_text = (
+                        "Your message has been sent to our support team. "
+                        "We will follow up as soon as possible."
+                    )
+
+                from app.services.communication_delivery import enqueue_tracked_sms
+
+                delivery = enqueue_tracked_sms(
+                    self.db,
+                    tenant_id=str(escalation.tenant_id),
+                    recipient_id=str(escalation.customer_id),
+                    recipient_role="customer",
+                    to_number=customer_phone,
+                    body=response_text,
+                    source_type="SENTIMENT_ESCALATION_ACK",
+                    source_id=str(escalation.id),
+                    job_id=escalation.job_id,
+                    title="We are reviewing your concern",
+                )
+                return bool(
+                    delivery.get("queued")
+                    or delivery.get("status")
+                    in {"queued", "sending", "accepted", "sent", "delivered"}
+                )
+
             await dispatch_twilio_message(
-                body=self.generate_auto_response(),
+                body=response_text,
                 to_phone=customer_phone,
             )
 
@@ -331,6 +374,93 @@ class SentimentEscalationService:
                 "Failed to send escalation auto-response."
             )
             return False
+
+    def _generate_communication_agent_response(
+        self,
+        escalation: SentimentEscalation,
+    ) -> str:
+        """Ask Communication Agent for a grounded escalation acknowledgement."""
+        from app.models import Job
+        from app.services.agent_communication import AgentCommunicationCoordinator
+        from app.services.ai.FieldOpsAI.schemas.communication import (
+            AgentCommunicationRequest,
+            CommunicationContext,
+            CommunicationRecipient,
+        )
+
+        customer = (
+            self.db.query(User)
+            .filter(
+                User.id == str(escalation.customer_id),
+                User.tenant_id == str(escalation.tenant_id),
+            )
+            .first()
+        )
+        job = (
+            self.db.query(Job)
+            .filter(
+                Job.id == escalation.job_id,
+                Job.tenant_id == escalation.tenant_id,
+            )
+            .first()
+            if escalation.job_id is not None
+            else None
+        )
+        allowed_statuses = {
+            "CREATED", "ASSIGNED", "EN_ROUTE", "ON_SITE",
+            "WORK_IN_PROGRESS", "COMPLETED", "CANCELLED",
+        }
+        status = str(getattr(job, "status", "CREATED") or "CREATED").upper()
+        if status == "IN_PROGRESS":
+            status = "WORK_IN_PROGRESS"
+        if status not in allowed_statuses:
+            status = "CREATED"
+
+        request_id = f"sentiment-escalation-{escalation.id}"
+        manager_context = (
+            "A manager has been assigned to review this concern."
+            if escalation.assigned_manager_id
+            else "The support team has been notified to review this concern."
+        )
+        context = CommunicationContext(
+            job_id=str(escalation.job_id or f"support-{escalation.id}"),
+            correlation_id=request_id,
+            notification_type="sentiment_escalation",
+            recipient_type=CommunicationRecipient.CUSTOMER,
+            channel="SMS",
+            locale="en",
+            customer_id=str(escalation.customer_id),
+            customer_name=(
+                f"{customer.first_name} {customer.last_name}".strip()
+                if customer
+                else None
+            ),
+            job_status=status,
+            job_title=job.service_type if job else None,
+            sentiment=(
+                escalation.sentiment_label
+                if escalation.sentiment_label in {"POSITIVE", "NEUTRAL", "NEGATIVE"}
+                else "NEGATIVE"
+            ),
+            additional_context=(
+                f"The customer's concern was escalated for human review. "
+                f"{manager_context} Acknowledge the concern empathetically. "
+                "Do not promise a specific resolution or response time."
+            ),
+        )
+        request = AgentCommunicationRequest(
+            requester_agent="SENTIMENT_AGENT",
+            request_id=request_id,
+            context=context,
+        )
+        result = AgentCommunicationCoordinator(
+            db=self.db,
+            tenant_id=str(escalation.tenant_id),
+        ).generate(request)
+        decision = result.decision
+        if decision.channel != "SMS" or decision.output.channel != "SMS":
+            raise ValueError("Communication Agent returned a non-SMS response.")
+        return decision.output.text
 
     async def notify_manager(
         self,
@@ -397,14 +527,11 @@ class SentimentEscalationService:
         # 2. Notification message
         # --------------------------------------------------
 
-        subject = (
-            "FieldOps Escalation: "
-            f"Job #{escalation.job_id}"
-        )
+        subject = "FieldOps Escalation: " + (f"Job #{escalation.job_id}" if escalation.job_id else "Customer support chat")
 
         message = (
             "Customer escalation requires your attention.\n\n"
-            f"Job ID: {escalation.job_id}\n"
+            f"Job ID: {escalation.job_id or 'Customer support chat'}\n"
             f"Customer: {escalation.customer_name}\n"
             f"Sentiment: {escalation.sentiment_label}\n"
             f"Confidence: {escalation.sentiment_score}\n"
@@ -454,7 +581,7 @@ class SentimentEscalationService:
                 body_html = (
                     "<h2>FieldOps Escalation</h2>"
                     f"<p><strong>Job ID:</strong> "
-                    f"{escalation.job_id}</p>"
+                    f"{escalation.job_id or 'Customer support chat'}</p>"
                     f"<p><strong>Customer:</strong> "
                     f"{escalation.customer_name}</p>"
                     f"<p><strong>Sentiment:</strong> "
@@ -496,7 +623,7 @@ class SentimentEscalationService:
                 notification = messaging.Notification(
                     title="FieldOps Escalation",
                     body=(
-                        f"Job #{escalation.job_id} requires "
+                        (f"Job #{escalation.job_id}" if escalation.job_id else "Customer support chat") + " requires "
                         "your attention."
                     ),
                 )

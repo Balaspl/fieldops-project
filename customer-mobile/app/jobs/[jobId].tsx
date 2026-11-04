@@ -26,6 +26,7 @@ import type { CustomerFeedback, CustomerJob } from "../../src/types/api";
 import { colors } from "../../src/theme";
 import { env } from "../../src/config/env";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
+import { useFocusedAutoRefresh } from "../../src/hooks/useFocusedAutoRefresh";
 
 const GREEN = "#087653";
 const DARK_GREEN = "#064E3B";
@@ -33,7 +34,6 @@ const TEXT = "#102A24";
 const MUTED = "#71847D";
 const BORDER = "#E3EEE8";
 const PALE = "#F3FAF6";
-const REFRESH_INTERVAL_MS = 2000;
 
 type TrackingJob = CustomerJob & {
   accepted_at?: string | null;
@@ -766,10 +766,9 @@ export default function CustomerJobDetailScreen() {
   useFocusEffect(
     useCallback(() => {
       void load();
-      const timer = setInterval(() => void load(false, true), REFRESH_INTERVAL_MS);
-      return () => clearInterval(timer);
     }, [load]),
   );
+  useFocusedAutoRefresh(() => load(false, true), !submitting);
 
   const progressStage = useMemo(() => job ? getProgressStage(job) : 0, [job]);
   const isCompleted = Boolean(job && ["COMPLETED", "CLOSED"].includes(normalizedStatus(job.status)));

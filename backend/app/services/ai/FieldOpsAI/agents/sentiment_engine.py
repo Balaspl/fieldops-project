@@ -21,6 +21,7 @@ The Sentiment Engine does NOT:
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Optional
 
@@ -87,6 +88,10 @@ class SentimentEngine:
             "helpful",
             "perfect",
             "wonderful",
+            "fixed the issue",
+            "resolved the issue",
+            "problem solved",
+            "worked well",
 
             # Spanish
             "bueno",
@@ -144,6 +149,11 @@ class SentimentEngine:
             "not working",
             "worst",
             "poor",
+            "late",
+            "nobody told me",
+            "no one told me",
+            "wasn't informed",
+            "was not informed",
 
             # Spanish
             "malo",
@@ -252,6 +262,16 @@ class SentimentEngine:
                     for intensifier in intensifiers
                 ):
                     negative_score += 0.5
+
+        # Use an explicitly supplied feedback rating as supporting signal.
+        # A middle rating stays neutral and does not override the written comment.
+        rating_match = re.search(r"customer rating:\s*([1-5])\s*/\s*5", message)
+        if rating_match:
+            rating = int(rating_match.group(1))
+            if rating <= 2:
+                negative_score += 1.0
+            elif rating >= 4:
+                positive_score += 1.0
 
         # -----------------------------------------------------
         # Determine sentiment
@@ -399,7 +419,16 @@ class SentimentEngine:
             "शिकायत",
         )
 
-        if any(
+        critical_urgency_keywords = (
+            "immediate danger", "life threatening", "electric shock", "fire",
+            "unsafe", "emergency", "peligro inmediato", "emergencia",
+            "மின்சார அதிர்ச்சி", "அவசரம்", "तत्काल खतरा", "आपातकाल",
+        )
+
+        if any(keyword in message for keyword in critical_urgency_keywords):
+            urgency = "CRITICAL"
+
+        elif any(
             keyword in message
             for keyword in high_urgency_keywords
         ):
@@ -486,10 +515,42 @@ class SentimentEngine:
             sentiment=sentiment,
             emotion=emotion,
             urgency=urgency,
+            severity=(
+                "CRITICAL"
+                if any(word in message for word in ("safety", "danger", "emergency", "seguridad", "emergencia", "பாதுகாப்பு", "அவசரம்", "सुरक्षा", "आपातकाल"))
+                else "HIGH" if any(word in message for word in ("third time", "multiple unresolved", "injured", "injury", "unsafe"))
+                else "MEDIUM" if sentiment in {"NEGATIVE", "MIXED"}
+                else "LOW"
+            ),
+            issue_categories=self._classify_issue_categories(message),
             requires_human=requires_human,
             confidence=confidence,
             summary=summary,
+            recommended_action=(
+                "Review the customer's message and contact them with an update."
+                if sentiment in {"NEGATIVE", "MIXED"} or requires_human
+                else "No follow-up is indicated by this message."
+            ),
         )
+
+    @staticmethod
+    def _classify_issue_categories(message: str) -> list[str]:
+        categories = []
+        rules = (
+            ("TECHNICIAN_DELAY", ("late", "waiting", "not arrived", "delay")),
+            ("COMMUNICATION", ("no response", "not responding", "nobody is responding", "no update", "nobody told me", "no one told me", "wasn't informed", "was not informed")),
+            ("SERVICE_QUALITY", ("poor service", "bad service", "did not fix", "not fixed")),
+            ("SCHEDULING", ("appointment", "reschedule", "schedule")),
+            ("PRICING_BILLING", ("price", "bill", "charge", "cost")),
+            ("UNRESOLVED_ISSUE", ("again", "still broken", "still not", "unresolved")),
+            ("SAFETY", ("safety", "danger", "unsafe", "emergency")),
+        )
+        for category, terms in rules:
+            if any(term in message for term in terms):
+                categories.append(category)
+        if not categories and any(term in message for term in ("great", "thanks", "thank you", "excellent", "customer rating:")):
+            categories.append("GENERAL_FEEDBACK")
+        return categories[:5]
 
     # ---------------------------------------------------------
     # Main analysis

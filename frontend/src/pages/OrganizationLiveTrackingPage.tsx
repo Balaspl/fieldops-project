@@ -208,8 +208,10 @@ export default function OrganizationLiveTrackingPage() {
     void fetchTechnicians();
 
     const fetchTimer = window.setInterval(() => {
-      void fetchTechnicians();
-    }, 15_000);
+      if (document.visibilityState === "visible" && document.hasFocus()) {
+        void fetchTechnicians();
+      }
+    }, 3000);
 
     const clockTimer = window.setInterval(() => {
       setNow(Date.now());

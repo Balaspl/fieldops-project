@@ -7,7 +7,7 @@ import {
   View,
 } from "react-native";
 import * as Location from "expo-location";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { customerApi } from "../src/api/customer";
@@ -24,6 +24,8 @@ import {
 } from "../src/components/ui";
 import type { CustomerProfile } from "../src/types/api";
 import { colors } from "../src/theme";
+import { useFocusedAutoRefresh } from "../src/hooks/useFocusedAutoRefresh";
+import { consumePickedServiceLocation } from "../src/utils/locationSelection";
 
 type CustomerProfileWithDefault = CustomerProfile & {
   is_default_location?: boolean;
@@ -55,11 +57,11 @@ export default function CustomerProfileScreen() {
   const [loadingProfileFailed, setLoadingProfileFailed] =
     useState(false);
 
-  const loadProfile = useCallback(async () => {
+  const loadProfile = useCallback(async (silent = false) => {
     let active = true;
 
-    setLoading(true);
-    setError("");
+    if (!silent) setLoading(true);
+    if (!silent) setError("");
 
     try {
       const value = await customerApi.profile();
@@ -107,7 +109,7 @@ export default function CustomerProfileScreen() {
       setPhone("");
       setProfile(null);
     } finally {
-      if (active) {
+      if (active && !silent) {
         setLoading(false);
       }
     }
@@ -116,6 +118,11 @@ export default function CustomerProfileScreen() {
       active = false;
     };
   }, [user?.first_name, user?.last_name]);
+
+  useFocusedAutoRefresh(
+    () => loadProfile(true),
+    !isEditing && !saving && !locating,
+  );
 
   useEffect(() => {
     let active = true;
@@ -177,6 +184,45 @@ export default function CustomerProfileScreen() {
       active = false;
     };
   }, [user?.first_name, user?.last_name]);
+
+  // Apply the Ola Maps selection when this profile screen regains focus.
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      const selection = consumePickedServiceLocation();
+
+      if (selection) {
+        setError("");
+        setAddress(selection.address);
+        // Clear previous locality data so an old PIN/city is not retained
+        // when the customer chooses a location in a different area.
+        setCity("");
+        setState("");
+        setPincode("");
+
+        void customerApi
+          .reverseLocation(selection.latitude, selection.longitude)
+          .then((result) => {
+            if (!active) return;
+            setCity(result.city || "");
+            setState(result.state || "");
+            setPincode((result.pincode || "").replace(/\D/g, "").slice(0, 6));
+          })
+          .catch(() => {
+            if (active) {
+              Alert.alert(
+                "Location selected",
+                "The address was updated. Please enter or verify the city, state and PIN code before saving.",
+              );
+            }
+          });
+      }
+
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
 
   const useCurrentLocation = async () => {
     setLocating(true);
@@ -430,8 +476,22 @@ export default function CustomerProfileScreen() {
           icon="locate-outline"
           kind="secondary"
           loading={locating}
-          disabled={!isEditing || locating}
+          disabled={!isEditing || locating || saving}
           onPress={() => void useCurrentLocation()}
+        />
+
+        <AppButton
+          title="Change location"
+          icon="map-outline"
+          kind="secondary"
+          disabled={!isEditing || locating || saving}
+          onPress={() => {
+            setError("");
+            router.push({
+              pathname: "/location-picker",
+              params: { address: address.trim() },
+            });
+          }}
         />
 
         <Pressable

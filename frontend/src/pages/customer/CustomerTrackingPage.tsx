@@ -216,8 +216,13 @@ export default function CustomerTrackingPage({
     let timer: number | undefined;
 
     const loadJobs = async () => {
+      if (stopped) return;
+      if (document.visibilityState !== "visible" || !document.hasFocus()) {
+        timer = window.setTimeout(loadJobs, 3000);
+        return;
+      }
       try {
-        setRefreshing(true);
+        setRefreshing(false);
 
         const response = await getCustomerJobs();
 
@@ -260,7 +265,7 @@ export default function CustomerTrackingPage({
         ) {
           timer = window.setTimeout(
             loadJobs,
-            5000
+            3000
           );
         }
       } catch (requestError: any) {
@@ -292,7 +297,7 @@ export default function CustomerTrackingPage({
 
         timer = window.setTimeout(
           loadJobs,
-          5000
+          3000
         );
       } finally {
         if (!stopped) {

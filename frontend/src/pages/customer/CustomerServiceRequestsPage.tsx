@@ -1633,7 +1633,7 @@ export default function CustomerServiceRequestsPage({
       } catch (err) {
         // Silent background failure
       }
-    }, 4000);
+    }, 3000);
 
     return () => {
       isMounted = false;

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Text, View, Pressable, ActivityIndicator, ScrollView } from "react-native";
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import { customerApi } from "../api/customer";
@@ -9,6 +9,7 @@ import { AppButton, Card, ChoiceChips, Field, Header, LoadingView, Screen, share
 import type { CustomerProfile, LocationSearchResult, ServiceCatalogItem, ServiceRequest } from "../types/api";
 import { colors } from "../theme";
 import { formatDate } from "../utils/format";
+import { consumePickedServiceLocation } from "../utils/locationSelection";
 
 const priorities = ["LOW", "MEDIUM", "HIGH", "CRITICAL", "URGENT"] as const;
 
@@ -156,7 +157,10 @@ export default function ServiceRequestForm({ requestId }: { requestId?: number }
   const [category, setCategory] = useState("");
   const [issue, setIssue] = useState("");
   const [priority, setPriority] = useState<(typeof priorities)[number]>("MEDIUM");
-  const [preferredDate, setPreferredDate] = useState("");
+  const [todayKey, setTodayKey] = useState(() => localDateKey(new Date()));
+  const [preferredDate, setPreferredDate] = useState(() =>
+    localDateKey(addDays(new Date(), 1)),
+  );
   const [preferredTime, setPreferredTime] = useState("");
   const [location, setLocation] = useState("");
   const [contactNumber, setContactNumber] = useState("");
@@ -172,6 +176,66 @@ export default function ServiceRequestForm({ requestId }: { requestId?: number }
     useLocalSearchParams<{
       serviceType?: string | string[];
     }>();
+
+  // Keep the booking calendar in sync when the app stays open across midnight.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    let cancelled = false;
+
+    const scheduleMidnightRefresh = () => {
+      const now = new Date();
+      const nextMidnight = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate() + 1,
+        0,
+        0,
+        1,
+      );
+
+      timer = setTimeout(() => {
+        if (cancelled) return;
+        setTodayKey(localDateKey(new Date()));
+        scheduleMidnightRefresh();
+      }, Math.max(1000, nextMidnight.getTime() - now.getTime()));
+    };
+
+    scheduleMidnightRefresh();
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, []);
+
+  // If the previously selected tomorrow becomes today at midnight,
+  // move the selection forward and clear the old time slot.
+  useEffect(() => {
+    if (editing || !preferredDate || preferredDate > todayKey) return;
+
+    const tomorrow = addDays(new Date(`${todayKey}T12:00:00`), 1);
+    setPreferredDate(localDateKey(tomorrow));
+    setPreferredTime("");
+  }, [editing, preferredDate, todayKey]);
+
+  // Receive the confirmed location when the Ola Maps picker returns to this form.
+  // Also refresh the calendar date whenever the form regains focus.
+  useFocusEffect(
+    useCallback(() => {
+      setTodayKey(localDateKey(new Date()));
+      const selectedLocation = consumePickedServiceLocation();
+      if (!selectedLocation) return;
+
+      setLocation(selectedLocation.address);
+      setLatitude(selectedLocation.latitude.toFixed(6));
+      setLongitude(selectedLocation.longitude.toFixed(6));
+      setLocationConfirmed(true);
+      setLocationResults([]);
+      setLocationSearchError("");
+      setShowLocationSuggestions(false);
+      setError("");
+    }, []),
+  );
   useEffect(() => {
     if (editing || !showLocationSuggestions || location.trim().length < 2) {
       setLocationResults([]);
@@ -230,9 +294,8 @@ const visibleCatalog = useMemo(
   );
 
   const availableDates = useMemo(() => {
-    const start = new Date();
-    start.setHours(12, 0, 0, 0);
-    return Array.from({ length: 8 }, (_, offset) => {
+    const start = new Date(`${todayKey}T12:00:00`);
+    return Array.from({ length: 5 }, (_, offset) => {
       const date = addDays(start, offset);
       return {
         key: localDateKey(date),
@@ -243,8 +306,8 @@ const visibleCatalog = useMemo(
           offset === 0 ? "Today" : offset === 1 ? "Tomorrow" : date.toLocaleDateString("en-IN", { weekday: "short" }),
       };
     });
-  }, []);
-  const firstAvailableDate = availableDates[0]?.key || localDateKey(new Date());
+  }, [todayKey]);
+  const firstAvailableDate = availableDates[1]?.key || localDateKey(addDays(new Date(), 1));
   const lastAvailableDate = availableDates[availableDates.length - 1]?.key || firstAvailableDate;
   const availableTimes = useMemo(
     () =>
@@ -486,8 +549,11 @@ const visibleCatalog = useMemo(
     if (!/^\d{4}-\d{2}-\d{2}$/.test(preferredDate.trim())) {
       return "Choose a preferred service date.";
     }
+    if (!editing && preferredDate <= todayKey) {
+      return "Today's booking is closed. Choose tomorrow or a later date.";
+    }
     if (!editing && (preferredDate < firstAvailableDate || preferredDate > lastAvailableDate)) {
-      return "Choose a service date from today through the next 7 days.";
+      return "Choose a service date from tomorrow through the next 3 days.";
     }
     if (!editing && !preferredTime) {
       return "Choose an available service time slot.";
@@ -496,7 +562,7 @@ const visibleCatalog = useMemo(
       return "Choose a service time between 8:00 AM and 7:00 PM.";
     }
     if (!editing && isPastTimeSlot(preferredDate, preferredTime)) {
-      return "Choose a future time slot for today.";
+      return "Choose an available future time slot.";
     }
     if (!editing && !locationConfirmed) {
       return "Choose an address suggestion or use your current location to confirm the service address.";
@@ -620,6 +686,24 @@ const visibleCatalog = useMemo(
         loading={locationBusy}
         kind="secondary"
       />
+      <AppButton
+        title="Change location"
+        icon="map-outline"
+        kind="secondary"
+        onPress={() => {
+          setError("");
+          setLocationSearchError("");
+          setShowLocationSuggestions(false);
+          router.push({
+            pathname: "/location-picker",
+            params: {
+              address: location,
+              latitude,
+              longitude,
+            },
+          });
+        }}
+      />
       {locationConfirmed ? (
         <View style={{ flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 2 }}>
           <Ionicons name="checkmark-circle" size={17} color={colors.success} />
@@ -642,27 +726,29 @@ const visibleCatalog = useMemo(
           <Text style={{ color: colors.text, fontSize: 13, fontWeight: "800" }}>Choose a service date</Text>
           <Text style={{ color: colors.danger, fontSize: 13, fontWeight: "900" }}>*</Text>
         </View>
-        <Text style={{ color: colors.muted, fontSize: 11 }}>Available today through the next 7 days</Text>
+        <Text style={{ color: colors.muted, fontSize: 11 }}>Today is closed · Book tomorrow or a later date</Text>
       </View>
-      <View style={{ flexDirection: "row", flexWrap: "wrap", columnGap: 8, rowGap: 8, paddingVertical: 2 }}>
+      <View style={{ flexDirection: "row", flexWrap: "nowrap", columnGap: 8, rowGap: 8, paddingVertical: 2 }}>
         {availableDates.map((date) => {
           const selected = preferredDate === date.key;
+          const closed = date.key === todayKey;
           return (
             <Pressable
               key={date.key}
               accessibilityRole="radio"
-              accessibilityLabel={`${date.shortLabel}, ${date.number} ${date.month}`}
-              accessibilityState={{ checked: selected }}
+              accessibilityLabel={`${date.shortLabel}, ${date.number} ${date.month}${closed ? ", booking closed" : ""}`}
+              accessibilityState={{ checked: selected, disabled: closed }}
+              disabled={closed}
               onPress={() => {
                 setPreferredDate(date.key);
                 setPreferredTime("");
                 setError("");
               }}
-              style={{ width: "22%", minHeight: 72, alignItems: "center", justifyContent: "center", gap: 3, borderRadius: 12, borderWidth: 1, borderColor: selected ? colors.brand : colors.border, backgroundColor: selected ? colors.brand : "#FFFFFF", paddingHorizontal: 4, paddingVertical: 8 }}
+              style={{ flex: 1, minWidth: 0, minHeight: 78, alignItems: "center", justifyContent: "center", gap: 3, borderRadius: 12, borderWidth: 1, borderColor: selected ? colors.brand : colors.border, backgroundColor: selected ? colors.brand : closed ? "#EEF1EF" : "#FFFFFF", paddingHorizontal: 3, paddingVertical: 7, opacity: closed ? 0.72 : 1 }}
             >
-              <Text style={{ color: selected ? "#FFFFFF" : colors.muted, fontSize: 10, fontWeight: "800" }}>{date.shortLabel}</Text>
-              <Text style={{ color: selected ? "#FFFFFF" : colors.text, fontSize: 20, lineHeight: 23, fontWeight: "900" }}>{date.number}</Text>
-              <Text style={{ color: selected ? "#FFFFFF" : colors.muted, fontSize: 10, fontWeight: "700" }}>{date.month}</Text>
+              <Text style={{ color: selected ? "#FFFFFF" : colors.muted, fontSize: 9, fontWeight: "800" }}>{date.shortLabel}</Text>
+              <Text style={{ color: selected ? "#FFFFFF" : closed ? colors.muted : colors.text, fontSize: 20, lineHeight: 23, fontWeight: "900" }}>{date.number}</Text>
+              <Text style={{ color: selected ? "#FFFFFF" : colors.muted, fontSize: 9, fontWeight: "700" }}>{closed ? "Closed" : date.month}</Text>
             </Pressable>
           );
         })}
@@ -676,7 +762,13 @@ const visibleCatalog = useMemo(
             </View>
             <Text style={{ color: colors.muted, fontSize: 11 }}>8:00 AM – 7:00 PM · Every 30 minutes</Text>
           </View>
-          {preferredDate ? (
+          {preferredDate && preferredDate <= todayKey ? (
+            <View style={{ padding: 12, borderRadius: 12, backgroundColor: "#F0F2F1" }}>
+              <Text style={{ color: colors.muted, fontSize: 12, lineHeight: 18, fontWeight: "700" }}>
+                Today's time slots are closed. Please choose tomorrow or a later date.
+              </Text>
+            </View>
+          ) : preferredDate ? (
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
               {availableTimes.map((slot) => {
                 const selected = preferredTime === slot.key;

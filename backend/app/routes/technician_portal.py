@@ -60,7 +60,7 @@ from ..auth.password import hash_password, verify_password
 
 from ..models import (
     Job, Technician, InAppNotification, GPSPing, CustomerFeedback,
-    TechnicianProfile,
+    TechnicianProfile, JobMessage,
 )
 
 from ..models_legacy import(
@@ -97,6 +97,58 @@ from ..services.customer_notification_services import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _add_automatic_job_chat_message(db, job, sender_user_id: str, body: str):
+    """Persist a technician lifecycle update in the existing job conversation."""
+    service_request = (
+        db.query(ServiceRequest)
+        .filter(ServiceRequest.linked_job_id == job.id)
+        .first()
+    )
+    customer_user_id = str(service_request.customer_user_id) if service_request and service_request.customer_user_id else None
+    if not customer_user_id:
+        return None, None
+
+    message = JobMessage(
+        job_id=job.id,
+        tenant_id=job.tenant_id,
+        sender_user_id=str(sender_user_id),
+        sender_role="TECHNICIAN",
+        body=body,
+    )
+    db.add(message)
+    db.flush()
+    return message, customer_user_id
+
+
+async def _broadcast_automatic_job_chat_message(message, customer_user_id: str) -> None:
+    if message is None or not customer_user_id:
+        return
+    try:
+        from ..services.socket_manager import sio
+
+        await sio.emit(
+            "job_message",
+            {
+                "job_id": message.job_id,
+                "message": {
+                    "id": message.id,
+                    "job_id": message.job_id,
+                    "sender_user_id": message.sender_user_id,
+                    "sender_role": message.sender_role,
+                    "body": message.body,
+                    "created_at": message.created_at.isoformat() if message.created_at else None,
+                    "delivered_at": None,
+                    "read_at": None,
+                    "is_mine": False,
+                },
+            },
+            room=f"user_{customer_user_id}",
+        )
+    except Exception:
+        # The persisted message remains available when the customer reconnects.
+        logger.exception("Could not broadcast automatic job chat update job_id=%s", message.job_id)
 
 # Keep this aligned with the acceptance window in routes/jobs.py.
 
@@ -1587,6 +1639,12 @@ async def accept_job(
     offer_metadata = getattr(offer_notification, "notification_metadata", None) or {}
     dispatch_attempt_id = offer_metadata.get("dispatch_attempt_id") if isinstance(offer_metadata, dict) else None
 
+    automatic_chat_message, chat_customer_id = _add_automatic_job_chat_message(
+        db,
+        job,
+        current_user.user_id,
+        f"Automatic job update from {tech.technician_name}: I’ve accepted job #{job.id} for {job.service_type}. I’ll update you here when I’m on my way.",
+    )
 
 
     # ---------------------------------------------------------
@@ -1600,6 +1658,13 @@ async def accept_job(
     # ---------------------------------------------------------
 
     db.commit()
+
+    if automatic_chat_message is not None:
+        db.refresh(automatic_chat_message)
+        await _broadcast_automatic_job_chat_message(
+            automatic_chat_message,
+            chat_customer_id,
+        )
 
     logger.info(
         "assignment_committed job_id=%s technician_id=%s dispatch_attempt_id=%s status=%s outcome=committed",
@@ -2101,6 +2166,65 @@ async def start_job(
 
     db.commit()
 
+    # Calculate the initial trip estimate after the authoritative status is
+    # committed. A maps/GPS problem must not undo a successful job start.
+    try:
+        eta_result = None
+        if tech.tech_id:
+            from ..services.eta_service import ETAService
+            from ..services.ola_map_client import OlaMapsClient
+            from ..redis_client import get_redis_client
+
+            redis_client = get_redis_client()
+            eta_result = await ETAService(
+                db,
+                redis_client,
+                OlaMapsClient(redis_client),
+            ).calculate_eta(str(tech.tech_id), int(job.id))
+
+        distance_km = eta_result.get("distance_km") if isinstance(eta_result, dict) else None
+        duration_minutes = eta_result.get("duration_minutes") if isinstance(eta_result, dict) else None
+        estimate_parts = []
+        if distance_km is not None:
+            estimate_parts.append(f"about {float(distance_km):g} km")
+        if duration_minutes is not None:
+            estimate_parts.append(f"an estimated {max(1, round(float(duration_minutes)))} minutes")
+
+        if estimate_parts:
+            estimate = " and ".join(estimate_parts)
+            chat_body = (
+                f"Automatic job update from {tech.technician_name}: I’m on my way to job #{job.id}. "
+                f"The route is {estimate}."
+            )
+        else:
+            chat_body = (
+                f"Automatic job update from {tech.technician_name}: I’m on my way to job #{job.id}. "
+                "A distance and arrival estimate "
+                "will be shared when fresh GPS data is available."
+            )
+
+        automatic_chat_message, chat_customer_id = _add_automatic_job_chat_message(
+            db,
+            job,
+            current_user.user_id,
+            chat_body,
+        )
+        if automatic_chat_message is not None:
+            db.commit()
+            db.refresh(automatic_chat_message)
+            await _broadcast_automatic_job_chat_message(
+                automatic_chat_message,
+                chat_customer_id,
+            )
+        else:
+            db.rollback()
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Could not create automatic en-route chat update job_id=%s",
+            job_id,
+        )
+
     return {
         "message": "Job started and en-route",
         "job_id": job_id,
@@ -2221,9 +2345,23 @@ async def on_site_job(
 
     )
 
+    automatic_chat_message, chat_customer_id = _add_automatic_job_chat_message(
+        db,
+        job,
+        current_user.user_id,
+        f"Automatic job update from {tech.technician_name}: I’ve reached your location for job #{job.id} and am ready to begin.",
+    )
+
     db.commit()
 
     db.refresh(job)
+
+    if automatic_chat_message is not None:
+        db.refresh(automatic_chat_message)
+        await _broadcast_automatic_job_chat_message(
+            automatic_chat_message,
+            chat_customer_id,
+        )
 
     return {
 
@@ -2316,7 +2454,21 @@ async def pause_job(
         request=request,
     )
 
+    automatic_chat_message, chat_customer_id = _add_automatic_job_chat_message(
+        db,
+        job,
+        current_user.user_id,
+        f"Automatic job update from {tech.technician_name}: work on job #{job.id} is temporarily paused. I’ll update you when it resumes.",
+    )
+
     db.commit()
+
+    if automatic_chat_message is not None:
+        db.refresh(automatic_chat_message)
+        await _broadcast_automatic_job_chat_message(
+            automatic_chat_message,
+            chat_customer_id,
+        )
 
     return {
         "message": "Job paused",
@@ -2406,7 +2558,21 @@ async def resume_job(
         request=request,
     )
 
+    automatic_chat_message, chat_customer_id = _add_automatic_job_chat_message(
+        db,
+        job,
+        current_user.user_id,
+        f"Automatic job update from {tech.technician_name}: work on job #{job.id} has resumed.",
+    )
+
     db.commit()
+
+    if automatic_chat_message is not None:
+        db.refresh(automatic_chat_message)
+        await _broadcast_automatic_job_chat_message(
+            automatic_chat_message,
+            chat_customer_id,
+        )
 
     return {
         "message": "Job resumed",
@@ -2774,7 +2940,21 @@ async def complete_job(
 
     )
 
+    automatic_chat_message, chat_customer_id = _add_automatic_job_chat_message(
+        db,
+        job,
+        current_user.user_id,
+        f"Automatic job update from {tech.technician_name}: job #{job.id} is complete.",
+    )
+
     db.commit()
+
+    if automatic_chat_message is not None:
+        db.refresh(automatic_chat_message)
+        await _broadcast_automatic_job_chat_message(
+            automatic_chat_message,
+            chat_customer_id,
+        )
 
     return {"message": "Job completed", "job_id": job_id, "status": "COMPLETED"}
 

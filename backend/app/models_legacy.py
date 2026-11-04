@@ -408,7 +408,7 @@ class NotificationChannelDelivery(Base):
     id = Column(Integer, primary_key=True)
     tenant_id = Column(String(50), ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True)
     notification_id = Column(String(36), ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False)
-    channel = Column(String(20), nullable=False)          # in_app | sms | email
+    channel = Column(String(20), nullable=False)          # in_app | sms | email | push
     recipient_id = Column(String(50), nullable=False)
     status = Column(String(30), nullable=False, default="queued")
     provider_id = Column(String(255), nullable=True)

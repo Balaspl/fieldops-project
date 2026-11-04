@@ -44,6 +44,7 @@ from app.services.invoice_service import invoice_summary
 from .channels import (
     claim_delivery,
     enqueue_email,
+    enqueue_push,
     enqueue_sms,
     external_channels_enabled,
     idem_key,
@@ -51,12 +52,13 @@ from .channels import (
     normalize_phone,
     push_live,
 )
-from .events import EMAIL, IN, SMS, JobEvent
+from .events import EMAIL, IN, PUSH, SMS, JobEvent
 from .message import build_card, build_copy, personalize_customer_title
 from .recipients import Recipient, resolve_recipients
 from .store import upsert_notification
 from .texts import (
     email_content,
+    push_content,
     sms_text,
     tracking_link,
     validate_text,
@@ -658,6 +660,11 @@ def compose(state: ComposeInput) -> dict:
         if EMAIL in recipient.channels
         else None
     )
+    push_message = (
+        push_content(title, body)
+        if PUSH in recipient.channels
+        else None
+    )
 
     return {
         "messages": [
@@ -668,6 +675,7 @@ def compose(state: ComposeInput) -> dict:
                 "card": card,
                 "sms": sms_message,
                 "email": email_message,
+                "push": push_message,
             }
         ]
     }
@@ -777,7 +785,7 @@ def dispatch(
                 continue
 
             # Claim external delivery rows only after a card was persisted.
-            for channel in (SMS, EMAIL):
+            for channel in (SMS, EMAIL, PUSH):
                 if (
                     channel in recipient.channels
                     and channel in allowed_channels
@@ -972,6 +980,22 @@ def dispatch(
                                "event_version": event_version,
                                "recipient_role": recipient.role,
                                "delivery_id": delivery_id},
+                    )
+
+                elif channel == PUSH:
+                    push_message = message.get("push")
+                    if not push_message:
+                        mark_delivery(
+                            db,
+                            delivery_id,
+                            "failed",
+                            "missing push content",
+                        )
+                        continue
+                    enqueue_push(
+                        push_message["title"],
+                        push_message["body"],
+                        delivery_id=delivery_id,
                     )
 
             except Exception as exc:

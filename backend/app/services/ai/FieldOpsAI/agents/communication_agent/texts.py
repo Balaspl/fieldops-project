@@ -38,6 +38,13 @@ def sms_text(title: str, body: str, link: str | None) -> str:
     return f"{text} Track: {link}" if link else text
 
 
+def push_content(title: str, body: str) -> dict[str, str]:
+    """Create a concise native push title/body from approved message copy."""
+    safe_title = strip_emoji(title)[:50] or "FieldOps update"
+    safe_body = strip_emoji(body)[:160] or "Your service request has been updated."
+    return {"title": safe_title, "body": safe_body}
+
+
 def email_content(title: str, body: str, job, link: str | None, event=None) -> dict:
     event_value = getattr(event, "value", event)
     customer_name = (getattr(job, "customer_name", None) or "there").strip()

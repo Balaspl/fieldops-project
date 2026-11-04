@@ -78,6 +78,16 @@ def _normalize_tokens(value: str) -> list[str]:
     return [aliases.get(token, token) for token in tokens if aliases.get(token, token) not in _STOPWORDS]
 
 
+def _requires_support_handoff(message: str) -> bool:
+    text = message.casefold()
+    return any(re.search(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", text) for phrase in (
+        "safety", "unsafe", "danger", "gas leak", "smoke", "fire", "electric shock",
+        "injured", "legal", "lawyer", "refund", "cancel", "complaint", "manager", "late", "delayed", "no update", "not working", "unresolved",
+        "human", "talk to someone", "speak to someone", "technician is late", "tech is late",
+        "no show", "never arrived", "still broken", "not fixed", "rude", "charged twice",
+    ))
+
+
 def _classify(state: SupportState) -> dict[str, Any]:
     text = re.sub(r"[^a-z0-9\s]", " ", state["message"].casefold()).strip()
     tokens = set(_normalize_tokens(state["message"]))
@@ -86,6 +96,14 @@ def _classify(state: SupportState) -> dict[str, Any]:
         return {"intent": "request_history"}
     if re.fullmatch(r"(?:hi|hello|hey|good morning|good afternoon|good evening|thanks|thank you|thx|bye|goodbye)(?:\s+there)?(?:\s+how are you)?", text):
         return {"intent": "small_talk"}
+    if _requires_support_handoff(state["message"]):
+        return {"intent": "support_escalation"}
+
+    if any(phrase in text for phrase in (
+        "how do i contact support", "how can i contact support", "how do i reach support",
+        "how can i reach support", "where do i contact support", "support contact",
+    )):
+        return {"intent": "support_contact_explanation"}
 
     # Definition questions must be separated from lookups about the signed-in
     # customer's own request before applying any broad service/job vocabulary.
@@ -96,6 +114,8 @@ def _classify(state: SupportState) -> dict[str, Any]:
     if ("service" in tokens and any(word in tokens for word in ("offer", "provide", "catalog", "available", "book", "have", "list"))) or any(x in text for x in ("what services", "which services", "service types", "service catalog", "what do you offer", "what does fieldops offer", "services do you offer", "services can i book")):
         return {"intent": "service_catalog"}
     if any(x in text for x in ("create a service request", "create service request", "new service request", "submit a request", "book a service", "request a service", "make a service request")):
+        return {"intent": "service_creation"}
+    if "service request" in text and any(word in tokens for word in ("create", "submit", "book", "make", "raise")):
         return {"intent": "service_creation"}
 
     if "technician" in tokens and any(word in tokens for word in ("when", "arrive", "arrival", "eta", "come")):
@@ -338,7 +358,12 @@ def _respond_once(state: SupportState) -> dict[str, Any]:
     if state["intent"] in live_intents:
         jobs = state.get("jobs", [])
         if not jobs:
-            return {"answer": "I couldnâ€™t find a service request linked to your account. You can submit a support request from the Support page.", "sources": [], "escalate": True}
+            return {
+                "answer": "I couldn't find a service request linked to your account. If you haven't submitted one yet, start from New Request. You can check its progress under My Requests after you submit it.",
+                "sources": [],
+                "escalate": False,
+                "components": [{"type": "support", "title": "Create a service request", "action": "service_requests"}],
+            }
         explicit_match = next((job for job in jobs if (job["job_id"] is not None and re.search(rf"(?<!\d){re.escape(str(job['job_id']))}(?!\d)", text)) or (job["request_number"] and job["request_number"].lower() in text)), None)
         contextual_matches: list[dict[str, Any]] = []
         for history_item in reversed(state.get("history", [])[-6:]):
@@ -347,8 +372,32 @@ def _respond_once(state: SupportState) -> dict[str, Any]:
             if contextual_matches:
                 break
         if "other request" in text or (len(jobs) > 1 and explicit_match is None and len(contextual_matches) != 1):
-            choices = "; ".join(f"{job['request_number'] or ('#' + str(job['job_id']))} ({job['status']})" for job in jobs[:5])
-            return {"answer": f"I found multiple service requests. Which one do you mean: {choices}?", "sources": [], "escalate": False}
+            status_labels = {
+                "CREATED": "Submitted",
+                "PENDING": "Waiting for review",
+                "ASSIGNED": "Technician assigned",
+                "EN_ROUTE": "Technician on the way",
+                "ON_SITE": "Technician arrived",
+                "IN_PROGRESS": "Work in progress",
+                "COMPLETED": "Completed",
+                "CANCELLED": "Cancelled",
+                "CLOSED": "Closed",
+                "REJECTED_BY_TECHNICIAN": "Technician declined",
+            }
+            choices = "\n".join(
+                f"{index}. {job['request_number'] or ('Job #' + str(job['job_id']))} — "
+                f"{status_labels.get(str(job['status']).upper(), str(job['status']).replace('_', ' ').title())}"
+                for index, job in enumerate(jobs[:5], start=1)
+            )
+            more = "\nShowing the 5 most recent requests." if len(jobs) > 5 else ""
+            return {
+                "answer": (
+                    "I found multiple service requests. Which one would you like me to check?\n\n"
+                    f"{choices}{more}\n\nReply with the request number or Job # shown above."
+                ),
+                "sources": [],
+                "escalate": False,
+            }
         match = explicit_match or (contextual_matches[-1] if contextual_matches else jobs[0])
         label = match["request_number"] or f"#{match['job_id']}"
         answer = f"Service request {label} is currently {match['status']}."
@@ -376,11 +425,11 @@ def _respond_once(state: SupportState) -> dict[str, Any]:
             answer += " This chat shows the current assignment status but does not include technician acceptance or rejection history."
         answer += " An arrival estimate is currently unavailable." if not match["arrival_estimate"] else f" The latest arrival estimate is {match['arrival_estimate']}."
         if any(word in text for word in ("delay", "delayed", "late")):
-            answer += " I donâ€™t have a verified reason for a delay in the chat records."
+            answer += " I don't have a verified reason for a delay in the chat records."
         if "reassign" in text:
-            answer += " I can confirm the current assignment status, but assignment change history isnâ€™t available here."
+            answer += " I can confirm the current assignment status, but assignment change history isn't available here."
         if any(word in text for word in ("reschedule", "schedule change", "changed appointment")):
-            answer += " Appointment change history isnâ€™t available in chat; please use the Support page for help."
+            answer += " Appointment change history isn't available in chat; please use the Support page for help."
         if match["completed_at"]:
             answer += f" The recorded completion time is {match['completed_at']}."
         elif any(term in text for term in ("when will my service finish", "when will it finish", "when will the job finish", "finish the job")):
@@ -400,7 +449,87 @@ def _respond_once(state: SupportState) -> dict[str, Any]:
             "follow_up_suggestions": ["How can I track my technician?", "What does this status mean?"],
         }
     if state["intent"] in {"account_support", "support_escalation"}:
-        return {"answer": "I canâ€™t make account or booking changes here. Please use the Support page to contact the FieldOps team.", "sources": [], "escalate": True}
+        if any(phrase in text for phrase in ("safety", "unsafe", "danger", "gas leak", "smoke", "fire", "electric shock", "injured")):
+            answer = "I’m sorry this may be unsafe. If anyone is in immediate danger, contact local emergency services first. I can send this conversation to FieldOps Support for follow-up."
+        else:
+            answer = "I’m sorry you’re dealing with this. I can send this conversation to the FieldOps Support team so they can review the details and follow up."
+        return {"answer": answer, "sources": [], "escalate": True}
+    if state["intent"] == "service_creation":
+        return {
+            "answer": "To create a service request, open New Request, choose a service type, enter the issue and service details, then submit. You can follow its progress under My Requests.",
+            "sources": [],
+            "escalate": False,
+            "components": [{"type": "support", "title": "Ready to request a service?", "action": "service_requests"}],
+            "follow_up_suggestions": ["What services does FieldOps offer?", "How can I check my job status?"],
+        }
+    if state["intent"] == "fieldops_overview":
+        approved = state.get("faqs") or []
+        if approved:
+            best = approved[0]
+            return {
+                "answer": best["answer"],
+                "sources": [{"type": "faq", "id": best["id"]}],
+                "escalate": False,
+            }
+        return {
+            "answer": "FieldOps helps you request services, track request and technician progress, communicate with the service team, and review job completion information.",
+            "sources": [],
+            "escalate": False,
+        }
+    if state["intent"] == "status_explanation":
+        status_meanings = {
+            "created": "FieldOps has received the request; it is waiting for review or assignment.",
+            "pending": "The request is waiting for review or scheduling.",
+            "assigned": "A technician has been assigned to the job.",
+            "en route": "The assigned technician is travelling to the service location.",
+            "on site": "The technician has arrived at the service location.",
+            "in progress": "Work on the service request is underway.",
+            "completed": "The work has been marked complete. A completion report may be available in service history.",
+            "cancelled": "The service request has been cancelled.",
+            "closed": "The job record has been closed.",
+            "unassigned": "A technician has not been assigned yet.",
+        }
+        requested_status = next((name for name in status_meanings if name in text), None)
+        answer = status_meanings.get(
+            requested_status,
+            "Request statuses show where your service request is in the process, from receipt and assignment through technician arrival, work, and completion.",
+        )
+        return {"answer": answer, "sources": [], "escalate": False}
+    if state["intent"] == "notifications":
+        return {
+            "answer": "FieldOps notifications share updates about your service requests. Open Notifications in the customer portal to review recent updates, and check My Requests for the current request status.",
+            "sources": [],
+            "escalate": False,
+            "components": [{"type": "support", "title": "View your service requests", "action": "service_requests"}],
+        }
+    if state["intent"] == "tracking_explanation":
+        return {
+            "answer": "Open Tracking from the customer portal to see available technician location updates. Live tracking appears when a technician is assigned and sharing location. You can also check the request status under My Requests.",
+            "sources": [],
+            "escalate": False,
+            "components": [{"type": "support", "title": "Open technician tracking", "action": "tracking"}],
+        }
+    if state["intent"] == "appointment_process":
+        return {
+            "answer": "When you submit a service request, provide your preferred service date and time. FieldOps will show request updates under My Requests; contact Support if you need to change a confirmed appointment.",
+            "sources": [],
+            "escalate": False,
+            "components": [{"type": "support", "title": "View your service requests", "action": "service_requests"}],
+        }
+    if state["intent"] == "closure_report_explanation":
+        return {
+            "answer": "A completion or closure report records the work completed for a job. When one is available, open the completed job in your service history to review or download it.",
+            "sources": [],
+            "escalate": False,
+            "follow_up_suggestions": ["How do I get a completion report?", "How can I check my job status?"],
+        }
+    if state["intent"] == "support_contact_explanation":
+        return {
+            "answer": "You can contact the FieldOps team from the Support page. Submit a request there to share the issue and track staff updates. I can also answer common questions here.",
+            "sources": [],
+            "escalate": False,
+            "components": [{"type": "support", "title": "Open Support page", "action": "support"}],
+        }
     if state.get("faq_ambiguous") and len(state.get("faqs", [])) > 1:
         choices = " or ".join(f'“{item["question"]}”' for item in state["faqs"][:2])
         return {"answer": f"I found a couple of possible topics. Are you asking about {choices}?", "sources": [], "escalate": False}
@@ -417,7 +546,12 @@ def _respond_once(state: SupportState) -> dict[str, Any]:
         # an unnecessary generation call changing a correct topic into another.
         best = approved[0]
         return {"answer": best["answer"], "sources": [{"type": "faq", "id": best["id"]}], "escalate": False}
-    return {"answer": "I couldnâ€™t verify an answer from the information available. Please use the Support page to contact the FieldOps team.", "sources": [], "escalate": True}
+    return {
+        "answer": "I couldn’t find a verified answer for that question. Please use the Support page to contact the FieldOps team, or ask me about service requests, job status, appointments, technician tracking, or completion reports.",
+        "sources": [],
+        "escalate": True,
+        "components": [{"type": "support", "title": "Open Support page", "action": "support"}],
+    }
 
 
 def _respond(state: SupportState) -> dict[str, Any]:
@@ -447,7 +581,7 @@ def _decorate_reply(state: SupportState) -> dict[str, Any]:
     if state.get("escalate"):
         components = list(state.get("components", []))
         if not any(component.get("type") == "support" for component in components):
-            components.append({"type": "support", "title": "Contact FieldOps Support", "action": "support"})
+            components.append({"type": "support", "title": "Send this conversation to the support team", "action": "create_support_case"})
         result["components"] = components
     if not state.get("follow_up_suggestions"):
         if state.get("intent") in {"job_status", "appointment", "technician_tracking", "delays_reassignment", "job_completion"}:

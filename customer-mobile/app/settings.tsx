@@ -6,8 +6,9 @@ import { getApiErrorMessage } from "../src/api/client";
 import { AppButton, Card, ErrorState, Field, Header, LoadingView, Screen } from "../src/components/ui";
 import type { NotificationPreferences } from "../src/types/api";
 import { colors } from "../src/theme";
+import { registerCustomerPushDevice, unregisterCustomerPushDevice } from "../src/notifications/notificationService";
 
-const defaultPrefs: Partial<NotificationPreferences> = { sms_enabled: true, email_enabled: true, push_enabled: true, portal_enabled: true, daily_engagement_enabled: false, preferred_locale: "en", timezone: "Asia/Kolkata", quiet_hours_start: "22:00", quiet_hours_end: "08:00" };
+const defaultPrefs: Partial<NotificationPreferences> = { sms_enabled: true, email_enabled: true, push_enabled: false, portal_enabled: true, daily_engagement_enabled: false, preferred_locale: "en", timezone: "Asia/Kolkata", quiet_hours_start: "22:00", quiet_hours_end: "08:00" };
 
 function PreferenceToggle({ label, description, value, onChange }: { label: string; description: string; value: boolean; onChange: (v: boolean) => void }) {
   return <View style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: colors.border }}><View style={{ flex: 1, gap: 4 }}><Text style={{ color: colors.text, fontSize: 14, fontWeight: "700" }}>{label}</Text><Text style={{ color: colors.muted, fontSize: 12, lineHeight: 17 }}>{description}</Text></View><Switch value={value} onValueChange={onChange} trackColor={{ false: "#D7DFD9", true: colors.accent }} thumbColor={value ? colors.brand : "#FFFFFF"} /></View>;
@@ -36,14 +37,27 @@ export default function CustomerSettingsScreen() {
   const savePrefs = async () => {
     setError(""); setSavingPreferences(true);
     try {
+      let pushEnabled = Boolean(preferences.push_enabled);
+      let pushSetupError = "";
+      if (pushEnabled) {
+        try { await registerCustomerPushDevice(); }
+        catch (e) { pushEnabled = false; pushSetupError = getApiErrorMessage(e, "Push notifications could not be enabled."); }
+      } else {
+        await unregisterCustomerPushDevice().catch(() => undefined);
+      }
       const payload = {
-        sms_enabled: Boolean(preferences.sms_enabled), email_enabled: Boolean(preferences.email_enabled), push_enabled: Boolean(preferences.push_enabled),
+        sms_enabled: Boolean(preferences.sms_enabled), email_enabled: Boolean(preferences.email_enabled), push_enabled: pushEnabled,
         portal_enabled: Boolean(preferences.portal_enabled), daily_engagement_enabled: Boolean(preferences.daily_engagement_enabled),
         preferred_locale: String(preferences.preferred_locale || "en"), timezone: String(preferences.timezone || "Asia/Kolkata"),
         quiet_hours_start: String(preferences.quiet_hours_start || "22:00"), quiet_hours_end: String(preferences.quiet_hours_end || "08:00"),
       };
       setPreferences(await customerApi.updateNotificationPreferences(payload));
-      Alert.alert("Preferences saved", "Your notification preferences have been updated.");
+      Alert.alert(
+        "Preferences saved",
+        pushSetupError
+          ? `Other preferences were saved, but push remains off. ${pushSetupError}`
+          : "Your notification preferences have been updated.",
+      );
     } catch (e) { setError(getApiErrorMessage(e, "Could not save notification preferences.")); }
     finally { setSavingPreferences(false); }
   };
@@ -72,7 +86,7 @@ export default function CustomerSettingsScreen() {
       <PreferenceToggle label="In-app / portal updates" description="Service status and account messages inside FieldOps" value={Boolean(preferences.portal_enabled)} onChange={(v) => setBool("portal_enabled", v)} />
       <PreferenceToggle label="Email updates" description="Service progress and important account messages" value={Boolean(preferences.email_enabled)} onChange={(v) => setBool("email_enabled", v)} />
       <PreferenceToggle label="SMS updates" description="Text messages where enabled for your account" value={Boolean(preferences.sms_enabled)} onChange={(v) => setBool("sms_enabled", v)} />
-      <PreferenceToggle label="Push preference" description="Saved server preference; native customer push registration is not yet available in the backend contract" value={Boolean(preferences.push_enabled)} onChange={(v) => setBool("push_enabled", v)} />
+      <PreferenceToggle label="Push updates on this device" description="Allow FieldOps job updates to appear as notifications on this iOS or Android device" value={Boolean(preferences.push_enabled)} onChange={(v) => setBool("push_enabled", v)} />
       <PreferenceToggle label="Daily engagement messages" description="Optional non-urgent service reminders where configured" value={Boolean(preferences.daily_engagement_enabled)} onChange={(v) => setBool("daily_engagement_enabled", v)} />
       <Field label="Preferred language / locale" value={String(preferences.preferred_locale || "en")} onChangeText={(v) => setPreferences((old) => ({ ...old, preferred_locale: v }))} placeholder="en" autoCapitalize="none" />
       <Field label="Time zone" value={String(preferences.timezone || "Asia/Kolkata")} onChangeText={(v) => setPreferences((old) => ({ ...old, timezone: v }))} placeholder="Asia/Kolkata" autoCapitalize="none" />

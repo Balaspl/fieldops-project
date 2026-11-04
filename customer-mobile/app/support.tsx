@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useFocusedAutoRefresh } from "../src/hooks/useFocusedAutoRefresh";
 import { Alert, Pressable, ScrollView, Text, View } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -21,14 +22,16 @@ export default function CustomerSupportScreen() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [submittingError, setSubmittingError] = useState("");
-  const load = useCallback(async (pull = false) => {
-    if (pull) setRefreshing(true); else setLoading(true);
-    setError("");
+  const load = useCallback(async (pull = false, silent = false) => {
+    if (pull) setRefreshing(true); else if (!silent) setLoading(true);
+    if (!silent) setError("");
     try { const [s, j] = await Promise.all([customerApi.supportRequests(), customerApi.jobs()]); setRequests(s); setJobs(j); }
-    catch (e) { setError(getApiErrorMessage(e, "Could not load support requests.")); }
+    catch (e) { if (!silent) setError(getApiErrorMessage(e, "Could not load support requests.")); }
     finally { setLoading(false); setRefreshing(false); }
   }, []);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
+  useFocusedAutoRefresh(() => load(false, true), !showForm && !saving);
+
   const create = async () => {
     setSubmittingError("");
     if (subject.trim().length < 3) { setSubmittingError("Enter a subject with at least 3 characters."); return; }
@@ -59,9 +62,12 @@ export default function CustomerSupportScreen() {
       {loading ? <LoadingView message="Loading your support requests…" /> : requests.length === 0 ? <Card><EmptyState title="No support requests yet" message="Your submitted questions and their latest status will appear here." icon="chatbubbles-outline" /></Card> : <View style={{ gap: 12 }}><Text style={{ color: colors.text, fontWeight: "800", fontSize: 17 }}>Your support requests</Text>{requests.map((item) => <Card key={item.id}>
         <View style={sharedStyles.spaceBetween}><Text style={{ flex: 1, color: colors.text, fontSize: 14, fontWeight: "800" }}>{item.subject}</Text><StatusBadge status={item.status} /></View>
         <Text style={{ color: colors.muted, fontSize: 11 }}>{item.request_number} · {formatDateTime(item.created_at)}</Text>
+        <Text style={{ color: colors.muted, fontSize: 11 }}>{item.category.replace(/_/g, " ")} · {item.priority} priority{item.assigned_staff_name ? ` · Assigned to ${item.assigned_staff_name}` : " · Waiting for assignment"}</Text>
         <Text style={{ color: colors.text, fontSize: 13, lineHeight: 20 }}>{item.description}</Text>
         {item.related_job_id ? <Text style={{ color: colors.muted, fontSize: 12 }}>Related job #{item.related_job_id}</Text> : null}
         {item.resolution_note ? <View style={{ backgroundColor: colors.accentLight, padding: 11, borderRadius: 11, gap: 4 }}><Text style={{ color: colors.brand, fontSize: 11, fontWeight: "800" }}>SUPPORT RESPONSE</Text><Text style={{ color: colors.text, fontSize: 12, lineHeight: 18 }}>{item.resolution_note}</Text></View> : null}
+        {item.updates?.length ? <View style={{ gap: 8 }}><Text style={{ color: colors.text, fontSize: 12, fontWeight: "800" }}>Case updates</Text>{item.updates.map((update) => <View key={update.id} style={{ borderLeftWidth: 2, borderLeftColor: colors.accent, paddingLeft: 9, gap: 2 }}><Text style={{ color: colors.text, fontSize: 12, fontWeight: "700" }}>{update.author_name}</Text><Text style={{ color: colors.muted, fontSize: 12, lineHeight: 17 }}>{update.message}</Text><Text style={{ color: colors.muted, fontSize: 10 }}>{formatDateTime(update.created_at)}</Text></View>)}</View> : null}
+        {(["RESOLVED", "CLOSED"].includes(item.status)) ? <AppButton title="Issue still needs help? Reopen request" kind="secondary" onPress={() => Alert.alert("Reopen support request?", "The support team will be notified and continue working on this case.", [{ text: "Cancel", style: "cancel" }, { text: "Reopen", onPress: () => { void customerApi.reopenSupportRequest(item.id).then(() => { void load(); Alert.alert("Request reopened", "Your case is back in the support queue."); }).catch((e) => Alert.alert("Could not reopen request", getApiErrorMessage(e, "Please try again."))); } }])} /> : null}
       </Card>)}</View>}
     </ScrollView>
   </Screen>;

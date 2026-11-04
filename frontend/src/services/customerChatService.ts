@@ -20,7 +20,7 @@ export type ChatComponent = {
   completed_at?: string | null;
   closure_report_available?: boolean;
   items?: string[];
-  action?: "service_requests" | "tracking" | "support" | "download_report" | null;
+  action?: "service_requests" | "tracking" | "support" | "create_support_case" | "download_report" | null;
 };
 
 export type ChatConversation = {
@@ -55,6 +55,18 @@ export async function sendCustomerChatMessage(conversationId: string | null, mes
     message,
     client_message_id: clientMessageId,
   });
+  return response.data;
+}
+
+export async function createSupportCaseFromChat(conversationId: string) {
+  const response = await api.post<{
+    id: number;
+    request_number: string;
+    status: string;
+    priority: string;
+    created: boolean;
+    message: string;
+  }>(`/api/v1/customer/chat/conversations/${encodeURIComponent(conversationId)}/support-case`, {});
   return response.data;
 }
 

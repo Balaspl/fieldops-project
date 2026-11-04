@@ -104,10 +104,14 @@ export interface CustomerSupportRequestResponse {
   description: string;
   related_job_id: number | null;
   status: string;
+  category: string;
+  priority: string;
+  assigned_staff_name: string | null;
   resolution_note: string | null;
   resolved_at: string | null;
   created_at: string;
   updated_at: string;
+  updates: Array<{ id: number; author_role: string; author_name: string; message: string; created_at: string }>;
 }
 
 export interface CustomerSupportAdminJob {
@@ -139,6 +143,18 @@ export interface CustomerSupportAdminRequest
     phone_number: string | null;
   };
   job: CustomerSupportAdminJob | null;
+  assigned_staff_id: string | null;
+  source_chat_conversation_id: string | null;
+  chat_transcript: Array<{ sender: string; content: string; created_at: string }>;
+  sentiment_triage: {
+    sentiment: string;
+    emotion: string | null;
+    urgency: string | null;
+    severity: string | null;
+    confidence: number;
+    issue_categories: string[];
+    recommended_action: string | null;
+  } | null;
 }
 
 export interface CustomerSupportAdminUpdate {
@@ -148,6 +164,9 @@ export interface CustomerSupportAdminUpdate {
     | "RESOLVED"
     | "CLOSED";
   resolution_note?: string | null;
+  category?: string;
+  priority?: string;
+  assign_to_me?: boolean;
 }
 // Profile
 export const getCustomerProfile = () =>
@@ -262,6 +281,12 @@ export const createCustomerSupportRequest = (
   api.post<CustomerSupportRequestResponse>(
     "/api/customer/support-requests",
     data,
+  );
+
+export const reopenCustomerSupportRequest = (id: number, message?: string) =>
+  api.post<CustomerSupportRequestResponse>(
+    `/api/customer/support-requests/${id}/reopen`,
+    { message },
   );
 
 export const getAdminCustomerSupportRequests = (

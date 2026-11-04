@@ -61,11 +61,18 @@ from ..services.twilio_sms import (
     send_job_assignment_sms,
 )
 from app.models import User
+from app.models_legacy import NotificationChannelDelivery
 from app.services.ai.FieldOpsAI.services.intent_service import IntentService
 from app.services.ai.FieldOpsAI.schemas.intent import IntentContext
 from app.services.ai.FieldOpsAI.services.realtime_sentiment import (
     RealTimeSentimentScorer,
 )
+from app.services.inbound_customer_communication import (
+    handle_customer_sms,
+)
+from app.services.inbound_technician_communication import handle_technician_sms
+from app.services.communication_delivery import enqueue_tracked_sms
+from app.services.socket_manager import sio
 from app.services.sms.twilio_service import TwilioSMSService
 from app.tasks import send_sms_async, send_bulk_sms_async
 
@@ -796,6 +803,44 @@ async def twilio_status_webhook(
         payload
     )
 
+    channel_delivery = (
+        db.query(NotificationChannelDelivery)
+        .filter(NotificationChannelDelivery.provider_id == MessageSid)
+        .first()
+    )
+    if channel_delivery:
+        status_value = (MessageStatus or "").strip().lower()
+        tracked_status = {
+            "queued": "queued",
+            "sending": "sending",
+            "sent": "accepted",
+            "delivered": "delivered",
+            "failed": "failed",
+            "undelivered": "failed",
+        }.get(status_value)
+        if tracked_status:
+            current_status = str(channel_delivery.status or "").lower()
+            rank = {
+                "queued": 0,
+                "sending": 1,
+                "accepted": 2,
+                "sent": 2,
+                "failed": 3,
+                "delivered": 3,
+            }
+            may_advance = rank.get(tracked_status, 0) >= rank.get(current_status, 0)
+            if current_status in {"delivered", "failed"} and tracked_status != "delivered":
+                may_advance = False
+            if may_advance:
+                channel_delivery.status = tracked_status
+                if tracked_status == "failed" and (ErrorCode or ErrorMessage):
+                    channel_delivery.error_message = (
+                        f"Twilio {status_value}: {ErrorCode or ErrorMessage}"
+                    )[:500]
+                elif tracked_status != "failed":
+                    channel_delivery.error_message = None
+                db.commit()
+
     if delivery is None:
         logger.warning(
             "SMS delivery record not found. "
@@ -885,29 +930,15 @@ async def twilio_inbound_webhook(
         "END",
     }
 
-    if (
-        Body
-        and Body.strip().upper()
-        in stop_keywords
-    ):
-        technician = (
-            db.query(Technician)
-            .filter(
-                Technician.phone_number
-                == From
-            )
-            .first()
-        )
-
-        if technician:
-            technician.sms_opt_out = 1
-            db.commit()
-
-            logger.info(
-                "Technician opted out of SMS. "
-                "tech_id=%s",
-                technician.tech_id,
-            )
+    technician_matches = (
+        db.query(Technician)
+        .filter(Technician.phone_number == From)
+        .all()
+    )
+    if len(technician_matches) > 1:
+        logger.warning("Inbound SMS sender maps to multiple technician records.")
+        return {"status": "ok", "communication": {"status": "sender_ambiguous"}}
+    technician_sender = technician_matches[0] if technician_matches else None
 
     # ---------------------------------------------------------
     # Customer Intent Recognition
@@ -923,6 +954,52 @@ async def twilio_inbound_webhook(
         )
         .first()
     )
+
+    if customer and technician_sender:
+        logger.warning("Inbound SMS sender maps to both a customer and technician account.")
+        return {"status": "ok", "communication": {"status": "sender_ambiguous"}}
+
+    if (
+        technician_sender
+        and Body
+        and Body.strip().upper() in stop_keywords
+    ):
+        technician_sender.sms_opt_out = 1
+        db.commit()
+        logger.info(
+            "Technician opted out of SMS. tech_id=%s",
+            technician_sender.tech_id,
+        )
+        return {"status": "ok", "communication": {"status": "opted_out"}}
+
+    customer_stop_keywords = {"STOP", "UNSUBSCRIBE", "QUIT", "END"}
+    if customer and Body and Body.strip().upper() in customer_stop_keywords:
+        from app.services.ai.FieldOpsAI.repositories.customer_profile_repository import (
+            CustomerProfileRepository,
+        )
+        from app.services.ai.FieldOpsAI.schemas.customer_profile import (
+            CustomerPreferenceUpdate,
+        )
+        from app.services.ai.FieldOpsAI.services.customer_preference_service import (
+            CustomerPreferenceService,
+        )
+
+        CustomerPreferenceService(
+            CustomerProfileRepository(db)
+        ).update_preferences(
+            tenant_id=str(customer.tenant_id),
+            customer_id=str(customer.id),
+            payload=CustomerPreferenceUpdate(sms_enabled=False),
+            actor_id=str(customer.id),
+            actor_source="CUSTOMER",
+            correlation_id=correlation_id_ctx.get() or None,
+        )
+        logger.info(
+            "Customer SMS opt-out received; no conversational reply will be sent. "
+            "user_id=%s",
+            customer.id,
+        )
+        return {"status": "ok", "communication": {"status": "opted_out"}}
 
     if customer and Body and Body.strip():
         intent_service = IntentService(
@@ -965,34 +1042,139 @@ async def twilio_inbound_webhook(
             .first()
         )
 
-        if customer_job:
-            sentiment_scorer = RealTimeSentimentScorer(db=db)
+        sentiment_scorer = RealTimeSentimentScorer(db=db)
+        sentiment_result = await sentiment_scorer.score_reply(
+            reply_text=Body,
+            customer_id=customer.id,
+            job_id=customer_job.id if customer_job else None,
+            channel="SMS",
+            language="en",
+            context=None,
+            tenant_id=customer.tenant_id,
+            source_type="SMS",
+            source_id=MessageSid,
+        )
 
-            sentiment_result = await sentiment_scorer.score_reply(
-                reply_text=Body,
-                customer_id=customer.id,
-                job_id=customer_job.id,
-                channel="SMS",
-                language="en",
-                context=None,
+        logger.info(
+            "Customer sentiment classified. "
+            "user_id=%s job_id=%s sentiment=%s confidence=%.2f",
+            customer.id,
+            customer_job.id if customer_job else None,
+            sentiment_result.sentiment if sentiment_result else "SKIPPED",
+            sentiment_result.confidence if sentiment_result else 0.0,
+        )
+        try:
+            communication_result = handle_customer_sms(
+                db,
+                customer=customer,
+                body=Body,
+                message_sid=MessageSid,
             )
-
-            logger.info(
-                "Customer sentiment classified. "
-                "user_id=%s job_id=%s sentiment=%s confidence=%.2f",
-                customer.id,
-                customer_job.id,
-                sentiment_result.sentiment,
-                sentiment_result.confidence,
-            )
-        else:
-            logger.info(
-                "No active job found for customer sentiment analysis. "
+        except Exception as exc:
+            logger.exception(
+                "Communication Agent could not process inbound customer SMS. "
                 "user_id=%s",
                 customer.id,
             )
+            raise HTTPException(
+                status_code=503,
+                detail="Unable to process the customer message right now.",
+            ) from exc
+
+        logger.info(
+            "Inbound customer SMS routed through Communication Agent. "
+            "user_id=%s conversation_id=%s status=%s reply_queued=%s",
+            customer.id,
+            communication_result.get("conversation_id"),
+            communication_result.get("status"),
+            communication_result.get("reply_queued"),
+        )
+    elif technician_sender and Body and Body.strip():
+        technician_result = handle_technician_sms(
+            db,
+            technician=technician_sender,
+            body=Body,
+            message_sid=MessageSid,
+        )
+        state = technician_result.get("status")
+        if state == "job_selection_required":
+            enqueue_tracked_sms(
+                db,
+                tenant_id=str(technician_sender.tenant_id),
+                recipient_id=str(technician_result["technician_user_id"]),
+                recipient_role="technician",
+                technician_id=technician_sender.tech_id,
+                to_number=From,
+                body=(
+                    "You have multiple active jobs. Reply with JOB #<number> "
+                    "followed by your message so I can attach it to the right job."
+                ),
+                source_type="INBOUND_TECH_SMS_CLARIFICATION",
+                source_id=MessageSid,
+                title="Specify the job for your message",
+            )
+        elif state == "job_not_assigned_or_chat_unavailable":
+            enqueue_tracked_sms(
+                db,
+                tenant_id=str(technician_sender.tenant_id),
+                recipient_id=str(technician_result["technician_user_id"]),
+                recipient_role="technician",
+                technician_id=technician_sender.tech_id,
+                to_number=From,
+                body=(
+                    "I couldn't match that job to an active assignment. "
+                    "Please send this update from the FieldOps technician app."
+                ),
+                source_type="INBOUND_TECH_SMS_CLARIFICATION",
+                source_id=MessageSid,
+                title="Job update needs the technician app",
+            )
+        elif state == "stored":
+            try:
+                await sio.emit(
+                    "job_message",
+                    {
+                        "job_id": technician_result["job_id"],
+                        "message": {
+                            "id": technician_result["message_id"],
+                            "job_id": technician_result["job_id"],
+                            "sender_user_id": technician_result["sender_user_id"],
+                            "sender_role": technician_result["sender_role"],
+                            "body": technician_result["body"],
+                            "created_at": technician_result["created_at"],
+                            "delivered_at": None,
+                            "read_at": None,
+                            "is_mine": False,
+                        },
+                    },
+                    room=f"user_{technician_result['customer_user_id']}",
+                )
+            except Exception:
+                logger.exception(
+                    "Could not broadcast inbound technician SMS to the customer. "
+                    "job_id=%s",
+                    technician_result.get("job_id"),
+                )
+        logger.info(
+            "Inbound technician SMS handled. tech_id=%s status=%s job_id=%s",
+            technician_sender.tech_id,
+            state,
+            technician_result.get("job_id"),
+        )
     return {
         "status": "ok",
+        **(
+            {
+                "communication": communication_result,
+            }
+            if customer and Body and Body.strip()
+            else {}
+        ),
+        **(
+            {"communication": technician_result}
+            if technician_sender and not customer and Body and Body.strip()
+            else {}
+        ),
     }
 
 

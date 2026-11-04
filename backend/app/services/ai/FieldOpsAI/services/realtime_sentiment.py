@@ -34,8 +34,9 @@ class RealTimeSentimentScorer:
 
     def _get_previous_messages(
         self,
-        customer_id: str,
-        job_id: int,
+        customer_id: int | str,
+        job_id: int | None,
+        source_type: str | None = None,
     ) -> list[str]:
         """
         Return the previous 3 customer messages for the
@@ -47,8 +48,8 @@ class RealTimeSentimentScorer:
             .filter(
                 SentimentThreadMessage.customer_id
                 == str(customer_id),
-                SentimentThreadMessage.job_id
-                == job_id,
+                SentimentThreadMessage.job_id == job_id,
+                *([SentimentThreadMessage.source_type == source_type] if source_type else []),
             )
             .order_by(
                 SentimentThreadMessage.created_at.desc()
@@ -65,11 +66,15 @@ class RealTimeSentimentScorer:
     async def score_reply(
         self,
         reply_text: str,
-        customer_id: int,
-        job_id: int,
+        customer_id: int | str,
+        job_id: int | None,
         channel: str,
-        language: str = "en",
+        language: Optional[str] = None,
         context: Optional[list[str]] = None,
+        source_message_id: Optional[str] = None,
+        source_type: Optional[str] = None,
+        source_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ):
         """
         Analyze and persist an incoming customer reply.
@@ -78,7 +83,30 @@ class RealTimeSentimentScorer:
         if not reply_text or not reply_text.strip():
             return None
 
-        supported_channels = {"SMS", "EMAIL", "PORTAL"}
+        language = language or self._detect_language(reply_text)
+
+        if source_message_id:
+            existing = (
+                self.db.query(SentimentThreadMessage)
+                .filter(SentimentThreadMessage.source_message_id == source_message_id)
+                .first()
+            )
+            if existing:
+                return existing
+
+        source_type = (source_type or channel).upper()
+        if source_id:
+            existing = self.db.query(SentimentThreadMessage).filter(
+                SentimentThreadMessage.source_type == source_type,
+                SentimentThreadMessage.source_id == str(source_id),
+            ).first()
+            if existing:
+                return existing
+
+        supported_channels = {
+            "EMAIL", "SMS", "CHAT", "WHATSAPP", "PORTAL", "SUPPORT_TICKET",
+            "DISPATCH_NOTE", "JOB_CHAT", "SUPPORT_CHAT", "JOB_FEEDBACK", "SUPPORT_CASE",
+        }
 
         if channel.upper() not in supported_channels:
             raise ValueError(
@@ -98,6 +126,7 @@ class RealTimeSentimentScorer:
             else self._get_previous_messages(
                 customer_id=customer_id,
                 job_id=job_id,
+                source_type=source_type if job_id is None else None,
             )
         )
 
@@ -120,7 +149,7 @@ class RealTimeSentimentScorer:
                 if sentiment_shift
                 else "negative_high_confidence"
             )
-            job = self.db.query(Job).filter(Job.id == job_id).first()
+            job = self.db.query(Job).filter(Job.id == job_id).first() if job_id is not None else None
 
             if job:
                 DispatcherAlertService.trigger_sentiment_alert(
@@ -132,7 +161,7 @@ class RealTimeSentimentScorer:
                 )
 
         sentiment_record = SentimentThreadMessage(
-            tenant_id=self._get_tenant_id(job_id),
+            tenant_id=tenant_id or self._get_tenant_id(job_id),
             customer_id=str(customer_id),
             job_id=job_id,
             channel=channel,
@@ -161,6 +190,12 @@ class RealTimeSentimentScorer:
                 "summary",
                 None,
             ),
+            severity=getattr(result, "severity", None),
+            issue_categories=getattr(result, "issue_categories", []),
+            recommended_action=getattr(result, "recommended_action", None),
+            source_message_id=source_message_id,
+            source_type=source_type,
+            source_id=str(source_id) if source_id is not None else source_message_id,
         )
 
         self.db.add(sentiment_record)
@@ -169,6 +204,7 @@ class RealTimeSentimentScorer:
 
         escalation = self.escalation_service.create_escalation(
             message=sentiment_record,
+            suggested_action=getattr(result, "recommended_action", None),
         )
 
         if escalation:
@@ -178,16 +214,17 @@ class RealTimeSentimentScorer:
         .first()
     )
 
-            if customer:
+            if customer and channel not in {"JOB_CHAT", "SUPPORT_CHAT", "JOB_FEEDBACK", "SUPPORT_CASE"}:
                 await self.escalation_service.send_auto_response(
-                customer_phone=customer.phone_number
+                customer_phone=customer.phone_number,
+                escalation=escalation,
         )
 
             await self.escalation_service.notify_manager(
                 escalation
     )
 
-        job = self.db.query(Job).filter(Job.id == job_id).first()
+        job = self.db.query(Job).filter(Job.id == job_id).first() if job_id is not None else None
         if job:
             RetentionWorkflowService(self.db).create_workflow(
                 tenant_id=job.tenant_id,
@@ -198,6 +235,22 @@ class RealTimeSentimentScorer:
             )
 
         return result
+
+    @staticmethod
+    def _detect_language(message: str) -> str:
+        """Detect supported scripts and common Spanish cues locally."""
+        if any("\u0b80" <= char <= "\u0bff" for char in message):
+            return "ta"
+        if any("\u0900" <= char <= "\u097f" for char in message):
+            return "hi"
+        words = set(re.findall(r"[a-záéíóúüñ]+", message.lower()))
+        if words & {
+            "gracias", "hola", "bueno", "buena", "excelente", "problema",
+            "queja", "retraso", "molesto", "molesta", "decepcionado",
+            "decepcionada", "funciona", "servicio", "técnico", "técnica",
+        }:
+            return "es"
+        return "en"
 
     def _get_tenant_id(
         self,

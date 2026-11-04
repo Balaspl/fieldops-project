@@ -2,9 +2,11 @@
 
 from datetime import datetime, timezone
 import uuid
+import logging
+import re
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import desc
@@ -13,11 +15,13 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import AuthenticatedUser, get_current_user, require_role
 from app.auth.rbac import UserRole
 from app.database import get_db
-from app.models import CustomerChatConversation, CustomerChatMessage, CustomerSupportFAQ
+from app.models import CustomerChatConversation, CustomerChatMessage, CustomerSupportFAQ, CustomerSupportRequest
 from app.middleware.rate_limit import RateLimitPolicy, rate_limit_dependency
 from app.services.customer_support_graph import customer_support_graph
+from app.services.customer_support_cases import create_support_case
 
 router = APIRouter(prefix="/api/v1/customer/chat", tags=["Customer Support Chat"], dependencies=[Depends(require_role(UserRole.CUSTOMER))])
+logger = logging.getLogger(__name__)
 faq_router = APIRouter(prefix="/api/v1/admin/customer-support/faqs", tags=["Customer Support FAQ"], dependencies=[Depends(require_role(UserRole.SUPER_ADMIN))])
 _chat_limiter = rate_limit_dependency(RateLimitPolicy("customer_chat", 300, 60, False))
 _tenant_chat_limiter = rate_limit_dependency(RateLimitPolicy("customer_chat_tenant", 1000, 60, False))
@@ -43,6 +47,11 @@ class CreateConversation(BaseModel):
     title: str | None = Field(default=None, max_length=120)
 
 
+class SupportCaseFromChat(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    related_job_id: int | None = Field(default=None, ge=1)
+
+
 class FAQUpsert(BaseModel):
     model_config = ConfigDict(extra="forbid")
     question: str = Field(min_length=4, max_length=500)
@@ -66,7 +75,7 @@ class SupportComponent(BaseModel):
     completed_at: str | None = Field(default=None, max_length=60)
     closure_report_available: bool = False
     items: list[str] = Field(default_factory=list, max_length=30)
-    action: Literal["service_requests", "tracking", "support", "download_report"] | None = None
+    action: Literal["service_requests", "tracking", "support", "create_support_case", "download_report"] | None = None
 
 
 class SupportReply(BaseModel):
@@ -159,12 +168,69 @@ def get_conversation(conversation_id: str, user: AuthenticatedUser = Depends(get
 def delete_conversation(conversation_id: str, user: AuthenticatedUser = Depends(get_current_user), db: Session = Depends(get_db)):
     """Delete only the authenticated customer's chat session and its messages."""
     conversation = _conversation(db, user, conversation_id)
+    linked_case = db.query(CustomerSupportRequest).filter_by(
+        source_chat_conversation_id=conversation.id,
+        tenant_id=user.tenant_id,
+        customer_user_id=user.user_id,
+    ).first()
+    if linked_case:
+        raise HTTPException(status_code=409, detail="This conversation is attached to support request " + linked_case.request_number + " and is retained for the support team.")
     db.query(CustomerChatMessage).filter(
         CustomerChatMessage.tenant_id == user.tenant_id,
         CustomerChatMessage.conversation_id == conversation.id,
     ).delete(synchronize_session=False)
     db.delete(conversation)
     db.commit()
+
+
+@router.post("/conversations/{conversation_id}/support-case")
+def create_case_from_chat(
+    conversation_id: str,
+    payload: SupportCaseFromChat,
+    response: Response,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    conversation = _conversation(db, user, conversation_id)
+    messages = db.query(CustomerChatMessage).filter(
+        CustomerChatMessage.conversation_id == conversation.id,
+        CustomerChatMessage.tenant_id == user.tenant_id,
+        CustomerChatMessage.status == "SUCCEEDED",
+    ).order_by(CustomerChatMessage.created_at, CustomerChatMessage.id).all()
+    customer_messages = [row for row in messages if row.sender_type == "customer"]
+    if not customer_messages:
+        raise HTTPException(status_code=400, detail="Send a message before creating a support request.")
+    escalation_reply = next((row for row in reversed(messages) if row.sender_type == "assistant" and row.needs_escalation and row.reply_to_message_id), None)
+    issue_message = next((row for row in customer_messages if escalation_reply and row.id == escalation_reply.reply_to_message_id), customer_messages[-1])
+    latest_customer_message = issue_message.content.strip()
+    subject = re.sub(r"\s+", " ", latest_customer_message).strip(" .!?\n")[:190] or "Customer support request from chat"
+    related_job_id = payload.related_job_id
+    if related_job_id is None:
+        for row in reversed(messages):
+            for component in row.response_components or []:
+                if component.get("type") == "job_status" and component.get("job_id"):
+                    related_job_id = component["job_id"]
+                    break
+            if related_job_id:
+                break
+    case, created = create_support_case(
+        db,
+        customer_id=user.user_id,
+        tenant_id=user.tenant_id,
+        subject=subject,
+        description=latest_customer_message,
+        related_job_id=related_job_id,
+        source_chat_conversation_id=conversation.id,
+    )
+    response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+    return {
+        "id": case.id,
+        "request_number": case.request_number,
+        "status": case.status,
+        "priority": case.priority,
+        "created": created,
+        "message": "Your conversation is now linked to a support case. The support team can review the chat and follow up here.",
+    }
 
 
 @router.post("", dependencies=[Depends(authenticated_chat_rate_limit)])
@@ -204,6 +270,12 @@ def send_message(payload: SendMessage, user: AuthenticatedUser = Depends(get_cur
             raise HTTPException(status_code=409, detail="Unable to accept this message. Please retry.")
         assistant = db.query(CustomerChatMessage).filter_by(reply_to_message_id=prior.id).first()
         return {"conversation_id": conversation.id, "answer": assistant.content if assistant else "Your message is being processed.", "intent": assistant.intent if assistant else None, "sources": assistant.source_references if assistant else [], "escalation": bool(assistant.needs_escalation) if assistant else False, "components": (assistant.response_components or []) if assistant else [], "follow_up_suggestions": (assistant.follow_up_suggestions or []) if assistant else []}
+    try:
+        from app.sentiment.job_message_tasks import analyze_customer_support_message
+        analyze_customer_support_message.delay(incoming.id)
+    except Exception:
+        # Sentiment is supplemental; support chat remains available if Celery is down.
+        logger.exception("Unable to queue support chat sentiment analysis for message %s", incoming.id)
     try:
         history_rows = db.query(CustomerChatMessage).filter(
             CustomerChatMessage.tenant_id == user.tenant_id,

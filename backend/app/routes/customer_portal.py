@@ -69,8 +69,17 @@ from ..portal_schemas import (
     CustomerPaymentHistoryResponse,
     CustomerSupportRequestCreate,
     CustomerSupportRequestResponse,
+    CustomerSupportReopenRequest,
 )
+from ..schemas import FCMTokenRegistration
 from ..services.enterprise_audit import audit_log, AuditAction
+from ..services.customer_support_cases import (
+    create_support_case,
+    customer_case_payload,
+    notify_support_staff,
+    support_updates,
+)
+from ..models import CustomerSupportCaseUpdate
 from ..services.ola_map_client import OlaMapsClient, is_valid_coordinate
 from ..services.eta_service import ETAService
 from ..redis_client import get_redis_client
@@ -2353,7 +2362,7 @@ async def list_customer_support_requests(
     within the authenticated tenant.
     """
 
-    return (
+    requests = (
         db.query(CustomerSupportRequest)
         .filter(
             CustomerSupportRequest.customer_user_id
@@ -2367,6 +2376,7 @@ async def list_customer_support_requests(
         )
         .all()
     )
+    return [customer_case_payload(db, row) for row in requests]
 
 
 @router.post(
@@ -2386,40 +2396,79 @@ async def create_customer_support_request(
     authenticated user and are never accepted from the request body.
     """
 
-    related_job_id = data.related_job_id
-
-    if related_job_id is not None:
-        related_request = (
-            db.query(ServiceRequest)
-            .filter(
-                ServiceRequest.linked_job_id == related_job_id,
-                ServiceRequest.customer_user_id == current_user.user_id,
-                ServiceRequest.tenant_id == current_user.tenant_id,
-            )
-            .first()
-        )
-
-        if not related_request:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Related job not found for this customer.",
-            )
-
-    support_request = CustomerSupportRequest(
-        request_number=_generate_support_request_number(),
-        customer_user_id=current_user.user_id,
+    support_request, _ = create_support_case(
+        db,
+        customer_id=current_user.user_id,
         tenant_id=current_user.tenant_id,
         subject=data.subject,
         description=data.description,
-        status="OPEN",
-        related_job_id=related_job_id,
+        related_job_id=data.related_job_id,
     )
+    return customer_case_payload(db, support_request)
 
-    db.add(support_request)
+
+@router.post(
+    "/support-requests/{support_request_id}/reopen",
+    response_model=CustomerSupportRequestResponse,
+)
+async def reopen_customer_support_request(
+    support_request_id: int,
+    data: CustomerSupportReopenRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    support_request = db.query(CustomerSupportRequest).filter(
+        CustomerSupportRequest.id == support_request_id,
+        CustomerSupportRequest.customer_user_id == current_user.user_id,
+        CustomerSupportRequest.tenant_id == current_user.tenant_id,
+    ).first()
+    if support_request is None:
+        raise HTTPException(status_code=404, detail="Support request not found.")
+    if support_request.status not in {"RESOLVED", "CLOSED"}:
+        raise HTTPException(status_code=409, detail="This request is already open for support.")
+    old_status = support_request.status
+    support_request.status = "OPEN"
+    support_request.resolution_note = None
+    support_request.resolved_at = None
+    support_request.resolved_by = None
+    note = data.message or "The issue is not resolved yet. Please continue helping me."
+    customer_update = CustomerSupportCaseUpdate(
+        support_request_id=support_request.id,
+        author_user_id=current_user.user_id,
+        author_role="customer",
+        message=note,
+    )
+    db.add(customer_update)
+    audit_log(
+        db,
+        action=AuditAction.CUSTOMER_SUPPORT_UPDATED,
+        tenant_id=support_request.tenant_id,
+        user_id=current_user.user_id,
+        role=current_user.role.value,
+        entity_type="customer_support_request",
+        entity_id=str(support_request.id),
+        old_value={"status": old_status},
+        new_value={"status": "OPEN", "customer_message": note},
+    )
+    notify_support_staff(
+        db,
+        support_request,
+        f"Support case {support_request.request_number} reopened",
+        f"The customer asked for more help: {note[:250]}",
+        f"reopened:{uuid.uuid4().hex[:10]}",
+    )
     db.commit()
     db.refresh(support_request)
+    db.refresh(customer_update)
+    try:
+        from app.sentiment.job_message_tasks import analyze_customer_support_case
 
-    return support_request
+        analyze_customer_support_case.delay(support_request.id, customer_update.id)
+    except Exception:
+        logger.exception(
+            "Could not queue sentiment analysis for support case update %s", customer_update.id
+        )
+    return customer_case_payload(db, support_request)
 
 # ──────────────────────────────────────────────────
 # Service History
@@ -2707,6 +2756,15 @@ async def submit_customer_feedback(
             detail="Feedback has already been submitted for this job.",
         )
 
+    if (feedback.comment or "").strip():
+        try:
+            from app.sentiment.job_message_tasks import analyze_customer_job_feedback
+
+            analyze_customer_job_feedback.delay(feedback.id)
+        except Exception:
+            # Persisting feedback must not depend on the sentiment queue being available.
+            logger.exception("Could not queue sentiment analysis for feedback %s", feedback.id)
+
     # Customer feedback is also a dispatch event. Persist one notification
     # per active dispatcher/admin and publish it only to this job's tenant.
     try:
@@ -2794,6 +2852,66 @@ async def submit_customer_feedback(
 # ──────────────────────────────────────────────────
 # Customer Notification Preferences
 # ──────────────────────────────────────────────────
+
+@router.put("/notification-device")
+async def register_customer_notification_device(
+    payload: FCMTokenRegistration,
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.NOTIFICATIONS_VIEW_OWN)
+    ),
+    db: Session = Depends(get_db),
+):
+    """Register the authenticated customer's native push token."""
+    user = (
+        db.query(User)
+        .filter(
+            User.id == str(current_user.user_id),
+            User.tenant_id == str(current_user.tenant_id),
+            User.role == UserRole.CUSTOMER.value,
+            User.is_active.is_(True),
+            User.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if user is None:
+        raise HTTPException(status_code=404, detail="Customer account not found.")
+    user.fcm_token = payload.token
+    user.device_type = payload.device_type
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Customer notification device registration failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to register this device for push notifications.",
+        ) from exc
+    return {"status": "registered"}
+
+
+@router.delete("/notification-device")
+async def unregister_customer_notification_device(
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.NOTIFICATIONS_VIEW_OWN)
+    ),
+    db: Session = Depends(get_db),
+):
+    """Remove the push token belonging to the authenticated customer account."""
+    user = (
+        db.query(User)
+        .filter(
+            User.id == str(current_user.user_id),
+            User.tenant_id == str(current_user.tenant_id),
+            User.role == UserRole.CUSTOMER.value,
+        )
+        .first()
+    )
+    if user is None:
+        raise HTTPException(status_code=404, detail="Customer account not found.")
+    user.fcm_token = None
+    user.device_type = None
+    db.commit()
+    return {"status": "unregistered"}
 
 @router.get(
     "/notification-preferences",

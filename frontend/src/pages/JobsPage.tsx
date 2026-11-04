@@ -1,3 +1,4 @@
+import { useActiveAutoRefresh } from "../hooks/useActiveAutoRefresh";
 import React, {
   useCallback,
   useEffect,
@@ -1487,12 +1488,12 @@ function JobCreationForm({
 
   const fetchJobs =
     useCallback(
-      async () => {
+      async (silent = false) => {
         const requestId =
           ++jobsRequestIdRef.current;
 
-        setJobsLoading(true);
-        setJobsError("");
+        if (!silent) setJobsLoading(true);
+        if (!silent) setJobsError("");
 
         try {
           const response =
@@ -1585,16 +1586,13 @@ function JobCreationForm({
             error
           );
 
-          setJobs([]);
-          setTotalJobsCount(0);
-          setJobsError(
-            "Unable to load jobs. Please try again."
-          );
+          if (!silent) {
+            setJobs([]);
+            setTotalJobsCount(0);
+            setJobsError("Unable to load jobs. Please try again.");
+          }
         } finally {
-          if (
-            requestId ===
-            jobsRequestIdRef.current
-          ) {
+          if (!silent && requestId === jobsRequestIdRef.current) {
             setJobsLoading(false);
           }
         }
@@ -1609,6 +1607,11 @@ function JobCreationForm({
   useEffect(() => {
     void fetchJobs();
   }, [fetchJobs]);
+
+  useActiveAutoRefresh(
+    () => fetchJobs(true),
+    !isFormOpen && !isEditing && !isClosureModalOpen,
+  );
 
   useEffect(() => {
     const loadTechnicians =

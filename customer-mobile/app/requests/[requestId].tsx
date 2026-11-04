@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import { useFocusedAutoRefresh } from "../../src/hooks/useFocusedAutoRefresh";
 import {
   Alert,
   Linking,
@@ -208,10 +209,10 @@ export default function ServiceRequestDetailScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const load = useCallback(async (pull = false) => {
+  const load = useCallback(async (pull = false, silent = false) => {
     if (pull) setRefreshing(true);
-    else setLoading(true);
-    setError("");
+    else if (!silent) setLoading(true);
+    if (!silent) setError("");
 
     try {
       if (!Number.isSafeInteger(requestId) || requestId <= 0) {
@@ -242,7 +243,7 @@ export default function ServiceRequestDetailScreen() {
       setPayment(paymentResult);
       setFeedback(feedbackResult);
     } catch (e) {
-      setError(getApiErrorMessage(e, "Unable to load job and invoice details."));
+      if (!silent) setError(getApiErrorMessage(e, "Unable to load job and invoice details."));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -250,6 +251,8 @@ export default function ServiceRequestDetailScreen() {
   }, [requestId]);
 
   useFocusEffect(useCallback(() => { void load(); }, [load]));
+  useFocusedAutoRefresh(() => load(false, true), !busy);
+
 
   const cancel = useCallback(() => {
     Alert.alert(

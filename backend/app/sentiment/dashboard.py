@@ -783,6 +783,7 @@ class SentimentDashboardService:
                     "sentiment_label": escalation.sentiment_label,
                     "sentiment_score": escalation.sentiment_score,
                     "trigger_reason": escalation.trigger_reason,
+                    "suggested_action": getattr(escalation, "suggested_action", None),
                     "status": escalation.status,
                     "assigned_manager_id": (
                         escalation.assigned_manager_id
@@ -1063,6 +1064,49 @@ async def get_metrics(
         "trend": service.get_sentiment_trend(
             tenant_id, granularity, parsed_start, parsed_end
         ),
+    }
+
+
+@router.get("/analyses")
+async def get_recent_analyses(
+    tenant_id: str = Query(...),
+    limit: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Return recent tenant-scoped customer message assessments for staff."""
+    _verify_tenant_access(current_user, tenant_id)
+    role = str(getattr(current_user.role, "value", current_user.role)).lower()
+    if role not in {"head", "super_admin", "dispatcher", "admin"}:
+        raise HTTPException(status_code=403, detail="Staff access is required.")
+    records = (
+        db.query(SentimentThreadMessage)
+        .filter(SentimentThreadMessage.tenant_id == tenant_id)
+        .order_by(SentimentThreadMessage.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return {
+        "items": [
+            {
+                "id": item.id,
+                "job_id": item.job_id,
+                "source_type": item.source_type,
+                "channel": item.channel,
+                "message": item.message,
+                "sentiment": item.sentiment,
+                "emotion": item.emotion,
+                "urgency": item.urgency,
+                "severity": item.severity,
+                "confidence": item.confidence,
+                "issue_categories": item.issue_categories or [],
+                "requires_human": str(item.requires_human or "").lower() in {"true", "yes", "1"},
+                "summary": item.summary,
+                "recommended_action": item.recommended_action,
+                "created_at": item.created_at.isoformat() if item.created_at else None,
+            }
+            for item in records
+        ]
     }
 
 

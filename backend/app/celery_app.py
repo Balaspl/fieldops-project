@@ -39,6 +39,7 @@ celery_app.conf.update(
     # registered on THIS celery_app instance.
     imports=(
         "app.tasks",
+        "app.sentiment.job_message_tasks",
     ),
 
     beat_schedule={

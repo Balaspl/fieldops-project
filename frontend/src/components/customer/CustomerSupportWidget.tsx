@@ -6,6 +6,7 @@ import {
   deleteCustomerChatConversation,
   downloadCustomerJobReport,
   getCustomerChatConversation,
+  createSupportCaseFromChat,
   sendCustomerChatMessage,
 } from "../../services/customerChatService";
 import "./CustomerSupportWidget.css";
@@ -123,7 +124,7 @@ export default function CustomerSupportWidget({ customerId, onSupportClick, onSe
       retryMessageId.current = null;
     } catch {
       if (sessionId !== chatSessionRef.current) return;
-      setError("Your message couldnÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢t be sent. Please retry.");
+      setError("Your message couldn't be sent. Please retry.");
       setDraft(content);
       setMessages((items) => items.filter((item) => item.id !== localMessage.id));
     } finally {
@@ -156,6 +157,37 @@ export default function CustomerSupportWidget({ customerId, onSupportClick, onSe
     catch { setReportError("The completion report could not be downloaded. Please contact FieldOps Support."); }
   }
 
+  function navigateFromChat(navigate?: () => void) {
+    navigate?.();
+    // Keep the conversation available while revealing the destination page.
+    setMinimized(true);
+  }
+
+  async function handoffToSupport() {
+    if (!conversationId) {
+      onSupportClick?.();
+      return;
+    }
+    const confirmed = window.confirm("Send this chat to the FieldOps support team as a trackable support request? The team will be able to review this conversation.");
+    if (!confirmed) return;
+    setBusy(true);
+    setError("");
+    try {
+      const supportCase = await createSupportCaseFromChat(conversationId);
+      setMessages((items) => [...items, {
+        id: Date.now(),
+        sender: "assistant",
+        content: `This conversation is linked to support request ${supportCase.request_number}. You can track the case and staff updates on the Support page.`,
+        created_at: new Date().toISOString(),
+        components: [{ type: "support", title: "Track support request", action: "support" }],
+      }]);
+    } catch {
+      setError("We couldn't create the support request. Your chat is still here; please try again or open the Support page.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function onSubmit(event: FormEvent) { event.preventDefault(); void submit(); }
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }
   return <>
@@ -170,14 +202,15 @@ export default function CustomerSupportWidget({ customerId, onSupportClick, onSe
           <strong>{component.title}</strong>
           {component.type === "job_status" && <div className="customer-chat-card-details"><span>Status: {component.status ?? "Unavailable"}</span>{component.preferred_service_date && <span>Preferred date: {component.preferred_service_date}</span>}{component.arrival_estimate && <span>Estimated arrival: {component.arrival_estimate}</span>}{component.completed_at && <span>Completed: {component.completed_at}</span>}</div>}
           {component.type === "service_catalog" && <ul>{(component.items ?? []).map((item) => <li key={item}>{item}</li>)}</ul>}
-          {component.action === "service_requests" && <button className="customer-chat-support-link" type="button" onClick={onServiceRequestsClick}>View service requests</button>}
-          {component.action === "tracking" && <button className="customer-chat-support-link" type="button" onClick={onTrackingClick}>Open technician tracking</button>}
+          {component.action === "service_requests" && <button className="customer-chat-support-link" type="button" onClick={() => navigateFromChat(onServiceRequestsClick)}>View service requests</button>}
+          {component.action === "tracking" && <button className="customer-chat-support-link" type="button" onClick={() => navigateFromChat(onTrackingClick)}>Open technician tracking</button>}
           {component.action === "download_report" && <button className="customer-chat-support-link" type="button" onClick={() => void downloadReport(component.job_id)}>Download completion report</button>}
-          {component.action === "support" && <button className="customer-chat-support-link" type="button" onClick={onSupportClick}>Open Support page</button>}
-        </div>)}{message.sender === "assistant" && !message.components?.some((component) => component.action === "support") && /support page/i.test(message.content) && <button className="customer-chat-support-link" type="button" onClick={onSupportClick}>Open Support page</button>}{message.sender === "assistant" && Boolean(message.follow_up_suggestions?.length) && <div className="customer-chat-followups" aria-label="Related questions">{message.follow_up_suggestions?.map((prompt) => <button key={prompt} type="button" disabled={busy} onClick={() => void submit(prompt)}>{prompt}</button>)}</div>}<time dateTime={message.created_at}>{new Date(message.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}
-        {busy && <div className="customer-chat-loading" role="status"><span /> Finding the right informationÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦</div>}
+          {component.action === "create_support_case" && <button className="customer-chat-support-link" type="button" disabled={busy} onClick={() => void handoffToSupport()}>Create support request</button>}
+          {component.action === "support" && <button className="customer-chat-support-link" type="button" onClick={() => navigateFromChat(onSupportClick)}>Open Support page</button>}
+        </div>)}{message.sender === "assistant" && !message.components?.some((component) => component.action === "support") && /support page/i.test(message.content) && <button className="customer-chat-support-link" type="button" onClick={() => navigateFromChat(onSupportClick)}>Open Support page</button>}{message.sender === "assistant" && Boolean(message.follow_up_suggestions?.length) && <div className="customer-chat-followups" aria-label="Related questions">{message.follow_up_suggestions?.map((prompt) => <button key={prompt} type="button" disabled={busy} onClick={() => void submit(prompt)}>{prompt}</button>)}</div>}<time dateTime={message.created_at}>{new Date(message.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}
+        {busy && <div className="customer-chat-loading" role="status"><span /> Finding the right information...</div>}
         {error && <div className="customer-chat-error" role="alert">{error}<button type="button" disabled={busy} onClick={() => void submit(draft)}> <RotateCw size={14} /> Retry</button></div>}
-        {reportError && <div className="customer-chat-error" role="alert">{reportError}<button type="button" onClick={onSupportClick}>Open Support page</button></div>}
+        {reportError && <div className="customer-chat-error" role="alert">{reportError}<button type="button" onClick={() => navigateFromChat(onSupportClick)}>Open Support page</button></div>}
         <div ref={endRef} />
       </div>
       <section className="customer-chat-suggestions" aria-label="Suggested questions">
@@ -185,7 +218,7 @@ export default function CustomerSupportWidget({ customerId, onSupportClick, onSe
         <div className="customer-chat-suggestion-list">{suggestions.map((prompt) => <button type="button" key={prompt} disabled={busy} onClick={() => void submit(prompt)}>{prompt}</button>)}</div>
       </section>
       <form className="customer-chat-compose" onSubmit={onSubmit}><textarea ref={composeRef} aria-label="Message FieldOps Support" placeholder="Write a message..." value={draft} maxLength={4000} onChange={(event) => setDraft(event.target.value)} onKeyDown={onKeyDown} disabled={busy} rows={1} /><button aria-label="Send message" type="submit" disabled={busy || !draft.trim()}><Send size={18} /></button></form>
-      <footer className="customer-chat-footer">For booking changes, use the Support page.</footer>
+      <footer className="customer-chat-footer">For human help, create a support request here or use the Support page.</footer>
     </section>}
     {open && minimized && <button className="customer-chat-reopen" type="button" onClick={() => setMinimized(false)} aria-label="Reopen support chat"><MessageCircle size={18} /> Support chat</button>}
     <button className="customer-chat-launcher" type="button" aria-label="Open FieldOps Support Chat" aria-expanded={open && !minimized} title="Chat with FieldOps Support" onClick={() => { setOpen(true); setMinimized(false); }}><FieldOpsMascot /><span className="customer-chat-tooltip">Chat with FieldOps Support</span></button>
