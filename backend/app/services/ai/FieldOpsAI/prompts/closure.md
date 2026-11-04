@@ -95,6 +95,9 @@ follow_up_required = false
 
 If follow_up_required is false, set follow_up_reason to null.
 
+If follow_up_required is true, provide a concise follow_up_reason
+based only on the supplied information. Never invent a reason.
+
 ---
 
 # Forbidden
@@ -109,7 +112,10 @@ You MUST NEVER:
 - Invent appointment dates
 - Mention AI
 - Mention internal systems
-- Mention confidence scores
+- Mention confidence scores in any human-readable summary
+
+The required confidence field must still be included in the JSON output
+because it is part of the ClosureDecision schema.
 
 ---
 

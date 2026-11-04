@@ -877,7 +877,8 @@ class TestDefaultRegistry:
     def test_default_registry_excludes_unmigrated_agents(self):
         """Test 56: Unmigrated agents are NOT registered."""
         registry = create_default_agent_registry()
-        unmigrated = [AITask.MONITORING, AITask.SENTIMENT, AITask.COMMUNICATION, AITask.CLOSURE]
+        assert registry.contains(AITask.CLOSURE)
+        unmigrated = [AITask.MONITORING, AITask.SENTIMENT, AITask.COMMUNICATION]
         for task in unmigrated:
             assert not registry.contains(task), f"{task.value} should not be registered"
 

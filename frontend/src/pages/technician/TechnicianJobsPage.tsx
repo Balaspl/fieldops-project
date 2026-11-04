@@ -76,7 +76,10 @@ import JobLiveTrackingMap from "../../components/customer-tracking/JobLiveTracki
 
 import JobMessagePanel from "../../components/customer-tracking/JobMessagePanel";
 
-import type { JobClosureData } from "../../services/planningService";
+import {
+  generateClosureSummary,
+  type JobClosureData,
+} from "../../services/planningService";
 
 import useAuthStore from "../../store/authStore";
 import {
@@ -2578,6 +2581,10 @@ const assignmentDistanceDisplay = !isValidCustomerLocation
           }}
 
           onSuccess={handlePaymentSubmitted}
+
+          onGenerateClosure={(input) =>
+            generateClosureSummary(completeModal, input)
+          }
 
         />
 

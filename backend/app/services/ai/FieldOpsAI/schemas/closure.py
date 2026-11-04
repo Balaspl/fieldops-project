@@ -17,7 +17,7 @@ The Closure Agent NEVER:
 
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ==========================================================
@@ -112,3 +112,19 @@ class ClosureDecision(BaseModel):
         le=1.0,
         description="AI confidence score."
     )
+    @model_validator(mode="after")
+    def validate_follow_up_reason(self) -> "ClosureDecision":
+        if self.follow_up_required:
+            if (
+                self.follow_up_reason is None
+                or not self.follow_up_reason.strip()
+            ):
+                raise ValueError(
+                    "follow_up_reason is required when follow_up_required is true."
+                )
+        elif self.follow_up_reason is not None:
+            raise ValueError(
+                "follow_up_reason must be null when follow_up_required is false."
+            )
+
+        return self

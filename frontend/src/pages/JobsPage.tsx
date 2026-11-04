@@ -16,12 +16,39 @@ import {
   Loader2,
   CheckCircle2,
   Star,
+  Search,
+  MapPin,
+  Grid2X2,
+  Snowflake,
+  Zap,
+  Droplet,
+  Wifi,
+  Wrench,
+  Layers,
+  CircleMinus,
+  UserRound,
+  Navigation,
+  LoaderCircle,
+  CircleX,
+  AlertCircle,
+  ArrowUp,
+  Equal,
+  ArrowDown,
+  Clock3,
+  AlertTriangle,
+  RotateCcw,
+  Filter,
+  Hammer,
+  ShieldCheck,
+  Briefcase,
+  type LucideIcon,
 } from "lucide-react";
 import LoadingSpinner from "../components/ui/LoadingSpinner";
 import EmptyState from "../components/ui/EmptyState";
 import JobStatusTimeline from "../components/customer-tracking/JobStatusTimeline";
 import useAuthStore from "../store/authStore";
 import {
+  generateClosureSummary,
   getJobClosure,
   getJobs,
   getTechnicians,
@@ -413,6 +440,11 @@ function JobCreationForm({
       DEFAULT_JOB_LIST_FILTERS
     );
 
+  const [appliedJobFilters, setAppliedJobFilters] =
+    useState<JobListFilters>({
+      ...DEFAULT_JOB_LIST_FILTERS,
+    });
+
   const [jobsPage, setJobsPage] =
     useState(1);
 
@@ -609,7 +641,7 @@ function JobCreationForm({
     return style;
   };
 
-  const updateJobFilter = (
+    const updateJobFilter = (
     key: JobFilterKey,
     value: string
   ) => {
@@ -619,31 +651,78 @@ function JobCreationForm({
     }));
   };
 
-  const clearJobFilters = () => {
+  const filterTones = {
+    green: { bg: "#E9F8EF", text: "#087B50", border: "#BFE8D2", active: "#07965B" },
+    sky: { bg: "#EAF7FF", text: "#0369A1", border: "#BAE6FD", active: "#0284C7" },
+    amber: { bg: "#FFF7E2", text: "#92400E", border: "#FDE68A", active: "#D97706" },
+    blue: { bg: "#EDF4FF", text: "#1D4ED8", border: "#BFDBFE", active: "#2563EB" },
+    purple: { bg: "#F4EEFF", text: "#6B21A8", border: "#DDD6FE", active: "#7C3AED" },
+    indigo: { bg: "#EEF2FF", text: "#3730A3", border: "#C7D2FE", active: "#4F46E5" },
+    pink: { bg: "#FFF0F7", text: "#BE185D", border: "#FBCFE8", active: "#DB2777" },
+    orange: { bg: "#FFF3E8", text: "#C2410C", border: "#FED7AA", active: "#EA580C" },
+    teal: { bg: "#E7F9F6", text: "#0F766E", border: "#99F6E4", active: "#0F766E" },
+    slate: { bg: "#F1F5F9", text: "#475569", border: "#CBD5E1", active: "#64748B" },
+    red: { bg: "#FFF0F0", text: "#B91C1C", border: "#FECACA", active: "#DC2626" },
+    mint: { bg: "#E9FBF3", text: "#047857", border: "#A7F3D0", active: "#059669" },
+  };
+
+  const renderFilterChip = (
+    label: string,
+    value: string,
+    currentValue: string,
+    tone: (typeof filterTones)[keyof typeof filterTones],
+    Icon: LucideIcon,
+    onSelect: (value: string) => void,
+  ) => {
+    const selected = currentValue === value;
+
+    return (
+      <button
+        key={value}
+        type="button"
+        aria-pressed={selected}
+        className="jobs-filter-chip"
+        onClick={() => onSelect(value)}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: "7px",
+          minHeight: "36px",
+          padding: "8px 13px",
+          borderRadius: "999px",
+          border: `1px solid ${selected ? tone.active : tone.border}`,
+          background: selected ? tone.active : tone.bg,
+          color: selected ? "#FFFFFF" : tone.text,
+          fontSize: "11px",
+          fontWeight: 700,
+          whiteSpace: "nowrap",
+          cursor: "pointer",
+          boxShadow: selected
+            ? "0 4px 9px rgba(7,123,77,.18)"
+            : "0 1px 3px rgba(15,23,42,.035)",
+          transition: "all .18s ease",
+        }}
+      >
+        <Icon size={14} strokeWidth={2.2} />
+        <span>{label}</span>
+      </button>
+    );
+  };
+
+    const clearJobFilters = () => {
     setJobFilters({
       ...DEFAULT_JOB_LIST_FILTERS,
     });
-  };
 
-  useEffect(() => {
-    const timer =
-      window.setTimeout(() => {
-        setDebSearchTerm(
-          searchTerm.trim()
-        );
-      }, 300);
+    setAppliedJobFilters({
+      ...DEFAULT_JOB_LIST_FILTERS,
+    });
 
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [searchTerm]);
-
-  useEffect(() => {
+    setSearchTerm("");
+    setDebSearchTerm("");
     setJobsPage(1);
-  }, [
-    debSearchTerm,
-    jobFilters,
-  ]);
+  };
 
   const getFormServiceTypes =
     () => {
@@ -1503,34 +1582,34 @@ function JobCreationForm({
               search:
                 debSearchTerm ||
                 undefined,
-              status:
-                jobFilters.status !==
+                status:
+                appliedJobFilters.status !==
                 "ALL"
-                  ? jobFilters.status
+                  ? appliedJobFilters.status
                   : undefined,
               priority:
-                jobFilters.priority !==
+                appliedJobFilters.priority !==
                 "ALL"
-                  ? jobFilters.priority
+                  ? appliedJobFilters.priority
                   : undefined,
               service_type:
-                jobFilters.service_type !==
+                appliedJobFilters.service_type !==
                 "ALL"
-                  ? jobFilters.service_type
+                  ? appliedJobFilters.service_type
                   : undefined,
               sla:
-                jobFilters.sla !==
+                appliedJobFilters.sla !==
                 "ALL"
-                  ? jobFilters.sla
+                  ? appliedJobFilters.sla
                   : undefined,
               location:
-                jobFilters.location.trim() ||
+                appliedJobFilters.location.trim() ||
                 undefined,
               technician_id:
-                jobFilters.technician !==
+                appliedJobFilters.technician !==
                 "ALL"
                   ? Number(
-                      jobFilters.technician
+                      appliedJobFilters.technician
                     )
                   : undefined,
             });
@@ -1600,7 +1679,7 @@ function JobCreationForm({
       [
         jobsPage,
         debSearchTerm,
-        jobFilters,
+        appliedJobFilters,
       ]
     );
 
@@ -2833,481 +2912,337 @@ function JobCreationForm({
             </div>
           </div>
 
-          {/* Filters */}
+          {/* Modern Color-Coded Job Filters */}
           <div
-            style={
-              styles.filtersRow
-            }
+            style={{
+              padding: "16px 18px 12px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "14px",
+            }}
           >
+            {/* Search, Location and Technician */}
             <div
-              style={
-                styles.filterGroup
-              }
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                gap: "14px",
+              }}
             >
-              <label
-                style={
-                  styles.filterLabel
-                }
-              >
-                Search
-              </label>
+              <div style={styles.filterGroup}>
+                <label style={styles.filterLabel}>Search</label>
+                <div style={{ position: "relative" }}>
+                  <Search
+                    size={16}
+                    color="#64748B"
+                    style={{
+                      position: "absolute",
+                      left: "12px",
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                    }}
+                  />
+                  <input
+                    type="text"
+                    aria-label="Search jobs"
+                    placeholder="Search name, location..."
+                    value={searchTerm}
+                    onChange={(event) => setSearchTerm(event.target.value)}
+                    style={{
+                      ...styles.filterInput,
+                      width: "100%",
+                      height: "40px",
+                      boxSizing: "border-box",
+                      paddingLeft: "36px",
+                    }}
+                  />
+                </div>
+              </div>
 
-              <input
-                type="text"
-                aria-label="Search jobs"
-                placeholder="Search name, location..."
-                value={
-                  searchTerm
-                }
-                onChange={(event) =>
-                  setSearchTerm(
-                    event.target.value
-                  )
-                }
-                onFocus={() =>
-                  setFocusedInput(
-                    "search"
-                  )
-                }
-                onBlur={() =>
-                  setFocusedInput(
-                    null
-                  )
-                }
-                style={
-                  focusedInput ===
-                  "search"
-                    ? {
-                        ...styles.filterInput,
-                        ...styles.filterInputFocus,
-                      }
-                    : styles.filterInput
-                }
-              />
-            </div>
+              <div style={styles.filterGroup}>
+                <label style={styles.filterLabel}>Location</label>
+                <div style={{ position: "relative" }}>
+                  <MapPin
+                    size={16}
+                    color="#64748B"
+                    style={{
+                      position: "absolute",
+                      left: "12px",
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                    }}
+                  />
+                  <input
+                    type="text"
+                    aria-label="Filter jobs by location"
+                    placeholder="Search location..."
+                    value={jobFilters.location}
+                    onChange={(event) =>
+                      updateJobFilter("location", event.target.value)
+                    }
+                    style={{
+                      ...styles.filterInput,
+                      width: "100%",
+                      height: "40px",
+                      boxSizing: "border-box",
+                      paddingLeft: "36px",
+                    }}
+                  />
+                </div>
+              </div>
 
-            <div
-              style={
-                styles.filterGroup
-              }
-            >
-              <label
-                style={
-                  styles.filterLabel
-                }
-              >
-                Location
-              </label>
+              <div style={styles.filterGroup}>
+                <label style={styles.filterLabel}>Technician</label>
+                <select
+                  value={jobFilters.technician}
+                  onChange={(event) =>
+                    updateJobFilter("technician", event.target.value)
+                  }
+                  aria-label="Filter jobs by technician"
+                  style={{
+                    ...styles.filterInput,
+                    height: "40px",
+                    width: "100%",
+                    boxSizing: "border-box",
+                  }}
+                >
+                  <option value="ALL">
+                    {techniciansLoading
+                      ? "Loading technicians..."
+                      : "All Technicians"}
+                  </option>
 
-              <input
-                type="text"
-                aria-label="Filter jobs by location"
-                placeholder="Search location..."
-                value={
-                  jobFilters.location
-                }
-                onChange={(event) =>
-                  updateJobFilter(
-                    "location",
-                    event.target.value
-                  )
-                }
-                onFocus={() =>
-                  setFocusedInput(
-                    "location"
-                  )
-                }
-                onBlur={() =>
-                  setFocusedInput(
-                    null
-                  )
-                }
-                style={
-                  focusedInput ===
-                  "location"
-                    ? {
-                        ...styles.filterInput,
-                        ...styles.filterInputFocus,
-                      }
-                    : styles.filterInput
-                }
-              />
-            </div>
-
-            <div
-              style={
-                styles.filterGroup
-              }
-            >
-              <label
-                style={
-                  styles.filterLabel
-                }
-              >
-                Priority
-              </label>
-
-              <select
-                value={
-                  jobFilters.priority
-                }
-                onChange={(event) =>
-                  updateJobFilter(
-                    "priority",
-                    event.target.value
-                  )
-                }
-                aria-label="Filter jobs by priority"
-                onFocus={() =>
-                  setFocusedInput(
-                    "priority"
-                  )
-                }
-                onBlur={() =>
-                  setFocusedInput(
-                    null
-                  )
-                }
-                style={
-                  focusedInput ===
-                  "priority"
-                    ? {
-                        ...styles.filterInput,
-                        ...styles.filterInputFocus,
-                      }
-                    : styles.filterInput
-                }
-              >
-                {PRIORITY_FILTER_OPTIONS.map(
-                  (option) => (
+                  {technicians.map((technician) => (
                     <option
-                      key={
-                        option.value
-                      }
-                      value={
-                        option.value
-                      }
+                      key={technician.technician_id}
+                      value={String(technician.technician_id)}
                     >
-                      {
-                        option.label
-                      }
+                      {technician.technician_name}
                     </option>
-                  )
+                  ))}
+                </select>
+
+                {techniciansError && (
+                  <span style={{ fontSize: "11px", color: "#7A2020" }}>
+                    {techniciansError}
+                  </span>
                 )}
-              </select>
+              </div>
             </div>
 
+            {/* Service Filters */}
             <div
-              style={
-                styles.filterGroup
-              }
+              style={{
+                borderTop: "1px solid #E7F0EB",
+                paddingTop: "12px",
+              }}
             >
-              <label
-                style={
-                  styles.filterLabel
-                }
-              >
+              <label style={{ ...styles.filterLabel, display: "block", marginBottom: "10px" }}>
                 Service
               </label>
 
-              <select
-                value={
-                  jobFilters.service_type
-                }
-                onChange={(event) =>
-                  updateJobFilter(
-                    "service_type",
-                    event.target.value
-                  )
-                }
-                aria-label="Filter jobs by service type"
-                onFocus={() =>
-                  setFocusedInput(
-                    "service"
-                  )
-                }
-                onBlur={() =>
-                  setFocusedInput(
-                    null
-                  )
-                }
-                style={
-                  focusedInput ===
-                  "service"
-                    ? {
-                        ...styles.filterInput,
-                        ...styles.filterInputFocus,
-                      }
-                    : styles.filterInput
-                }
-              >
-                <option value="ALL">
-                  All Services
-                </option>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                {renderFilterChip(
+                  "All Services",
+                  "ALL",
+                  jobFilters.service_type,
+                  filterTones.green,
+                  Grid2X2,
+                  (value) => updateJobFilter("service_type", value),
+                )}
 
-                {serviceTypes.map(
-                  (service) => (
-                    <option
-                      key={
-                        service.value
-                      }
-                      value={
-                        service.value
-                      }
-                    >
-                      {
-                        service.label
-                      }
-                    </option>
+                {[
+                  { label: "HVAC Repair", value: "HVAC_REPAIR", tone: filterTones.sky, icon: Snowflake },
+                  { label: "Electrical Service", value: "ELECTRICAL_SERVICE", tone: filterTones.amber, icon: Zap },
+                  { label: "Plumbing Service", value: "PLUMBING_SERVICE", tone: filterTones.blue, icon: Droplet },
+                  { label: "Network Support", value: "NETWORK_SUPPORT", tone: filterTones.purple, icon: Wifi },
+                  { label: "General Maintenance", value: "GENERAL_MAINTENANCE", tone: filterTones.indigo, icon: Wrench },
+                  { label: "Appliance Repair", value: "APPLIANCE_REPAIR", tone: filterTones.pink, icon: Briefcase },
+                  { label: "Roofing & Carpentry", value: "ROOFING_CARPENTRY", tone: filterTones.orange, icon: Hammer },
+                  { label: "CCTV & Security", value: "CCTV_SECURITY", tone: filterTones.teal, icon: ShieldCheck },
+                ].map((service) =>
+                  renderFilterChip(
+                    service.label,
+                    service.value,
+                    jobFilters.service_type,
+                    service.tone,
+                    service.icon,
+                    (value) => updateJobFilter("service_type", value),
                   )
                 )}
-              </select>
+              </div>
             </div>
 
+            {/* Status Filters */}
             <div
-              style={
-                styles.filterGroup
-              }
+              style={{
+                borderTop: "1px solid #E7F0EB",
+                paddingTop: "12px",
+              }}
             >
-              <label
-                style={
-                  styles.filterLabel
-                }
-              >
+              <label style={{ ...styles.filterLabel, display: "block", marginBottom: "10px" }}>
                 Status
               </label>
 
-              <select
-                value={
-                  jobFilters.status
-                }
-                onChange={(event) =>
-                  updateJobFilter(
-                    "status",
-                    event.target.value
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                {[
+                  { label: "All Statuses", value: "ALL", tone: filterTones.green, icon: Layers },
+                  { label: "Unassigned", value: "UNASSIGNED", tone: filterTones.slate, icon: CircleMinus },
+                  { label: "Assigned", value: "ASSIGNED", tone: filterTones.blue, icon: UserRound },
+                  { label: "En Route", value: "EN_ROUTE", tone: filterTones.purple, icon: Navigation },
+                  { label: "In Progress", value: "IN_PROGRESS", tone: filterTones.amber, icon: LoaderCircle },
+                  { label: "Completed", value: "COMPLETED", tone: filterTones.mint, icon: CheckCircle2 },
+                  { label: "Cancelled", value: "CANCELLED", tone: filterTones.red, icon: CircleX },
+                ].map((status) =>
+                  renderFilterChip(
+                    status.label,
+                    status.value,
+                    jobFilters.status,
+                    status.tone,
+                    status.icon,
+                    (value) => updateJobFilter("status", value),
                   )
-                }
-                aria-label="Filter jobs by status"
-                onFocus={() =>
-                  setFocusedInput(
-                    "status"
-                  )
-                }
-                onBlur={() =>
-                  setFocusedInput(
-                    null
-                  )
-                }
-                style={
-                  focusedInput ===
-                  "status"
-                    ? {
-                        ...styles.filterInput,
-                        ...styles.filterInputFocus,
-                      }
-                    : styles.filterInput
-                }
-              >
-                <option value="ALL">
-                  All Statuses
-                </option>
-                <option value="CREATED">
-                  Unassigned
-                </option>
-                <option value="ASSIGNED">
-                  Assigned
-                </option>
-                <option value="EN_ROUTE">
-                  En Route
-                </option>
-                <option value="IN_PROGRESS">
-                  In Progress
-                </option>
-                <option value="COMPLETED">
-                  Completed
-                </option>
-                <option value="CANCELLED">
-                  Cancelled
-                </option>
-              </select>
+                )}
+              </div>
+            </div>
+
+            {/* Priority and SLA */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+                gap: "18px",
+                borderTop: "1px solid #E7F0EB",
+                paddingTop: "12px",
+              }}
+            >
+              <div>
+                <label style={{ ...styles.filterLabel, display: "block", marginBottom: "10px" }}>
+                  Priority
+                </label>
+
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                  {[
+                    { label: "All", value: "ALL", tone: filterTones.green, icon: Layers },
+                    { label: "Critical", value: "CRITICAL", tone: filterTones.red, icon: AlertCircle },
+                    { label: "High", value: "HIGH", tone: filterTones.orange, icon: ArrowUp },
+                    { label: "Medium", value: "MEDIUM", tone: filterTones.blue, icon: Equal },
+                    { label: "Low", value: "LOW", tone: filterTones.mint, icon: ArrowDown },
+                  ].map((priority) =>
+                    renderFilterChip(
+                      priority.label,
+                      priority.value,
+                      jobFilters.priority,
+                      priority.tone,
+                      priority.icon,
+                      (value) => updateJobFilter("priority", value),
+                    )
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label style={{ ...styles.filterLabel, display: "block", marginBottom: "10px" }}>
+                  SLA
+                </label>
+
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                  {[
+                    { label: "All SLA", value: "ALL", tone: filterTones.green, icon: Clock3 },
+                    { label: "Within SLA", value: "WITHIN_SLA", tone: filterTones.mint, icon: CheckCircle2 },
+                    { label: "Approaching Breach", value: "APPROACHING_BREACH", tone: filterTones.amber, icon: AlertTriangle },
+                    { label: "Breached", value: "BREACHED", tone: filterTones.red, icon: AlertCircle },
+                  ].map((sla) =>
+                    renderFilterChip(
+                      sla.label,
+                      sla.value,
+                      jobFilters.sla,
+                      sla.tone,
+                      sla.icon,
+                      (value) => updateJobFilter("sla", value),
+                    )
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 
           <div
-            style={
-              styles.filterGroup
-            }
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              flexWrap: "wrap",
+              gap: "12px",
+              padding: "0 18px 14px",
+            }}
           >
-            <label
-              style={
-                styles.filterLabel
-              }
-            >
-              Technician
-            </label>
+            <p style={{ ...styles.resultsCount, margin: 0 }}>
+              Showing{" "}
+              <strong>
+                {totalJobsCount === 0
+                  ? 0
+                  : (safeJobsPage - 1) * JOBS_PAGE_SIZE + 1}
+                –
+                {Math.min(
+                  safeJobsPage * JOBS_PAGE_SIZE,
+                  totalJobsCount
+                )}
+              </strong>{" "}
+              of <strong>{totalJobsCount}</strong> jobs found
+            </p>
 
-            <select
-              value={
-                jobFilters.technician
-              }
-              onChange={(event) =>
-                updateJobFilter(
-                  "technician",
-                  event.target.value
-                )
-              }
-              aria-label="Filter jobs by technician"
-              onFocus={() =>
-                setFocusedInput(
-                  "technician"
-                )
-              }
-              onBlur={() =>
-                setFocusedInput(
-                  null
-                )
-              }
-              style={
-                focusedInput ===
-                "technician"
-                  ? {
-                      ...styles.filterInput,
-                      ...styles.filterInputFocus,
-                    }
-                  : styles.filterInput
-              }
-            >
-              <option value="ALL">
-                {techniciansLoading
-                  ? "Loading technicians..."
-                  : "All Technicians"}
-              </option>
-
-              {technicians.map(
-                (technician) => (
-                  <option
-                    key={
-                      technician.technician_id
-                    }
-                    value={String(
-                      technician.technician_id
-                    )}
-                  >
-                    {
-                      technician.technician_name
-                    }
-                  </option>
-                )
-              )}
-            </select>
-
-            {techniciansError && (
-              <span
+            <div style={{ display: "flex", gap: "9px" }}>
+              <button
+                type="button"
+                onClick={clearJobFilters}
                 style={{
-                  fontSize:
-                    "11px",
-                  color:
-                    "#7A2020",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "7px",
+                  padding: "9px 15px",
+                  borderRadius: "10px",
+                  border: "1px solid #D6E5DD",
+                  background: "#FFFFFF",
+                  color: "#476253",
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  cursor: "pointer",
                 }}
               >
-                {
-                  techniciansError
-                }
-              </span>
-            )}
+                <RotateCcw size={14} />
+                Clear
+              </button>
+
+              <button
+                type="button"
+                                onClick={() => {
+                  setAppliedJobFilters({
+                    ...jobFilters,
+                  });
+                  setDebSearchTerm(searchTerm.trim());
+                  setJobsPage(1);
+                }}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "7px",
+                  padding: "9px 17px",
+                  borderRadius: "10px",
+                  border: "1px solid #078B54",
+                  background: "linear-gradient(145deg, #0BA568, #07804E)",
+                  color: "#FFFFFF",
+                  fontSize: "11px",
+                  fontWeight: 750,
+                  cursor: "pointer",
+                  boxShadow: "0 4px 9px rgba(7,123,77,.18)",
+                }}
+              >
+                <Filter size={14} />
+                Apply Filters
+              </button>
+            </div>
           </div>
-
-          <div
-            style={
-              styles.filterGroup
-            }
-          >
-            <label
-              style={
-                styles.filterLabel
-              }
-            >
-              SLA
-            </label>
-
-            <select
-              value={
-                jobFilters.sla
-              }
-              onChange={(event) =>
-                updateJobFilter(
-                  "sla",
-                  event.target.value
-                )
-              }
-              aria-label="Filter jobs by SLA"
-              onFocus={() =>
-                setFocusedInput(
-                  "sla"
-                )
-              }
-              onBlur={() =>
-                setFocusedInput(
-                  null
-                )
-              }
-              style={
-                focusedInput ===
-                "sla"
-                  ? {
-                      ...styles.filterInput,
-                      ...styles.filterInputFocus,
-                    }
-                  : styles.filterInput
-              }
-            >
-              <option value="ALL">
-                All SLA
-              </option>
-              <option value="WITHIN_SLA">
-                Within SLA
-              </option>
-              <option value="APPROACHING_BREACH">
-                Approaching Breach
-              </option>
-              <option value="BREACHED">
-                Breached
-              </option>
-            </select>
-          </div>
-
-          <p
-            style={
-              styles.resultsCount
-            }
-          >
-            Showing{" "}
-            <strong>
-              {totalJobsCount === 0
-                ? 0
-                : (safeJobsPage -
-                    1) *
-                    JOBS_PAGE_SIZE +
-                  1}
-              –
-              {Math.min(
-                safeJobsPage *
-                  JOBS_PAGE_SIZE,
-                totalJobsCount
-              )}
-            </strong>{" "}
-            of{" "}
-            <strong>
-              {
-                totalJobsCount
-              }
-            </strong>{" "}
-            job
-            {totalJobsCount !== 1
-              ? "s"
-              : ""}{" "}
-            found
-          </p>
 
           <div
             style={{
@@ -3397,18 +3332,18 @@ function JobCreationForm({
               <EmptyState
                 title={
                   (
-                    searchTerm.trim() ||
-                    jobFilters.status !==
+                  debSearchTerm ||
+                    appliedJobFilters.status !==
                       "ALL" ||
-                    jobFilters.priority !==
+                    appliedJobFilters.priority !==
                       "ALL" ||
-                    jobFilters.service_type !==
+                    appliedJobFilters.service_type !==
                       "ALL" ||
-                    jobFilters.sla !==
+                    appliedJobFilters.sla !==
                       "ALL" ||
-                    jobFilters.technician !==
+                    appliedJobFilters.technician !==
                       "ALL" ||
-                    jobFilters.location.trim()
+                    appliedJobFilters.location.trim()
                   )
                     ? "No jobs match your filters"
                     : "No jobs found"
@@ -7112,6 +7047,9 @@ function JobCreationForm({
               }
               onSuccess={
                 handleClosureSuccess
+              }
+              onGenerateClosure={(input) =>
+                generateClosureSummary(viewJob.id, input)
               }
             />
           </div>

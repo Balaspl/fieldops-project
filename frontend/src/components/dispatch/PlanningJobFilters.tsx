@@ -5,6 +5,30 @@ import {
   MapPin,
   Filter,
   RotateCcw,
+  Grid2X2,
+  Snowflake,
+  Zap,
+  Droplet,
+  Wifi,
+  Wrench,
+  Briefcase,
+  Hammer,
+  ShieldCheck,
+  Layers,
+  CircleMinus,
+  UserRound,
+  Navigation,
+  LoaderCircle,
+  CheckCircle2,
+  CircleX,
+  AlertCircle,
+  ArrowUp,
+  Equal,
+  ArrowDown,
+  Clock3,
+  Check,
+  AlertTriangle,
+  type LucideIcon,
 } from "lucide-react";
 
 export interface PlanningJobFilterValues {
@@ -69,25 +93,112 @@ const groupStyle = {
   alignItems: "center",
 };
 
-const pillStyle = (selected: boolean) => ({
+type FilterTone = {
+  bg: string;
+  text: string;
+  border: string;
+  active: string;
+};
+
+const filterTones: Record<string, FilterTone> = {
+  green: {
+    bg: "#E9F8EF",
+    text: "#087B50",
+    border: "#BFE8D2",
+    active: "#07965B",
+  },
+  sky: {
+    bg: "#EAF7FF",
+    text: "#0369A1",
+    border: "#BAE6FD",
+    active: "#0284C7",
+  },
+  amber: {
+    bg: "#FFF7E2",
+    text: "#92400E",
+    border: "#FDE68A",
+    active: "#D97706",
+  },
+  blue: {
+    bg: "#EDF4FF",
+    text: "#1D4ED8",
+    border: "#BFDBFE",
+    active: "#2563EB",
+  },
+  purple: {
+    bg: "#F4EEFF",
+    text: "#6B21A8",
+    border: "#DDD6FE",
+    active: "#7C3AED",
+  },
+  indigo: {
+    bg: "#EEF2FF",
+    text: "#3730A3",
+    border: "#C7D2FE",
+    active: "#4F46E5",
+  },
+  pink: {
+    bg: "#FFF0F7",
+    text: "#BE185D",
+    border: "#FBCFE8",
+    active: "#DB2777",
+  },
+  orange: {
+    bg: "#FFF3E8",
+    text: "#C2410C",
+    border: "#FED7AA",
+    active: "#EA580C",
+  },
+  teal: {
+    bg: "#E7F9F6",
+    text: "#0F766E",
+    border: "#99F6E4",
+    active: "#0F766E",
+  },
+  slate: {
+    bg: "#F1F5F9",
+    text: "#475569",
+    border: "#CBD5E1",
+    active: "#64748B",
+  },
+  red: {
+    bg: "#FFF0F0",
+    text: "#B91C1C",
+    border: "#FECACA",
+    active: "#DC2626",
+  },
+  mint: {
+    bg: "#E9FBF3",
+    text: "#047857",
+    border: "#A7F3D0",
+    active: "#059669",
+  },
+};
+
+const pillStyle = (
+  selected: boolean,
+  tone: FilterTone,
+) => ({
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "7px",
   minHeight: "37px",
-  padding: "7px 17px",
-  border: selected
-    ? "1px solid #129957"
-    : "1px solid #E0E7EC",
+  padding: "7px 13px",
+  border: `1px solid ${
+    selected ? tone.active : tone.border
+  }`,
   borderRadius: "999px",
-  background: selected
-    ? "linear-gradient(180deg, #16A765 0%, #098B50 100%)"
-    : "#F5F7F9",
-  color: selected ? "#FFFFFF" : "#46566A",
+  background: selected ? tone.active : tone.bg,
+  color: selected ? "#FFFFFF" : tone.text,
   fontSize: "12px",
-  fontWeight: selected ? 700 : 500,
+  fontWeight: 700,
   whiteSpace: "nowrap" as const,
   cursor: "pointer",
   transition: "all 0.16s ease",
   boxShadow: selected
-    ? "0 2px 5px rgba(16, 153, 87, 0.16)"
-    : "none",
+    ? "0 3px 7px rgba(16, 153, 87, 0.16)"
+    : "0 1px 3px rgba(15, 23, 42, 0.035)",
 });
 
 export default function PlanningJobFilters({
@@ -105,7 +216,6 @@ export default function PlanningJobFilters({
   ) => {
     const next = { ...filters, [key]: value };
     setFilters(next);
-    onFiltersChange?.(next);
   };
 
   const clearFilters = () => {
@@ -129,16 +239,23 @@ export default function PlanningJobFilters({
     </div>
   );
 
-  const renderPills = (
+    const renderPills = (
     label: string,
     key: "priority" | "serviceType" | "status" | "sla",
-    options: { label: string; value: string }[],
+    options: {
+      label: string;
+      value: string;
+      tone: FilterTone;
+      icon: LucideIcon;
+    }[],
   ) => (
     <div style={{ minWidth: 0 }}>
       <div style={labelStyle}>{label}</div>
+
       <div style={groupStyle}>
         {options.map((option) => {
           const selected = filters[key] === option.value;
+          const Icon = option.icon;
 
           return (
             <button
@@ -146,9 +263,10 @@ export default function PlanningJobFilters({
               type="button"
               aria-pressed={selected}
               onClick={() => updateFilter(key, option.value)}
-              style={pillStyle(selected)}
+              style={pillStyle(selected, option.tone)}
             >
-              {option.label}
+              <Icon size={15} strokeWidth={2.4} />
+              <span>{option.label}</span>
             </button>
           );
         })}
@@ -337,16 +455,61 @@ export default function PlanningJobFilters({
           borderBottom: "1px solid #E7EEE9",
         }}
       >
-        {renderPills("Service", "serviceType", [
-          { label: "All Services", value: "ALL" },
-          { label: "HVAC Repair", value: "HVAC_REPAIR" },
-          { label: "Electrical Service", value: "ELECTRICAL_SERVICE" },
-          { label: "Plumbing Service", value: "PLUMBING_SERVICE" },
-          { label: "Network Support", value: "NETWORK_SUPPORT" },
-          { label: "General Maintenance", value: "GENERAL_MAINTENANCE" },
-          { label: "Appliance Repair", value: "APPLIANCE_REPAIR" },
-          { label: "Roofing & Carpentry", value: "ROOFING_CARPENTRY" },
-          { label: "CCTV & Security", value: "CCTV_SECURITY" },
+          {renderPills("Service", "serviceType", [
+          {
+            label: "All Services",
+            value: "ALL",
+            tone: filterTones.green,
+            icon: Grid2X2,
+          },
+          {
+            label: "HVAC Repair",
+            value: "HVAC_REPAIR",
+            tone: filterTones.sky,
+            icon: Snowflake,
+          },
+          {
+            label: "Electrical Service",
+            value: "ELECTRICAL_SERVICE",
+            tone: filterTones.amber,
+            icon: Zap,
+          },
+          {
+            label: "Plumbing Service",
+            value: "PLUMBING_SERVICE",
+            tone: filterTones.blue,
+            icon: Droplet,
+          },
+          {
+            label: "Network Support",
+            value: "NETWORK_SUPPORT",
+            tone: filterTones.purple,
+            icon: Wifi,
+          },
+          {
+            label: "General Maintenance",
+            value: "GENERAL_MAINTENANCE",
+            tone: filterTones.indigo,
+            icon: Wrench,
+          },
+          {
+            label: "Appliance Repair",
+            value: "APPLIANCE_REPAIR",
+            tone: filterTones.pink,
+            icon: Briefcase,
+          },
+          {
+            label: "Roofing & Carpentry",
+            value: "ROOFING_CARPENTRY",
+            tone: filterTones.orange,
+            icon: Hammer,
+          },
+          {
+            label: "CCTV & Security",
+            value: "CCTV_SECURITY",
+            tone: filterTones.teal,
+            icon: ShieldCheck,
+          },
         ])}
       </div>
 
@@ -358,14 +521,49 @@ export default function PlanningJobFilters({
           borderBottom: "1px solid #E7EEE9",
         }}
       >
-        {renderPills("Status", "status", [
-          { label: "All Statuses", value: "ALL" },
-          { label: "Unassigned", value: "CREATED" },
-          { label: "Assigned", value: "ASSIGNED" },
-          { label: "En Route", value: "EN_ROUTE" },
-          { label: "In Progress", value: "IN_PROGRESS" },
-          { label: "Completed", value: "COMPLETED" },
-          { label: "Cancelled", value: "CANCELLED" },
+                {renderPills("Status", "status", [
+          {
+            label: "All Statuses",
+            value: "ALL",
+            tone: filterTones.green,
+            icon: Layers,
+          },
+          {
+            label: "Unassigned",
+            value: "UNASSIGNED",
+            tone: filterTones.slate,
+            icon: CircleMinus,
+          },
+          {
+            label: "Assigned",
+            value: "ASSIGNED",
+            tone: filterTones.blue,
+            icon: UserRound,
+          },
+          {
+            label: "En Route",
+            value: "EN_ROUTE",
+            tone: filterTones.purple,
+            icon: Navigation,
+          },
+          {
+            label: "In Progress",
+            value: "IN_PROGRESS",
+            tone: filterTones.amber,
+            icon: LoaderCircle,
+          },
+          {
+            label: "Completed",
+            value: "COMPLETED",
+            tone: filterTones.mint,
+            icon: CheckCircle2,
+          },
+          {
+            label: "Cancelled",
+            value: "CANCELLED",
+            tone: filterTones.red,
+            icon: CircleX,
+          },
         ])}
       </div>
 
@@ -377,19 +575,64 @@ export default function PlanningJobFilters({
           gap: "20px",
         }}
       >
-        {renderPills("Priority", "priority", [
-          { label: "All", value: "ALL" },
-          { label: "Critical", value: "CRITICAL" },
-          { label: "High", value: "HIGH" },
-          { label: "Medium", value: "MEDIUM" },
-          { label: "Low", value: "LOW" },
+          {renderPills("Priority", "priority", [
+          {
+            label: "All",
+            value: "ALL",
+            tone: filterTones.green,
+            icon: Layers,
+          },
+          {
+            label: "Critical",
+            value: "CRITICAL",
+            tone: filterTones.red,
+            icon: AlertCircle,
+          },
+          {
+            label: "High",
+            value: "HIGH",
+            tone: filterTones.orange,
+            icon: ArrowUp,
+          },
+          {
+            label: "Medium",
+            value: "MEDIUM",
+            tone: filterTones.blue,
+            icon: Equal,
+          },
+          {
+            label: "Low",
+            value: "LOW",
+            tone: filterTones.mint,
+            icon: ArrowDown,
+          },
         ])}
 
-        {renderPills("SLA", "sla", [
-          { label: "All SLA", value: "ALL" },
-          { label: "Within SLA", value: "WITHIN_SLA" },
-          { label: "Approaching Breach", value: "APPROACHING_BREACH" },
-          { label: "Breached", value: "BREACHED" },
+                {renderPills("SLA", "sla", [
+          {
+            label: "All SLA",
+            value: "ALL",
+            tone: filterTones.green,
+            icon: Clock3,
+          },
+          {
+            label: "Within SLA",
+            value: "WITHIN_SLA",
+            tone: filterTones.mint,
+            icon: Check,
+          },
+          {
+            label: "Approaching Breach",
+            value: "APPROACHING_BREACH",
+            tone: filterTones.amber,
+            icon: AlertTriangle,
+          },
+          {
+            label: "Breached",
+            value: "BREACHED",
+            tone: filterTones.red,
+            icon: AlertCircle,
+          },
         ])}
       </div>
 

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, Query,
 from typing import Optional
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, time, timezone, timedelta
 import json
 import uuid
 import logging
@@ -11,6 +11,7 @@ from app.services.timer_service import TimerService
 from app.database import get_db
 from app.models import (
     Job,
+    JobClosure,
     Technician,
     AuditEvent,
     DispatcherNotification,
@@ -31,6 +32,7 @@ from app.services.ai.FieldOpsAI.schemas.agent_messages import (
     MessageEnvelope,
     MessageType,
 )
+from app.services.ai.FieldOpsAI.schemas.closure import ClosureDecision
 from app.services.job_closure_service import get_job_closure
 from app import schemas
 
@@ -61,6 +63,15 @@ router = APIRouter(
     prefix="/jobs",
     tags=["Jobs"]
 )
+
+
+class ClosureGenerationInput(BaseModel):
+    """Technician-supplied fields used to draft closure content."""
+
+    technician_notes: str = Field(..., min_length=5, max_length=5000)
+    parts_used: list[str] = Field(default_factory=list, max_length=100)
+    duration_minutes: int = Field(..., ge=0)
+    customer_confirmation: Optional[str] = Field(default=None, max_length=2000)
 
 
 def require_any_job_permission(*permissions: Permission):
@@ -139,18 +150,65 @@ def get_technician_for_current_user(
 @router.get("/stats")
 def get_jobs_stats(
     time_range: Optional[str] = None,
+    start_datetime: Optional[datetime] = None,
+    end_datetime: Optional[datetime] = None,
     user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(get_current_user_or_tenant),
     current_user: AuthenticatedUser = Depends(require_permission(Permission.DASHBOARD_VIEW)),
     db: Session = Depends(get_db)
 ):
     user, tenant_id = user_tenant
     try:
-        # Filter by time range if provided
-        start_date = None
-        if time_range == "week":
-            start_date = datetime.now(timezone.utc) - timedelta(days=7)
+        # Filter dashboard aggregates by an explicit calendar date range or
+        # one of the supported calendar presets. Explicit dates take priority
+        # so a month selected from the month picker is not treated as a
+        # rolling 30-day window. Date boundaries are UTC and end-exclusive.
+        now = datetime.now(timezone.utc)
+        start_bound = None
+        end_bound = None
+
+        if start_datetime is not None or end_datetime is not None:
+            if start_datetime is None or end_datetime is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Both start_datetime and end_datetime are required.",
+                )
+
+            # The browser sends ISO timestamps representing local midnight.
+            # Normalize both to UTC before comparing with timezone-aware DB values.
+            start_bound = (
+                start_datetime.replace(tzinfo=timezone.utc)
+                if start_datetime.tzinfo is None
+                else start_datetime.astimezone(timezone.utc)
+            )
+            end_bound = (
+                end_datetime.replace(tzinfo=timezone.utc)
+                if end_datetime.tzinfo is None
+                else end_datetime.astimezone(timezone.utc)
+            )
+            if start_bound >= end_bound:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="start_datetime must be before end_datetime.",
+                )
+        elif time_range == "today":
+            start_bound = datetime.combine(now.date(), time.min, tzinfo=timezone.utc)
+            end_bound = start_bound + timedelta(days=1)
+        elif time_range == "week":
+            # Calendar week is Sunday through Saturday.
+            days_since_sunday = (now.weekday() + 1) % 7
+            start_day = now.date() - timedelta(days=days_since_sunday)
+            start_bound = datetime.combine(start_day, time.min, tzinfo=timezone.utc)
+            end_bound = start_bound + timedelta(days=7)
         elif time_range == "month":
-            start_date = datetime.now(timezone.utc) - timedelta(days=30)
+            month_start = now.date().replace(day=1)
+            next_month_start = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+            start_bound = datetime.combine(month_start, time.min, tzinfo=timezone.utc)
+            end_bound = datetime.combine(next_month_start, time.min, tzinfo=timezone.utc)
+        elif time_range == "custom":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Custom date ranges require start_datetime and end_datetime.",
+            )
 
         # Tenant visibility:
         # 1. Jobs assigned to technicians belonging to this tenant.
@@ -177,12 +235,14 @@ def get_jobs_stats(
                 ),
             )
         )
-                # Preserve the organization-scoped query before date filtering.
-        # Dashboard job cards count current jobs across all dates.
-        all_time_query = query
+        # Apply selected date range to all dashboard statistics and KPI cards.
+        if start_bound is not None:
+            query = query.filter(Job.created_at >= start_bound)
+        if end_bound is not None:
+            query = query.filter(Job.created_at < end_bound)
 
-        if start_date:
-            query = query.filter(Job.created_at >= start_date)
+        # Reuse the date-filtered, organization-scoped query for KPI cards.
+        all_time_query = query
 
         # Total Jobs
         total_jobs = query.count()
@@ -356,8 +416,73 @@ def get_jobs_stats(
         if other_count < 0:
             other_count = 0
 
+        # Payment summary follows the selected dashboard date range.
+        # Payments are recorded when the job is completed.
+        payment_query = db.query(JobClosure).filter(
+            JobClosure.tenant_id == tenant_id
+        )
+
+        if start_bound is not None:
+            payment_query = payment_query.filter(
+                JobClosure.completed_at >= start_bound
+            )
+
+        if end_bound is not None:
+            payment_query = payment_query.filter(
+                JobClosure.completed_at < end_bound
+            )
+
+        payment_total = 0.0
+        cash_total = 0.0
+        upi_total = 0.0
+        payment_count = 0
+
+        for closure in payment_query.all():
+            report = closure.work_report
+
+            if not isinstance(report, dict):
+                continue
+
+            payment = report.get("payment")
+
+            if not isinstance(payment, dict):
+                continue
+
+            def read_payment_amount(value):
+                try:
+                    amount = float(value or 0)
+                except (TypeError, ValueError):
+                    return 0.0
+
+                if amount < 0 or amount == float("inf") or amount != amount:
+                    return 0.0
+
+                return amount
+
+            cash_amount = read_payment_amount(
+                payment.get("cash_amount")
+            )
+            upi_amount = read_payment_amount(
+                payment.get("upi_amount")
+            )
+
+            recorded_amount = cash_amount + upi_amount
+
+            if recorded_amount > 0:
+                cash_total += cash_amount
+                upi_total += upi_amount
+                payment_total += recorded_amount
+                payment_count += 1
+
         return {
             "job_cards": job_cards,
+
+            "payment_summary": {
+                "total_recorded": round(payment_total, 2),
+                "cash_total": round(cash_total, 2),
+                "upi_total": round(upi_total, 2),
+                "payment_count": payment_count,
+            },
             "service_technicians": service_technician_counts,
             "jobs": {
                 "total": total_jobs,
@@ -381,6 +506,8 @@ def get_jobs_stats(
                 "other": other_count
             }
         }
+    except HTTPException:
+        raise
     except Exception as error:
         raise HTTPException(status_code=500,detail=f"Failed to fetch dashboard stats: {str(error)}")
 async def start_automatic_dispatch(
@@ -762,7 +889,20 @@ def get_jobs(
                 )
             )
 
-            if normalized_input == "INPROGRESS":
+            if normalized_input == "UNASSIGNED":
+                query = query.filter(
+                    Job.assigned_technician_id.is_(None),
+                    normalized_job_status.in_(
+                        [
+                            "CREATED",
+                            "QUEUED",
+                            "ACTIVE",
+                            "UNASSIGNED",
+                        ]
+                    ),
+                )
+
+            elif normalized_input == "INPROGRESS":
                 query = query.filter(
                     normalized_job_status.in_(
                         ["INPROGRESS", "ONSITE", "PAUSED"]
@@ -4296,6 +4436,76 @@ def get_public_tracking_info(
 
 
 # ──── Job Closure Endpoints ────
+
+@router.post(
+    "/{job_id}/closure/summary",
+    response_model=ClosureDecision,
+)
+async def generate_job_closure_summary(
+    job_id: int,
+    payload: ClosureGenerationInput,
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.JOBS_STATUS_UPDATE)
+    ),
+    db: Session = Depends(get_db),
+):
+    """Generate closure text without persisting it or changing job state."""
+    if current_user.role != UserRole.TECHNICIAN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only technicians can generate a closure summary",
+        )
+
+    job = (
+        db.query(Job)
+        .filter(
+            Job.id == job_id,
+            Job.tenant_id == current_user.tenant_id,
+        )
+        .first()
+    )
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found",
+        )
+
+    technician = get_technician_for_current_user(db, current_user)
+    if not technician:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Technician record not found",
+        )
+    if job.assigned_technician_id != technician.technician_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This job is not assigned to you",
+        )
+    if not job.service_type:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Job type is missing; closure summary cannot be generated",
+        )
+
+    from app.services.ai.integrations.closure_integration import (
+        ClosureIntegration,
+    )
+    from app.services.ai.FieldOpsAI.schemas.closure import ClosureContext
+
+    context = ClosureContext(
+        customer_name=job.customer_name,
+        technician_name=technician.technician_name,
+        job_type=job.service_type,
+        technician_notes=payload.technician_notes,
+        parts_used=payload.parts_used,
+        duration_minutes=payload.duration_minutes,
+        customer_confirmation=payload.customer_confirmation,
+    )
+    decision = await ClosureIntegration().generate_async(
+        context=context.model_dump(mode="json"),
+        tenant_id=str(current_user.tenant_id),
+    )
+    return decision
 
 @router.post(
     "/{job_id}/close",

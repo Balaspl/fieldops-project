@@ -1,6 +1,6 @@
 import pytest
 from datetime import datetime, date, timezone
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -150,6 +150,54 @@ def test_successful_job_closure(setup_db):
     assert updated_job.status == "COMPLETED"
     assert updated_job.completed_at is not None
     assert updated_job.completed_by == str(tech.technician_id)
+
+
+def test_generate_closure_summary_does_not_close_or_persist_job(setup_db):
+    from app.services.ai.FieldOpsAI.schemas.closure import ClosureDecision
+
+    db = setup_db
+    tech, job = create_sample_tech_and_job(db)
+    user = _authenticated_user(
+        user_id=tech.tech_id,
+        tenant_id=tech.tenant_id,
+        role=UserRole.TECHNICIAN,
+    )
+    _override_payment_status_dependencies(db, user)
+
+    decision = ClosureDecision(
+        work_summary="Completed the repair described in the technician notes.",
+        customer_summary="The reported service work has been completed.",
+        invoice_description="Service repair work completed.",
+        follow_up_required=False,
+        follow_up_reason=None,
+        confidence=0.9,
+    )
+
+    try:
+        with patch(
+            "app.services.ai.integrations.closure_integration."
+            "ClosureIntegration.generate_async",
+            new_callable=AsyncMock,
+            return_value=decision,
+        ) as generate_async:
+            response = client.post(
+                f"/jobs/{job.id}/closure/summary",
+                json={
+                    "technician_notes": "Inspected and repaired the unit.",
+                    "parts_used": ["Capacitor"],
+                    "duration_minutes": 45,
+                },
+            )
+    finally:
+        _clear_payment_status_dependencies()
+
+    assert response.status_code == 200
+    assert response.json() == decision.model_dump(mode="json")
+    generate_async.assert_awaited_once()
+
+    db.refresh(job)
+    assert job.status == "ON_SITE"
+    assert db.query(JobClosure).filter(JobClosure.job_id == job.id).first() is None
 
 
 def test_subtotal_calculated(setup_db):
