@@ -1,5 +1,4 @@
 package com.fieldops.mobile
-import com.fieldops.BuildConfig
 
 import android.app.Application
 import android.content.res.Configuration

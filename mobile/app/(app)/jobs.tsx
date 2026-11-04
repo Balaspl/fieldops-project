@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   deleteOfflineRecord,
@@ -6,19 +6,13 @@ import {
   setOfflineRecord,
   type OfflineScope
 } from "../../src/offline/offlineStore";
-import {
-  FlatList,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View
-} from "react-native";
+import { FlatList, Image, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, type ImageSourcePropType } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import {
   getTechnicianJobs,
+  getTechnicianJobHistory,
   type TechnicianJob,
   type TechnicianJobCollection
 } from "../../src/api/technician";
@@ -30,8 +24,6 @@ import {
   LoadingState
 } from "../../src/components/ScreenState";
 
-type JobFilter = "ALL" | "EN_ROUTE" | "IN_PROGRESS" | "COMPLETED";
-
 function normalizeJobs(
   data: TechnicianJobCollection
 ): TechnicianJob[] {
@@ -42,6 +34,27 @@ interface CachedTechnicianJobs {
   jobs: TechnicianJob[];
   cachedAt: string;
 }
+
+type JobStatusFilter = "ALL" | "ASSIGNED" | "ACCEPTED" | "STARTED" | "EN_ROUTE" | "IN_PROGRESS" | "COMPLETED";
+type JobDateFilter = "ANY" | "TODAY" | "THIS_WEEK" | "THIS_MONTH" | "OVERDUE";
+
+const jobStatusFilters: { label: string; value: JobStatusFilter }[] = [
+  { label: "All statuses", value: "ALL" },
+  { label: "Assigned", value: "ASSIGNED" },
+  { label: "Accepted", value: "ACCEPTED" },
+  { label: "Started", value: "STARTED" },
+  { label: "En Route", value: "EN_ROUTE" },
+  { label: "In Progress", value: "IN_PROGRESS" },
+  { label: "Completed", value: "COMPLETED" }
+];
+
+const jobDateFilters: { label: string; value: JobDateFilter }[] = [
+  { label: "Any date", value: "ANY" },
+  { label: "Today", value: "TODAY" },
+  { label: "This week", value: "THIS_WEEK" },
+  { label: "This month", value: "THIS_MONTH" },
+  { label: "Past due", value: "OVERDUE" }
+];
 
 function getJobsCacheScope(user: unknown): OfflineScope | null {
   if (typeof user !== "object" || user === null) {
@@ -178,7 +191,8 @@ async function saveCachedJobs(
 ): Promise<void> {
   try {
     const cachedValue: CachedTechnicianJobs = {
-      jobs,
+      // Avoid storing photo data in secure offline list storage.
+      jobs: jobs.map((job) => ({ ...job, images: [] })),
       cachedAt: new Date().toISOString()
     };
 
@@ -202,71 +216,20 @@ function normalizeStatus(status: string): string {
     .toUpperCase();
 }
 
-function getStatusGroup(status: string): JobFilter | "OTHER" {
-  const normalized = normalizeStatus(status);
-
-  if (normalized === "EN ROUTE" || normalized === "ENROUTE") {
-    return "EN_ROUTE";
-  }
-
-  if (normalized === "IN PROGRESS") {
-    return "IN_PROGRESS";
-  }
-
-  if (
-    normalized === "COMPLETED" ||
-    normalized === "COMPLETE"
-  ) {
-    return "COMPLETED";
-  }
-
-  return "OTHER";
+function isActiveAssignment(job: TechnicianJob): boolean {
+  const status = normalizeStatus(job.status).replace(/[ -]+/g, "_");
+  return ![
+    "COMPLETED",
+    "CLOSED",
+    "CANCELLED",
+    "CANCELED",
+    "REJECTED",
+    "REJECTED_BY_TECHNICIAN"
+  ].includes(status);
 }
 
-function formatStatus(status: string): string {
-  return normalizeStatus(status) || "UNKNOWN";
-}
-
-function formatSchedule(value?: string): string {
-  if (!value?.trim()) {
-    return "Not scheduled";
-  }
-
-  const trimmedValue = value.trim();
-  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmedValue);
-
-  if (dateOnly) {
-    const year = Number(dateOnly[1]);
-    const month = Number(dateOnly[2]);
-    const day = Number(dateOnly[3]);
-    const date = new Date(year, month - 1, day);
-
-    if (
-      date.getFullYear() !== year ||
-      date.getMonth() !== month - 1 ||
-      date.getDate() !== day
-    ) {
-      return trimmedValue;
-    }
-
-    return date.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric"
-    });
-  }
-
-  const date = new Date(trimmedValue);
-
-  if (Number.isNaN(date.getTime())) {
-    return trimmedValue;
-  }
-
-  return date.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric"
-  });
+function formatSchedule(date?: string | null, time?: string | null): string {
+  return [date, time].filter(Boolean).join(" ") || "N/A";
 }
 
 function getErrorMessage(error: unknown): string {
@@ -275,12 +238,96 @@ function getErrorMessage(error: unknown): string {
     : "Unable to load jobs. Please try again.";
 }
 
+function getAcceptanceSeconds(job: TechnicianJob, now: number): number | null {
+  const status = normalizeStatus(job.status).replace(/ /g, "_");
+  if (!["ASSIGNED", "ACTIVE", "PENDING", "AWAITING_ACCEPTANCE"].includes(status)) return null;
+  const explicitDeadline = job.acceptance_expires_at;
+  const explicitTimestamp = typeof explicitDeadline === "string" ? Date.parse(explicitDeadline) : Number.NaN;
+  const deadline = Number.isFinite(explicitTimestamp)
+    ? explicitTimestamp
+    : job.assigned_at
+      ? Date.parse(job.assigned_at) + 5 * 60 * 1000
+      : Number.NaN;
+  return Number.isFinite(deadline) ? Math.max(0, Math.floor((deadline - now) / 1000)) : null;
+}
+
+function formatAcceptanceTime(seconds: number): string {
+  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function getJobStatusFilter(job: TechnicianJob): JobStatusFilter | "OTHER" {
+  const status = normalizeStatus(job.status).replace(/[ -]+/g, "_");
+  if (["ASSIGNED", "PENDING", "AWAITING_ACCEPTANCE", "ACTIVE"].includes(status)) return "ASSIGNED";
+  if (["ACCEPTED", "ACCEPTED_BY_TECHNICIAN"].includes(status)) return "ACCEPTED";
+  if (["COMPLETED", "COMPLETE", "CLOSED"].includes(status)) return "COMPLETED";
+  if (["EN_ROUTE", "ENROUTE"].includes(status)) return "EN_ROUTE";
+  if (["STARTED", "WORK_STARTED"].includes(status)) return "STARTED";
+  if (["ON_SITE", "ONSITE", "IN_PROGRESS", "PAUSED"].includes(status)) return "IN_PROGRESS";
+  if (job.work_started_at) return "STARTED";
+  return "OTHER";
+}
+
+function getScheduledDay(job: TechnicianJob): Date | null {
+  const value = job.preferred_service_date?.trim() || job.scheduled_at?.trim();
+  if (!value) return null;
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  const date = dateOnly
+    ? new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
+    : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function matchesDateFilter(job: TechnicianJob, filter: JobDateFilter, now: Date): boolean {
+  if (filter === "ANY") return true;
+  const scheduled = getScheduledDay(job);
+  if (!scheduled) return false;
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (filter === "TODAY") return scheduled.getTime() === today.getTime();
+  if (filter === "OVERDUE") return scheduled < today;
+  if (filter === "THIS_MONTH") return scheduled.getFullYear() === today.getFullYear() && scheduled.getMonth() === today.getMonth();
+  const weekStart = new Date(today);
+  weekStart.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+  const nextWeek = new Date(weekStart);
+  nextWeek.setDate(weekStart.getDate() + 7);
+  return scheduled >= weekStart && scheduled < nextWeek;
+}
+
+const jobCategoryImages: Record<string, ImageSourcePropType> = {
+  electrical: require("../../assets/images/job-service-electrical.png"),
+  plumbing: require("../../assets/images/job-service-plumbing.png"),
+  hvac: require("../../assets/images/job-service-hvac.png"),
+  network: require("../../assets/images/job-service-network.png"),
+  appliance: require("../../assets/images/job-service-appliances.png"),
+  carpentry: require("../../assets/images/job-service-carpentry.png"),
+  cleaning: require("../../assets/images/job-service-cleaning.png"),
+  security: require("../../assets/images/job-service-security.png"),
+  maintenance: require("../../assets/images/job-service-maintenance.png"),
+  default: require("../../assets/images/jobs-toolbox.png")
+};
+
+function getJobThumbnailSource(job: TechnicianJob): ImageSourcePropType {
+  const firstPhoto = Array.isArray(job.images)
+    ? job.images.find((image) => typeof image === "string" && image.trim())
+    : undefined;
+  if (typeof firstPhoto === "string" && (/^data:image\//i.test(firstPhoto) || /^https?:\/\//i.test(firstPhoto))) {
+    return { uri: firstPhoto };
+  }
+
+  const category = `${job.service_type ?? ""} ${job.title ?? ""} ${job.required_skill ?? ""}`.toLowerCase();
+  const categoryKey = Object.keys(jobCategoryImages).find((key) => key !== "default" && category.includes(key));
+  return (categoryKey ? jobCategoryImages[categoryKey] : undefined) ?? jobCategoryImages.default!;
+}
+
 export default function JobsScreen() {
   const router = useRouter();
+  const jobsListRef = useRef<FlatList<TechnicianJob>>(null);
   const user = useAuthStore((state) => state.user);
   const cacheScope = useMemo(() => getJobsCacheScope(user), [user]);
 
   const [jobs, setJobs] = useState<TechnicianJob[]>([]);
+  const [completedJobs, setCompletedJobs] = useState<TechnicianJob[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -288,8 +335,15 @@ export default function JobsScreen() {
   const [dataSource, setDataSource] = useState<"server" | "cache" | null>(
     null
   );
-  const [activeFilter, setActiveFilter] = useState<JobFilter>("ALL");
+  const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
+  const [now, setNow] = useState(Date.now());
   const [searchQuery, setSearchQuery] = useState("");
+  const [completedCount, setCompletedCount] = useState(0);
+  const [isFilterModalVisible, setIsFilterModalVisible] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<JobStatusFilter>("ALL");
+  const [dateFilter, setDateFilter] = useState<JobDateFilter>("ANY");
+  const [draftStatusFilter, setDraftStatusFilter] = useState<JobStatusFilter>("ALL");
+  const [draftDateFilter, setDraftDateFilter] = useState<JobDateFilter>("ANY");
 
   const loadJobs = useCallback(async (refresh = false) => {
     if (refresh) {
@@ -307,7 +361,7 @@ export default function JobsScreen() {
 
       if (cachedJobs) {
         hasCachedJobs = true;
-        setJobs(cachedJobs.jobs);
+        setJobs(cachedJobs.jobs.filter(isActiveAssignment));
         setDataSource("cache");
         setOfflineMessage(
           "Showing saved jobs while checking for updates. These details may be outdated."
@@ -317,11 +371,22 @@ export default function JobsScreen() {
     }
 
     try {
-      const response = await getTechnicianJobs();
-      const serverJobs = normalizeJobs(response);
+      const serverJobs = normalizeJobs(await getTechnicianJobs())
+        .filter(isActiveAssignment)
+        .sort((first, second) => {
+        const firstTimestamp = Date.parse(String(first.assigned_at || first.created_at || "")) || 0;
+        const secondTimestamp = Date.parse(String(second.assigned_at || second.created_at || "")) || 0;
+        return secondTimestamp - firstTimestamp;
+      });
 
       setJobs(serverJobs);
       setDataSource("server");
+      setLastSyncedAt(new Date());
+      void getTechnicianJobHistory().then((history) => {
+        const completed = history.filter((job) => ["COMPLETED", "COMPLETE", "CLOSED"].includes(normalizeStatus(job.status).replace(/[ -]+/g, "_")));
+        setCompletedJobs(completed);
+        setCompletedCount(completed.length);
+      }).catch(() => undefined);
       setOfflineMessage(null);
       setError(null);
 
@@ -355,52 +420,35 @@ export default function JobsScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      jobsListRef.current?.scrollToOffset({ offset: 0, animated: false });
       void loadJobs();
     }, [loadJobs])
   );
 
-  const counts = useMemo(() => {
-    return {
-      ALL: jobs.length,
-      EN_ROUTE: jobs.filter(
-        (job) => getStatusGroup(job.status) === "EN_ROUTE"
-      ).length,
-      IN_PROGRESS: jobs.filter(
-        (job) => getStatusGroup(job.status) === "IN_PROGRESS"
-      ).length,
-      COMPLETED: jobs.filter(
-        (job) => getStatusGroup(job.status) === "COMPLETED"
-      ).length
-    };
-  }, [jobs]);
-
+  const getStatusCount = (filter: JobStatusFilter) => jobs.filter((job) => getJobStatusFilter(job) === filter).length;
+  const assignedCount = getStatusCount("ASSIGNED");
+  const acceptedCount = getStatusCount("ACCEPTED");
+  const startedCount = getStatusCount("STARTED");
+  const enRouteCount = getStatusCount("EN_ROUTE");
+  const inProgressCount = getStatusCount("IN_PROGRESS");
   const visibleJobs = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-
-    return jobs.filter((job) => {
-      const matchesFilter =
-        activeFilter === "ALL" ||
-        getStatusGroup(job.status) === activeFilter;
-
-      const searchableText = [
-        job.job_number,
-        job.id,
-        job.title,
-        job.customer_name,
-        job.address,
-        job.priority,
-        job.status
-      ]
-        .filter((value) => value !== undefined && value !== null)
-        .join(" ")
-        .toLowerCase();
-
-      return matchesFilter && (!query || searchableText.includes(query));
+    const sourceJobs = statusFilter === "COMPLETED" ? completedJobs : jobs;
+    return sourceJobs.filter((job) => {
+      const matchesQuery = !query || [job.job_number, job.id, job.service_type, job.title, job.customer_name, job.location, job.site_address, job.address].filter(Boolean).join(" ").toLowerCase().includes(query);
+      const matchesStatus = statusFilter === "ALL" || getJobStatusFilter(job) === statusFilter;
+      return matchesQuery && matchesStatus && matchesDateFilter(job, dateFilter, new Date());
     });
-  }, [jobs, activeFilter, searchQuery]);
+  }, [jobs, completedJobs, searchQuery, statusFilter, dateFilter]);
+
+  useEffect(() => {
+    if (!jobs.some((job) => getAcceptanceSeconds(job, Date.now()) !== null)) return;
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [jobs]);
 
   if (isLoading) {
-    return <LoadingState label="Loading your jobs..." />;
+    return <LoadingState label="Loading your jobs..." variant="list" />;
   }
 
   if (error && jobs.length === 0) {
@@ -413,20 +461,10 @@ export default function JobsScreen() {
     );
   }
 
-  const filters: {
-    key: JobFilter;
-    label: string;
-    icon: string;
-  }[] = [
-    { key: "ALL", label: "All Jobs", icon: "▤" },
-    { key: "EN_ROUTE", label: "En Route", icon: "➜" },
-    { key: "IN_PROGRESS", label: "In Progress", icon: "◷" },
-    { key: "COMPLETED", label: "Completed", icon: "✓" }
-  ];
-
   return (
     <View style={styles.screen}>
       <FlatList
+        ref={jobsListRef}
         data={visibleJobs}
         keyExtractor={(job) => String(job.id)}
         keyboardShouldPersistTaps="handled"
@@ -444,31 +482,48 @@ export default function JobsScreen() {
         }
         ListHeaderComponent={
           <View>
-            <View style={styles.header}>
-              <View style={styles.brandRow}>
-                <View style={styles.brandMark}>
-                  <Text style={styles.brandMarkText}>FC</Text>
-                </View>
-
-                <View style={styles.brandTextGroup}>
-                  <Text style={styles.brandName}>
-                    <Text style={styles.brandField}>Field</Text>
-                    <Text style={styles.brandOps}>Ops</Text>
-                  </Text>
-
-                  <Text style={styles.brandSubtitle}>
-                    C O M M A N D E R
-                  </Text>
+            <LinearGradient
+              colors={["#00533F", "#087653", "#0B8B61"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.jobsHero}
+            >
+              <View style={styles.heroTitleRow}>
+                <View style={styles.heroIcon}><Ionicons name="briefcase-outline" size={25} color="#FFFFFF" /></View>
+                <View style={styles.heroTitleText}>
+                  <Text style={styles.heroTitle}>Assigned Jobs</Text>
+                  <Text style={styles.heroSubtitle}>Jobs assigned to you</Text>
                 </View>
               </View>
+              <Image source={require("../../assets/images/jobs-toolbox.png")} style={styles.heroArtwork} resizeMode="contain" accessibilityLabel="Green toolbox with technician tools" />
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.jobStatsRow} style={styles.jobStatsViewport}>
+                <View style={[styles.jobStatCard, styles.assignedStat]}><View style={styles.statIcon}><Ionicons name="briefcase-outline" size={20} color="#075C40" /></View><View><Text style={styles.jobStatNumber}>{assignedCount}</Text><Text style={styles.jobStatLabel}>Assigned</Text></View></View>
+                <View style={[styles.jobStatCard, styles.acceptedStat]}><View style={styles.statIcon}><Ionicons name="checkmark-done-outline" size={20} color="#087653" /></View><View><Text style={styles.jobStatNumber}>{acceptedCount}</Text><Text style={styles.jobStatLabel}>Accepted</Text></View></View>
+                <View style={[styles.jobStatCard, styles.startedStat]}><View style={styles.statIcon}><Ionicons name="play-outline" size={20} color="#966500" /></View><View><Text style={styles.jobStatNumber}>{startedCount}</Text><Text style={styles.jobStatLabel}>Started</Text></View></View>
+                <View style={[styles.jobStatCard, styles.enRouteStat]}><View style={styles.statIcon}><Ionicons name="navigate-outline" size={20} color="#175CD3" /></View><View><Text style={styles.jobStatNumber}>{enRouteCount}</Text><Text style={styles.jobStatLabel}>En Route</Text></View></View>
+                <View style={[styles.jobStatCard, styles.progressStat]}><View style={styles.statIcon}><Ionicons name="time-outline" size={20} color="#966500" /></View><View><Text style={styles.jobStatNumber}>{inProgressCount}</Text><Text style={styles.jobStatLabel}>In Progress</Text></View></View>
+                <View style={[styles.jobStatCard, styles.completedStat]}><View style={styles.statIcon}><Ionicons name="checkmark-circle-outline" size={20} color="#087C80" /></View><View><Text style={styles.jobStatNumber}>{completedCount}</Text><Text style={styles.jobStatLabel}>Completed</Text></View></View>
+              </ScrollView>
+            </LinearGradient>
 
-              <Text style={styles.pageTitle}>My Jobs</Text>
-
-              <Text style={styles.pageSubtitle}>
-                Jobs assigned to your technician account
-              </Text>
-
-              <View style={styles.headerAccent} />
+            <View style={styles.searchRow}>
+              <View style={styles.searchBox}>
+                <Ionicons name="search-outline" size={22} color="#1F2937" />
+                <TextInput value={searchQuery} onChangeText={setSearchQuery} placeholder="Search by job ID, customer or location" placeholderTextColor="#78828C" style={styles.searchInput} returnKeyType="search" />
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Filter jobs by status and date"
+                onPress={() => {
+                  setDraftStatusFilter(statusFilter);
+                  setDraftDateFilter(dateFilter);
+                  setIsFilterModalVisible(true);
+                }}
+                style={styles.filterButton}
+              >
+                <Ionicons name="options-outline" size={22} color="#075C40" />
+                {statusFilter !== "ALL" || dateFilter !== "ANY" ? <View style={styles.filterActiveDot} /> : null}
+              </Pressable>
             </View>
 
             {dataSource === "cache" ? (
@@ -482,12 +537,8 @@ export default function JobsScreen() {
                     "Showing saved jobs. These details may be outdated."} Tap to refresh.
                 </Text>
               </Pressable>
-            ) : dataSource === "server" ? (
-              <View style={styles.serverNotice}>
-                <Text style={styles.serverNoticeText}>
-                  ✓ Jobs refreshed from server
-                </Text>
-              </View>
+            ) : dataSource === "server" && lastSyncedAt ? (
+              <Text style={styles.lastSynced}>Last synced {lastSyncedAt.toLocaleTimeString()}</Text>
             ) : error && jobs.length > 0 ? (
               <Pressable
                 accessibilityRole="button"
@@ -500,309 +551,139 @@ export default function JobsScreen() {
               </Pressable>
             ) : null}
 
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={styles.filterScroll}
-              contentContainerStyle={styles.filterContainer}
-            >
-              {filters.map((filter) => {
-                const selected = activeFilter === filter.key;
-
-                return (
-                  <Pressable
-                    key={filter.key}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected }}
-                    onPress={() => setActiveFilter(filter.key)}
-                    style={[
-                      styles.filterChip,
-                      selected && styles.filterChipActive
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.filterIcon,
-                        selected && styles.filterTextActive
-                      ]}
-                    >
-                      {filter.icon}
-                    </Text>
-
-                    <Text
-                      style={[
-                        styles.filterLabel,
-                        selected && styles.filterTextActive
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {filter.label}
-                    </Text>
-
-                    <View
-                      style={[
-                        styles.countBadge,
-                        selected && styles.countBadgeActive
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.countText,
-                          selected && styles.countTextActive
-                        ]}
-                      >
-                        {counts[filter.key]}
-                      </Text>
-                    </View>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-
-            <View style={styles.searchRow}>
-              <View style={styles.searchBox}>
-                <Text style={styles.searchIcon}>⌕</Text>
-
-                <TextInput
-                  accessibilityLabel="Search jobs"
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  placeholder="Search jobs by ID, customer or location..."
-                  placeholderTextColor="#829096"
-                  style={styles.searchInput}
-                  returnKeyType="search"
-                  autoCapitalize="none"
-                  clearButtonMode="while-editing"
-                />
-              </View>
-            </View>
-
-            <View style={styles.sectionHeading}>
-              <Text style={styles.sectionTitle}>
-                {activeFilter === "ALL"
-                  ? "Your assigned jobs"
-                  : filters.find((filter) => filter.key === activeFilter)
-                      ?.label}
-              </Text>
-
-              <Text style={styles.sectionCount}>
-                {visibleJobs.length}{" "}
-                {visibleJobs.length === 1 ? "job" : "jobs"}
-              </Text>
-            </View>
           </View>
         }
         ListEmptyComponent={
-          jobs.length === 0 ? (
-            <EmptyState
-              title="No jobs assigned"
-              message="Newly assigned jobs will appear here."
-              onRetry={() => void loadJobs(true)}
-            />
-          ) : (
-            <View style={styles.noResults}>
-              <View style={styles.noResultsIcon}>
-                <Text style={styles.noResultsIconText}>⌕</Text>
-              </View>
-
-              <Text style={styles.noResultsTitle}>
-                No matching jobs
-              </Text>
-
-              <Text style={styles.noResultsMessage}>
-                Try another search or select a different status.
-              </Text>
-
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => {
-                  setSearchQuery("");
-                  setActiveFilter("ALL");
-                }}
-                style={styles.clearButton}
-              >
-                <Text style={styles.clearButtonText}>
-                  Clear search and filters
-                </Text>
-              </Pressable>
-            </View>
-          )
+          <EmptyState
+            title={statusFilter !== "ALL" || dateFilter !== "ANY" || searchQuery ? "No matching jobs" : "No jobs assigned"}
+            message={statusFilter !== "ALL" || dateFilter !== "ANY" || searchQuery ? "Try changing or clearing your filters." : "Newly assigned jobs will appear here."}
+            onRetry={() => void loadJobs(true)}
+          />
         }
         renderItem={({ item }) => {
-          const isUrgent =
-            item.priority?.toUpperCase() === "URGENT";
+          const acceptanceSeconds = getAcceptanceSeconds(item, now);
+          const acceptanceColor = acceptanceSeconds !== null && acceptanceSeconds <= 30 ? "#DC2626" : acceptanceSeconds !== null && acceptanceSeconds <= 120 ? "#D97706" : "#078A4D";
+          const statusLabel = normalizeStatus(item.status).toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase());
 
           return (
-            <View
-              style={[
-                styles.jobCard,
-                isUrgent && styles.urgentCard
-              ]}
-            >
-              <View style={styles.cardTopRow}>
-                <View style={styles.jobIdentity}>
-                  <View
-                    style={[
-                      styles.serviceIconBox,
-                      isUrgent && styles.urgentIconBox
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.serviceIcon,
-                        isUrgent && styles.urgentServiceIcon
-                      ]}
-                    >
-                      ⚒
-                    </Text>
+            <View style={styles.compactJobCard}>
+              <View style={styles.compactJobBody}>
+                <View style={styles.jobCardHeading}>
+                  <View style={styles.compactTitleIcon}><Ionicons name="flash" size={21} color="#087653" /></View>
+                  <View style={styles.compactTitleGroup}>
+                    <Text style={styles.compactTitle} numberOfLines={1}>{item.service_type || item.title || "Service Request"}</Text>
+                    <Text style={styles.compactJobNumber} numberOfLines={1}>#{item.job_number || item.id}</Text>
                   </View>
-
-                  <View style={styles.jobNumberGroup}>
-                    <Text style={styles.jobNumber}>
-                      Job #{item.job_number ?? String(item.id)}
-                    </Text>
-
-                    <Text style={styles.jobReference}>
-                      Service assignment
-                    </Text>
+                  <View style={styles.statusPill}><Text style={styles.statusPillText}>{statusLabel || "Assigned"}</Text></View>
+                </View>
+                <View style={styles.jobSummaryRow}>
+                  <View style={styles.compactInfoRows}>
+                    <View style={styles.compactInfoRow}><View style={styles.compactInfoIcon}><Ionicons name="location-outline" size={16} color="#087653" /></View><Text style={styles.compactInfoText} numberOfLines={2}>{item.location || item.site_address || item.address || "Location not provided"}</Text></View>
+                    <View style={styles.compactInfoRow}><View style={styles.compactInfoIcon}><Ionicons name="call-outline" size={16} color="#087653" /></View><Text style={styles.compactInfoText} numberOfLines={1}>{item.contact_number || "Phone not provided"}</Text></View>
+                    <View style={styles.compactInfoRow}><View style={styles.compactInfoIcon}><Ionicons name="calendar-outline" size={16} color="#087653" /></View><Text style={styles.compactInfoText} numberOfLines={1}>{formatSchedule(item.preferred_service_date, item.preferred_service_time)}</Text></View>
                   </View>
+                  <Image source={getJobThumbnailSource(item)} style={styles.jobThumbnail} resizeMode="cover" accessibilityLabel={`Photo for ${item.service_type || item.title || "service job"}`} />
                 </View>
-
-                <View style={styles.statusBadge}>
-                  <Text style={styles.statusArrow}>➜</Text>
-                  <Text style={styles.statusText}>
-                    {formatStatus(item.status)}
-                  </Text>
-                </View>
+                {acceptanceSeconds !== null ? <Text style={[styles.acceptanceCountdown, { color: acceptanceColor }]}>Respond within {formatAcceptanceTime(acceptanceSeconds)}</Text> : null}
               </View>
-
-              <Text style={styles.jobTitle}>
-                {item.title || "Service job"}
-              </Text>
-
-              {item.priority ? (
-                <View
-                  style={[
-                    styles.priorityBadge,
-                    isUrgent
-                      ? styles.priorityBadgeUrgent
-                      : styles.priorityBadgeNormal
-                  ]}
-                >
-                  <View
-                    style={[
-                      styles.prioritySymbol,
-                      isUrgent
-                        ? styles.prioritySymbolUrgent
-                        : styles.prioritySymbolNormal
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.prioritySymbolText,
-                        isUrgent
-                          ? styles.prioritySymbolTextUrgent
-                          : styles.prioritySymbolTextNormal
-                      ]}
-                    >
-                      !
-                    </Text>
-                  </View>
-
-                  <View>
-                    <Text
-                      style={[
-                        styles.priorityLabel,
-                        isUrgent && styles.urgentText
-                      ]}
-                    >
-                      Priority
-                    </Text>
-
-                    <Text
-                      style={[
-                        styles.priorityValue,
-                        isUrgent && styles.urgentText
-                      ]}
-                    >
-                      {item.priority.toUpperCase()}
-                    </Text>
-                  </View>
-                </View>
-              ) : null}
-
-              {item.customer_name ? (
-                <View style={styles.detailRow}>
-                  <View style={styles.detailIconCircle}>
-                    <Text style={styles.detailIcon}>♙</Text>
-                  </View>
-
-                  <View style={styles.detailContent}>
-                    <Text style={styles.detailLabel}>Customer</Text>
-
-                    <Text style={styles.detailValue}>
-                      {item.customer_name}
-                    </Text>
-                  </View>
-                </View>
-              ) : null}
-
-              {item.address ? (
-                <View style={styles.detailRow}>
-                  <View style={styles.detailIconCircle}>
-                    <Text style={styles.detailIcon}>⌖</Text>
-                  </View>
-
-                  <View style={styles.detailContent}>
-                    <Text style={styles.detailLabel}>Location</Text>
-
-                    <Text style={styles.locationValue}>
-                      {item.address}
-                    </Text>
-                  </View>
-                </View>
-              ) : null}
-
-              <View style={styles.scheduleRow}>
-                <View style={styles.scheduleIconCircle}>
-                  <Text style={styles.scheduleIcon}>▦</Text>
-                </View>
-
-                <View style={styles.scheduleContent}>
-                  <Text style={styles.detailLabel}>
-                    Scheduled Date
-                  </Text>
-
-                  <Text style={styles.detailValue}>
-                    {formatSchedule(item.scheduled_at)}
-                  </Text>
-                </View>
-              </View>
-
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`View details for job ${item.job_number ?? item.id}`}
-                onPress={() =>
-                  router.push({
-                    pathname: "/(app)/jobs/[jobId]",
-                    params: { jobId: String(item.id) }
-                  })
-                }
-                style={({ pressed }) => [
-                  styles.detailsButton,
-                  pressed && styles.detailsButtonPressed
-                ]}
+                accessibilityLabel={`Job info for job ${item.job_number ?? item.id}`}
+                onPress={() => router.push({ pathname: "/(app)/jobs/[jobId]", params: { jobId: String(item.id), source: "jobs" } })}
+                style={({ pressed }) => [styles.jobInfoButton, pressed && styles.liveRoutePressed]}
               >
-                <Text style={styles.detailsButtonText}>
-                  View Job Details
-                </Text>
-
-                <Text style={styles.detailsButtonArrow}>→</Text>
+                <LinearGradient colors={["#07553F", "#07805A"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.jobInfoGradient}>
+                  <Ionicons name="information-circle-outline" size={18} color="#FFFFFF" />
+                  <Text style={styles.liveRouteText}>Job Info</Text>
+                  <Ionicons name="arrow-forward" size={16} color="#FFFFFF" />
+                </LinearGradient>
               </Pressable>
             </View>
           );
         }}
       />
+      <Modal
+        visible={isFilterModalVisible}
+        transparent
+        animationType="slide"
+        statusBarTranslucent
+        onRequestClose={() => setIsFilterModalVisible(false)}
+      >
+        <View style={styles.filterModalRoot}>
+          <Pressable style={styles.filterBackdrop} onPress={() => setIsFilterModalVisible(false)} />
+          <View style={styles.filterSheet}>
+            <View style={styles.filterSheetHandle} />
+            <View style={styles.filterSheetHeader}>
+              <View>
+                <Text style={styles.filterSheetTitle}>Filter jobs</Text>
+                <Text style={styles.filterSheetSubtitle}>Choose a status and scheduled date</Text>
+              </View>
+              <Pressable accessibilityRole="button" accessibilityLabel="Close filters" onPress={() => setIsFilterModalVisible(false)} style={styles.filterCloseButton}>
+                <Ionicons name="close" size={22} color="#42534A" />
+              </Pressable>
+            </View>
+
+            <ScrollView style={styles.filterOptionsScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <Text style={styles.filterSectionTitle}>Status</Text>
+              <View style={styles.filterChoices}>
+                {jobStatusFilters.map((option) => (
+                  <Pressable
+                    key={option.value}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: draftStatusFilter === option.value }}
+                    onPress={() => setDraftStatusFilter(option.value)}
+                    style={[styles.filterChoice, draftStatusFilter === option.value && styles.filterChoiceSelected]}
+                  >
+                    <Text style={[styles.filterChoiceText, draftStatusFilter === option.value && styles.filterChoiceTextSelected]}>{option.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              <Text style={[styles.filterSectionTitle, styles.dateFilterTitle]}>Scheduled date</Text>
+              <View style={styles.filterChoices}>
+                {jobDateFilters.map((option) => (
+                  <Pressable
+                    key={option.value}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: draftDateFilter === option.value }}
+                    onPress={() => setDraftDateFilter(option.value)}
+                    style={[styles.filterChoice, draftDateFilter === option.value && styles.filterChoiceSelected]}
+                  >
+                    <Text style={[styles.filterChoiceText, draftDateFilter === option.value && styles.filterChoiceTextSelected]}>{option.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </ScrollView>
+
+            <View style={styles.filterSheetActions}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => {
+                  setDraftStatusFilter("ALL");
+                  setDraftDateFilter("ANY");
+                  setStatusFilter("ALL");
+                  setDateFilter("ANY");
+                  setIsFilterModalVisible(false);
+                }}
+                style={styles.clearFiltersButton}
+              >
+                <Text style={styles.clearFiltersText}>Clear</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => {
+                  setStatusFilter(draftStatusFilter);
+                  setDateFilter(draftDateFilter);
+                  setIsFilterModalVisible(false);
+                }}
+                style={styles.applyFiltersButton}
+              >
+                <Text style={styles.applyFiltersText}>Apply filters</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -810,8 +691,76 @@ export default function JobsScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: "#F3F8F6"
+    backgroundColor: "#EEF4F1"
   },
+
+  jobsHero: { position: "relative", paddingHorizontal: 18, paddingTop: 17, paddingBottom: 20, borderBottomLeftRadius: 28, borderBottomRightRadius: 28 },
+  heroTitleRow: { minHeight: 68, flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 16, zIndex: 1 },
+  heroIcon: { width: 46, height: 46, borderRadius: 14, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.14)" },
+  heroTitleText: { flex: 1, maxWidth: "55%" },
+  heroTitle: { color: "#FFFFFF", fontSize: 21, fontWeight: "800", letterSpacing: -0.3 },
+  heroSubtitle: { color: "#D7F2E5", fontSize: 13, marginTop: 3 },
+  heroArtwork: { position: "absolute", width: 88, height: 80, right: 10, top: 47, zIndex: 0 },
+  jobStatsViewport: { marginTop: 38, marginHorizontal: -18, flexGrow: 0 },
+  jobStatsRow: { flexDirection: "row", gap: 8, paddingHorizontal: 18, paddingRight: 22 },
+  jobStatCard: { width: 100, minHeight: 67, flexShrink: 0, borderRadius: 18, paddingHorizontal: 7, paddingVertical: 8, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
+  assignedStat: { backgroundColor: "#DDF9DE" },
+  acceptedStat: { backgroundColor: "#E3F7E9" },
+  startedStat: { backgroundColor: "#FFF3D7" },
+  enRouteStat: { backgroundColor: "#E2F0FF" },
+  progressStat: { backgroundColor: "#FFF3D7" },
+  completedStat: { backgroundColor: "#DDF7F7" },
+  statIcon: { width: 31, height: 31, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.65)" },
+  jobStatNumber: { color: "#111827", fontSize: 17, lineHeight: 19, fontWeight: "900" },
+  jobStatLabel: { color: "#17211B", fontSize: 9, fontWeight: "700", marginTop: 1 },
+  searchRow: { flexDirection: "row", alignItems: "center", gap: 9, marginHorizontal: 15, marginTop: 14, marginBottom: 15 },
+  searchBox: { flex: 1, minHeight: 52, paddingHorizontal: 13, flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: "#FFFFFF", borderRadius: 16, borderWidth: 1, borderColor: "#DDE7E1", shadowColor: "#164E3B", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 6, elevation: 2 },
+  searchInput: { flex: 1, minWidth: 0, color: "#17211B", fontSize: 13, paddingVertical: 8 },
+  filterButton: { width: 52, height: 52, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: "#DDF9DE", borderWidth: 1, borderColor: "#C8E9CF" },
+  filterActiveDot: { position: "absolute", width: 8, height: 8, borderRadius: 4, top: 8, right: 8, backgroundColor: "#087653" },
+  filterModalRoot: { flex: 1, justifyContent: "flex-end" },
+  filterBackdrop: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(12, 25, 18, 0.45)" },
+  filterSheet: { maxHeight: "85%", paddingHorizontal: 20, paddingTop: 10, paddingBottom: 24, backgroundColor: "#FFFFFF", borderTopLeftRadius: 26, borderTopRightRadius: 26 },
+  filterOptionsScroll: { flexShrink: 1 },
+  filterSheetHandle: { width: 42, height: 4, alignSelf: "center", borderRadius: 2, backgroundColor: "#CBD5CE", marginBottom: 15 },
+  filterSheetHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 20 },
+  filterSheetTitle: { color: "#17211B", fontSize: 20, fontWeight: "800" },
+  filterSheetSubtitle: { color: "#6B7A70", fontSize: 12, marginTop: 4 },
+  filterCloseButton: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center", backgroundColor: "#F0F5F1" },
+  filterSectionTitle: { color: "#24352B", fontSize: 14, fontWeight: "800", marginBottom: 10 },
+  dateFilterTitle: { marginTop: 19 },
+  filterChoices: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  filterChoice: { minHeight: 38, paddingHorizontal: 13, borderRadius: 20, borderWidth: 1, borderColor: "#DCE7DF", backgroundColor: "#FFFFFF", alignItems: "center", justifyContent: "center" },
+  filterChoiceSelected: { backgroundColor: "#087653", borderColor: "#087653" },
+  filterChoiceText: { color: "#526257", fontSize: 12, fontWeight: "700" },
+  filterChoiceTextSelected: { color: "#FFFFFF" },
+  filterSheetActions: { flexDirection: "row", gap: 10, marginTop: 25 },
+  clearFiltersButton: { minHeight: 49, minWidth: 96, paddingHorizontal: 18, borderRadius: 14, borderWidth: 1, borderColor: "#DCE7DF", alignItems: "center", justifyContent: "center" },
+  clearFiltersText: { color: "#395144", fontSize: 14, fontWeight: "800" },
+  applyFiltersButton: { flex: 1, minHeight: 49, paddingHorizontal: 18, borderRadius: 14, backgroundColor: "#087653", alignItems: "center", justifyContent: "center" },
+  applyFiltersText: { color: "#FFFFFF", fontSize: 14, fontWeight: "800" },
+  lastSynced: { marginHorizontal: 20, marginBottom: 12, color: "#6B7280", fontSize: 11, textAlign: "right" },
+
+  compactJobCard: { marginHorizontal: 14, marginBottom: 14, borderRadius: 19, overflow: "hidden", backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#D8E7DF", borderLeftWidth: 4, borderLeftColor: "#48C944", shadowColor: "#164E3B", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.10, shadowRadius: 8, elevation: 3 },
+  compactJobBody: { paddingHorizontal: 12, paddingTop: 12, backgroundColor: "#FFFFFF" },
+  jobCardHeading: { minHeight: 54, flexDirection: "row", alignItems: "center", gap: 10, paddingBottom: 8 },
+  compactTitleIcon: { width: 48, height: 48, borderRadius: 14, alignItems: "center", justifyContent: "center", backgroundColor: "#E1F8E0" },
+  compactTitleGroup: { flex: 1, minWidth: 0 },
+  compactTitle: { color: "#111827", fontSize: 16, fontWeight: "800" },
+  compactJobNumber: { color: "#374151", fontSize: 12, marginTop: 2 },
+  statusPill: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 16, backgroundColor: "#D8F7D6" },
+  statusPillText: { color: "#075C28", fontSize: 11, fontWeight: "800" },
+  compactInfoRows: { flex: 1, minWidth: 0, paddingVertical: 4, backgroundColor: "#FFFFFF" },
+  jobSummaryRow: { width: "100%", flexDirection: "row", alignItems: "center", gap: 9 },
+  jobThumbnail: { width: 89, height: 76, flexShrink: 0, borderRadius: 13, backgroundColor: "#E7E2DA" },
+  compactInfoRow: { minHeight: 35, flexDirection: "row", alignItems: "center", gap: 9, paddingVertical: 4 },
+  compactInfoIcon: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", backgroundColor: "#EEF9F0" },
+  compactInfoText: { flex: 1, color: "#111827", fontSize: 13, lineHeight: 18, fontWeight: "500" },
+  acceptanceCountdown: { fontSize: 11, fontWeight: "800", marginBottom: 8, textAlign: "right" },
+  jobInfoButton: { minHeight: 48, marginHorizontal: 10, marginBottom: 10, overflow: "hidden", borderRadius: 13, borderWidth: 1, borderColor: "#0A7654", shadowColor: "#164E3B", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.10, shadowRadius: 4, elevation: 1 },
+  jobInfoGradient: { minHeight: 48, paddingHorizontal: 13, borderRadius: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
+  liveRoutePressed: { opacity: 0.88, transform: [{ scale: 0.99 }] },
+  liveRouteText: { color: "#FFFFFF", fontSize: 13, fontWeight: "800" },
 
   header: {
     backgroundColor: "#00513D",
@@ -943,34 +892,12 @@ const styles = StyleSheet.create({
     color: "#FFFFFF"
   },
 
-  searchRow: {
-    paddingHorizontal: 16,
-    marginTop: 12
-  },
-  searchBox: {
-    minHeight: 54,
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: "#E4ECE9",
-    borderRadius: 16,
-    paddingHorizontal: 13
-  },
   searchIcon: {
     color: "#536779",
     fontSize: 30,
     lineHeight: 34,
     marginRight: 10
   },
-  searchInput: {
-    flex: 1,
-    minWidth: 0,
-    color: "#132D40",
-    fontSize: 13,
-    paddingVertical: 12
-  },
-
   sectionHeading: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -991,7 +918,7 @@ const styles = StyleSheet.create({
   },
 
   list: {
-    paddingHorizontal: 14,
+    paddingHorizontal: 0,
     paddingBottom: 24
   },
   emptyList: {
@@ -1001,21 +928,25 @@ const styles = StyleSheet.create({
   },
 
   jobCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 22,
+    backgroundColor: "#FBFEFD",
+    borderRadius: 15,
     borderWidth: 1,
-    borderColor: "#E5EEEA",
-    padding: 16,
-    marginBottom: 15,
-    shadowColor: "#164E3B",
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.07,
-    shadowRadius: 12,
-    elevation: 3
+    borderColor: "#E3ECE7",
+    borderLeftWidth: 4,
+    borderLeftColor: "#0AA66A",
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 12,
+    marginBottom: 14,
+    shadowColor: "#154434",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 9,
+    elevation: 2
   },
   urgentCard: {
     borderLeftWidth: 4,
-    borderLeftColor: "#F04455"
+    borderLeftColor: "#0AA66A"
   },
   cardTopRow: {
     flexDirection: "row",
@@ -1216,29 +1147,49 @@ const styles = StyleSheet.create({
 
   detailsButton: {
     minHeight: 58,
-    borderRadius: 16,
-    backgroundColor: "#006747",
+    borderTopWidth: 1,
+    borderTopColor: "#E9EEF2",
+    marginTop: 12,
+    paddingTop: 12,
+    backgroundColor: "transparent",
     flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 16,
-    gap: 13
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    flexWrap: "wrap",
+    gap: 10
   },
   detailsButtonPressed: {
-    backgroundColor: "#004D39",
-    transform: [{ scale: 0.99 }]
+    opacity: 0.85
   },
   detailsButtonText: {
-    color: "#FFFFFF",
-    fontSize: 15,
-    fontWeight: "800"
+    color: "#156B5B",
+    fontSize: 12,
+    fontWeight: "700"
   },
   detailsButtonArrow: {
-    color: "#FFFFFF",
-    fontSize: 25,
-    lineHeight: 28,
-    fontWeight: "500"
+    color: "#156B5B",
+    fontSize: 20,
+    lineHeight: 22,
+    fontWeight: "700"
   },
+
+  cardHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 12 },
+  jobHeading: { flex: 1, minWidth: 0 },
+  jobId: { fontSize: 11, color: "#9CA3AF", fontWeight: "700", marginBottom: 3 },
+  badgeGroup: { flexDirection: "row", justifyContent: "flex-end", flexWrap: "wrap", gap: 6, maxWidth: "55%" },
+  webBadge: { fontSize: 10, fontWeight: "700", paddingHorizontal: 9, paddingVertical: 5, borderRadius: 16, overflow: "hidden" },
+  webDetails: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: "#E9EEF2", paddingVertical: 4 },
+  webDetail: { minHeight: 54, flexDirection: "row", alignItems: "flex-start", gap: 11, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: "#E7EDF2" },
+  webDetailText: { flex: 1, minWidth: 0 },
+  webDetailStrong: { color: "#172033", fontSize: 13, lineHeight: 19, fontWeight: "700" },
+  webDetailSub: { color: "#64748B", fontSize: 12, lineHeight: 18, marginTop: 2 },
+  callCustomer: { color: "#1769E8", fontSize: 12, marginTop: 3 },
+  serviceDetails: { flexDirection: "row", alignItems: "flex-start", gap: 11, paddingHorizontal: 3, paddingVertical: 12 },
+  footerStatus: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8, flex: 1, minWidth: 190 },
+  checkCircle: { width: 27, height: 27, borderRadius: 14, alignItems: "center", justifyContent: "center", backgroundColor: "#D1FAE5" },
+  assignedDate: { color: "#718096", fontSize: 10, lineHeight: 15, flexShrink: 1 },
+  acceptanceTimer: { fontSize: 11, fontWeight: "800" },
+  detailsAction: { minHeight: 36, paddingHorizontal: 10, borderWidth: 1, borderColor: "#156B5B", borderRadius: 8, flexDirection: "row", alignItems: "center", gap: 6 },
 
   noResults: {
     alignItems: "center",

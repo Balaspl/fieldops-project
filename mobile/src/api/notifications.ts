@@ -90,6 +90,13 @@ export async function markAllTechnicianNotificationsRead(): Promise<void> {
   await apiClient.put("/api/technician/notifications/read-all");
 }
 
+export async function dismissTechnicianNotification(
+  notificationId: string | number
+): Promise<void> {
+  const safeId = encodeURIComponent(String(notificationId));
+  await apiClient.delete(`/api/technician/notifications/${safeId}`);
+}
+
 export type PushDeviceType = "android" | "ios";
 
 export interface RegisterTechnicianPushTokenInput {
@@ -132,6 +139,8 @@ export async function registerTechnicianPushToken(
   }
 
   await apiClient.post(
+    // Keep the established endpoint path for backends that have not yet
+    // restarted with the newer /push-token alias.
     `/technicians/${encodeURIComponent(userId)}/fcm-token`,
     {
       token,

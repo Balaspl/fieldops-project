@@ -819,6 +819,18 @@ class DispatcherRuntime:
                 )
                 raise
 
+            # The in-app card above does not deliver a mobile push. Send
+            # the native FCM notification only after the assignment commits.
+            from app.services.assignment_push import send_assignment_push
+
+            await send_assignment_push(
+                job_id=job.id,
+                tenant_id=str(technician.tenant_id),
+                technician_id=str(technician.tech_id),
+                job_title=getattr(job, "service_type", None),
+                location=getattr(job, "location", None),
+            )
+
             # ----------------------------------------------------------
             # Refresh
             # ----------------------------------------------------------

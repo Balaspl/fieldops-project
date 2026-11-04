@@ -422,6 +422,12 @@ ServiceRequestResponse.model_rebuild()
 
 class TechnicianJobResponse(BaseModel):
     id: int
+    images: Optional[List[str]] = None
+    payment_status: Optional[str] = None
+    payment_amount: Optional[float] = None
+    payment_method: Optional[str] = None
+    payment_provider: Optional[str] = None
+    payment_updated_at: Optional[datetime] = None
     customer_name: Optional[str] = None
     location: Optional[str] = None
     issue_description: Optional[str] = None
@@ -436,11 +442,28 @@ class TechnicianJobResponse(BaseModel):
     updated_at: Optional[datetime] = None
     sla_deadline: Optional[datetime] = None
     assigned_at: Optional[datetime] = None
+    en_route_at: Optional[datetime] = None
+    on_site_at: Optional[datetime] = None
+    work_started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    closed_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+    rejected_at: Optional[datetime] = None
+    rejection_reason: Optional[str] = None
     site_address: Optional[str] = None
     site_latitude: Optional[float] = None
     site_longitude: Optional[float] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class TechnicianJobTrackingSummaryResponse(BaseModel):
+    job_id: int
+    distance_travelled_km: Optional[float] = None
+    technician_latitude: Optional[float] = None
+    technician_longitude: Optional[float] = None
+    technician_last_ping: Optional[datetime] = None
+    has_route_data: bool = False
 
 
 class TechnicianJobActionRequest(BaseModel):

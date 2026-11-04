@@ -9,7 +9,10 @@ import {
 import { isAxiosError } from "axios";
 import {
   ActivityIndicator,
+  Animated,
   Alert,
+  Easing,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -18,12 +21,16 @@ import {
   View
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
+import * as Location from "expo-location";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useAuthStore } from "../../../src/auth/authStore";
-import { isNetworkUnavailableError } from "../../../src/api/client";
+import { apiClient, isNetworkUnavailableError } from "../../../src/api/client";
 import { setActiveGpsJob } from "../../../src/gps/backgroundLocationService";
+import { getTechnicianAvailabilityLocation } from "../../../src/gps/gpsService";
 import {
   getTechnicianJob,
+  getTechnicianJobs,
   type TechnicianJob
 } from "../../../src/api/technician";
 import {
@@ -54,6 +61,62 @@ type CacheIdentifier = string | number | null | undefined;
 interface CachedTechnicianJob {
   job: TechnicianJob;
   cachedAt: string;
+}
+
+interface OlaRouteSummary {
+  distance_meters: number;
+  duration_seconds: number;
+  duration_in_traffic_seconds?: number | null;
+}
+
+interface TechnicianTrackingApiSummary {
+  job_id: string | number;
+  distance_travelled_km?: number | null;
+  technician_latitude?: number | null;
+  technician_longitude?: number | null;
+  technician_last_ping?: string | null;
+  has_route_data?: boolean;
+}
+
+interface TechnicianTrackingSummary {
+  distanceToCustomerKm: number | null;
+  estimatedMinutes: number | null;
+  distanceTravelledKm: number | null;
+  isWaitingForGps: boolean;
+  isLoading: boolean;
+}
+
+interface Coordinate {
+  latitude: number;
+  longitude: number;
+}
+
+function isValidCoordinate(value: Coordinate | null): value is Coordinate {
+  return Boolean(
+    value && Number.isFinite(value.latitude) && Number.isFinite(value.longitude) &&
+      value.latitude >= -90 && value.latitude <= 90 &&
+      value.longitude >= -180 && value.longitude <= 180 &&
+      !(value.latitude === 0 && value.longitude === 0)
+  );
+}
+
+function formatOnsiteDuration(
+  startValue: string | null | undefined,
+  now: number,
+  completedAt?: string | null
+): string {
+  if (!startValue) return "Pending";
+  const start = Date.parse(startValue);
+  if (!Number.isFinite(start)) return "Pending";
+  const completed = completedAt ? Date.parse(completedAt) : Number.NaN;
+  const end = Number.isFinite(completed) ? completed : now;
+  const minutes = Math.max(0, Math.floor((end - start) / 60_000));
+  return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+function getCustomerInitials(name?: string | null): string {
+  const parts = (name || "Customer").trim().split(/\s+/).filter(Boolean);
+  return parts.slice(0, 2).map((part) => part[0]?.toUpperCase() ?? "").join("") || "CU";
 }
 
 function getJobCacheKey(
@@ -265,10 +328,12 @@ function formatCachedTimestamp(value: string | null): string {
 export default function JobDetailScreen() {
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
-  const { jobId } = useLocalSearchParams<{ jobId: string }>();
+  const { jobId, source } = useLocalSearchParams<{ jobId: string; source?: string }>();
+  const openedFromHistory = source === "history";
   const { isOffline } = useNetworkStatus();
 
   const [job, setJob] = useState<TechnicianJob | null>(null);
+  const [otherStartedJob, setOtherStartedJob] = useState<TechnicianJob | null>(null);
   const [loading, setLoading] = useState(true);
   const [dataSource, setDataSource] =
     useState<"server" | "cache" | null>(null);
@@ -277,6 +342,14 @@ export default function JobDetailScreen() {
     useState<TechnicianJobAction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [queuedActions, setQueuedActions] = useState<QueuedJobAction[]>([]);
+  const [trackingSummary, setTrackingSummary] = useState<TechnicianTrackingSummary>({
+    distanceToCustomerKm: null,
+    estimatedMinutes: null,
+    distanceTravelledKm: null,
+    isWaitingForGps: false,
+    isLoading: false
+  });
+  const [trackingClock, setTrackingClock] = useState(Date.now());
   const [isRejectModalVisible, setIsRejectModalVisible] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
   const [currentTimeMs, setCurrentTimeMs] = useState(() => Date.now());
@@ -321,6 +394,7 @@ export default function JobDetailScreen() {
 
     setLoading(true);
     setError(null);
+    setOtherStartedJob(null);
 
     let cachedDetails = await readCachedTechnicianJob(
       cacheScope,
@@ -337,6 +411,14 @@ export default function JobDetailScreen() {
 
     try {
       const result = await getTechnicianJob(requestedJobId);
+      void getTechnicianJobs().then((assignedJobs) => {
+        const startedElsewhere = assignedJobs.find((candidate) => {
+          const status = normalizeJobStatus(candidate.status);
+          return String(candidate.id) !== requestedJobId &&
+            ["EN_ROUTE", "ON_SITE", "IN_PROGRESS", "PAUSED"].includes(status);
+        }) ?? null;
+        setOtherStartedJob(startedElsewhere);
+      }).catch(() => setOtherStartedJob(null));
       const savedAt = await saveCachedTechnicianJob(
         cacheScope,
         requestedJobId,
@@ -467,6 +549,192 @@ export default function JobDetailScreen() {
 
     return () => clearInterval(interval);
   }, [assignedStatus, assignedAtMs]);
+
+  useEffect(() => {
+    const trackingJob = job;
+    const trackingUser = user;
+    if (!trackingJob || trackingUser?.id == null || trackingUser.tenant_id == null) {
+      setTrackingSummary({
+        distanceToCustomerKm: null,
+        estimatedMinutes: null,
+        distanceTravelledKm: null,
+        isWaitingForGps: false,
+        isLoading: false
+      });
+      return;
+    }
+
+    const trackingJobId = String(trackingJob.id);
+    const trackingJobStatus = trackingJob.status;
+    const destinationLatitude = trackingJob.site_latitude;
+    const destinationLongitude = trackingJob.site_longitude;
+    const destinationAddress = trackingJob.site_address || trackingJob.address || trackingJob.location;
+    const tenantId = trackingUser.tenant_id;
+
+    const trackingStatuses = [
+      "ACCEPTED", "EN_ROUTE", "ON_SITE", "IN_PROGRESS", "PAUSED", "COMPLETED"
+    ];
+    if (!trackingStatuses.includes(normalizeJobStatus(trackingJobStatus))) {
+      setTrackingSummary({
+        distanceToCustomerKm: null,
+        estimatedMinutes: null,
+        distanceTravelledKm: null,
+        isWaitingForGps: false,
+        isLoading: false
+      });
+      return;
+    }
+
+    let active = true;
+
+    async function refreshTravelSummary() {
+      setTrackingSummary((current) => ({
+        ...current,
+        isLoading: current.distanceToCustomerKm === null && current.estimatedMinutes === null
+      }));
+
+      const trackingRequest = apiClient.get<TechnicianTrackingApiSummary>(
+        `/api/technician/jobs/${encodeURIComponent(trackingJobId)}/tracking-summary`
+      ).then((response) => response.data).catch(() => null);
+
+      const availabilityRequest = getTechnicianAvailabilityLocation(tenantId)
+        .catch(() => null);
+
+      const [trackingData, availability] = await Promise.all([
+        trackingRequest,
+        availabilityRequest
+      ]);
+
+      let origin: Coordinate | null = trackingData &&
+        trackingData.technician_latitude != null &&
+        trackingData.technician_longitude != null &&
+        Number.isFinite(trackingData.technician_latitude) &&
+        Number.isFinite(trackingData.technician_longitude)
+        ? { latitude: Number(trackingData.technician_latitude), longitude: Number(trackingData.technician_longitude) }
+        : availability &&
+        Number.isFinite(availability.latitude) && Number.isFinite(availability.longitude)
+        ? { latitude: Number(availability.latitude), longitude: Number(availability.longitude) }
+        : null;
+
+      if (!isValidCoordinate(origin)) {
+        try {
+          const permission = await Location.getForegroundPermissionsAsync();
+          if (permission.status === "granted") {
+            const lastKnown = await Location.getLastKnownPositionAsync({
+              maxAge: 120_000,
+              requiredAccuracy: 1_000
+            });
+            if (lastKnown) {
+              origin = {
+                latitude: lastKnown.coords.latitude,
+                longitude: lastKnown.coords.longitude
+              };
+            } else {
+              const position = await Promise.race([
+                Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low }),
+                new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Location request timed out")), 6_000))
+              ]);
+              origin = {
+                latitude: position.coords.latitude,
+                longitude: position.coords.longitude
+              };
+            }
+          }
+        } catch {
+          origin = null;
+        }
+      }
+
+      let destination: Coordinate | null = null;
+      const savedDestination = {
+        latitude: Number(destinationLatitude),
+        longitude: Number(destinationLongitude)
+      };
+      if (isValidCoordinate(savedDestination)) {
+        destination = savedDestination;
+      } else {
+        if (destinationAddress) {
+          try {
+            const matches = await Location.geocodeAsync(destinationAddress);
+            if (matches[0]) {
+              destination = {
+                latitude: matches[0].latitude,
+                longitude: matches[0].longitude
+              };
+            }
+          } catch {
+            destination = null;
+          }
+        }
+      }
+
+      let distanceToCustomerKm: number | null = null;
+      let estimatedMinutes: number | null = null;
+      if (isValidCoordinate(origin) && isValidCoordinate(destination)) {
+        try {
+          const routeResponse = await apiClient.get<OlaRouteSummary>(
+            "/api/v1/gps/route",
+            {
+              params: {
+                origin_lat: origin.latitude,
+                origin_lng: origin.longitude,
+                dest_lat: destination.latitude,
+                dest_lng: destination.longitude
+              }
+            }
+          );
+          const route = routeResponse.data;
+          if (Number.isFinite(route.distance_meters) && route.distance_meters > 0) {
+            distanceToCustomerKm = route.distance_meters / 1000;
+          }
+          const routeSeconds = route.duration_in_traffic_seconds ?? route.duration_seconds;
+          if (Number.isFinite(routeSeconds) && routeSeconds >= 0) {
+            estimatedMinutes = Math.max(1, Math.round(routeSeconds / 60));
+          }
+        } catch {
+          // Keep the displayed distance and ETA unavailable when road routing fails.
+        }
+      }
+
+      const normalizedCurrentStatus = normalizeJobStatus(trackingJobStatus);
+      const distanceTravelledKm = trackingData?.has_route_data
+        ? trackingData.distance_travelled_km ?? null
+        : normalizedCurrentStatus === "ACCEPTED" ? 0 : null;
+
+      if (active) {
+        setTrackingSummary({
+          distanceToCustomerKm,
+          estimatedMinutes,
+          distanceTravelledKm,
+          isWaitingForGps: Boolean(trackingData && !trackingData.has_route_data && normalizedCurrentStatus !== "ACCEPTED"),
+          isLoading: false
+        });
+      }
+    }
+
+    void refreshTravelSummary();
+    const interval = setInterval(() => void refreshTravelSummary(), 30_000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [
+    job?.id,
+    job?.status,
+    job?.site_latitude,
+    job?.site_longitude,
+    job?.site_address,
+    job?.address,
+    job?.location,
+    user?.id,
+    user?.tenant_id
+  ]);
+
+  useEffect(() => {
+    if (!job?.on_site_at || !["ON_SITE", "IN_PROGRESS", "PAUSED", "COMPLETED"].includes(assignedStatus)) return;
+    const interval = setInterval(() => setTrackingClock(Date.now()), 60_000);
+    return () => clearInterval(interval);
+  }, [assignedStatus, job?.on_site_at]);
 
 
   async function queueOfflineJobAction(
@@ -660,7 +928,10 @@ export default function JobDetailScreen() {
       }
 
       setError(
-        "The job action could not be confirmed by the server. Refresh the job before trying again."
+        action === "start" && isAxiosError(actionError) &&
+          actionError.response?.status === 409
+          ? "Another job is already in progress. Complete it before starting a new job."
+          : "The job action could not be confirmed by the server. Refresh the job before trying again."
       );
     } finally {
       setActiveAction(null);
@@ -670,7 +941,7 @@ export default function JobDetailScreen() {
  
 
   if (loading) {
-    return <LoadingState label="Loading job details..." />;
+    return <LoadingState label="Loading job details..." variant="detail" />;
   }
 
   if (error && !job) {
@@ -701,6 +972,12 @@ export default function JobDetailScreen() {
   const availableActions = getJobActionOptions(job.status).filter(
     ({ action }) => action !== "reject" || canRejectJob
   );
+  const showTravelSummary = [
+    "ACCEPTED", "EN_ROUTE", "ON_SITE", "IN_PROGRESS", "PAUSED", "COMPLETED"
+  ].includes(assignedStatus);
+  const showLiveMapAction = ["EN_ROUTE", "ON_SITE", "IN_PROGRESS", "PAUSED"].includes(assignedStatus);
+  const shimmerButtonCount = Number(showLiveMapAction) +
+    availableActions.filter(({ action }) => action !== "reject").length;
 
   const isUrgent = job.priority?.toUpperCase() === "URGENT";
 
@@ -716,6 +993,22 @@ export default function JobDetailScreen() {
     ? styles.priorityUrgent
     : styles.priorityNormal;
 
+  const jobStages = [
+    { label: "Assigned", icon: "briefcase-outline" as const },
+    { label: "Accepted", icon: "paper-plane-outline" as const },
+    { label: "On the way", icon: "car-outline" as const },
+    { label: "Arrived", icon: "location-outline" as const },
+    { label: "Working", icon: "construct-outline" as const },
+    { label: "Completed", icon: "checkmark-done-outline" as const }
+  ];
+  const currentStageIndex =
+    assignedStatus === "COMPLETED" ? 5
+      : assignedStatus === "IN_PROGRESS" || assignedStatus === "PAUSED" ? 4
+        : assignedStatus === "ON_SITE" ? 3
+          : assignedStatus === "EN_ROUTE" ? 2
+            : assignedStatus === "ACCEPTED" ? 1
+              : 0;
+
   return (
     <View style={styles.screen}>
       <ScrollView
@@ -724,12 +1017,17 @@ export default function JobDetailScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* Green branded job header */}
-        <View style={styles.hero}>
+        <LinearGradient
+          colors={["#063D32", "#087A57", "#10A875"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.hero}
+        >
           <View style={styles.headerRow}>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Go back"
-              onPress={() => router.back()}
+              onPress={() => router.replace(openedFromHistory ? "/(app)/history" : "/(app)/jobs")}
               style={({ pressed }) => [
                 styles.backButton,
                 pressed && styles.pressed
@@ -800,7 +1098,7 @@ export default function JobDetailScreen() {
               </View>
             ) : null}
           </View>
-        </View>
+        </LinearGradient>
         {queuedActions.length > 0 ? (
           <View style={styles.pendingActionBanner}>
             <Text style={styles.pendingActionTitle}>
@@ -844,15 +1142,164 @@ export default function JobDetailScreen() {
           </View>
         ) : null}
 
+        <View style={styles.progressCard}>
+          <View style={styles.progressHeading}>
+            <View style={styles.progressIcon}>
+              <Ionicons name="navigate-outline" size={21} color="#087653" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.progressTitle}>Job progress</Text>
+              <Text style={styles.progressSubtitle}>
+                {assignedStatus === "COMPLETED"
+                  ? "This service job is complete"
+                  : `Current stage · ${getJobStatusLabel(job.status)}`}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.progressSteps}>
+            {jobStages.map((stage, index) => {
+              const isDone = index < currentStageIndex || assignedStatus === "COMPLETED";
+              const isCurrent = index === currentStageIndex && assignedStatus !== "COMPLETED";
+              return (
+                <View key={stage.label} style={styles.progressStep}>
+                  <View style={styles.progressNodeRow}>
+                    {index > 0 ? (
+                      <View style={[styles.progressConnector, index <= currentStageIndex && styles.progressConnectorDone]} />
+                    ) : null}
+                    <View style={[
+                      styles.progressNode,
+                      isDone && styles.progressNodeDone,
+                      isCurrent && styles.progressNodeCurrent
+                    ]}>
+                      <Ionicons
+                        name={isDone ? "checkmark" : stage.icon}
+                        size={13}
+                        color={isDone || isCurrent ? "#FFFFFF" : "#92A49B"}
+                      />
+                    </View>
+                    {index < jobStages.length - 1 ? (
+                      <View style={[styles.progressConnector, index < currentStageIndex && styles.progressConnectorDone]} />
+                    ) : null}
+                  </View>
+                  <Text style={[
+                    styles.progressStepLabel,
+                    (isDone || isCurrent) && styles.progressStepLabelActive
+                  ]} numberOfLines={2}>{stage.label}</Text>
+                </View>
+              );
+            })}
+          </View>
+        </View>
+
+        {showTravelSummary ? (
+          <View style={styles.customerDetailsCard}>
+            <View style={styles.customerDetailsAvatar}>
+              <Text style={styles.customerDetailsInitials}>{getCustomerInitials(job.customer_name)}</Text>
+            </View>
+            <View style={styles.customerDetailsInfo}>
+              <Text style={styles.customerDetailsEyebrow}>CUSTOMER</Text>
+              <Text style={styles.customerDetailsName} numberOfLines={1}>
+                {job.customer_name || "Customer"}
+              </Text>
+              <Text style={styles.customerDetailsPhone} numberOfLines={1}>
+                {job.contact_number || "Phone number unavailable"}
+              </Text>
+            </View>
+            <View style={styles.customerDetailsActions}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Call customer"
+                disabled={!job.contact_number}
+                onPress={() => {
+                  const phone = job.contact_number?.replace(/[^\d+]/g, "");
+                  if (phone) void Linking.openURL(`tel:${phone}`).catch(() => Alert.alert("Call unavailable", "This device could not open the phone app."));
+                }}
+                style={({ pressed }) => [styles.customerDetailsAction, !job.contact_number && styles.customerDetailsActionDisabled, pressed && styles.pressed]}
+              >
+                <Ionicons name="call-outline" size={18} color="#087653" />
+                <Text style={styles.customerDetailsActionLabel}>Call</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Chat with customer"
+                onPress={() => router.push({ pathname: "/(app)/jobs/[jobId]/chat", params: { jobId: String(job.id) } } as never)}
+                style={({ pressed }) => [styles.customerDetailsAction, pressed && styles.pressed]}
+              >
+                <Ionicons name="chatbubble-ellipses-outline" size={18} color="#087653" />
+                <Text style={styles.customerDetailsActionLabel}>Chat</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+
+        {showTravelSummary ? (
+          <View style={styles.travelMetricsCard}>
+            <View style={styles.travelMetricsHeading}>
+              <View style={styles.travelMetricsIcon}>
+                <Ionicons name="navigate-outline" size={17} color="#087653" />
+              </View>
+              <View>
+                <Text style={styles.travelMetricsTitle}>Travel & timing</Text>
+                <Text style={styles.travelMetricsSubtitle}>Updates while this job is active</Text>
+              </View>
+            </View>
+            <View style={styles.travelMetricGrid}>
+              <View style={styles.travelMetric}>
+                <Ionicons name="car-outline" size={18} color="#087653" />
+                <Text style={styles.travelMetricLabel}>To customer</Text>
+                <Text style={styles.travelMetricValue} numberOfLines={1}>
+                  {trackingSummary.distanceToCustomerKm !== null
+                    ? `${trackingSummary.distanceToCustomerKm.toFixed(1)} km`
+                    : trackingSummary.isLoading ? "Calculating…" : "Unavailable"}
+                </Text>
+                <Text style={styles.travelMetricHint}>Road distance</Text>
+              </View>
+              <View style={styles.travelMetricDivider} />
+              <View style={styles.travelMetric}>
+                <Ionicons name="time-outline" size={18} color="#087653" />
+                <Text style={styles.travelMetricLabel}>Estimated arrival</Text>
+                <Text style={styles.travelMetricValue} numberOfLines={1}>
+                  {trackingSummary.estimatedMinutes !== null
+                    ? `${trackingSummary.estimatedMinutes} min`
+                    : trackingSummary.isLoading ? "Calculating…" : "Unavailable"}
+                </Text>
+                <Text style={styles.travelMetricHint}>Live route estimate</Text>
+              </View>
+              <View style={styles.travelMetricDivider} />
+              <View style={styles.travelMetric}>
+                <Ionicons name="navigate-outline" size={18} color="#087653" />
+                <Text style={styles.travelMetricLabel}>Travelled</Text>
+                <Text style={styles.travelMetricValue} numberOfLines={1}>
+                  {trackingSummary.distanceTravelledKm !== null
+                    ? `${trackingSummary.distanceTravelledKm.toFixed(1)} km`
+                    : trackingSummary.isWaitingForGps ? "Waiting for GPS" : "Unavailable"}
+                </Text>
+                <Text style={styles.travelMetricHint}>From GPS route history</Text>
+              </View>
+              <View style={styles.travelMetricDivider} />
+              <View style={styles.travelMetric}>
+                <Ionicons name="hourglass-outline" size={18} color="#087653" />
+                <Text style={styles.travelMetricLabel}>Time on site</Text>
+                <Text style={styles.travelMetricValue} numberOfLines={1}>
+                  {formatOnsiteDuration(job.on_site_at, trackingClock, job.completed_at)}
+                </Text>
+                <Text style={styles.travelMetricHint}>
+                  {job.on_site_at ? "Since arrival" : "Starts when you arrive"}
+                </Text>
+              </View>
+            </View>
+          </View>
+        ) : null}
+
         {/* Job information */}
         <View style={styles.sectionHeading}>
           <View>
             <Text style={styles.sectionTitle}>
-              Job details
+              Service details
             </Text>
 
             <Text style={styles.sectionSubtitle}>
-              Information about this assignment
+              Customer, appointment and work order
             </Text>
           </View>
 
@@ -866,11 +1313,13 @@ export default function JobDetailScreen() {
         </View>
 
         <View style={styles.detailsCard}>
-          {job.customer_name ? (
+          {job.service_type ? (
             <DetailRow
-              icon="person-outline"
-              label="Customer"
-              value={job.customer_name}
+              icon="construct-outline"
+              label="Service type"
+              value={job.service_type}
+              iconColor="#8756C8"
+              iconBackground="#F2EAFF"
             />
           ) : null}
 
@@ -879,25 +1328,28 @@ export default function JobDetailScreen() {
               icon="location-outline"
               label="Service location"
               value={job.address}
+              iconColor="#E16A4B"
+              iconBackground="#FFF0E9"
             />
           ) : null}
 
-          {job.scheduled_at ? (
+          {job.preferred_service_date || job.scheduled_at ? (
             <DetailRow
               icon="calendar-outline"
-              label="Scheduled date"
-              value={formatSchedule(job.scheduled_at)}
+              label="Scheduled appointment"
+              value={formatPreferredSchedule(
+                job.preferred_service_date || job.scheduled_at,
+                job.preferred_service_time
+              )}
+              iconColor="#C08A13"
+              iconBackground="#FFF6D9"
             />
           ) : null}
 
           {job.description ? (
             <View style={styles.descriptionSection}>
               <View style={styles.descriptionHeading}>
-                <Ionicons
-                  name="reader-outline"
-                  size={19}
-                  color="#087653"
-                />
+                <Ionicons name="reader-outline" size={19} color="#3973D6" />
 
                 <Text style={styles.detailLabel}>
                   Description
@@ -910,9 +1362,10 @@ export default function JobDetailScreen() {
             </View>
           ) : null}
 
-          {!job.customer_name &&
-          !job.address &&
+          {!job.address &&
           !job.scheduled_at &&
+          !job.preferred_service_date &&
+          !job.service_type &&
           !job.description ? (
             <Text style={styles.emptyDetails}>
               No additional job information is available.
@@ -1092,8 +1545,8 @@ export default function JobDetailScreen() {
           </View>
         ) : null}
 
-        {/* Job actions */}
-        <View style={styles.actionsSection}>
+        {/* Job actions are only relevant when opened from My Jobs. */}
+        {!openedFromHistory ? <View style={styles.actionsSection}>
           <Text style={styles.sectionTitle}>
             Available actions
           </Text>
@@ -1102,12 +1555,16 @@ export default function JobDetailScreen() {
             Update the job as you complete each stage.
           </Text>
 
-          {[
-            "EN_ROUTE",
-            "ON_SITE",
-            "IN_PROGRESS",
-            "PAUSED"
-          ].includes(assignedStatus) ? (
+          {otherStartedJob ? (
+            <View style={styles.singleJobNotice}>
+              <Ionicons name="lock-closed-outline" size={19} color="#9A5B08" />
+              <Text style={styles.singleJobNoticeText}>
+                Job #{otherStartedJob.job_number ?? otherStartedJob.id} is already active. Complete it before starting another job.
+              </Text>
+            </View>
+          ) : null}
+
+          {showLiveMapAction ? (
             <Pressable
               key="live-map"
               accessibilityRole="button"
@@ -1121,31 +1578,35 @@ export default function JobDetailScreen() {
               }}
               style={({ pressed }) => [
                 styles.actionButton,
-                pressed && styles.pressed,
+                styles.gradientButtonShell,
+                pressed && styles.gradientButtonPressed,
                 (activeAction !== null || dataSource !== "server") &&
                   styles.buttonDisabled
               ]}
             >
-              <Ionicons
-                name="map-outline"
-                size={22}
-                color="#FFFFFF"
-              />
-
-              <Text style={styles.actionButtonText}>
-                Live Map
-              </Text>
-
-              <Ionicons
-                name="arrow-forward"
-                size={19}
-                color="#FFFFFF"
-              />
+              {() => (
+                <>
+                  <LinearGradient
+                    colors={["#07543B", "#078A4D", "#26A96C"]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.gradientButtonContent}
+                  >
+                    <Ionicons name="map-outline" size={22} color="#FFFFFF" />
+                    <Text style={styles.actionButtonText}>Live Map</Text>
+                    <Ionicons name="arrow-forward" size={19} color="#FFFFFF" />
+                  </LinearGradient>
+                  <SilverTouchShimmer
+                    order={0}
+                    total={shimmerButtonCount}
+                  />
+                </>
+              )}
             </Pressable>
           ) : null}
 
           {availableActions.length > 0 ? (
-            availableActions.map(({ action, label }) => {
+            availableActions.map(({ action, label }, actionIndex) => {
               const actionIcons: Record<string, IconName> = {
                 accept: "checkmark-circle-outline",
                 reject: "close-circle-outline",
@@ -1158,6 +1619,8 @@ export default function JobDetailScreen() {
               };
 
               const isReject = action === "reject";
+              const isGradientAction = action !== "reject";
+              const blockedByOtherStartedJob = action === "start" && otherStartedJob !== null;
               const canQueueOfflineAction =
                 isOffline &&
                 action !== "reject" &&
@@ -1175,6 +1638,7 @@ export default function JobDetailScreen() {
                   accessibilityRole="button"
                   disabled={
                     activeAction !== null ||
+                    blockedByOtherStartedJob ||
                     cannotUseCachedData ||
                     offlineBlockedAction ||
                     (action === "accept" && acceptanceExpired)
@@ -1184,7 +1648,8 @@ export default function JobDetailScreen() {
                     styles.actionButton,
                     isReject && styles.rejectButton,
                     action === "complete" && styles.completeButton,
-                    pressed && styles.pressed,
+                    isGradientAction && styles.gradientButtonShell,
+                    pressed && (isGradientAction ? styles.gradientButtonPressed : styles.pressed),
                     (activeAction !== null ||
                       cannotUseCachedData ||
                       offlineBlockedAction) &&
@@ -1194,27 +1659,31 @@ export default function JobDetailScreen() {
                       styles.buttonDisabled
                   ]}
                 >
-                  {activeAction === action ? (
-                    <ActivityIndicator color="#FFFFFF" />
-                  ) : (
-                    <>
-                      <Ionicons
-                        name={actionIcons[action] ?? "construct-outline"}
-                        size={22}
-                        color="#FFFFFF"
-                      />
-
-                      <Text style={styles.actionButtonText}>
-                        {label}
-                      </Text>
-
-                      <Ionicons
-                        name="arrow-forward"
-                        size={19}
-                        color="#FFFFFF"
-                      />
-                    </>
-                  )}
+                  {() => {
+                    const content = activeAction === action ? (
+                      <ActivityIndicator color="#FFFFFF" />
+                    ) : (
+                      <>
+                        <Ionicons name={actionIcons[action] ?? "construct-outline"} size={22} color="#FFFFFF" />
+                        <Text style={styles.actionButtonText}>{label}</Text>
+                        <Ionicons name="arrow-forward" size={19} color="#FFFFFF" />
+                      </>
+                    );
+                    return isGradientAction ? (
+                      <>
+                        <LinearGradient
+                          colors={["#07543B", "#078A4D", "#26A96C"]}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 0 }}
+                          style={styles.gradientButtonContent}
+                        >{content}</LinearGradient>
+                        <SilverTouchShimmer
+                          order={Number(showLiveMapAction) + actionIndex}
+                          total={shimmerButtonCount}
+                        />
+                      </>
+                    ) : content;
+                  }}
                 </Pressable>
               );
             })
@@ -1231,7 +1700,7 @@ export default function JobDetailScreen() {
               </Text>
             </View>
           )}
-        </View>
+        </View> : null}
 
         <Text style={styles.footerText}>
           FieldOps Commander · Technician workspace
@@ -1254,24 +1723,120 @@ function formatSchedule(value: string): string {
   });
 }
 
+function formatPreferredSchedule(
+  dateValue?: string | null,
+  timeValue?: string | null
+): string {
+  if (!dateValue) return "Not scheduled";
+  const date = new Date(dateValue);
+  const formattedDate = Number.isNaN(date.getTime())
+    ? dateValue
+    : date.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        year: "numeric"
+      });
+  return [formattedDate, timeValue].filter(Boolean).join(" · ");
+}
+
+const SILVER_SWEEP_DURATION_MS = 2_600;
+
+function SilverTouchShimmer({
+  order,
+  total
+}: {
+  order: number;
+  total: number;
+}) {
+  const [progress] = useState(() => new Animated.Value(0));
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+    if (total === 0 || width === 0) return;
+    progress.setValue(0);
+    const animation = Animated.sequence([
+      Animated.delay(1_600 + order * SILVER_SWEEP_DURATION_MS),
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(progress, {
+            toValue: 1,
+            duration: SILVER_SWEEP_DURATION_MS,
+            easing: Easing.inOut(Easing.cubic),
+            useNativeDriver: true
+          }),
+          Animated.timing(progress, {
+            toValue: 0,
+            duration: 0,
+            useNativeDriver: true
+          }),
+          Animated.delay(Math.max(0, total - 1) * SILVER_SWEEP_DURATION_MS)
+        ]),
+        { iterations: -1 }
+      )
+    ]);
+    animation.start();
+    return () => animation.stop();
+  }, [order, progress, total, width]);
+
+  const translateX = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-Math.max(width, 1) * 0.65, Math.max(width, 1) * 1.4]
+  });
+
+  return (
+    <View
+      pointerEvents="none"
+      onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
+      style={styles.silverShimmerClip}
+    >
+      {width > 0 ? (
+        <Animated.View
+          style={[
+            styles.silverShimmerBand,
+            { width: width * 0.48, transform: [{ translateX }, { rotate: "18deg" }] }
+          ]}
+        >
+          <LinearGradient
+            colors={[
+              "rgba(255,255,255,0.02)",
+              "rgba(232,242,248,0.24)",
+              "rgba(255,255,255,0.82)",
+              "rgba(220,235,244,0.28)",
+              "rgba(255,255,255,0.02)"
+            ]}
+            locations={[0, 0.28, 0.5, 0.72, 1]}
+            start={{ x: 0, y: 0.5 }}
+            end={{ x: 1, y: 0.5 }}
+            style={styles.silverShimmerGradient}
+          />
+        </Animated.View>
+      ) : null}
+    </View>
+  );
+}
+
 interface DetailRowProps {
   icon: IconName;
   label: string;
   value: string;
+  iconColor?: string;
+  iconBackground?: string;
 }
 
 function DetailRow({
   icon,
   label,
-  value
+  value,
+  iconColor = "#0A8A62",
+  iconBackground = "#EAF7F0"
 }: DetailRowProps) {
   return (
     <View style={styles.detailRow}>
-      <View style={styles.detailIcon}>
+      <View style={[styles.detailIcon, { backgroundColor: iconBackground }]}>
         <Ionicons
           name={icon}
-          size={21}
-          color="#087653"
+          size={18}
+          color={iconColor}
         />
       </View>
 
@@ -1305,7 +1870,7 @@ const styles = StyleSheet.create({
   /* Header */
 
   hero: {
-    backgroundColor: "#00513D",
+    overflow: "hidden",
     paddingHorizontal: 20,
     paddingTop: 22,
     paddingBottom: 25,
@@ -1323,7 +1888,9 @@ const styles = StyleSheet.create({
     width: 43,
     height: 43,
     borderRadius: 15,
-    backgroundColor: "rgba(255,255,255,0.13)",
+    backgroundColor: "rgba(255,255,255,0.18)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.20)",
     alignItems: "center",
     justifyContent: "center"
   },
@@ -1351,7 +1918,9 @@ const styles = StyleSheet.create({
     width: 43,
     height: 43,
     borderRadius: 15,
-    backgroundColor: "rgba(255,255,255,0.10)",
+    backgroundColor: "rgba(255,255,255,0.16)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.15)",
     alignItems: "center",
     justifyContent: "center"
   },
@@ -1437,6 +2006,286 @@ const styles = StyleSheet.create({
     color: "#087653"
   },
 
+  progressCard: {
+    marginHorizontal: 15,
+    marginTop: 18,
+    padding: 16,
+    backgroundColor: "#FBFFFD",
+    borderRadius: 21,
+    borderWidth: 1,
+    borderColor: "#CFEBDD",
+    shadowColor: "#087653",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.09,
+    shadowRadius: 13,
+    elevation: 3
+  },
+
+  progressHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 11,
+    marginBottom: 20
+  },
+
+  progressIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: "#DDF8EB",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+
+  progressTitle: {
+    color: "#16372A",
+    fontSize: 16,
+    fontWeight: "800"
+  },
+
+  progressSubtitle: {
+    color: "#71847A",
+    fontSize: 11,
+    marginTop: 3
+  },
+
+  progressSteps: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginHorizontal: -3
+  },
+
+  progressStep: {
+    flex: 1,
+    alignItems: "center"
+  },
+
+  progressNodeRow: {
+    width: "100%",
+    height: 30,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+
+  progressNode: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#F1F5F3",
+    borderWidth: 1,
+    borderColor: "#DFE8E3",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+
+  progressNodeDone: {
+    backgroundColor: "#087653",
+    borderColor: "#087653"
+  },
+
+  progressNodeCurrent: {
+    backgroundColor: "#10A875",
+    borderColor: "#B8EBD2",
+    borderWidth: 3,
+    elevation: 3
+  },
+
+  progressConnector: {
+    flex: 1,
+    height: 2,
+    backgroundColor: "#E2EAE6"
+  },
+
+  progressConnectorDone: {
+    backgroundColor: "#10A875"
+  },
+
+  progressStepLabel: {
+    color: "#8A9A92",
+    fontSize: 9,
+    fontWeight: "700",
+    textAlign: "center",
+    marginTop: 7,
+    minHeight: 24
+  },
+
+  progressStepLabelActive: {
+    color: "#075C45"
+  },
+
+  travelMetricsCard: {
+    marginHorizontal: 15,
+    marginTop: 13,
+    padding: 14,
+    backgroundColor: "#F0F8F3",
+    borderRadius: 19,
+    borderWidth: 1,
+    borderColor: "#D8EADF"
+  },
+
+  customerDetailsCard: {
+    marginHorizontal: 15,
+    marginTop: 13,
+    padding: 11,
+    minHeight: 76,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#DCEAE2",
+    shadowColor: "#164E3B",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 7,
+    elevation: 2
+  },
+
+  customerDetailsAvatar: {
+    width: 42,
+    height: 42,
+    flexShrink: 0,
+    borderRadius: 21,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#075C45"
+  },
+
+  customerDetailsInitials: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "800"
+  },
+
+  customerDetailsInfo: {
+    flex: 1,
+    minWidth: 0
+  },
+
+  customerDetailsEyebrow: {
+    color: "#829188",
+    fontSize: 8,
+    fontWeight: "800",
+    letterSpacing: 0.8
+  },
+
+  customerDetailsName: {
+    color: "#17392B",
+    fontSize: 13,
+    fontWeight: "800",
+    marginTop: 2
+  },
+
+  customerDetailsPhone: {
+    color: "#64766C",
+    fontSize: 10,
+    fontWeight: "600",
+    marginTop: 3
+  },
+
+  customerDetailsActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5
+  },
+
+  customerDetailsAction: {
+    minWidth: 39,
+    height: 47,
+    paddingHorizontal: 4,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 2,
+    backgroundColor: "#EAF5EF"
+  },
+
+  customerDetailsActionDisabled: {
+    opacity: 0.45
+  },
+
+  customerDetailsActionLabel: {
+    color: "#35614A",
+    fontSize: 9,
+    fontWeight: "700"
+  },
+
+  travelMetricsHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    marginBottom: 13
+  },
+
+  travelMetricsIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#DDF1E5"
+  },
+
+  travelMetricsTitle: {
+    color: "#17392B",
+    fontSize: 14,
+    fontWeight: "800"
+  },
+
+  travelMetricsSubtitle: {
+    color: "#75877D",
+    fontSize: 10,
+    marginTop: 2
+  },
+
+  travelMetricGrid: {
+    flexDirection: "row",
+    alignItems: "stretch"
+  },
+
+  travelMetric: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: "flex-start",
+    paddingHorizontal: 5,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#DCEAE1"
+  },
+
+  travelMetricDivider: {
+    width: 1,
+    backgroundColor: "#D9E7DE",
+    marginTop: 10
+  },
+
+  travelMetricLabel: {
+    minHeight: 26,
+    color: "#74867C",
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: "600",
+    marginTop: 6
+  },
+
+  travelMetricValue: {
+    color: "#153B2B",
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "800",
+    marginTop: 2
+  },
+
+  travelMetricHint: {
+    minHeight: 24,
+    color: "#87968D",
+    fontSize: 8,
+    lineHeight: 11,
+    marginTop: 4
+  },
+
   pendingActionBanner: {
     marginHorizontal: 15,
     marginTop: 16,
@@ -1502,8 +2351,8 @@ const styles = StyleSheet.create({
   /* Section headings */
 
   sectionHeading: {
-    marginTop: 25,
-    marginBottom: 13,
+    marginTop: 19,
+    marginBottom: 9,
     paddingHorizontal: 19,
     flexDirection: "row",
     alignItems: "center",
@@ -1536,32 +2385,32 @@ const styles = StyleSheet.create({
 
   detailsCard: {
     marginHorizontal: 15,
-    paddingHorizontal: 15,
-    paddingVertical: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 2,
     backgroundColor: "#FFFFFF",
     borderRadius: 21,
     borderWidth: 1,
-    borderColor: "#E4EEE9",
-    shadowColor: "#164E3B",
+    borderColor: "#DCECE4",
+    shadowColor: "#087653",
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.055,
-    shadowRadius: 10,
-    elevation: 2
+    shadowOpacity: 0.075,
+    shadowRadius: 12,
+    elevation: 3
   },
 
   detailRow: {
     flexDirection: "row",
     alignItems: "flex-start",
-    paddingVertical: 15,
-    gap: 12,
+    paddingVertical: 9,
+    gap: 10,
     borderBottomWidth: 1,
     borderBottomColor: "#EEF3F0"
   },
 
   detailIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 14,
+    width: 34,
+    height: 34,
+    borderRadius: 12,
     backgroundColor: "#EAF6F0",
     alignItems: "center",
     justifyContent: "center"
@@ -1569,25 +2418,25 @@ const styles = StyleSheet.create({
 
   detailContent: {
     flex: 1,
-    paddingTop: 2
+    paddingTop: 1
   },
 
   detailLabel: {
-    color: "#7A8B82",
-    fontSize: 12,
-    lineHeight: 17,
-    marginBottom: 4
+    color: "#75877D",
+    fontSize: 10,
+    lineHeight: 14,
+    marginBottom: 2
   },
 
   detailValue: {
     color: "#18372B",
-    fontSize: 14,
-    lineHeight: 21,
+    fontSize: 13,
+    lineHeight: 18,
     fontWeight: "600"
   },
 
   descriptionSection: {
-    paddingVertical: 16
+    paddingVertical: 11
   },
 
   descriptionHeading: {
@@ -1599,8 +2448,8 @@ const styles = StyleSheet.create({
 
   descriptionText: {
     color: "#42584D",
-    fontSize: 14,
-    lineHeight: 22
+    fontSize: 13,
+    lineHeight: 19
   },
 
   emptyDetails: {
@@ -1800,6 +2649,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15
   },
 
+  singleJobNotice: {
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: "#FFF5DF",
+    borderWidth: 1,
+    borderColor: "#F2D89A",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9
+  },
+
+  singleJobNoticeText: {
+    flex: 1,
+    color: "#81500D",
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "600"
+  },
+
   actionButton: {
     minHeight: 59,
     marginTop: 12,
@@ -1810,6 +2679,57 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     gap: 11
+  },
+
+  gradientButtonShell: {
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    overflow: "hidden",
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: "rgba(6,92,62,0.22)",
+    elevation: 4,
+    shadowColor: "#087653",
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.22,
+    shadowRadius: 9
+  },
+
+  gradientButtonContent: {
+    flex: 1,
+    minHeight: 59,
+    paddingHorizontal: 17,
+    borderRadius: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 11
+  },
+
+  silverShimmerClip: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 16,
+    overflow: "hidden"
+  },
+
+  silverShimmerBand: {
+    position: "absolute",
+    top: -12,
+    bottom: -12,
+    left: 0
+  },
+
+  silverShimmerGradient: {
+    flex: 1
+  },
+
+  gradientButtonPressed: {
+    transform: [{ scale: 0.985 }],
+    elevation: 7
   },
 
   rejectButton: {

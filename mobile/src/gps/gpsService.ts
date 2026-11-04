@@ -89,3 +89,14 @@ export async function sendTechnicianAvailabilityPing(
 
   return response.data;
 }
+
+export async function getTechnicianAvailabilityLocation(
+  tenantIdValue: string | number
+): Promise<GpsAvailabilityResponse> {
+  const tenantId = requireTenantId(tenantIdValue);
+  const response = await apiClient.get<GpsAvailabilityResponse>(
+    "/api/v1/gps/availability",
+    { headers: { "X-Tenant-ID": tenantId } }
+  );
+  return response.data;
+}

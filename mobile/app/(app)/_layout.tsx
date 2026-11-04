@@ -2,9 +2,11 @@
 import { Redirect, Tabs, useRouter } from "expo-router";
 import { AppState, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useAuthStore } from "../../src/auth/authStore";
 import { LoadingState } from "../../src/components/ScreenState";
+import { TechnicianJobAssignmentOffer } from "../../src/components/TechnicianJobAssignmentOffer";
 import { useNetworkStatus } from "../../src/hooks/useNetworkStatus";
 import { syncPendingJobActions } from "../../src/offline/jobActionSync";
 import {
@@ -28,6 +30,7 @@ export default function AppLayout() {
   const user = useAuthStore((state) => state.user);
   const router = useRouter();
   const networkStatus = useNetworkStatus();
+  const insets = useSafeAreaInsets();
 
   // Synchronize persisted job actions when the technician is online
   // and when the app returns to the foreground. The synchronizer
@@ -120,26 +123,60 @@ export default function AppLayout() {
     if (
       !isAuthenticated ||
       !user ||
-      user.role.toLowerCase() !== "technician"
+      user.role.toLowerCase() !== "technician" ||
+      networkStatus.isLoading ||
+      networkStatus.isOffline
     ) {
       return;
     }
 
-    void registerPushTokenForTechnician({
-      id: user.id,
-      tenant_id: user.tenant_id
-    }).catch((error: unknown) => {
-      // Push registration failures must not block app access.
-      logError(
-        "notifications.registration_failed",
-        error
-      );
-    });
+    let active = true;
+    let registrationInFlight = false;
+
+    const registerPushToken = async () => {
+      if (!active || registrationInFlight) {
+        return;
+      }
+
+      registrationInFlight = true;
+
+      try {
+        await registerPushTokenForTechnician({
+          id: user.id,
+          tenant_id: user.tenant_id
+        });
+      } catch (error: unknown) {
+        // Push registration failures must not block app access.
+        logError("notifications.registration_failed", error);
+      } finally {
+        registrationInFlight = false;
+      }
+    };
+
+    void registerPushToken();
+
+    const appStateSubscription = AppState.addEventListener(
+      "change",
+      (nextState) => {
+        if (nextState === "active") {
+          void registerPushToken();
+        }
+      }
+    );
+
+    return () => {
+      active = false;
+      appStateSubscription.remove();
+    };
   }, [
     isAuthenticated,
     user?.id,
     user?.tenant_id,
-    user?.role
+    user?.role,
+    networkStatus.isLoading,
+    networkStatus.isOffline,
+    networkStatus.isConnected,
+    networkStatus.isInternetReachable
   ]);
 
   // Track GPS only for an authenticated technician.
@@ -305,7 +342,7 @@ export default function AppLayout() {
   ]);
 
   if (isLoading) {
-    return <LoadingState label="Checking your session..." />;
+    return <LoadingState label="Checking your session..." variant="dashboard" />;
   }
 
   if (!isAuthenticated || !user) {
@@ -354,7 +391,13 @@ export default function AppLayout() {
             tabBarActiveTintColor: "#007F5F",
             tabBarInactiveTintColor: "#91A39B",
             tabBarLabelStyle: styles.tabLabel,
-            tabBarStyle: styles.tabBar
+            tabBarStyle: [
+              styles.tabBar,
+              {
+                height: 62 + insets.bottom,
+                paddingBottom: Math.max(insets.bottom, 5)
+              }
+            ]
           }}
         >
           <Tabs.Screen
@@ -405,6 +448,7 @@ export default function AppLayout() {
           <Tabs.Screen
             name="notifications"
             options={{
+              href: null,
               title: "Notifications",
               tabBarLabel: "Alerts",
               tabBarIcon: ({ color, size, focused }) => (
@@ -436,7 +480,16 @@ export default function AppLayout() {
             name="jobs/[jobId]"
             options={{
               href: null,
-              title: "Job Details"
+              title: "Job Details",
+              tabBarStyle: { display: "none" }
+            }}
+          />
+
+          <Tabs.Screen
+            name="jobs/[jobId]/chat"
+            options={{
+              href: null,
+              title: "Job Chat"
             }}
           />
 
@@ -473,6 +526,7 @@ export default function AppLayout() {
           />
         </Tabs>
       </View>
+      <TechnicianJobAssignmentOffer />
     </View>
   );
 }

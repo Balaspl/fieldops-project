@@ -420,6 +420,7 @@ async def _generate_safe_technician_content(
 
 
 @router.post("/technicians/{id}/fcm-token")
+@router.post("/technicians/{id}/push-token")
 def register_fcm_token(
     id: str,
     payload: FCMTokenRegistration,
@@ -515,7 +516,8 @@ def register_fcm_token(
             detail="Access denied.",
         )
 
-    # Never include the device token in application logs.
+    # Expo push tokens are stored in the legacy fcm_token column so existing
+    # technician records and notification delivery queries remain compatible.
     technician.fcm_token = payload.token
     technician.device_type = payload.device_type
 
@@ -533,7 +535,7 @@ def register_fcm_token(
         ) from exc
 
     logger.info(
-        "Registered technician FCM token.",
+        "Registered technician push token.",
         extra=log_extra,
     )
 

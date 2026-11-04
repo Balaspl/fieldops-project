@@ -1,21 +1,52 @@
-import firebase_admin
-from firebase_admin import credentials, messaging
+"""Send technician remote pushes through the Expo Push Service.
+
+The module keeps its historical name and function contract so existing
+notification callers continue to work. Device tokens stored in the legacy
+``fcm_token`` column are ExpoPushTokens; the backend does not initialize or
+authenticate with Firebase Admin.
+"""
+
+from __future__ import annotations
+
 import asyncio
-import uuid
 import os
+import uuid
+
 import requests
 from sqlalchemy.orm import Session
+
 from ..logger import logger
-from ..models import Technician, NotificationDelivery
+from ..models import NotificationDelivery, Technician
 from .preferences import get_technician_preferences
 
-# Initialize Firebase Admin with default credentials if available
-try:
-    if not firebase_admin._apps:
-        firebase_admin.initialize_app()
-    logger.info("Firebase Admin initialized successfully.")
-except Exception as e:
-    logger.warning(f"Could not initialize Firebase Admin SDK (it might need GOOGLE_APPLICATION_CREDENTIALS): {e}")
+EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
+ANDROID_CHANNEL_ID = "fieldops_job_assignments_v2"
+EXPO_TOKEN_PREFIXES = ("ExponentPushToken[", "ExpoPushToken[")
+
+
+def _record_delivery(
+    db: Session,
+    *,
+    tenant_id: str,
+    technician_id: str,
+    job_id: str,
+    status: str,
+    ticket_id: str | None = None,
+    error_message: str | None = None,
+) -> int | str:
+    delivery = NotificationDelivery(
+        tenant_id=tenant_id,
+        tech_id=technician_id,
+        job_id=job_id,
+        status=status,
+        fcm_message_id=ticket_id,
+        error_message=error_message,
+    )
+    db.add(delivery)
+    db.commit()
+    db.refresh(delivery)
+    return delivery.id
+
 
 async def send_job_assignment_notification(
     db: Session,
@@ -24,86 +55,66 @@ async def send_job_assignment_notification(
     job_title: str,
     location: str,
     tech_ids: list[str],
-    correlation_id: str = None,
+    correlation_id: str | None = None,
     max_retries: int = 3,
     notification_title: str | None = None,
     notification_body: str | None = None,
     notification_type: str = "job_assignment",
     priority: str = "HIGH",
 ) -> dict:
-    
     correlation_id = correlation_id or str(uuid.uuid4())
     log_extra = {"correlation_id": correlation_id, "job_id": job_id}
     safe_title = (
         notification_title.strip()
-        if isinstance(
-            notification_title,
-            str,
-        )
-        and notification_title.strip()
+        if isinstance(notification_title, str) and notification_title.strip()
         else "FieldOps Update"
     )
-
     safe_body = (
         notification_body.strip()
-        if isinstance(
-            notification_body,
-            str,
-        )
-        and notification_body.strip()
+        if isinstance(notification_body, str) and notification_body.strip()
         else "A FieldOps job has an update."
     )
-
-    safe_notification_type = (
-        str(
-            notification_type
-        )
-        .strip()
-        .lower()
-    )
-
-    safe_priority = (
-        str(
-            priority
-        )
-        .strip()
-        .upper()
-    )
+    safe_notification_type = str(notification_type).strip().lower()
+    safe_priority = str(priority).strip().upper()
 
     if not safe_notification_type:
-        raise ValueError(
-            "notification_type must not be empty."
-        )
-
-    # Final transport-level validation after placeholders have
-    # been restored.
+        raise ValueError("notification_type must not be empty.")
     if len(safe_title) > 50:
-        raise ValueError(
-            "Push title exceeds 50 characters."
-        )    
-    
-    techs = db.query(Technician).filter(Technician.tech_id.in_(tech_ids)).all()
-    valid_techs = [t for t in techs if t.fcm_token]
-    
-    final_valid_techs = []
-    failed_count = len(tech_ids) - len(valid_techs)
-    
-    for t in valid_techs:
-        prefs = get_technician_preferences(db, t.tech_id)
-        if prefs.get("push_enabled", True):
-            final_valid_techs.append(t)
+        raise ValueError("Push title exceeds 50 characters.")
+
+    if not tech_ids:
+        return {"sent": 0, "failed": 0, "delivery_ids": []}
+
+    technicians = (
+        db.query(Technician)
+        .filter(Technician.tech_id.in_(tech_ids))
+        .all()
+    )
+    valid_technicians = [tech for tech in technicians if tech.fcm_token]
+    technician_by_token = {
+        str(tech.fcm_token): tech for tech in valid_technicians
+    }
+    failed_count = len(tech_ids) - len(valid_technicians)
+    enabled_technicians = []
+
+    for tech in valid_technicians:
+        preferences = get_technician_preferences(db, tech.tech_id)
+        if preferences.get("push_enabled", True):
+            enabled_technicians.append(tech)
         else:
-            logger.info(f"Skipping tech {t.tech_id} (push notifications disabled)", extra=log_extra)
             failed_count += 1
-    
-    if not final_valid_techs:
-        logger.info("No technicians with valid FCM tokens and push enabled found.", extra=log_extra)
+            logger.info(
+                "Skipping technician push because push notifications are disabled",
+                extra={**log_extra, "technician_id": tech.tech_id},
+            )
+
+    if not enabled_technicians:
+        logger.info(
+            "No technicians with registered Expo push tokens and push enabled",
+            extra=log_extra,
+        )
         return {"sent": 0, "failed": failed_count, "delivery_ids": []}
 
-    tech_map = {t.fcm_token: t.tech_id for t in final_valid_techs}
-    current_tokens = list(tech_map.keys())
-    
-    # Payload Construction
     data_payload = {
         "job_id": str(job_id),
         "job_title": str(job_title),
@@ -111,251 +122,168 @@ async def send_job_assignment_notification(
         "priority": safe_priority,
         "type": safe_notification_type,
     }
-
-    # Assignment actions are included only for assignment events.
-    if safe_notification_type in {
-        "job_assignment",
-        "technician_job_assigned",
-    }:
+    if safe_notification_type in {"job_assignment", "technician_job_assigned"}:
         data_payload.update(
             {
-                "accept_url": (
-                    "https://api.fieldops.io/v1/jobs/"
-                    f"{job_id}/accept"
-                ),
-                "reject_url": (
-                    "https://api.fieldops.io/v1/jobs/"
-                    f"{job_id}/reject"
-                ),
+                "accept_url": f"https://api.fieldops.io/v1/jobs/{job_id}/accept",
+                "reject_url": f"https://api.fieldops.io/v1/jobs/{job_id}/reject",
                 "expires_in": "600",
             }
         )
 
-    notification = messaging.Notification(
-        title=safe_title,
-        body=safe_body,
-    )
-
-    android_config = messaging.AndroidConfig(
-        priority=(
-            "high"
-            if safe_priority == "HIGH"
-            else "normal"
-        ),
-        notification=messaging.AndroidNotification(
-            channel_id="job_assignments",
-            sound="default"
-        )
-    )
-
-    apns_config = messaging.APNSConfig(
-        payload=messaging.APNSPayload(
-            aps=messaging.Aps(
-                alert=messaging.ApsAlert(
-                    title=safe_title,
-                    body=safe_body,
-                ),
-                badge=1,
-                sound="default",
-                category=(
-                    "JOB_ASSIGNMENT"
-                    if safe_notification_type
-                    in {
-                        "job_assignment",
-                        "technician_job_assigned",
-                    }
-                    else "JOB_UPDATE"
-                )
-            )
-        )
-    )
-
     sent_count = 0
-    delivery_ids = []
+    delivery_ids: list[int | str] = []
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    expo_access_token = os.getenv("EXPO_ACCESS_TOKEN", "").strip()
+    if expo_access_token:
+        headers["Authorization"] = f"Bearer {expo_access_token}"
 
-    expo_tokens = [
-        token for token in current_tokens
-        if token.startswith(("ExponentPushToken[", "ExpoPushToken["))
-    ]
-    for token in expo_tokens:
-        tech_id = tech_map[token]
-        try:
-            headers = {"Accept": "application/json", "Content-Type": "application/json"}
-            expo_access_token = os.getenv("EXPO_ACCESS_TOKEN")
-            if expo_access_token:
-                headers["Authorization"] = f"Bearer {expo_access_token}"
-            response = await asyncio.to_thread(
-                requests.post,
-                "https://exp.host/--/api/v2/push/send",
-                json={
-                    "to": token,
-                    "title": safe_title,
-                    "body": safe_body,
-                    "sound": "default",
-                    "priority": "high" if safe_priority == "HIGH" else "default",
-                    "channelId": "fieldops_updates",
-                    "data": data_payload,
-                    "categoryId": (
-                        "JOB_ASSIGNMENT"
-                        if safe_notification_type in {"job_assignment", "technician_job_assigned"}
-                        else "JOB_UPDATE"
-                    ),
-                },
-                headers=headers,
-                timeout=10,
-            )
-            response.raise_for_status()
-            ticket = response.json().get("data", {})
-            if ticket.get("status") != "ok":
-                error_code = (ticket.get("details") or {}).get("error")
-                if error_code == "DeviceNotRegistered":
-                    db.query(Technician).filter(
-                        Technician.tech_id == tech_id,
-                        Technician.tenant_id == tenant_id,
-                        Technician.fcm_token == token,
-                    ).update({"fcm_token": None, "device_type": None}, synchronize_session=False)
-                    db.commit()
-                failed_count += 1
-                delivery = NotificationDelivery(
-                    tenant_id=tenant_id,
-                    tech_id=tech_id,
-                    job_id=str(job_id),
-                    status="failed",
-                    error_message="Expo push provider rejected the notification",
-                )
-                db.add(delivery)
-                db.commit()
-                db.refresh(delivery)
-                delivery_ids.append(delivery.id)
-                continue
-            sent_count += 1
-            delivery = NotificationDelivery(
-                tenant_id=tenant_id,
-                tech_id=tech_id,
-                job_id=str(job_id),
-                status="delivered",
-                fcm_message_id=ticket.get("id"),
-            )
-            db.add(delivery)
-            db.commit()
-            db.refresh(delivery)
-            delivery_ids.append(delivery.id)
-        except Exception as exc:
+    for tech in enabled_technicians:
+        token = str(tech.fcm_token)
+        if not token.startswith(EXPO_TOKEN_PREFIXES):
             failed_count += 1
             logger.warning(
-                "Expo push delivery failed",
-                extra={**log_extra, "tech_id": tech_id, "error_type": type(exc).__name__},
+                "Stored technician token is not an Expo push token; technician must reopen the updated app",
+                extra={**log_extra, "technician_id": tech.tech_id},
             )
-            delivery = NotificationDelivery(
+            delivery_ids.append(
+                _record_delivery(
+                    db,
+                    tenant_id=tenant_id,
+                    technician_id=str(tech.tech_id),
+                    job_id=str(job_id),
+                    status="failed",
+                    error_message="Technician must register an Expo push token.",
+                )
+            )
+            continue
+
+        message = {
+            "to": token,
+            "title": safe_title,
+            "body": safe_body,
+            "sound": "default",
+            "priority": "high" if safe_priority == "HIGH" else "default",
+            "channelId": ANDROID_CHANNEL_ID,
+            "data": data_payload,
+            "categoryId": (
+                "JOB_ASSIGNMENT"
+                if safe_notification_type
+                in {"job_assignment", "technician_job_assigned"}
+                else "JOB_UPDATE"
+            ),
+        }
+
+        ticket: dict = {}
+        last_error: Exception | None = None
+        for attempt in range(max(1, max_retries)):
+            try:
+                response = await asyncio.to_thread(
+                    requests.post,
+                    EXPO_PUSH_URL,
+                    json=message,
+                    headers=headers,
+                    timeout=10,
+                )
+                response.raise_for_status()
+                response_data = response.json().get("data")
+                if isinstance(response_data, list):
+                    ticket = response_data[0] if response_data else {}
+                elif isinstance(response_data, dict):
+                    ticket = response_data
+                else:
+                    ticket = {}
+                last_error = None
+                break
+            except (requests.RequestException, ValueError) as exc:
+                last_error = exc
+                status_code = (
+                    exc.response.status_code
+                    if isinstance(exc, requests.HTTPError) and exc.response
+                    else None
+                )
+                should_retry = (
+                    status_code is None
+                    or status_code == 429
+                    or status_code >= 500
+                )
+                if not should_retry or attempt + 1 >= max(1, max_retries):
+                    break
+                await asyncio.sleep(2**attempt)
+
+        if last_error is not None:
+            failed_count += 1
+            logger.warning(
+                "Expo Push Service request failed",
+                extra={
+                    **log_extra,
+                    "technician_id": tech.tech_id,
+                    "error_type": type(last_error).__name__,
+                },
+            )
+            delivery_ids.append(
+                _record_delivery(
+                    db,
+                    tenant_id=tenant_id,
+                    technician_id=str(tech.tech_id),
+                    job_id=str(job_id),
+                    status="failed",
+                    error_message=f"Expo push request failed: {type(last_error).__name__}",
+                )
+            )
+            continue
+
+        if ticket.get("status") == "ok":
+            sent_count += 1
+            delivery_ids.append(
+                _record_delivery(
+                    db,
+                    tenant_id=tenant_id,
+                    technician_id=str(tech.tech_id),
+                    job_id=str(job_id),
+                    status="delivered",
+                    ticket_id=ticket.get("id"),
+                )
+            )
+            continue
+
+        failed_count += 1
+        error_code = (ticket.get("details") or {}).get("error")
+        error_message = str(ticket.get("message") or "Expo rejected the push.")
+        if error_code == "DeviceNotRegistered":
+            db.query(Technician).filter(
+                Technician.tech_id == tech.tech_id,
+                Technician.tenant_id == tenant_id,
+                Technician.fcm_token == token,
+            ).update(
+                {"fcm_token": None, "device_type": None},
+                synchronize_session=False,
+            )
+            db.commit()
+        logger.warning(
+            "Expo Push Service rejected a technician notification",
+            extra={
+                **log_extra,
+                "technician_id": tech.tech_id,
+                "error_code": error_code,
+            },
+        )
+        delivery_ids.append(
+            _record_delivery(
+                db,
                 tenant_id=tenant_id,
-                tech_id=tech_id,
+                technician_id=str(tech.tech_id),
                 job_id=str(job_id),
                 status="failed",
-                error_message=f"Expo provider error: {type(exc).__name__}",
+                error_message=error_message[:500],
             )
-            db.add(delivery)
-            db.commit()
-            db.refresh(delivery)
-            delivery_ids.append(delivery.id)
-
-    current_tokens = [token for token in current_tokens if token not in set(expo_tokens)]
-
-    for attempt in range(max_retries):
-        if not current_tokens:
-            break
-            
-        message = messaging.MulticastMessage(
-            tokens=current_tokens,
-            notification=notification,
-            data=data_payload,
-            android=android_config,
-            apns=apns_config
         )
-        
-        try:
-            logger.info(f"Attempting to send push notifications to {len(current_tokens)} tokens (Attempt {attempt+1}/{max_retries})", extra=log_extra)
-            response = messaging.send_each_for_multicast(message)
-            failed_tokens_next_round = []
-            
-            for idx, resp in enumerate(response.responses):
-                token = current_tokens[idx]
-                tech_id = tech_map[token]
-                
-                if resp.success:
-                    sent_count += 1
-                    delivery = NotificationDelivery(
-                        tenant_id=tenant_id,
-                        tech_id=tech_id,
-                        job_id=str(job_id),
-                        status="delivered",
-                        fcm_message_id=resp.message_id
-                    )
-                    db.add(delivery)
-                    db.commit()
-                    db.refresh(delivery)
-                    delivery_ids.append(delivery.id)
-                else:
-                    err_type = type(resp.exception).__name__
-                    if "UnregisteredError" in err_type or "InvalidArgumentError" in err_type:
-                        # Invalid token - cleanup
-                        tech = db.query(Technician).filter(Technician.tech_id == tech_id).first()
-                        if tech:
-                            tech.fcm_token = None
-                            logger.info(f"Cleaned up invalid token for tech_id {tech_id}", extra=log_extra)
-                        failed_count += 1
-                        delivery = NotificationDelivery(
-                            tenant_id=tenant_id,
-                            tech_id=tech_id, 
-                            job_id=str(job_id), 
-                            status="failed", 
-                            error_message=str(resp.exception)
-                        )
-                        db.add(delivery)
-                        db.commit()
-                        db.refresh(delivery)
-                        delivery_ids.append(delivery.id)
-                    else:
-                        # Transient error, add to retry queue
-                        if attempt == max_retries - 1:
-                            failed_count += 1
-                            delivery = NotificationDelivery(
-                                tenant_id=tenant_id,
-                                tech_id=tech_id,
-                                job_id=str(job_id),
-                                status="failed",
-                                error_message=str(resp.exception)
-                            )
-                            db.add(delivery)
-                            db.commit()
-                            db.refresh(delivery)
-                            delivery_ids.append(delivery.id)
-                        else:
-                            failed_tokens_next_round.append(token)
-            
-            current_tokens = failed_tokens_next_round
-            if current_tokens:
-                logger.warning(f"{len(current_tokens)} tokens failed with transient errors. Retrying...", extra=log_extra)
-                await asyncio.sleep(2 ** attempt)
-                
-        except Exception as e:
-            logger.error(f"FCM batch send globally failed: {e}", extra=log_extra)
-            if attempt == max_retries - 1:
-                # Final attempt failed
-                for token in current_tokens:
-                    failed_count += 1
-                    tech_id = tech_map[token]
-                    delivery = NotificationDelivery(
-                        tenant_id=tenant_id,
-                        tech_id=tech_id,
-                        job_id=str(job_id),
-                        status="failed",
-                        error_message=str(e)
-                    )
-                    db.add(delivery)
-                    db.commit()
-                    db.refresh(delivery)
-                    delivery_ids.append(delivery.id)
-            else:
-                await asyncio.sleep(2 ** attempt)
 
-    return {"sent": sent_count, "failed": failed_count, "delivery_ids": delivery_ids}
+    return {
+        "sent": sent_count,
+        "failed": failed_count,
+        "delivery_ids": delivery_ids,
+    }
