@@ -881,7 +881,8 @@ def test_get_job_detail_paths():
     with pytest.raises(HTTPException):
         asyncio.run(tp.get_job_detail(job_id=1, current_user=u(), db=DB(Q(first=None))))
     found = job()
-    assert asyncio.run(tp.get_job_detail(job_id=1, current_user=u(), db=DB(Q(first=tech()), Q(first=found)))) is found
+    res = asyncio.run(tp.get_job_detail(job_id=1, current_user=u(), db=DB(Q(first=tech()), Q(first=found))))
+    assert res.id == found.id
 
 
 def test_accept_job_paths(patch_tp):

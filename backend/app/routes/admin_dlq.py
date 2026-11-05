@@ -26,6 +26,38 @@ router = APIRouter(
 
 
 @router.get(
+    "/config",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_dlq_config() -> dict:
+    """Return failed task handling configuration."""
+    from app.celery_app import get_failed_task_handling_config
+    return get_failed_task_handling_config()
+
+
+@router.post(
+    "/configure",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def configure_dlq_endpoint() -> dict:
+    """Configure failed task handling."""
+    from app.celery_app import configure_failed_task_handling
+    return configure_failed_task_handling()
+
+
+@router.get(
     "",
     dependencies=[
         Depends(

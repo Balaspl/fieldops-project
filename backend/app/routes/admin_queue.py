@@ -348,3 +348,162 @@ def get_retry_policy_status_alias() -> dict:
 def configure_retry_policy_endpoint_alias() -> dict:
     return configure_retry_rules_endpoint()
 
+
+# ---------------------------------------------------------------------------
+# Failed Task Handling (DLQ & Safe Requeue Support)
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/failed-handling",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_failed_handling_status() -> dict:
+    """Return the configuration and status of failed task handling."""
+    from app.celery_app import get_failed_task_handling_config
+    return get_failed_task_handling_config()
+
+
+@router.post(
+    "/failed-handling/configure",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def configure_failed_handling_endpoint() -> dict:
+    """Ensure failed task handling is configured on Celery."""
+    from app.celery_app import configure_failed_task_handling
+    return configure_failed_task_handling()
+
+
+# Aliases for /dlq/config and /failed-tasks
+@router.get(
+    "/dlq/config",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_dlq_config_alias() -> dict:
+    return get_failed_handling_status()
+
+
+@router.post(
+    "/dlq/configure",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def configure_dlq_endpoint_alias() -> dict:
+    return configure_failed_handling_endpoint()
+
+
+@router.get(
+    "/failed-tasks",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_failed_tasks_status_alias() -> dict:
+    return get_failed_handling_status()
+
+
+@router.post(
+    "/failed-tasks/configure",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def configure_failed_tasks_endpoint_alias() -> dict:
+    return configure_failed_handling_endpoint()
+
+
+# ---------------------------------------------------------------------------
+# Task Timeouts (Bounded Execution & Worker Timeouts)
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/timeouts",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_task_timeouts_status() -> dict:
+    """Return the configuration and status of task timeouts."""
+    from app.celery_app import get_task_timeouts_config
+    return get_task_timeouts_config()
+
+
+@router.post(
+    "/timeouts/configure",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def configure_task_timeouts_endpoint() -> dict:
+    """Ensure task timeouts are configured on Celery."""
+    from app.celery_app import configure_task_timeouts
+    return configure_task_timeouts()
+
+
+# Aliases for /task-timeouts
+@router.get(
+    "/task-timeouts",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_task_timeouts_status_alias() -> dict:
+    return get_task_timeouts_status()
+
+
+@router.post(
+    "/task-timeouts/configure",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def configure_task_timeouts_endpoint_alias() -> dict:
+    return configure_task_timeouts_endpoint()
+
+

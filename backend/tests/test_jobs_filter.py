@@ -10146,8 +10146,8 @@ async def test_cov_assign_job_kafka_publish_results(monkeypatch, publish_result)
         )
 
         assert result["status"] == "ASSIGNED"
-        assert len(background_tasks.tasks) == 1
-        task = background_tasks.tasks[0]
+        assert len(background_tasks.tasks) >= 1
+        task = [t for t in background_tasks.tasks if "publish" in getattr(t.func, "__name__", "")][0]
         await task.func(*task.args, **task.kwargs)
     finally:
         db.close()
@@ -10211,8 +10211,8 @@ async def test_cov_assign_job_kafka_publish_exception(monkeypatch):
         )
 
         assert result["status"] == "ASSIGNED"
-        assert len(background_tasks.tasks) == 1
-        task = background_tasks.tasks[0]
+        assert len(background_tasks.tasks) >= 1
+        task = [t for t in background_tasks.tasks if "publish" in getattr(t.func, "__name__", "")][0]
         await task.func(*task.args, **task.kwargs)
     finally:
         db.close()

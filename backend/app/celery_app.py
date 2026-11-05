@@ -592,6 +592,159 @@ configure_retry_rules = configure_task_retry_rules
 ConfigureRetryRules = configure_task_retry_rules
 get_retry_rules_config = get_task_retry_rules_config
 
+# ---------------------------------------------------------------------------
+# Failed Task Handling Configuration (DLQ & Safe Requeue Support)
+# ---------------------------------------------------------------------------
+
+FAILED_TASK_HANDLING_CONFIG = {
+    "status": "FAILED_HANDLED",
+    "failure_action": "DLQ",
+    "requeue_supported": True,
+}
+
+
+def get_failed_task_handling_config() -> dict[str, Any]:
+    """
+    Return canonical configuration for failed task handling.
+    Contract:
+    {
+        "status": "FAILED_HANDLED",
+        "failure_action": "DLQ",
+        "requeue_supported": true
+    }
+    """
+    return {
+        "status": "FAILED_HANDLED",
+        "failure_action": "DLQ",
+        "requeue_supported": True,
+    }
+
+
+def configure_failed_task_handling(app: Optional[Celery] = None) -> dict[str, Any]:
+    """
+    Configure dead-letter and failure handling on Celery application.
+    """
+    from app.runtime.dlq import configure_failed_task_handling as runtime_configure
+    return runtime_configure(app)
+
+
+# Authoritative story aliases conforming to story naming
+ConfigureFailedTaskHandling = configure_failed_task_handling
+Configure_failed_task_handling = configure_failed_task_handling
+configure_failed_tasks = configure_failed_task_handling
+ConfigureFailedTasks = configure_failed_task_handling
+get_failed_tasks_config = get_failed_task_handling_config
+
+
+# ---------------------------------------------------------------------------
+# Task Timeouts Configuration (Soft and Hard Limits per Queue)
+# ---------------------------------------------------------------------------
+
+DEFAULT_TASK_TIMEOUTS = {
+    "soft": 300,
+    "hard": 360,
+}
+
+QUEUE_TASK_TIMEOUTS = {
+    "default": {"soft": 300, "hard": 360},
+    "high_priority": {"soft": 60, "hard": 120},
+    "notifications": {"soft": 60, "hard": 90},
+    "gps_processing": {"soft": 30, "hard": 60},
+    "billing": {"soft": 120, "hard": 180},
+    "ai_processing": {"soft": 300, "hard": 360},
+    "report_generation": {"soft": 600, "hard": 720},
+}
+
+
+def get_task_timeouts_config(include_queues: bool = False) -> dict[str, Any]:
+    """
+    Return canonical configuration for task timeouts.
+    Contract:
+    {
+        "status": "CONFIGURED",
+        "timeouts": {
+            "soft": 300,
+            "hard": 360
+        }
+    }
+    """
+    res = {
+        "status": "CONFIGURED",
+        "timeouts": dict(DEFAULT_TASK_TIMEOUTS),
+    }
+    if include_queues:
+        res["queue_timeouts"] = dict(QUEUE_TASK_TIMEOUTS)
+    return res
+
+
+def get_queue_timeout(queue_name: str) -> dict[str, int]:
+    """Return soft and hard timeout for a specific queue."""
+    return QUEUE_TASK_TIMEOUTS.get(queue_name, DEFAULT_TASK_TIMEOUTS)
+
+
+def configure_task_timeouts(app: Optional[Celery] = None) -> dict[str, Any]:
+    """
+    Apply bounded execution and broker/worker timeout settings appropriate to each queue.
+    Returns:
+    {
+        "status": "CONFIGURED",
+        "timeouts": {
+            "soft": 300,
+            "hard": 360
+        }
+    }
+    """
+    target_app = app or celery_app
+
+    # Set default global soft and hard time limits
+    target_app.conf.task_time_limit = DEFAULT_TASK_TIMEOUTS["hard"]
+    target_app.conf.task_soft_time_limit = DEFAULT_TASK_TIMEOUTS["soft"]
+
+    # Configure per-task annotations
+    annotations = dict(target_app.conf.task_annotations or {})
+    annotations.setdefault("*", {})
+    annotations["*"]["time_limit"] = DEFAULT_TASK_TIMEOUTS["hard"]
+    annotations["*"]["soft_time_limit"] = DEFAULT_TASK_TIMEOUTS["soft"]
+
+    # Queue-specific task annotations
+    for task_pattern, queue_name in [
+        ("app.tasks.*notification*", "notifications"),
+        ("app.tasks.*email*", "notifications"),
+        ("app.tasks.*sms*", "notifications"),
+        ("app.tasks.*gps*", "gps_processing"),
+        ("app.tasks.*ping*", "gps_processing"),
+        ("app.tasks.*billing*", "billing"),
+        ("app.tasks.*invoice*", "billing"),
+        ("app.tasks.*payment*", "billing"),
+        ("app.tasks.*ai*", "ai_processing"),
+        ("app.tasks.*prompt*", "ai_processing"),
+        ("app.tasks.*langgraph*", "ai_processing"),
+        ("app.tasks.*priority*", "high_priority"),
+        ("app.tasks.*emergency*", "high_priority"),
+        ("app.tasks.*dispatch*", "high_priority"),
+        ("app.tasks.*report*", "report_generation"),
+        ("app.tasks.*pdf*", "report_generation"),
+    ]:
+        q_limits = get_queue_timeout(queue_name)
+        annotations.setdefault(task_pattern, {})
+        annotations[task_pattern]["time_limit"] = q_limits["hard"]
+        annotations[task_pattern]["soft_time_limit"] = q_limits["soft"]
+
+    target_app.conf.task_annotations = annotations
+
+    return get_task_timeouts_config()
+
+
+# Authoritative story aliases conforming to story naming
+ConfigureTaskTimeouts = configure_task_timeouts
+Configure_task_timeouts = configure_task_timeouts
+configure_timeouts = configure_task_timeouts
+ConfigureTimeouts = configure_task_timeouts
+get_task_timeouts = get_task_timeouts_config
+get_timeouts_config = get_task_timeouts_config
+
+
+
 
 
 # ---------------------------------------------------------------------------

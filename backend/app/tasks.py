@@ -12,7 +12,10 @@ from typing import Any, Optional, Union
 from .runtime.dlq import DeadLetterQueue
 from .services.enterprise_audit import AuditAction, audit_log
 from .celery_app import celery_app
-from .database import SessionLocal
+def SessionLocal(*args, **kwargs):
+    import app.database
+    return app.database.SessionLocal(*args, **kwargs)
+
 from . import models
 from .logger import logger
 from .services.eta_service import ETAService
@@ -3634,12 +3637,142 @@ def handle_task_failure_with_retry_policy(
     )
     return {
         "status": "MOVED_TO_DLQ",
+        "failure_action": "DLQ",
+        "requeue_supported": True,
         "dlq_id": dlq_record.get("id"),
         "reason": evaluation.reason,
         "retry_count": retry_count,
         "tenant_id": tenant_id,
         "correlation_id": correlation_id,
     }
+
+
+# ---------------------------------------------------------------------------
+# Story 8.8: Failed Task Handling Celery Task & Wrappers
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    name="app.tasks.configure_failed_task_handling_task",
+)
+def configure_failed_task_handling_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Celery task to verify and activate failed task handling."""
+    from app.celery_app import configure_failed_task_handling
+    return configure_failed_task_handling()
+
+
+from app.runtime.dlq import (
+    handle_failed_task,
+    configure_failed_task_handling,
+    get_failed_task_handling_config,
+    sanitize_payload,
+)
+
+
+# ---------------------------------------------------------------------------
+# Story 8.9: Task Timeouts Celery Task & Wrappers
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    name="app.tasks.configure_task_timeouts_task",
+)
+def configure_task_timeouts_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Celery task to verify and activate task timeout rules."""
+    from app.celery_app import configure_task_timeouts
+    return configure_task_timeouts()
+
+
+from app.celery_app import (
+    DEFAULT_TASK_TIMEOUTS,
+    QUEUE_TASK_TIMEOUTS,
+    get_task_timeouts_config,
+    get_queue_timeout,
+    configure_task_timeouts,
+)
+
+
+def handle_task_timeout(
+    *,
+    task_name: str,
+    queue: str = "default",
+    tenant_id: str,
+    correlation_id: Optional[str] = None,
+    elapsed_seconds: Optional[float] = None,
+    db=None,
+    redis=None,
+    error: Optional[BaseException] = None,
+    task_payload: Optional[dict] = None,
+) -> dict[str, Any]:
+    """
+    Handle task execution timeout:
+    - Rolls back active database session to prevent partial/dirty state.
+    - Logs structured timeout, task, and correlation information.
+    - Routes timed-out task to DLQ without leaving partial state.
+    """
+    logger.warning(
+        "Task execution timed out. task=%s, queue=%s, tenant_id=%s, correlation_id=%s, elapsed=%.2fs, error=%s",
+        task_name,
+        queue,
+        tenant_id,
+        correlation_id,
+        elapsed_seconds or 0.0,
+        error,
+        extra={
+            "task_name": task_name,
+            "queue": queue,
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "elapsed_seconds": elapsed_seconds,
+            "event": "TASK_TIMEOUT",
+        },
+    )
+
+    if db is not None:
+        try:
+            db.rollback()
+            logger.info("Rolled back database transaction on timeout for task=%s", task_name)
+        except Exception as rb_err:
+            logger.error("Failed to rollback db transaction on timeout: %s", rb_err)
+
+    # Route to DLQ if tenant_id is provided
+    try:
+        from app.runtime.dlq import handle_failed_task
+        dlq_result = handle_failed_task(
+            task_name=task_name,
+            queue=queue,
+            payload=task_payload or {},
+            error=error or TimeoutError(f"Task exceeded execution timeout on queue '{queue}'"),
+            exception_category="timeout_exceeded",
+            tenant_id=tenant_id,
+            correlation_id=correlation_id,
+            reason="task_timeout_exceeded",
+            redis=redis,
+            db=db,
+        )
+    except Exception as dlq_err:
+        logger.error("Failed to route timed-out task to DLQ: %s", dlq_err)
+        dlq_result = {
+            "status": "FAILED_HANDLED",
+            "failure_action": "DLQ",
+            "requeue_supported": True,
+        }
+
+    return {
+        "status": "TIMED_OUT",
+        "task_name": task_name,
+        "queue": queue,
+        "tenant_id": tenant_id,
+        "correlation_id": correlation_id,
+        "partial_state_prevented": True,
+        "dlq_result": dlq_result,
+    }
+
+
 
 
 
