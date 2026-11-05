@@ -618,7 +618,7 @@ export default function CustomerSettingsPage() {
                   [
                     ["sms_enabled", "SMS Notifications"],
                     ["email_enabled", "Email Notifications"],
-                    ["push_enabled", "Push Notifications"],
+                    ["push_enabled", "App Push Notifications"],
                     ["portal_enabled", "Portal Notifications"],
                   ] as const
                 ).map(([field, label]) => (

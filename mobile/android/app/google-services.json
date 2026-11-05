@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "738990799004",
+    "project_id": "fieldops-687ab",
+    "storage_bucket": "fieldops-687ab.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:738990799004:android:039c71cca8b12df2cc9559",
+        "android_client_info": {
+          "package_name": "com.fieldops.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBAqRV42ZCbqnYvM-s4J_9ap5ttUPGxY-A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

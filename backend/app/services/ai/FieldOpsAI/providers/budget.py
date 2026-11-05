@@ -95,7 +95,7 @@ class TokenBudgetConfig(BaseModel):
             "push": 200,
             "portal": 200,
             "customer_support": 1200,
-            "sentiment": 10,
+            "sentiment": 512,
             "general": 4096,
         }
     )

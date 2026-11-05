@@ -76,12 +76,16 @@ import JobLiveTrackingMap from "../../components/customer-tracking/JobLiveTracki
 
 import JobMessagePanel from "../../components/customer-tracking/JobMessagePanel";
 
-import type { JobClosureData } from "../../services/planningService";
+import {
+  generateClosureSummary,
+  type JobClosureData,
+} from "../../services/planningService";
 
 import useAuthStore from "../../store/authStore";
 import {
   formatAcceptanceCountdown,
   useAcceptanceCountdowns,
+  isAwaitingAcceptance,
 } from "../../hooks/useAcceptanceCountdown";
 import TechnicianJobAssignmentPopup from "../../components/technician/TechnicianJobAssignmentPopup";
 import {
@@ -421,13 +425,14 @@ const normalizeStatus = (status: unknown): string =>
   String(status ?? "").trim().toUpperCase();
 
 const getStatusLabel = (status: unknown): string => {
-
-  switch (normalizeStatus(status)) {
-
+  const normalized = normalizeStatus(status).replace(/[-\s]+/g, "_");
+  switch (normalized) {
     case "ASSIGNED":
-
     case "ACTIVE":
-
+    case "AWAITING_ACCEPTANCE":
+    case "PENDING":
+    case "QUEUED":
+    case "PLANNED":
       return "AWAITING ACCEPTANCE";
 
     case "ACCEPTED":
@@ -614,11 +619,10 @@ export default function TechnicianJobsPage() {
       const list = Array.isArray(response?.data) ? response.data : [];
 
       const assignedJob = list.find((job: any) => {
-        const status = normalizeStatus(job?.status);
         const jobId = Number(job?.id);
 
         return (
-          status === "ASSIGNED" &&
+          isAwaitingAcceptance(job) &&
           !rejectedPopupJobIdsRef.current.has(jobId)
         );
       });
@@ -635,8 +639,8 @@ export default function TechnicianJobsPage() {
     }
   };
 
-  const loadJobs = async () => {
-    setLoading(true);
+  const loadJobs = async (silent = false) => {
+    if (!silent) setLoading(true);
 
     try {
       const response = await getTechnicianJobs();
@@ -654,11 +658,10 @@ export default function TechnicianJobsPage() {
       }
 
       const pendingAssigned = list.find((job: any) => {
-        const status = normalizeStatus(job?.status);
         const jobId = Number(job?.id);
 
         return (
-          (status === "ASSIGNED" || status === "ACTIVE") &&
+          isAwaitingAcceptance(job) &&
           !rejectedPopupJobIdsRef.current.has(jobId)
         );
       });
@@ -673,20 +676,32 @@ export default function TechnicianJobsPage() {
       }
     } catch (error) {
       console.error("Failed to load technician jobs:", error);
-      setJobsError("Unable to load your assigned jobs. Please try again.");
+      if (!silent) setJobsError("Unable to load your assigned jobs. Please try again.");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
+
+  // When timer expires, close the assignment popup automatically for this technician
+  useEffect(() => {
+    if (assignedPopupJob && timerSeconds !== null && timerSeconds <= 0) {
+      const jobId = Number(assignedPopupJob.id);
+      rejectedPopupJobIdsRef.current.add(jobId);
+      assignedPopupJobIdRef.current = null;
+      setAssignedPopupJob(null);
+      void loadJobs();
+    }
+  }, [assignedPopupJob, timerSeconds]);
 
  useEffect(() => {
 
   void loadJobs();
 
   const interval = window.setInterval(() => {
-
-    void checkForAssignedJob();
-
+    if (document.visibilityState === "visible") {
+      void loadJobs(true);
+      void checkForAssignedJob();
+    }
   }, 3000);
 
   return () => {
@@ -2566,6 +2581,10 @@ const assignmentDistanceDisplay = !isValidCustomerLocation
           }}
 
           onSuccess={handlePaymentSubmitted}
+
+          onGenerateClosure={(input) =>
+            generateClosureSummary(completeModal, input)
+          }
 
         />
 

@@ -2,7 +2,7 @@
 from enum import Enum
 
 # Channels
-IN, SMS, EMAIL = "in_app", "sms", "email"
+IN, SMS, EMAIL, PUSH = "in_app", "sms", "email", "push"
 
 
 class JobEvent(str, Enum):
@@ -116,54 +116,54 @@ EVENT_STEP = {
 # ---------------------------------------------------------------------------
 RECIPIENT_RULES = {
     JobEvent.JOB_CREATED: {
-        "customer": [IN, SMS, EMAIL],
+        "customer": [IN, SMS, EMAIL, PUSH],
         "org_admin": [IN, EMAIL],
         "super_admin": [IN],
     },
     JobEvent.TECHNICIAN_ASSIGNED: {
-        "customer": [IN, EMAIL],
+        "customer": [IN, EMAIL, PUSH],
         "org_admin": [IN, EMAIL],
         "technician_org_admin": [IN, EMAIL],
     },
     JobEvent.TECHNICIAN_ACCEPTED: {
-        "customer": [IN, SMS, EMAIL],
+        "customer": [IN, SMS, EMAIL, PUSH],
         "org_admin": [IN, EMAIL],
         "technician_org_admin": [IN, EMAIL],
         "super_admin": [IN],
     },
     JobEvent.TECHNICIAN_REJECTED: {
-        "customer": [IN],
+        "customer": [IN, PUSH],
         "org_admin": [IN, EMAIL],
         "technician_org_admin": [IN, EMAIL],
         "super_admin": [IN],
     },
     JobEvent.DELAYED: {
-        "customer": [IN],
+        "customer": [IN, PUSH],
         "org_admin": [IN],
         "super_admin": [IN],
     },
     JobEvent.EN_ROUTE: {
-        "customer": [IN, SMS, EMAIL],
+        "customer": [IN, SMS, EMAIL, PUSH],
         "org_admin": [IN],
         "super_admin": [IN],
     },
     JobEvent.ON_SITE: {
-        "customer": [IN, SMS, EMAIL],
+        "customer": [IN, SMS, EMAIL, PUSH],
         "org_admin": [IN],
         "super_admin": [IN],
     },
     JobEvent.SERVICE_STARTED: {
-        "customer": [IN, EMAIL],
+        "customer": [IN, EMAIL, PUSH],
         "org_admin": [IN],
     },
     JobEvent.COMPLETED: {
-        "customer": [IN, SMS, EMAIL],
+        "customer": [IN, SMS, EMAIL, PUSH],
         "org_admin": [IN, EMAIL],
         "technician_org_admin": [IN, EMAIL],
         "super_admin": [IN],
     },
     JobEvent.CANCELLED: {
-        "customer": [IN, SMS, EMAIL],
+        "customer": [IN, SMS, EMAIL, PUSH],
         "technician": [IN],
         "org_admin": [IN, EMAIL],
         "technician_org_admin": [IN, EMAIL],
@@ -174,7 +174,7 @@ RECIPIENT_RULES = {
         "super_admin": [IN],
     },
     JobEvent.INVOICE_READY: {
-        "customer": [IN, EMAIL],
+        "customer": [IN, EMAIL, PUSH],
         "org_admin": [IN],
     },
 }

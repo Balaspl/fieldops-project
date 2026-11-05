@@ -16,7 +16,7 @@ import redis.asyncio as aioredis
 logger = logging.getLogger(__name__)
 
 from .database import SessionLocal
-from app.routes import admin_dlq
+from app.routes import admin_dlq, admin_agent_tracking
 from .routes import (
     jobs,
     technicians,
@@ -64,7 +64,6 @@ from .runtime.metrics import runtime_metrics_collector
 from .services.default_template import seed_default_templates
 from .services.kafka.producer import KafkaProducer
 from .services.kafka.monitoring import kafka_monitoring
-from app.sentiment.dashboard import router as sentiment_dashboard_router
 from .routes import oauth2, sso
 
 from .middleware.rate_limit import status_router
@@ -533,6 +532,7 @@ app.include_router(admin_queue.router)
 app.include_router(admin_dlq.router)
 app.include_router(admin_metrics.router)
 app.include_router(admin_tools.router)
+app.include_router(admin_agent_tracking.router)
 
 # â”€â”€â”€â”€ Portal Routes â”€â”€â”€â”€
 from .routes import technician_portal, customer_portal
@@ -549,9 +549,6 @@ app.mount("/socket.io", sio_app)
 
 # ----------Message Preview--------------------
 app.include_router(message_preview.router)
-
-# ----------Sentiment Dashboard---------------
-app.include_router(sentiment_dashboard_router)
 
 app.include_router(oauth2.router)
 app.include_router(sso.router)

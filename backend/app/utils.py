@@ -202,7 +202,7 @@ def map_service_type_to_skill(service_type: str) -> str:
         return "CCTV & Security"
 
     # ------------------------------------------------------------------
-    # General Maintenance
+    # General Maintenance / Handyman
     # ------------------------------------------------------------------
     if any(
         keyword in st
@@ -214,9 +214,140 @@ def map_service_type_to_skill(service_type: str) -> str:
             "MOTOR ALIGNMENT",
             "PUMP",
             "VALVE",
+            "HANDYMAN",
         )
     ):
         return "General Maintenance"
+
+    # ------------------------------------------------------------------
+    # Painting and Waterproofing
+    # ------------------------------------------------------------------
+    if any(
+        keyword in st
+        for keyword in (
+            "PAINTING",
+            "WATERPROOFING",
+            "PAINT",
+            "STUCCO",
+            "WALL DEFECT",
+        )
+    ):
+        return "Painting & Waterproofing"
+
+    # ------------------------------------------------------------------
+    # Civil, Masonry and Flooring
+    # ------------------------------------------------------------------
+    if any(
+        keyword in st
+        for keyword in (
+            "CIVIL",
+            "MASONRY",
+            "FLOORING",
+            "PLASTERING",
+            "BRICK",
+            "CONCRETE",
+            "PAVING",
+            "SLAB",
+        )
+    ):
+        return "Civil & Masonry"
+
+    # ------------------------------------------------------------------
+    # Cleaning Services
+    # ------------------------------------------------------------------
+    if any(
+        keyword in st
+        for keyword in (
+            "CLEANING",
+            "HOUSEKEEPING",
+            "DEEP CLEAN",
+            "SANITY",
+            "DISINFECTION",
+        )
+    ):
+        return "Cleaning Services"
+
+    # ------------------------------------------------------------------
+    # Pest Control
+    # ------------------------------------------------------------------
+    if any(
+        keyword in st
+        for keyword in (
+            "PEST CONTROL",
+            "PEST",
+            "TERMITE",
+            "RODENT",
+            "FUMIGATION",
+            "COCKROACH",
+            "INSECT",
+        )
+    ):
+        return "Pest Control"
+
+    # ------------------------------------------------------------------
+    # Water Purifier (RO) & Treatment
+    # ------------------------------------------------------------------
+    if any(
+        keyword in st
+        for keyword in (
+            "WATER PURIFIER",
+            "RO WATER",
+            "WATER TREATMENT",
+            "PURIFIER",
+            "RO PLANT",
+            "WATER SOFTENER",
+        )
+    ):
+        return "Water Purifier & Treatment"
+
+    # ------------------------------------------------------------------
+    # Solar and Power Backup
+    # ------------------------------------------------------------------
+    if any(
+        keyword in st
+        for keyword in (
+            "SOLAR",
+            "ROOFTOP SOLAR",
+            "SOLAR WATER HEATER",
+            "DG SET",
+            "STABILIZER",
+        )
+    ):
+        return "Solar & Power Backup"
+
+    # ------------------------------------------------------------------
+    # Doors, Windows, Locks and Glass
+    # ------------------------------------------------------------------
+    if any(
+        keyword in st
+        for keyword in (
+            "DOORS",
+            "WINDOWS",
+            "LOCKS",
+            "GLASS",
+            "LOCKSMITH",
+            "SHUTTER",
+            "WELDING",
+            "FABRICATION",
+        )
+    ):
+        return "Doors, Windows & Glass"
+
+    # ------------------------------------------------------------------
+    # Gardening and Landscaping
+    # ------------------------------------------------------------------
+    if any(
+        keyword in st
+        for keyword in (
+            "GARDENING",
+            "LANDSCAPING",
+            "LAWN",
+            "PRUNING",
+            "IRRIGATION",
+            "GARDEN",
+        )
+    ):
+        return "Gardening & Landscaping"
 
     return "Other"
 

@@ -60,7 +60,7 @@ from ..auth.password import hash_password, verify_password
 
 from ..models import (
     Job, Technician, InAppNotification, GPSPing, CustomerFeedback,
-    TechnicianProfile,
+    TechnicianProfile, JobMessage, JobPaymentStatus,
 )
 
 from ..models_legacy import(
@@ -82,6 +82,7 @@ from ..models.customer_signature import CustomerSignature
 from ..portal_schemas import (
     TechnicianProfileCreate, TechnicianProfileUpdate, TechnicianProfileResponse,
     TechnicianJobResponse, TechnicianJobRejectRequest, TechnicianJobCompleteRequest,
+    TechnicianJobTrackingSummaryResponse,
     TechnicianDashboardResponse, TechnicianPerformanceReportResponse,
     ChangePasswordRequest,
 )
@@ -97,6 +98,58 @@ from ..services.customer_notification_services import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _add_automatic_job_chat_message(db, job, sender_user_id: str, body: str):
+    """Persist a technician lifecycle update in the existing job conversation."""
+    service_request = (
+        db.query(ServiceRequest)
+        .filter(ServiceRequest.linked_job_id == job.id)
+        .first()
+    )
+    customer_user_id = str(service_request.customer_user_id) if service_request and service_request.customer_user_id else None
+    if not customer_user_id:
+        return None, None
+
+    message = JobMessage(
+        job_id=job.id,
+        tenant_id=job.tenant_id,
+        sender_user_id=str(sender_user_id),
+        sender_role="TECHNICIAN",
+        body=body,
+    )
+    db.add(message)
+    db.flush()
+    return message, customer_user_id
+
+
+async def _broadcast_automatic_job_chat_message(message, customer_user_id: str) -> None:
+    if message is None or not customer_user_id:
+        return
+    try:
+        from ..services.socket_manager import sio
+
+        await sio.emit(
+            "job_message",
+            {
+                "job_id": message.job_id,
+                "message": {
+                    "id": message.id,
+                    "job_id": message.job_id,
+                    "sender_user_id": message.sender_user_id,
+                    "sender_role": message.sender_role,
+                    "body": message.body,
+                    "created_at": message.created_at.isoformat() if message.created_at else None,
+                    "delivered_at": None,
+                    "read_at": None,
+                    "is_mine": False,
+                },
+            },
+            room=f"user_{customer_user_id}",
+        )
+    except Exception:
+        # The persisted message remains available when the customer reconnects.
+        logger.exception("Could not broadcast automatic job chat update job_id=%s", message.job_id)
 
 # Keep this aligned with the acceptance window in routes/jobs.py.
 
@@ -285,7 +338,7 @@ def _build_technician_performance_report(
             category = "completed"
         elif status_value in {"accepted", "en_route", "in_progress", "paused"}:
             category = "active"
-        elif status_value in {"assigned", "active", "pending"}:
+        elif status_value in {"assigned", "active", "pending", "awaiting_acceptance", "awaiting acceptance", "queued", "planned"}:
             category = "pending"
         elif status_value in {"cancelled", "canceled"}:
             category = "cancelled"
@@ -300,8 +353,7 @@ def _build_technician_performance_report(
             round(sum(durations) / len(durations), 1) if durations else None
         ),
         "customer_rating": round(sum(ratings) / len(ratings), 1) if ratings else None,
-        "total_distance_km": round(_gps_distance_km(gps_points), 1) if gps_points else None,
-        "completion_trend": trend,
+        "total_distance_km": round(float(_gps_distance_km(gps_points) or 0.0), 1),        "completion_trend": trend,
         "status_distribution": [
             {"status": status, "count": count}
             for status, count in status_counts.items()
@@ -1169,7 +1221,33 @@ async def get_assigned_jobs(
 
         )
 
-    return query.order_by(Job.created_at.desc()).all()
+    jobs = query.order_by(Job.created_at.desc()).all()
+    if not jobs:
+        return []
+
+    job_ids = [job.id for job in jobs]
+    request_rows = (
+        db.query(ServiceRequest.linked_job_id, ServiceRequest.images)
+        .filter(ServiceRequest.linked_job_id.in_(job_ids))
+        .order_by(ServiceRequest.created_at.desc())
+        .all()
+    )
+    images_by_job = {}
+    for linked_job_id, images in request_rows:
+        if linked_job_id in images_by_job:
+            continue
+        images_by_job[linked_job_id] = (
+            [image for image in images if isinstance(image, str)][:1]
+            if isinstance(images, list)
+            else []
+        )
+
+    return [
+        TechnicianJobResponse.model_validate(job).model_copy(
+            update={"images": images_by_job.get(job.id, [])}
+        )
+        for job in jobs
+    ]
 
 @router.get("/jobs/history", response_model=list[TechnicianJobResponse])
 
@@ -1190,7 +1268,7 @@ async def get_job_history(
         db.query(Job)
         .filter(
             Job.assigned_technician_id == tech.technician_id,
-            func.lower(Job.status).in_(["completed", "closed"]),
+            func.lower(Job.status).in_(["completed", "closed", "cancelled"]),
         )
         .all()
     )
@@ -1216,7 +1294,7 @@ async def get_job_history(
 
     history = [
         (
-            job.completed_at or getattr(job, "closed_at", None) or job.created_at,
+            job.completed_at or getattr(job, "closed_at", None) or getattr(job, "cancelled_at", None) or job.created_at,
             TechnicianJobResponse.model_validate(job),
         )
         for job in completed_jobs
@@ -1224,7 +1302,7 @@ async def get_job_history(
     attempted_job_ids = {job.id for job, _ in rejected_attempts}
     for job, attempt in rejected_attempts:
         if (
-            str(job.status or "").lower() in {"completed", "closed"}
+            str(job.status or "").lower() in {"completed", "closed", "cancelled"}
             and job.assigned_technician_id == tech.technician_id
         ):
             continue
@@ -1253,7 +1331,91 @@ async def get_job_history(
         return value.timestamp()
 
     history.sort(key=lambda item: event_timestamp(item[0]), reverse=True)
-    return [job for _, job in history]
+    if not history:
+        return []
+
+    # Add history-only presentation data from the authoritative closure and
+    # payment records. Scope each lookup to the job's tenant because jobs may
+    # have been dispatched across organizations.
+    job_ids = {job.id for _, job in history}
+    tenant_by_job = dict(
+        db.query(Job.id, Job.tenant_id).filter(Job.id.in_(job_ids)).all()
+    )
+    closures = (
+        db.query(JobClosure)
+        .filter(JobClosure.job_id.in_(job_ids))
+        .order_by(JobClosure.completed_at.desc(), JobClosure.id.desc())
+        .all()
+    )
+    closure_by_job = {}
+    for closure in closures:
+        if closure.tenant_id == tenant_by_job.get(closure.job_id):
+            closure_by_job.setdefault(closure.job_id, closure)
+
+    payment_rows = (
+        db.query(JobPaymentStatus)
+        .filter(JobPaymentStatus.job_id.in_(job_ids))
+        .order_by(JobPaymentStatus.updated_at.desc(), JobPaymentStatus.id.desc())
+        .all()
+    )
+    payment_by_job = {}
+    for payment in payment_rows:
+        if payment.tenant_id == tenant_by_job.get(payment.job_id):
+            payment_by_job.setdefault(payment.job_id, payment)
+
+    request_rows = (
+        db.query(ServiceRequest.linked_job_id, ServiceRequest.images)
+        .filter(ServiceRequest.linked_job_id.in_(job_ids))
+        .order_by(ServiceRequest.created_at.desc())
+        .all()
+    )
+    images_by_job = {}
+    for linked_job_id, images in request_rows:
+        if linked_job_id not in images_by_job:
+            images_by_job[linked_job_id] = (
+                [image for image in images if isinstance(image, str)][:1]
+                if isinstance(images, list)
+                else []
+            )
+
+    from ..services.invoice_service import invoice_totals
+
+    enriched = []
+    for _, job_response in history:
+        closure = closure_by_job.get(job_response.id)
+        payment = payment_by_job.get(job_response.id)
+        work_report = closure.work_report if closure and isinstance(closure.work_report, dict) else {}
+        payment_details = work_report.get("payment") if isinstance(work_report, dict) else None
+        payment_details = payment_details if isinstance(payment_details, dict) else {}
+        payment_status = str(payment.status or "UNAVAILABLE").strip().upper() if payment else "UNAVAILABLE"
+        # The technician completion flow validates that the collected cash/UPI
+        # amounts exactly match the invoice before it persists this payment
+        # summary. Older rows may lack JobPaymentStatus, so use that saved
+        # completion record as the authoritative fallback.
+        if payment_status == "UNAVAILABLE" and closure and payment_details.get("method") and payment_details.get("total_amount") is not None:
+            payment_status = "SUCCESSFUL"
+        if payment_status not in {"PENDING", "SUCCESSFUL", "FAILED", "UNAVAILABLE"}:
+            payment_status = "UNAVAILABLE"
+        try:
+            amount = invoice_totals(closure.subtotal)["total_amount"] if closure else None
+        except (TypeError, ValueError, OverflowError):
+            # An invalid legacy subtotal should not make the entire history
+            # endpoint fail; the card can still show its other job details.
+            amount = None
+        if amount is None:
+            try:
+                amount = float(payment_details["total_amount"]) if payment_details.get("total_amount") is not None else None
+            except (TypeError, ValueError, OverflowError):
+                amount = None
+        enriched.append(job_response.model_copy(update={
+            "images": images_by_job.get(job_response.id, []),
+            "payment_status": payment_status if closure else None,
+            "payment_amount": amount,
+            "payment_method": payment_details.get("method"),
+            "payment_provider": payment_details.get("provider"),
+            "payment_updated_at": payment.updated_at if payment and closure else (closure.completed_at if closure and payment_status == "SUCCESSFUL" else None),
+        }))
+    return enriched
 
 @router.get("/jobs/{job_id}", response_model=TechnicianJobResponse)
 
@@ -1267,7 +1429,7 @@ async def get_job_detail(
 
 ):
 
-    """View a specific job (only if assigned to this technician)."""
+    """View a job currently assigned to or previously handled by this technician."""
 
     tech = _get_tech_for_user(db, current_user.user_id, current_user.tenant_id)
 
@@ -1281,7 +1443,90 @@ async def get_job_detail(
 
         raise HTTPException(status_code=403, detail="Job not found or not assigned to you")
 
-    return job
+    request_row = (
+        db.query(ServiceRequest.images)
+        .filter(ServiceRequest.linked_job_id == job.id)
+        .order_by(ServiceRequest.created_at.desc())
+        .first()
+    )
+    images = request_row[0] if request_row else None
+    job_images = (
+        [image for image in images if isinstance(image, str)][:1]
+        if isinstance(images, list)
+        else []
+    )
+    return TechnicianJobResponse.model_validate(job).model_copy(
+        update={"images": job_images}
+    )
+
+
+@router.get(
+    "/jobs/{job_id}/tracking-summary",
+    response_model=TechnicianJobTrackingSummaryResponse,
+)
+async def get_technician_job_tracking_summary(
+    job_id: int,
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.JOBS_VIEW_OWN)
+    ),
+    db: Session = Depends(get_db),
+):
+    """Return GPS-derived route progress for this technician's assigned job."""
+    tech = _get_tech_for_user(db, current_user.user_id, current_user.tenant_id)
+    if not tech:
+        raise HTTPException(status_code=403, detail="Technician record not found")
+
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    technician_ids = {
+        str(value)
+        for value in (tech.tech_id, tech.technician_id, current_user.user_id)
+        if value is not None
+    }
+    was_rejected_by_technician = (
+        db.query(RedispatchAttempt.id)
+        .filter(
+            RedispatchAttempt.job_id == job.id,
+            RedispatchAttempt.technician_id == tech.technician_id,
+            RedispatchAttempt.technician_tenant_id == tech.tenant_id,
+            func.lower(RedispatchAttempt.event_type) == "rejection",
+        )
+        .first()
+        is not None
+    )
+    can_view_history = (
+        job.assigned_technician_id == tech.technician_id
+        or str(job.rejected_by_tech_id or "") in technician_ids
+        or str(job.completed_by or "") in technician_ids
+        or was_rejected_by_technician
+    )
+    if not can_view_history:
+        raise HTTPException(status_code=403, detail="Job is not in your assigned or job history")
+
+    technician_ids = list({
+        str(tech.tech_id) if tech.tech_id else "",
+        str(tech.technician_id) if tech.technician_id is not None else "",
+    } - {""})
+    query = db.query(GPSPing).filter(
+        GPSPing.job_id == str(job.id),
+        GPSPing.technician_id.in_(technician_ids),
+    )
+    if job.en_route_at is not None:
+        query = query.filter(GPSPing.timestamp >= job.en_route_at)
+
+    pings = query.order_by(GPSPing.timestamp.asc()).all()
+    latest_ping = pings[-1] if pings else None
+
+    return TechnicianJobTrackingSummaryResponse(
+        job_id=job.id,
+        distance_travelled_km=round(_gps_distance_km(pings), 1) if pings else None,
+        technician_latitude=float(latest_ping.latitude) if latest_ping else None,
+        technician_longitude=float(latest_ping.longitude) if latest_ping else None,
+        technician_last_ping=latest_ping.timestamp if latest_ping else None,
+        has_route_data=bool(pings),
+    )
 
 @router.post(
 
@@ -1588,6 +1833,12 @@ async def accept_job(
     offer_metadata = getattr(offer_notification, "notification_metadata", None) or {}
     dispatch_attempt_id = offer_metadata.get("dispatch_attempt_id") if isinstance(offer_metadata, dict) else None
 
+    automatic_chat_message, chat_customer_id = _add_automatic_job_chat_message(
+        db,
+        job,
+        current_user.user_id,
+        f"Automatic job update from {tech.technician_name}: I’ve accepted job #{job.id} for {job.service_type}. I’ll update you here when I’m on my way.",
+    )
 
 
     # ---------------------------------------------------------
@@ -1601,6 +1852,13 @@ async def accept_job(
     # ---------------------------------------------------------
 
     db.commit()
+
+    if automatic_chat_message is not None:
+        db.refresh(automatic_chat_message)
+        await _broadcast_automatic_job_chat_message(
+            automatic_chat_message,
+            chat_customer_id,
+        )
 
     logger.info(
         "assignment_committed job_id=%s technician_id=%s dispatch_attempt_id=%s status=%s outcome=committed",
@@ -2102,6 +2360,65 @@ async def start_job(
 
     db.commit()
 
+    # Calculate the initial trip estimate after the authoritative status is
+    # committed. A maps/GPS problem must not undo a successful job start.
+    try:
+        eta_result = None
+        if tech.tech_id:
+            from ..services.eta_service import ETAService
+            from ..services.ola_map_client import OlaMapsClient
+            from ..redis_client import get_redis_client
+
+            redis_client = get_redis_client()
+            eta_result = await ETAService(
+                db,
+                redis_client,
+                OlaMapsClient(redis_client),
+            ).calculate_eta(str(tech.tech_id), int(job.id))
+
+        distance_km = eta_result.get("distance_km") if isinstance(eta_result, dict) else None
+        duration_minutes = eta_result.get("duration_minutes") if isinstance(eta_result, dict) else None
+        estimate_parts = []
+        if distance_km is not None:
+            estimate_parts.append(f"about {float(distance_km):g} km")
+        if duration_minutes is not None:
+            estimate_parts.append(f"an estimated {max(1, round(float(duration_minutes)))} minutes")
+
+        if estimate_parts:
+            estimate = " and ".join(estimate_parts)
+            chat_body = (
+                f"Automatic job update from {tech.technician_name}: I’m on my way to job #{job.id}. "
+                f"The route is {estimate}."
+            )
+        else:
+            chat_body = (
+                f"Automatic job update from {tech.technician_name}: I’m on my way to job #{job.id}. "
+                "A distance and arrival estimate "
+                "will be shared when fresh GPS data is available."
+            )
+
+        automatic_chat_message, chat_customer_id = _add_automatic_job_chat_message(
+            db,
+            job,
+            current_user.user_id,
+            chat_body,
+        )
+        if automatic_chat_message is not None:
+            db.commit()
+            db.refresh(automatic_chat_message)
+            await _broadcast_automatic_job_chat_message(
+                automatic_chat_message,
+                chat_customer_id,
+            )
+        else:
+            db.rollback()
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Could not create automatic en-route chat update job_id=%s",
+            job_id,
+        )
+
     return {
         "message": "Job started and en-route",
         "job_id": job_id,
@@ -2222,9 +2539,23 @@ async def on_site_job(
 
     )
 
+    automatic_chat_message, chat_customer_id = _add_automatic_job_chat_message(
+        db,
+        job,
+        current_user.user_id,
+        f"Automatic job update from {tech.technician_name}: I’ve reached your location for job #{job.id} and am ready to begin.",
+    )
+
     db.commit()
 
     db.refresh(job)
+
+    if automatic_chat_message is not None:
+        db.refresh(automatic_chat_message)
+        await _broadcast_automatic_job_chat_message(
+            automatic_chat_message,
+            chat_customer_id,
+        )
 
     return {
 
@@ -2317,7 +2648,21 @@ async def pause_job(
         request=request,
     )
 
+    automatic_chat_message, chat_customer_id = _add_automatic_job_chat_message(
+        db,
+        job,
+        current_user.user_id,
+        f"Automatic job update from {tech.technician_name}: work on job #{job.id} is temporarily paused. I’ll update you when it resumes.",
+    )
+
     db.commit()
+
+    if automatic_chat_message is not None:
+        db.refresh(automatic_chat_message)
+        await _broadcast_automatic_job_chat_message(
+            automatic_chat_message,
+            chat_customer_id,
+        )
 
     return {
         "message": "Job paused",
@@ -2407,7 +2752,21 @@ async def resume_job(
         request=request,
     )
 
+    automatic_chat_message, chat_customer_id = _add_automatic_job_chat_message(
+        db,
+        job,
+        current_user.user_id,
+        f"Automatic job update from {tech.technician_name}: work on job #{job.id} has resumed.",
+    )
+
     db.commit()
+
+    if automatic_chat_message is not None:
+        db.refresh(automatic_chat_message)
+        await _broadcast_automatic_job_chat_message(
+            automatic_chat_message,
+            chat_customer_id,
+        )
 
     return {
         "message": "Job resumed",
@@ -2775,7 +3134,21 @@ async def complete_job(
 
     )
 
+    automatic_chat_message, chat_customer_id = _add_automatic_job_chat_message(
+        db,
+        job,
+        current_user.user_id,
+        f"Automatic job update from {tech.technician_name}: job #{job.id} is complete.",
+    )
+
     db.commit()
+
+    if automatic_chat_message is not None:
+        db.refresh(automatic_chat_message)
+        await _broadcast_automatic_job_chat_message(
+            automatic_chat_message,
+            chat_customer_id,
+        )
 
     return {"message": "Job completed", "job_id": job_id, "status": "COMPLETED"}
 
@@ -2824,6 +3197,8 @@ async def get_notifications(
         InAppNotification.tenant_id == current_user.tenant_id,
 
         InAppNotification.tech_id.in_(search_ids),
+
+        InAppNotification.status != "DISMISSED",
 
     ).order_by(
 
@@ -2967,6 +3342,8 @@ async def get_notifications(
                     == current_user.tenant_id,
 
                     InAppNotification.tech_id.in_(search_ids),
+
+                    InAppNotification.status != "DISMISSED",
 
                 ).order_by(
 
@@ -3289,6 +3666,37 @@ async def mark_all_notifications_read(
         "updated": updated_count,
 
     }
+
+@router.delete("/notifications/{notification_id}")
+async def dismiss_technician_notification(
+    notification_id: str,
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.NOTIFICATIONS_VIEW_OWN)
+    ),
+    db: Session = Depends(get_db),
+):
+    """Dismiss one notification belonging to the authenticated technician."""
+    tech = _get_tech_for_user(
+        db,
+        current_user.user_id,
+        current_user.tenant_id,
+    )
+    recipient_ids = _get_notification_recipient_ids(
+        current_user.user_id,
+        tech,
+    )
+    notification = db.query(InAppNotification).filter(
+        InAppNotification.id == notification_id,
+        InAppNotification.tenant_id == current_user.tenant_id,
+        InAppNotification.tech_id.in_(recipient_ids),
+    ).first()
+    if not notification:
+        raise HTTPException(status_code=404, detail="Notification not found")
+
+    notification.status = "DISMISSED"
+    notification.dismissed_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"message": "Notification dismissed", "notification_id": notification.id}
 
 # ──────────────────────────────────────────────────
 
@@ -3753,8 +4161,8 @@ async def get_technician_dashboard(
     ).count()
 
     pending = base.filter(
-        func.lower(Job.status).in_(
-            ["assigned", "active"]
+        func.upper(func.replace(func.trim(Job.status), " ", "_")).in_(
+            ["ASSIGNED", "AWAITING_ACCEPTANCE", "ACTIVE", "PENDING", "PLANNED", "QUEUED"]
         )
     ).count()
 

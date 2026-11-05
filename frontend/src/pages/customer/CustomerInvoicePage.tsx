@@ -1,3 +1,4 @@
+import { useActiveAutoRefresh } from "../../hooks/useActiveAutoRefresh";
 
 
 import { useCallback, useEffect, useState } from "react";
@@ -171,13 +172,13 @@ export default function CustomerInvoicePage() {
 
   const [error, setError] = useState<string | null>(null);
 
-  const loadInvoices = useCallback(async () => {
+  const loadInvoices = useCallback(async (silent = false) => {
 
-    setLoading(true);
+    if (!silent) setLoading(true);
 
-    setError(null);
+    if (!silent) setError(null);
 
-    setPaymentStatuses({});
+    if (!silent) setPaymentStatuses({});
 
     try {
 
@@ -261,23 +262,23 @@ export default function CustomerInvoicePage() {
 
     } catch (requestError) {
 
-      setInvoices([]);
-
-      setPaymentStatuses({});
-
-      setError(getErrorMessage(requestError));
+      if (!silent) {
+        setInvoices([]);
+        setPaymentStatuses({});
+        setError(getErrorMessage(requestError));
+      }
 
     } finally {
 
-      setLoading(false);
+      if (!silent) setLoading(false);
 
     }
 
   }, []);
 
-  const loadPaymentHistory = useCallback(async () => {
-    setPaymentHistoryLoading(true);
-    setPaymentHistoryError(null);
+  const loadPaymentHistory = useCallback(async (silent = false) => {
+    if (!silent) setPaymentHistoryLoading(true);
+    if (!silent) setPaymentHistoryError(null);
 
     try {
       const response = await getCustomerPaymentHistory();
@@ -288,7 +289,7 @@ export default function CustomerInvoicePage() {
           : [],
       );
     } catch (requestError) {
-      setPaymentHistory([]);
+      if (!silent) setPaymentHistory([]);
 
       const responseStatus =
         (
@@ -299,21 +300,21 @@ export default function CustomerInvoicePage() {
           } | null
         )?.response?.status;
 
-      if (responseStatus === 401) {
+      if (!silent && responseStatus === 401) {
         setPaymentHistoryError(
           "Your session has expired. Please sign in again.",
         );
-      } else if (responseStatus === 403) {
+      } else if (!silent && responseStatus === 403) {
         setPaymentHistoryError(
           "You do not have permission to view payment history.",
         );
-      } else {
+      } else if (!silent) {
         setPaymentHistoryError(
           "We couldn't load your payment history right now. Please try again.",
         );
       }
     } finally {
-      setPaymentHistoryLoading(false);
+      if (!silent) setPaymentHistoryLoading(false);
     }
   }, []);
 
@@ -324,6 +325,10 @@ export default function CustomerInvoicePage() {
   useEffect(() => {
     void loadPaymentHistory();
   }, [loadPaymentHistory]);
+
+  useActiveAutoRefresh(async () => {
+    await Promise.all([loadInvoices(true), loadPaymentHistory(true)]);
+  }, !loading && !paymentHistoryLoading);
 
   return (
 

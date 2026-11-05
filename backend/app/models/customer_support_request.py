@@ -105,6 +105,11 @@ class CustomerSupportRequest(Base):
         nullable=True,
     )
 
+    category = Column(String(40), nullable=False, default="OTHER", server_default="OTHER")
+    priority = Column(String(20), nullable=False, default="MEDIUM", server_default="MEDIUM")
+    assigned_staff_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    source_chat_conversation_id = Column(String(36), nullable=True)
+
     created_at = Column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -137,4 +142,18 @@ class CustomerSupportRequest(Base):
             "ix_customer_support_requests_related_job_id",
             "related_job_id",
         ),
+        Index("uq_customer_support_source_chat", "source_chat_conversation_id", unique=True),
     )
+
+
+class CustomerSupportCaseUpdate(Base):
+    """Customer-visible progress update within a support case."""
+
+    __tablename__ = "customer_support_case_updates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    support_request_id = Column(Integer, ForeignKey("customer_support_requests.id", ondelete="CASCADE"), nullable=False, index=True)
+    author_user_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    author_role = Column(String(20), nullable=False)
+    message = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)

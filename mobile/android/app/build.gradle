@@ -5,65 +5,21 @@ apply plugin: "com.facebook.react"
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 
-/**
- * React Native and Expo configuration.
- */
 react {
-    entryFile = file([
-        "node",
-        "-e",
-        "require('expo/scripts/resolveAppEntry')",
-        projectRoot,
-        "android",
-        "absolute"
-    ].execute(null, rootDir).text.trim())
+    entryFile = file(["node", "-e", "require('expo/scripts/resolveAppEntry')", projectRoot, "android", "absolute"].execute(null, rootDir).text.trim())
+    reactNativeDir = new File(["node", "--print", "require.resolve('react-native/package.json')"].execute(null, rootDir).text.trim()).getParentFile().getAbsoluteFile()
+    hermesCommand = new File(["node", "--print", "require.resolve('hermes-compiler/package.json', { paths: [require.resolve('react-native/package.json')] })"].execute(null, rootDir).text.trim()).getParentFile().getAbsolutePath() + "/hermesc/%OS-BIN%/hermesc"
+    codegenDir = new File(["node", "--print", "require.resolve('@react-native/codegen/package.json', { paths: [require.resolve('react-native/package.json')] })"].execute(null, rootDir).text.trim()).getParentFile().getAbsoluteFile()
 
-    reactNativeDir = new File([
-        "node",
-        "--print",
-        "require.resolve('react-native/package.json')"
-    ].execute(null, rootDir).text.trim()).getParentFile().getAbsoluteFile()
-
-    hermesCommand = new File([
-        "node",
-        "--print",
-        "require.resolve('hermes-compiler/package.json', { paths: [require.resolve('react-native/package.json')] })"
-    ].execute(null, rootDir).text.trim()).getParentFile().getAbsolutePath() + "/hermesc/%OS-BIN%/hermesc"
-
-    codegenDir = new File([
-        "node",
-        "--print",
-        "require.resolve('@react-native/codegen/package.json', { paths: [require.resolve('react-native/package.json')] })"
-    ].execute(null, rootDir).text.trim()).getParentFile().getAbsoluteFile()
-
-    enableBundleCompression = (
-        findProperty('android.enableBundleCompression') ?: false
-    ).toBoolean()
-
-    // Use Expo CLI to bundle the app.
-    cliFile = new File([
-        "node",
-        "--print",
-        "require.resolve('@expo/cli', { paths: [require.resolve('expo/package.json')] })"
-    ].execute(null, rootDir).text.trim())
-
+    enableBundleCompression = (findProperty('android.enableBundleCompression') ?: false).toBoolean()
+    cliFile = new File(["node", "--print", "require.resolve('@expo/cli', { paths: [require.resolve('expo/package.json')] })"].execute(null, rootDir).text.trim())
     bundleCommand = "export:embed"
 
-    // Automatically link native React Native libraries.
     autolinkLibrariesWithApp()
 }
 
-/**
- * Release build configuration.
- */
-def enableMinifyInReleaseBuilds = (
-    findProperty('android.enableMinifyInReleaseBuilds') ?: false
-).toBoolean()
+def enableMinifyInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBuilds') ?: false).toBoolean()
 
-/**
- * JavaScriptCore fallback configuration.
- * Hermes remains the default when hermesEnabled is true.
- */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
 android {
@@ -71,40 +27,23 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    /*
-     * Must match the Kotlin package declarations in:
-     * MainActivity.kt
-     * MainApplication.kt
-     *
-     * These files are currently under:
-     * android/app/src/main/java/com/fieldops/
-     */
-    namespace "com.fieldops"
-
-    /*
-     * Required because this project defines custom BuildConfig fields.
-     */
-    buildFeatures {
-        buildConfig true
+    // Use the newer CMake installed through Android Studio SDK Manager.
+    externalNativeBuild {
+        cmake {
+            version "3.31.6"
+        }
     }
 
-    defaultConfig {
-        /*
-         * Must match expo.android.package in app.json.
-         */
-        applicationId "com.fieldops.mobile"
+    namespace 'com.fieldops.mobile'
 
+    defaultConfig {
+        applicationId 'com.fieldops.mobile'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-
         versionCode 1
-        versionName "1.0"
+        versionName "1.0.0"
 
-        buildConfigField(
-            "String",
-            "REACT_NATIVE_RELEASE_LEVEL",
-            "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
-        )
+        buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
 
     signingConfigs {
@@ -120,34 +59,20 @@ android {
         debug {
             signingConfig signingConfigs.debug
         }
-
         release {
-            // Use a proper production signing key before publishing.
             signingConfig signingConfigs.debug
-
-            def enableShrinkResources =
-                findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
-
+            def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds
-
-            proguardFiles(
-                getDefaultProguardFile("proguard-android.txt"),
-                "proguard-rules.pro"
-            )
-
-            def enablePngCrunchInRelease =
-                findProperty('android.enablePngCrunchInReleaseBuilds') ?: 'true'
-
+            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+            def enablePngCrunchInRelease = findProperty('android.enablePngCrunchInReleaseBuilds') ?: 'true'
             crunchPngs enablePngCrunchInRelease.toBoolean()
         }
     }
 
     packagingOptions {
         jniLibs {
-            def enableLegacyPackaging =
-                findProperty('expo.useLegacyPackaging') ?: 'false'
-
+            def enableLegacyPackaging = findProperty('expo.useLegacyPackaging') ?: 'false'
             useLegacyPackaging enableLegacyPackaging.toBoolean()
         }
     }
@@ -157,59 +82,34 @@ android {
     }
 }
 
-/*
- * Apply additional Android packaging options from gradle.properties.
- */
 ["pickFirsts", "excludes", "merges", "doNotStrip"].each { prop ->
-    def options = (
-        findProperty("android.packagingOptions.$prop") ?: ""
-    ).split(",")
-
-    for (i in 0..<options.size()) {
-        options[i] = options[i].trim()
-    }
-
+    def options = (findProperty("android.packagingOptions.$prop") ?: "").split(",")
+    for (i in 0..<options.size()) options[i] = options[i].trim()
     options -= ""
 
     if (options.length > 0) {
         println "android.packagingOptions.$prop += $options ($options.length)"
-
         options.each {
             android.packagingOptions[prop] += it
         }
     }
 }
 
-/*
- * App dependencies.
- */
 dependencies {
     implementation("com.facebook.react:react-android")
 
-    def isGifEnabled =
-        (findProperty('expo.gif.enabled') ?: "") == "true"
-
-    def isWebpEnabled =
-        (findProperty('expo.webp.enabled') ?: "") == "true"
-
-    def isWebpAnimatedEnabled =
-        (findProperty('expo.webp.animated') ?: "") == "true"
+    def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true"
+    def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true"
+    def isWebpAnimatedEnabled = (findProperty('expo.webp.animated') ?: "") == "true"
 
     if (isGifEnabled) {
-        implementation(
-            "com.facebook.fresco:animated-gif:${expoLibs.versions.fresco.get()}"
-        )
+        implementation("com.facebook.fresco:animated-gif:${expoLibs.versions.fresco.get()}")
     }
 
     if (isWebpEnabled) {
-        implementation(
-            "com.facebook.fresco:webpsupport:${expoLibs.versions.fresco.get()}"
-        )
-
+        implementation("com.facebook.fresco:webpsupport:${expoLibs.versions.fresco.get()}")
         if (isWebpAnimatedEnabled) {
-            implementation(
-                "com.facebook.fresco:animated-webp:${expoLibs.versions.fresco.get()}"
-            )
+            implementation("com.facebook.fresco:animated-webp:${expoLibs.versions.fresco.get()}")
         }
     }
 
@@ -219,3 +119,5 @@ dependencies {
         implementation jscFlavor
     }
 }
+
+apply plugin: 'com.google.gms.google-services'

@@ -21,7 +21,7 @@ import { SkillComboSelect } from "../components/ui/SkillComboSelect";
 import LoadingSpinner from "../components/ui/LoadingSpinner";
 
 const PAGE_SIZE = 8;
-const REFRESH_MS = 5_000;
+const REFRESH_MS = 3000;
 const STALE_MS = 120_000;
 const SKILLS = [
   "HVAC Repair",

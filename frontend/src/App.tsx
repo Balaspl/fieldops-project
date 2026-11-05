@@ -23,6 +23,7 @@ import {
   Menu,
   MapPin,
   Wrench,
+  Workflow,
 } from "lucide-react";
 import useAuthStore from "./store/authStore";
 import NotificationBell from "./components/notifications/NotificationBell";
@@ -68,6 +69,7 @@ const OrganizationOnboardingPage = lazy(
   () => import("./pages/OrganizationOnboardingPage"),
 );
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
+const AgentTrackingPage = lazy(() => import("./pages/AgentTrackingPage"));
 const JobsPage = lazy(() => import("./pages/JobsPage"));
 const TechniciansDispatchersPage = lazy(
   () => import("./pages/TechniciansDispatchersPage"),
@@ -525,6 +527,42 @@ const localCss = `
 
 `;
 
+type DashboardDateRange = {
+  start_date: string;
+  end_date: string;
+};
+
+const formatDashboardDate = (date: Date): string => {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+};
+
+const getDashboardDateRangeForPreset = (preset: string): DashboardDateRange | null => {
+  const today = new Date();
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const end = new Date(start);
+
+  if (preset === "today") {
+    return { start_date: formatDashboardDate(start), end_date: formatDashboardDate(end) };
+  }
+
+  if (preset === "week") {
+    start.setDate(start.getDate() - start.getDay());
+    end.setTime(start.getTime());
+    end.setDate(end.getDate() + 6);
+    return { start_date: formatDashboardDate(start), end_date: formatDashboardDate(end) };
+  }
+
+  if (preset === "month") {
+    start.setDate(1);
+    end.setFullYear(today.getFullYear(), today.getMonth() + 1, 0);
+    return { start_date: formatDashboardDate(start), end_date: formatDashboardDate(end) };
+  }
+
+  return null;
+};
+
 function AppInner() {
   const { user, accessToken, logout } = useAuthStore();
   console.log("AUTH USER:", user);
@@ -600,10 +638,16 @@ function AppInner() {
         return "tech_dashboard";
 
       if (isCustomer)
-        return "cust_requests";
+        return "cust_create_request";
 
       return "dashboard";
     });
+
+  useEffect(() => {
+    if (activeTab === "sentiment" || activeTab === "communication_center") {
+      setActiveTab("dashboard");
+    }
+  }, [activeTab]);
 
   const isTechnicianShell = isTechnician;
 
@@ -618,7 +662,7 @@ function AppInner() {
   }, [isCustomer]);
 
   const [previousCustomerTab, setPreviousCustomerTab] =
-    useState<string>("cust_requests");
+    useState<string>("cust_create_request");
   const [selectedCustomerNotificationId, setSelectedCustomerNotificationId] =
     useState<string | null>(null);
 
@@ -689,6 +733,9 @@ function AppInner() {
     useState(false);
 
   const [timeRange, setTimeRange] = useState("week");
+  const [dashboardDateRange, setDashboardDateRange] = useState<DashboardDateRange | null>(
+    () => getDashboardDateRangeForPreset("week"),
+  );
   const [
   selectedCompletedJobForView,
   setSelectedCompletedJobForView,
@@ -736,6 +783,9 @@ function AppInner() {
 
       case "planning":
         return "Loading Planning Board...";
+
+      case "agent_tracking":
+        return "Loading Agent Tracking...";
 
       case "services":
         return "Loading Services Catalog...";
@@ -909,10 +959,11 @@ function AppInner() {
 
     void checkCustomerSupportRequests();
 
-    const interval = setInterval(
-      checkCustomerSupportRequests,
-      10000,
-    );
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void checkCustomerSupportRequests();
+      }
+    }, 3000);
 
     return () =>
       clearInterval(interval);
@@ -1476,50 +1527,15 @@ function AppInner() {
         marginLeft: "auto",
       }}
     >
-      {!isMobileLayout && (
-        <div style={{ position: "relative" }}>
-          <Calendar
-            size={14}
-            style={{
-              position: "absolute",
-              left: "10px",
-              top: "50%",
-              transform: "translateY(-50%)",
-              color: "#374151",
-              pointerEvents: "none",
-            }}
-          />
 
-          <select
-            value={timeRange}
-            onChange={(event) => setTimeRange(event.target.value)}
-            aria-label="Dashboard date range"
-            style={{
-              height: "38px",
-              padding: "0 12px 0 30px",
-              border: "1px solid #E2E8F0",
-              borderRadius: "8px",
-              background: "#FFFFFF",
-              color: "#374151",
-              fontSize: "12px",
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            <option value="week">This Week</option>
-            <option value="month">This Month</option>
-            <option value="all">All Time</option>
-          </select>
-        </div>
-      )}
-            <NotificationBell
-  unreadCount={unreadCount}
-  onClick={() =>
-    setIsNotificationDrawerOpen((open) => !open)
-  }
-  isAnimated={isBellAnimated}
-  showSound={true}
-/>
+    <NotificationBell
+      unreadCount={unreadCount}
+      onClick={() =>
+        setIsNotificationDrawerOpen((open) => !open)
+      }
+      isAnimated={isBellAnimated}
+      showSound={true}
+    />
 
       {!isMobileLayout && (
         <div
@@ -1845,35 +1861,6 @@ function AppInner() {
         </header>
       )}
 
-      {isTechnician && !isMobileLayout && (
-        <button
-          type="button"
-          aria-label={sidebarCollapsed ? "Expand technician sidebar" : "Collapse technician sidebar"}
-          title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-          style={{
-            position: "fixed",
-            top: 60,
-            left: sidebarCollapsed ? 60 : 220,
-            zIndex: 1001,
-            width: 28,
-            height: 28,
-            padding: 0,
-            border: "1px solid #D7E3DC",
-            borderRadius: "0 8px 8px 0",
-            background: "#FFFFFF",
-            color: "#475569",
-            boxShadow: "2px 2px 8px rgba(15, 23, 42, 0.10)",
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Menu size={16} />
-        </button>
-      )}
-
       {/* Main Body Layout (Sidebar + Main Area) */}
       <div
         style={
@@ -2057,21 +2044,62 @@ function AppInner() {
                   }
             }
           >
-      {/* Compact spacer below the fixed header */}
-<div
-  aria-hidden="true"
-  style={
-    isMobileLayout || isTechnician
-      ? { display: "none" }
-      : {
-          height: "38px",
-          minHeight: "38px",
-          flexShrink: 0,
-          padding: 0,
-          margin: 0,
-        }
-  }
-/>
+          {isTechnician && !isMobileLayout ? (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "flex-end",
+                height: 32,
+                minHeight: 32,
+                flexShrink: 0,
+              }}
+            >
+              <button
+                type="button"
+                aria-label={
+                  sidebarCollapsed
+                    ? "Expand technician sidebar"
+                    : "Collapse technician sidebar"
+                }
+                title={
+                  sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"
+                }
+                onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+                style={{
+                  width: 28,
+                  height: 28,
+                  padding: 0,
+                  border: "1px solid #D7E3DC",
+                  borderRadius: 8,
+                  background: "#FFFFFF",
+                  color: "#475569",
+                  boxShadow: "2px 2px 8px rgba(15, 23, 42, 0.10)",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Menu size={16} />
+              </button>
+            </div>
+          ) : (
+            <div
+              aria-hidden="true"
+              style={
+                isMobileLayout || isTechnician
+                  ? { display: "none" }
+                  : {
+                      height: "38px",
+                      minHeight: "38px",
+                      flexShrink: 0,
+                      padding: 0,
+                      margin: 0,
+                    }
+              }
+            />
+          )}
 
           {isTechnician ? (
             <nav
@@ -2081,20 +2109,6 @@ function AppInner() {
                   : styles.sidebarNav
               }
             >
-              <span
-                style={
-                  isMobileLayout ||
-                  sidebarCollapsed
-                    ? {
-                        display:
-                          "none",
-                      }
-                    : styles.navGroupLabel
-                }
-              >
-                TECHNICIAN
-              </span>
-
               <button
                 className="nav-item-style"
                 style={getItemStyle(
@@ -2432,28 +2446,6 @@ function AppInner() {
                   Technicians
                 </span>
               </button>
-
-              {!isDispatcher && (
-                <button
-                  className="nav-item-style"
-                  style={getItemStyle("dispatchers")}
-                  onClick={() => handleTabChange("dispatchers")}
-                  title="Dispatchers"
-                >
-                  <Users size={18} style={{ flexShrink: 0 }} />
-                  <span
-                    className="nav-text"
-                    style={
-                      isMobileLayout || sidebarCollapsed
-                        ? { display: "none" }
-                        : {}
-                    }
-                  >
-                    Dispatchers
-                  </span>
-                </button>
-              )}
-
               <button
                 className="nav-item-style"
                 style={getItemStyle(
@@ -2487,6 +2479,20 @@ function AppInner() {
                   Planning
                 </span>
               </button>
+
+              {isSuperAdmin && (
+                <button
+                  className="nav-item-style"
+                  style={getItemStyle("agent_tracking")}
+                  onClick={() => handleTabChange("agent_tracking")}
+                  title="Agent Tracking"
+                >
+                  <Workflow size={18} style={{ flexShrink: 0 }} />
+                  <span className="nav-text" style={isMobileLayout || sidebarCollapsed ? { display: "none" } : {}}>
+                    Agent Tracking
+                  </span>
+                </button>
+              )}
 
               <button
                 className="nav-item-style"
@@ -3014,6 +3020,8 @@ function AppInner() {
                   }}
                   timeRange={timeRange}
                   onTimeRangeChange={setTimeRange}
+                  dateRange={dashboardDateRange}
+                  onDateRangeChange={setDashboardDateRange}
                 />
               )}
 
@@ -3049,6 +3057,8 @@ function AppInner() {
                 "tracking" && (
                 <TrackingDashboardPage />
               )}
+
+              {activeTab === "agent_tracking" && isSuperAdmin && <AgentTrackingPage />}
 
               {activeTab ===
                 "profile" && (

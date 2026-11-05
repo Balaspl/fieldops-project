@@ -12,6 +12,7 @@ from ..auth.rbac import Permission, UserRole
 from ..database import get_db
 from ..models import (
     CustomerSupportRequest,
+    CustomerSupportCaseUpdate,
     Job,
     Technician,
     User,
@@ -21,6 +22,7 @@ from ..portal_schemas import (
     CustomerSupportRequestUpdate,
 )
 from ..services.enterprise_audit import AuditAction, audit_log
+from ..services.customer_support_cases import support_sentiment_triage, chat_transcript, support_updates
 
 
 router = APIRouter(
@@ -76,6 +78,7 @@ def _support_query(
 def _build_admin_response(
     db: Session,
     support_request: CustomerSupportRequest,
+    include_details: bool = True,
 ) -> CustomerSupportRequestAdminResponse:
     customer = (
         db.query(User)
@@ -101,6 +104,11 @@ def _build_admin_response(
     }
 
     job_data = None
+    assigned_staff_id = getattr(support_request, "assigned_staff_id", None)
+    assigned_staff = (
+        db.query(User).filter(User.id == assigned_staff_id).first()
+        if assigned_staff_id else None
+    )
 
     if support_request.related_job_id is not None:
         job = (
@@ -154,6 +162,11 @@ def _build_admin_response(
         subject=support_request.subject,
         description=support_request.description,
         status=support_request.status,
+        category=getattr(support_request, "category", "OTHER"),
+        priority=support_request.priority,
+        assigned_staff_id=assigned_staff_id,
+        assigned_staff_name=(f"{assigned_staff.first_name} {assigned_staff.last_name}".strip() if assigned_staff else None),
+        source_chat_conversation_id=getattr(support_request, "source_chat_conversation_id", None),
         related_job_id=support_request.related_job_id,
         resolution_note=support_request.resolution_note,
         resolved_at=support_request.resolved_at,
@@ -161,6 +174,9 @@ def _build_admin_response(
         updated_at=support_request.updated_at,
         customer=customer_data,
         job=job_data,
+        updates=support_updates(db, support_request.id) if include_details else [],
+        chat_transcript=chat_transcript(db, support_request) if include_details else [],
+        sentiment_triage=support_sentiment_triage(db, support_request) if include_details else None,
     )
 
 
@@ -211,7 +227,7 @@ async def list_customer_support_requests_for_staff(
     )
 
     return [
-        _build_admin_response(db, support_request)
+        _build_admin_response(db, support_request, include_details=False)
         for support_request in requests
     ]
 
@@ -278,9 +294,34 @@ async def update_customer_support_request_for_staff(
 
     now = datetime.now(timezone.utc)
     old_status = support_request.status
+    old_category = getattr(support_request, "category", "OTHER")
+    old_priority = support_request.priority
+    old_assigned_staff_id = getattr(support_request, "assigned_staff_id", None)
 
     support_request.status = data.status
-    support_request.resolution_note = data.resolution_note
+    if data.category is not None:
+        support_request.category = data.category
+    if data.priority is not None:
+        support_request.priority = data.priority
+    if data.assign_to_me:
+        support_request.assigned_staff_id = current_user.user_id
+
+    public_update = data.resolution_note.strip() if data.resolution_note else None
+    if public_update and public_update != support_request.resolution_note:
+        db.add(CustomerSupportCaseUpdate(
+            support_request_id=support_request.id,
+            author_user_id=current_user.user_id,
+            author_role=str(current_user.role.value).lower(),
+            message=public_update,
+        ))
+        support_request.resolution_note = public_update
+    elif old_status != data.status:
+        db.add(CustomerSupportCaseUpdate(
+            support_request_id=support_request.id,
+            author_user_id=current_user.user_id,
+            author_role=str(current_user.role.value).lower(),
+            message=f"Your support request status is now {data.status.replace('_', ' ').lower()}.",
+        ))
 
     if data.status in {"RESOLVED", "CLOSED"}:
         if support_request.resolved_at is None:
@@ -298,10 +339,13 @@ async def update_customer_support_request_for_staff(
         role=current_user.role.value,
         entity_type="customer_support_request",
         entity_id=str(support_request.id),
-        old_value={"status": old_status},
+        old_value={"status": old_status, "category": old_category, "priority": old_priority, "assigned_staff_id": old_assigned_staff_id},
         new_value={
             "status": data.status,
-            "resolution_note": data.resolution_note,
+            "category": getattr(support_request, "category", "OTHER"),
+            "priority": support_request.priority,
+            "assigned_staff_id": getattr(support_request, "assigned_staff_id", None),
+            "resolution_note": public_update,
         },
     )
 
@@ -322,11 +366,7 @@ async def update_customer_support_request_for_staff(
         body=(
             f"Support request {support_request.request_number} "
             f"is now {support_request.status}."
-            + (
-                f" Resolution: {support_request.resolution_note}"
-                if support_request.resolution_note
-                else ""
-            )
+            + (f" Update: {public_update}" if public_update else "")
         ),
         status="UNREAD",
         priority="HIGH",

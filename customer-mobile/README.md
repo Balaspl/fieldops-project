@@ -14,6 +14,7 @@ A separate React Native + Expo + TypeScript customer application for the FieldOp
 - Opens an external map application with the backend's latest technician coordinate (or service-site coordinate when no technician coordinate is available).
 - Service history, completed-job feedback submission, invoice totals and itemized billing details, and persisted payment status/history.
 - Customer in-app notification feed, unread counts, mark-one-read and mark-all-read actions.
+- Native push token registration from notification preferences, with push taps opening the related job or notification history.
 - Notification preferences, customer profile creation/update, password change, and support-request creation/history/resolution notes.
 - Separate Expo configuration, Android package, iOS bundle ID, app scheme, EAS profiles, TypeScript settings and environment template.
 
@@ -81,10 +82,11 @@ A separate React Native + Expo + TypeScript customer application for the FieldOp
 
 - `EXPO_PUBLIC_API_BASE_URL` is required. Production/staging rejects plain HTTP; use HTTPS.
 - `EXPO_PUBLIC_OLA_MAPS_API_KEY` is used by the embedded Ola Maps Web SDK. It is bundled into the client app, so use a dedicated, appropriately restricted client key; do not reuse a backend-only secret.
+- `EXPO_PUBLIC_EAS_PROJECT_ID` is required for native Expo push-token registration. Create/link this app with EAS, set its project ID, and configure Android FCM and iOS APNs credentials in EAS before building a development/production client.
 - `.env` is excluded from version control. Do not put API secrets or signing credentials in `EXPO_PUBLIC_*`; client variables are bundled into the app.
 - `com.fieldops.customer`, `com.fieldops.customer` (iOS) and the `fieldopscustomer://` URL scheme are deliberately distinct from the technician app IDs.
 - `eas.json` provides development, preview and production profiles. Run `eas init` in this folder to associate the app with your own Expo/EAS project before using hosted EAS builds.
-- If you use Android Firebase/FCM or iOS APNs for native push later, configure project credentials and add the customer device-registration/delivery contract on the backend first. No technician push-token endpoint is called by this app.
+- Expo Go does not support the native remote-push flow used by this app. Use a development build or production build on a physical device to check push registration and delivery.
 
 ## Backend integration boundaries
 
@@ -101,6 +103,7 @@ Current customer routes consumed by this app:
 - `/api/customer/jobs/{id}/feedback`
 - `/api/customer/invoices`, `/api/customer/invoices/{job_id}`, `/api/customer/invoices/{job_id}/payment-status`, `/api/customer/payment-history`
 - `/api/customer/notifications`, `/api/customer/notifications/{notification_id}/read`, `/api/customer/notifications/read-all`
+- `/api/customer/notification-device` (PUT to register, DELETE to unregister the authenticated customer's push token)
 - `/api/customer/notification-preferences`
 - `/api/customer/support-requests`
 - `/organizations/location-search?q=…` for server-side service address suggestions
@@ -110,7 +113,7 @@ Current customer routes consumed by this app:
 
 These are explicitly surfaced rather than hidden behind mocked behavior:
 
-1. **Native push registration:** the inspected backend includes a customer in-app notification feed and preferences, but no customer device-registration endpoint matching the technician token registration API. This app therefore includes working in-app notification history/read states and does not pretend that native push is registered.
+1. **Push provider setup:** source code registers Expo push tokens and queues tracked lifecycle push notifications. Native delivery still requires this app's EAS project ID plus valid FCM/APNs credentials in EAS. The customer's push preference defaults off; enabling it in Settings requests device permission and registers the device.
 2. **Map and service address:** the mobile app uses the backend's server-side `/organizations/location-search` endpoint for address suggestions and `/organizations/reverse-location` for GPS reverse geocoding, so no map-provider API key is bundled in the app. A selected address still requires the customer to confirm its coordinates before booking; if search is unavailable, foreground GPS or manually entered coordinates remain available. The app never silently substitutes the backend's Chennai fallback. For technician navigation, it opens a map link using authorized backend coordinates.
 3. **Payment initiation:** existing customer APIs expose invoices and persisted payment status/history, not a payment initiation/checkout API. This app displays billing information but does not invent payment processing.
 4. **Request evidence uploads:** the current service-request contract has an `images` list, but a dedicated secure customer upload contract was not identified. The app sends an empty list and does not upload large base64 images into the request payload.

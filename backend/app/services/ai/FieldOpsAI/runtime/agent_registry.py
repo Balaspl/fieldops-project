@@ -561,32 +561,27 @@ class AgentRegistry:
 
 def create_default_agent_registry() -> AgentRegistry:
     """
-    Create and return a new AgentRegistry pre-loaded with the two
+    Create and return a new AgentRegistry pre-loaded with the
     migrated agent implementations.
 
     Registered types
     ----------------
     - AITask.PLANNING → PlanningAgent
     - AITask.DISPATCH → DispatchAgent
+    - AITask.INTAKE → IntakeAgent
+    - AITask.CLOSURE → ClosureAgent
 
     Excluded types (not yet migrated)
     ----------------------------------
     - AITask.MONITORING
     - AITask.SENTIMENT
     - AITask.COMMUNICATION
-    - AITask.CLOSURE
-
-    Returns a new registry each time — there is no module-level
-    global singleton.
-
-    Provider dependencies (e.g. ai_orchestrator) are NOT imported here.
-    Registry bootstrap must not initialize provider-related dependencies.
     """
-
     # Import here to avoid circular imports at module load time.
     from app.services.ai.FieldOpsAI.agents.planning_agent import PlanningAgent
     from app.services.ai.FieldOpsAI.agents.dispatch_agent import DispatchAgent
     from app.services.ai.FieldOpsAI.agents.intake_agent import IntakeAgent
+    from app.services.ai.FieldOpsAI.agents.closure_agent import ClosureAgent
 
     registry = AgentRegistry()
 
@@ -619,7 +614,16 @@ def create_default_agent_registry() -> AgentRegistry:
             config=config,
             orchestrator=orchestrator,  # type: ignore[arg-type]
         )
-
+    
+    # ClosureAgent factory — forwards the optional orchestrator.
+    def _closure_factory(
+        config: AgentConfig,
+        orchestrator: object | None,
+    ) -> ClosureAgent:
+        return ClosureAgent(
+            config=config,
+            orchestrator=orchestrator,  # type: ignore[arg-type]
+        )
     registry.register(
         registration=AgentRegistration(
             agent_type=AITask.PLANNING,
@@ -654,6 +658,20 @@ def create_default_agent_registry() -> AgentRegistry:
             ),
         ),
         factory=_intake_factory,
+    )
+
+    registry.register(
+        registration=AgentRegistration(
+            agent_type=AITask.CLOSURE,
+            agent_class=ClosureAgent,
+            version="1.0",
+            enabled=True,
+            description=(
+                "AI agent responsible for generating structured "
+                "technician job closure information."
+            ),
+        ),
+        factory=_closure_factory,
     )
 
     return registry

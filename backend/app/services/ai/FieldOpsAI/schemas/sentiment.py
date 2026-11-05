@@ -30,8 +30,13 @@ class SentimentContext(BaseModel):
         "SMS",
         "CHAT",
         "WHATSAPP",
+        "PORTAL",
         "SUPPORT_TICKET",
         "DISPATCH_NOTE",
+        "JOB_CHAT",
+        "SUPPORT_CHAT",
+        "JOB_FEEDBACK",
+        "SUPPORT_CASE",
     ] = Field(
         ...,
         description="Source of the customer communication."
@@ -39,7 +44,7 @@ class SentimentContext(BaseModel):
 
     message: str = Field(
         ...,
-        min_length=5,
+        min_length=1,
         description="Customer communication."
     )
     language: Literal[
@@ -106,6 +111,23 @@ class SentimentDecision(BaseModel):
         description="Business urgency level."
     )
 
+    severity: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"] = Field(
+        default="LOW", description="Impact severity, separate from time urgency."
+    )
+
+    issue_categories: list[Literal[
+        "TECHNICIAN_DELAY",
+        "TECHNICIAN_BEHAVIOR",
+        "SERVICE_QUALITY",
+        "COMMUNICATION",
+        "SCHEDULING",
+        "PRICING_BILLING",
+        "UNRESOLVED_ISSUE",
+        "SAFETY",
+        "GENERAL_FEEDBACK",
+        "OTHER",
+    ]] = Field(default_factory=list, max_length=5)
+
     requires_human: bool = Field(
         ...,
         description="Whether human intervention is recommended."
@@ -122,4 +144,10 @@ class SentimentDecision(BaseModel):
         default=None,
         min_length=10,
         description="Short factual summary of the customer's message."
+    )
+
+    recommended_action: Optional[str] = Field(
+        default=None,
+        max_length=500,
+        description="Suggested next step for a human operator; never execute automatically.",
     )

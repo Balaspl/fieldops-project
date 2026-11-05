@@ -452,6 +452,18 @@ def assign_job(
 
         db.commit()
 
+        if background_tasks is not None:
+            from ..services.assignment_push import send_assignment_push
+
+            background_tasks.add_task(
+                send_assignment_push,
+                job_id=job.id,
+                tenant_id=str(technician.tenant_id),
+                technician_id=str(technician.tech_id),
+                job_title=job.service_type,
+                location=job.location,
+            )
+
         # ============================================================
         # 10B. Publish Kafka Job Assigned Event
         # ============================================================
@@ -588,7 +600,8 @@ def assign_jobs_bulk(
     user_tenant: tuple[Optional[AuthenticatedUser], str] = Depends(
         get_current_user_or_tenant
     ),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = None,
 ):
     """
     Assign one technician to multiple jobs.
@@ -911,6 +924,23 @@ def assign_jobs_bulk(
         # ============================================================
 
         db.commit()
+
+        if background_tasks is not None:
+            from ..services.assignment_push import send_assignment_push
+
+            for result in results:
+                assigned_job = next(
+                    (item for item in jobs if item.id == result["job_id"]),
+                    None,
+                )
+                background_tasks.add_task(
+                    send_assignment_push,
+                    job_id=result["job_id"],
+                    tenant_id=str(technician.tenant_id),
+                    technician_id=str(technician.tech_id),
+                    job_title=getattr(assigned_job, "service_type", None),
+                    location=getattr(assigned_job, "location", None),
+                )
 
         # ============================================================
         # 9. Return Response

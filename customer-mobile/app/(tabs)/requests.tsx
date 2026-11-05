@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import { useFocusedAutoRefresh } from "../../src/hooks/useFocusedAutoRefresh";
 import {
   Alert,
   Linking,
@@ -213,19 +214,15 @@ function getInitials(name?: string | null): string {
 export default function CustomerRequestsScreen() {
   const [requests, setRequests] = useState<ServiceRequest[]>([]);
   const [jobs, setJobs] = useState<CustomerJob[]>([]);
-  const [filter, setFilter] = useState<RequestFilter>("ALL");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
 
-  const load = useCallback(async (pull = false) => {
-    if (pull) {
-      setRefreshing(true);
-    } else {
-      setLoading(true);
-    }
+  const load = useCallback(async (pull = false, silent = false) => {
+    if (pull) setRefreshing(true);
+    else if (!silent) setLoading(true);
 
-    setError("");
+    if (!silent) setError("");
 
     try {
       // Preserve the existing customer-scoped backend request and sync live job details.
@@ -236,7 +233,7 @@ export default function CustomerRequestsScreen() {
       setRequests(fetchedRequests);
       setJobs(fetchedJobs);
     } catch (e) {
-      setError(
+      if (!silent) setError(
         getApiErrorMessage(
           e,
           "Could not load service requests.",
@@ -253,11 +250,8 @@ export default function CustomerRequestsScreen() {
       void load();
     }, [load]),
   );
+  useFocusedAutoRefresh(() => load(false, true));
 
-  const shown = useMemo(
-    () => requests.filter((item) => matches(item, filter)),
-    [requests, filter],
-  );
 
   const metrics = useMemo<Metric[]>(() => {
     const count = (key: RequestFilter) =>
@@ -320,15 +314,6 @@ export default function CustomerRequestsScreen() {
       },
     ];
   }, [requests]);
-
-  const filterLabels: Record<RequestFilter, string> = {
-    ALL: "All Requests",
-    UNASSIGNED: "Unassigned",
-    ASSIGNED: "Assigned",
-    ACTIVE: "In Progress",
-    COMPLETED: "Completed",
-    CANCELLED: "Cancelled",
-  };
 
   return (
     <Screen
@@ -405,44 +390,6 @@ export default function CustomerRequestsScreen() {
           </View>
         )}
 
-        {/* Horizontally scrolling filters */}
-        <View style={styles.filterSection}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.filterRow}
-          >
-            {filters.map((item) => {
-              const selected = filter === item;
-
-              return (
-                <Pressable
-                  key={item}
-                  onPress={() => setFilter(item)}
-                  style={[
-                    styles.filterChip,
-                    selected && styles.filterChipSelected,
-                  ]}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected }}
-                >
-                  <Text
-                    style={[
-                      styles.filterText,
-                      selected && styles.filterTextSelected,
-                    ]}
-                  >
-                    {filterLabels[item]}
-                    {item !== "ALL"
-                      ? ` (${metrics.find((m) => m.key === item)?.value ?? 0})`
-                      : ""}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-        </View>
-
         {error ? (
           <ErrorState
             message={error}
@@ -450,15 +397,11 @@ export default function CustomerRequestsScreen() {
           />
         ) : loading ? (
           <LoadingView message="Loading service requests…" />
-        ) : shown.length === 0 ? (
+        ) : requests.length === 0 ? (
           <Card>
             <EmptyState
               title="No requests found"
-              message={
-                filter === "ALL"
-                  ? "Book a service and your request will appear here."
-                  : `There are no ${filterLabels[filter].toLowerCase()} to show.`
-              }
+              message="Book a service and your request will appear here."
               icon="documents-outline"
               action={
                 <AppButton
@@ -470,7 +413,7 @@ export default function CustomerRequestsScreen() {
           </Card>
         ) : (
           <View style={styles.requestList}>
-            {shown.map((request) => {
+            {requests.map((request) => {
               const details = request as RequestWithTechnician;
               const technicianName = details.assigned_technician_name?.trim();
               const technicianPhone = details.assigned_technician_phone?.trim();
@@ -513,10 +456,33 @@ export default function CustomerRequestsScreen() {
                 rawDistance <= 500;
 
               const showTrackActions = !isCompleted && !isCancelled;
+              const openRequestDetails = () => {
+                if (resolvedJobId) {
+                  router.push({
+                    pathname: "/jobs/[jobId]",
+                    params: { jobId: String(resolvedJobId) },
+                  });
+                } else {
+                  router.push({
+                    pathname: "/requests/[requestId]",
+                    params: { requestId: String(request.id) },
+                  });
+                }
+              };
 
               return (
-                <View key={request.id} style={styles.jobCard}>
-                  {/* Top Category & Status Header */}
+                <Pressable
+                  key={request.id}
+                  onPress={openRequestDetails}
+                  style={({ pressed }) => [
+                    styles.jobCard,
+                    pressed && styles.jobCardPressed,
+                  ]}
+                  android_ripple={{ color: "#E8F5EE" }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open ${request.title} details`}
+                >
+                    {/* Top Category & Status Header */}
                   <View style={styles.cardHeaderRow}>
                     <View style={styles.categoryWrap}>
                       <Text style={styles.categoryBadge}>
@@ -665,7 +631,7 @@ export default function CustomerRequestsScreen() {
                     </View>
                   </View>
 
-                  {/* Action Buttons Row (Image 2 style) */}
+                  {/* Action buttons stop propagation so their own actions remain independent. */}
                   <View style={styles.cardFooterActions}>
                     {showTrackActions ? (
                       <>
@@ -673,7 +639,10 @@ export default function CustomerRequestsScreen() {
                           {/* Only show calling when a real phone number was returned by the API. */}
                           {effectiveTechPhone ? (
                             <Pressable
-                              onPress={() => void callTechnician(effectiveTechPhone)}
+                              onPress={(event) => {
+                                event.stopPropagation();
+                                void callTechnician(effectiveTechPhone);
+                              }}
                               style={({ pressed }) => [
                                 styles.callIconBtn,
                                 pressed && styles.pressed,
@@ -689,7 +658,8 @@ export default function CustomerRequestsScreen() {
                           ) : null}
 
                           <Pressable
-                            onPress={() => {
+                            onPress={(event) => {
+                              event.stopPropagation();
                               if (resolvedJobId) {
                                 router.push({
                                   pathname: "/jobs/[jobId]",
@@ -719,7 +689,8 @@ export default function CustomerRequestsScreen() {
 
                         {/* Track on Map Button */}
                         <Pressable
-                          onPress={() => {
+                          onPress={(event) => {
+                            event.stopPropagation();
                             if (resolvedJobId) {
                               router.push({
                                 pathname: "/jobs/[jobId]",
@@ -756,12 +727,13 @@ export default function CustomerRequestsScreen() {
                         </View>
 
                         <Pressable
-                          onPress={() =>
+                          onPress={(event) => {
+                            event.stopPropagation();
                             router.push({
                               pathname: "/requests/[requestId]",
                               params: { requestId: String(request.id) },
-                            })
-                          }
+                            });
+                          }}
                           style={({ pressed }) => [
                             styles.receiptActionBtn,
                             pressed && styles.pressed,
@@ -784,12 +756,13 @@ export default function CustomerRequestsScreen() {
                         </Text>
 
                         <Pressable
-                          onPress={() =>
+                          onPress={(event) => {
+                            event.stopPropagation();
                             router.push({
                               pathname: "/requests/[requestId]",
                               params: { requestId: String(request.id) },
-                            })
-                          }
+                            });
+                          }}
                           style={({ pressed }) => [
                             styles.normalDetailsBtn,
                             pressed && styles.pressed,
@@ -807,7 +780,7 @@ export default function CustomerRequestsScreen() {
                       </>
                     )}
                   </View>
-                </View>
+                </Pressable>
               );
             })}
           </View>
@@ -964,42 +937,6 @@ const styles = StyleSheet.create({
     opacity: 0.30,
   },
 
-  filterSection: {
-    marginBottom: 13,
-  },
-
-  filterRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-    paddingVertical: 2,
-    paddingRight: 8,
-  },
-
-  filterChip: {
-    borderRadius: 25,
-    borderWidth: 1,
-    borderColor: "#DEE7E1",
-    backgroundColor: "#FFFFFF",
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-  },
-
-  filterChipSelected: {
-    backgroundColor: "#003F31",
-    borderColor: "#003F31",
-  },
-
-  filterText: {
-    color: "#65766C",
-    fontSize: 10,
-    fontWeight: "800",
-  },
-
-  filterTextSelected: {
-    color: "#FFFFFF",
-  },
-
   requestList: {
     gap: 13,
   },
@@ -1017,6 +954,11 @@ const styles = StyleSheet.create({
     elevation: 3,
     marginBottom: 16,
   },
+
+  jobCardPressed: {
+    opacity: 0.92,
+  },
+
 
   cardHeaderRow: {
     flexDirection: "row",

@@ -161,6 +161,7 @@ celery_app.conf.update(
     # app.tasks contains tasks that must be registered on THIS celery_app instance.
     imports=(
         "app.tasks",
+        "app.sentiment.job_message_tasks",
     ),
 
     beat_schedule={

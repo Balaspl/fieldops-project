@@ -1,30 +1,323 @@
-"""Authoritative, fail-closed technician eligibility checks for dispatch."""
+"""
+Authoritative, fail-closed technician eligibility checks for dispatch.
+
+Rules:
+- Only AVAILABLE technicians with a fresh heartbeat are dispatch eligible.
+- Maximum workload is 5 active jobs.
+- Technicians with current_jobs >= 5 are excluded.
+- Tenant validation remains mandatory when job_tenant_id is provided.
+- Valid location is required for distance-based planning.
+- Location priority:
+    1. Fresh and valid Redis GPS coordinates
+    2. Saved technician coordinates
+    3. Organization fallback coordinates
+"""
 
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
-from datetime import datetime, timedelta, timezone
+
+from datetime import datetime, timezone
 from typing import Any
 
 
-HEARTBEAT_MAX_AGE_SECONDS = int(os.getenv("DISPATCH_HEARTBEAT_MAX_AGE_SECONDS", "120"))
-LOCATION_MAX_AGE_SECONDS = int(os.getenv("DISPATCH_LOCATION_MAX_AGE_SECONDS", "120"))
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------
+
+HEARTBEAT_MAX_AGE_SECONDS = int(
+    os.getenv("DISPATCH_HEARTBEAT_MAX_AGE_SECONDS", "120")
+)
+
+LOCATION_MAX_AGE_SECONDS = int(
+    os.getenv("DISPATCH_LOCATION_MAX_AGE_SECONDS", "120")
+)
+
 MINIMUM_ACCEPTED_GPS_ACCURACY_METERS = 150.0
-LOCATION_MAX_ACCURACY_METERS = float(os.getenv("DISPATCH_MAX_GPS_ACCURACY_METERS", "150"))
+
+LOCATION_MAX_ACCURACY_METERS = float(
+    os.getenv("DISPATCH_MAX_GPS_ACCURACY_METERS", "150")
+)
+
+MAX_TECHNICIAN_WORKLOAD = 5
 
 
-def _age_seconds(value: Any, now: datetime) -> float | None:
+# ---------------------------------------------------------------------
+# Date helpers
+# ---------------------------------------------------------------------
+
+def _age_seconds(
+    value: Any,
+    now: datetime,
+) -> float | None:
+    """
+    Calculate the age of a datetime value.
+
+    This is informational only. Heartbeat age does not determine
+    technician dispatch eligibility.
+    """
+
     if not isinstance(value, datetime):
         return None
+
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
-    age = (now - value.astimezone(timezone.utc)).total_seconds()
+
+    age = (
+        now - value.astimezone(timezone.utc)
+    ).total_seconds()
+
     if age < -30:
         return None
+
     return age
 
+
+# ---------------------------------------------------------------------
+# Coordinate validation
+# ---------------------------------------------------------------------
+
+def _valid_coordinates(
+    latitude: Any,
+    longitude: Any,
+) -> tuple[float, float] | None:
+    """Validate latitude and longitude."""
+
+    try:
+        lat = float(latitude)
+        lng = float(longitude)
+
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+    if not math.isfinite(lat) or not math.isfinite(lng):
+        return None
+
+    if not (-90 <= lat <= 90):
+        return None
+
+    if not (-180 <= lng <= 180):
+        return None
+
+    return lat, lng
+
+
+def _parse_saved_location(
+    technician: Any,
+) -> tuple[float, float] | None:
+    """
+    Read saved technician coordinates.
+
+    Expected format:
+        latitude,longitude
+    """
+
+    saved_location = str(
+        getattr(technician, "technician_location", "") or ""
+    ).strip()
+
+    if not saved_location:
+        return None
+
+    try:
+        latitude_text, longitude_text = saved_location.split(",", 1)
+
+        return _valid_coordinates(
+            latitude_text.strip(),
+            longitude_text.strip(),
+        )
+
+    except ValueError:
+        return None
+
+
+def _parse_fallback_location(
+    fallback_location: tuple[float, float] | None,
+) -> tuple[float, float] | None:
+    """Validate organization fallback coordinates."""
+
+    if fallback_location is None:
+        return None
+
+    try:
+        return _valid_coordinates(
+            fallback_location[0],
+            fallback_location[1],
+        )
+
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+# ---------------------------------------------------------------------
+# Redis GPS lookup
+# ---------------------------------------------------------------------
+
+def _get_redis_location(
+    technician: Any,
+    redis_client: Any,
+    now: datetime,
+) -> dict[str, Any]:
+    """
+    Retrieve a fresh, valid technician GPS location.
+
+    Stale or inaccurate GPS data is not used for distance ranking.
+    The caller can fall back to saved technician or organization
+    coordinates instead.
+    """
+
+    result = {
+        "coordinates": None,
+        "location_age_seconds": None,
+        "accuracy_meters": None,
+        "reason": None,
+    }
+
+    tenant_id = str(
+        getattr(technician, "tenant_id", "") or ""
+    )
+
+    if redis_client is None or not tenant_id:
+        result["reason"] = "redis_location_unavailable"
+        return result
+
+    identities = (
+        getattr(technician, "tech_id", None),
+        getattr(technician, "technician_id", None),
+    )
+
+    for identity in identities:
+
+        if identity is None:
+            continue
+
+        try:
+            redis_key = (
+                f"gps:availability:{tenant_id}:{identity}"
+            )
+
+            raw = redis_client.get(redis_key)
+
+            if not raw:
+                continue
+
+            if isinstance(raw, (str, bytes, bytearray)):
+                location = json.loads(raw)
+            else:
+                location = raw
+
+            if not isinstance(location, dict):
+                continue
+
+            coordinates = _valid_coordinates(
+                location.get("latitude"),
+                location.get("longitude"),
+            )
+
+            if coordinates is None:
+                result["reason"] = "invalid_location_coordinates"
+                continue
+
+            # ---------------------------------------------------------
+            # Validate GPS timestamp
+            # ---------------------------------------------------------
+
+            raw_timestamp = location.get("timestamp")
+
+            if not raw_timestamp:
+                result["reason"] = "missing_location_timestamp"
+                continue
+
+            try:
+                timestamp = datetime.fromisoformat(
+                    str(raw_timestamp).replace("Z", "+00:00")
+                )
+
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(
+                        tzinfo=timezone.utc
+                    )
+
+                location_age = (
+                    now - timestamp.astimezone(timezone.utc)
+                ).total_seconds()
+
+            except (TypeError, ValueError, OverflowError):
+                result["reason"] = "invalid_location_timestamp"
+                continue
+
+            if location_age < -30:
+                result["reason"] = "future_location_timestamp"
+                continue
+
+            if location_age > LOCATION_MAX_AGE_SECONDS:
+                result["reason"] = "stale_location"
+                continue
+
+            # ---------------------------------------------------------
+            # Validate GPS accuracy
+            # ---------------------------------------------------------
+
+            raw_accuracy = location.get("accuracy")
+
+            accuracy = None
+
+            if raw_accuracy is not None:
+
+                try:
+                    accuracy = float(raw_accuracy)
+
+                except (TypeError, ValueError, OverflowError):
+                    result["reason"] = "invalid_location_accuracy"
+                    continue
+
+                if not math.isfinite(accuracy) or accuracy < 0:
+                    result["reason"] = "invalid_location_accuracy"
+                    continue
+
+                if accuracy > LOCATION_MAX_ACCURACY_METERS:
+                    result["reason"] = "poor_location_accuracy"
+                    continue
+
+            # ---------------------------------------------------------
+            # Valid GPS location
+            # ---------------------------------------------------------
+
+            result["coordinates"] = coordinates
+
+            result["location_age_seconds"] = round(
+                location_age,
+                1,
+            )
+
+            result["accuracy_meters"] = accuracy
+
+            result["reason"] = None
+
+            return result
+
+        except Exception:
+
+            logger.warning(
+                "Technician GPS lookup failed for identity=%s",
+                identity,
+                exc_info=True,
+            )
+
+            result["reason"] = "location_lookup_failed"
+
+    return result
+
+
+# ---------------------------------------------------------------------
+# Main eligibility function
+# ---------------------------------------------------------------------
 
 def evaluate_technician_dispatch_eligibility(
     technician: Any,
@@ -34,89 +327,131 @@ def evaluate_technician_dispatch_eligibility(
     fallback_location: tuple[float, float] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Return authoritative eligibility and safe diagnostic fields."""
-    import app.services.dispatch_eligibility as _this_mod
+    """
+    Evaluate whether a technician can be considered for dispatch.
+
+    Eligibility requirements:
+
+    1. Tenant must match when job_tenant_id is provided.
+    2. Technician workload must be below 5.
+    3. A valid location must be available.
+
+    Presence and heartbeat checks protect the final dispatch decision.
+    """
 
     now = now or datetime.now(timezone.utc)
-    tenant_id = str(getattr(technician, "tenant_id", "") or "")
-    technician_id = getattr(technician, "technician_id", None)
-    tech_user_id = getattr(technician, "tech_id", None)
-    status = str(getattr(technician, "technician_status", "") or "").strip().upper()
+
+    # -----------------------------------------------------------------
+    # Technician information
+    # -----------------------------------------------------------------
+
+    technician_id = getattr(
+        technician,
+        "technician_id",
+        None,
+    )
+
+    tech_user_id = getattr(
+        technician,
+        "tech_id",
+        None,
+    )
+
+    tenant_id = str(
+        getattr(technician, "tenant_id", "") or ""
+    )
+
+    status = str(
+        getattr(technician, "technician_status", "") or ""
+    ).strip().upper()
+
     reasons: list[str] = []
 
     if status != "AVAILABLE":
         reasons.append("not_available")
 
-    if job_tenant_id is not None and tenant_id != str(job_tenant_id):
+    # -----------------------------------------------------------------
+    # Tenant validation
+    # -----------------------------------------------------------------
+
+    if (
+        job_tenant_id is not None
+        and tenant_id != str(job_tenant_id)
+    ):
+
         reasons.append("tenant_mismatch")
 
-    raw_last_ping = getattr(technician, "last_ping", None)
-    heartbeat_age = _age_seconds(raw_last_ping, now)
-    if raw_last_ping is None:
+    # -----------------------------------------------------------------
+    # Workload validation
+    # -----------------------------------------------------------------
+
+    raw_workload = getattr(
+        technician,
+        "current_jobs",
+        0,
+    )
+
+    try:
+        workload = int(raw_workload or 0)
+
+    except (TypeError, ValueError, OverflowError):
+
+        workload = MAX_TECHNICIAN_WORKLOAD
+
+        reasons.append("invalid_workload")
+
+    if workload < 0:
+        reasons.append("invalid_workload")
+
+    elif workload >= MAX_TECHNICIAN_WORKLOAD:
+
+        reasons.append("workload_limit_reached")
+
+    # -----------------------------------------------------------------
+    # Heartbeat information
+    # -----------------------------------------------------------------
+
+    heartbeat_age = _age_seconds(
+        getattr(technician, "last_ping", None),
+        now,
+    )
+
+    if heartbeat_age is None:
         reasons.append("missing_or_future_heartbeat")
-    elif heartbeat_age is None:
-        reasons.append("missing_or_future_heartbeat")
-    elif heartbeat_age > _this_mod.HEARTBEAT_MAX_AGE_SECONDS:
+    elif heartbeat_age > HEARTBEAT_MAX_AGE_SECONDS:
         reasons.append("stale_heartbeat")
 
-    location: dict[str, Any] | None = None
-    location_lookup_failed = False
-    if redis_client is not None and tenant_id:
-        for identity in (tech_user_id, technician_id):
-            if identity is None:
-                continue
-            try:
-                raw = redis_client.get(f"gps:availability:{tenant_id}:{identity}")
-                if raw:
-                    location = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
-                    break
-            except Exception:
-                location_lookup_failed = True
-                break
-    else:
-        location_lookup_failed = True
+    # Heartbeat age is checked for the final dispatch decision.
 
-    location_age: float | None = None
-    accuracy: float | None = None
-    coordinates: tuple[float, float] | None = None
-    has_raw_location = isinstance(location, dict)
+    # -----------------------------------------------------------------
+    # Location lookup
+    # -----------------------------------------------------------------
 
-    if has_raw_location:
-        try:
-            lat = float(location["latitude"])
-            lng = float(location["longitude"])
-            if not (math.isfinite(lat) and math.isfinite(lng) and -90 <= lat <= 90 and -180 <= lng <= 180):
-                raise ValueError("invalid cached coordinates")
-            coordinates = (lat, lng)
-            raw_accuracy = location.get("accuracy")
-            accuracy = float(raw_accuracy) if raw_accuracy is not None else None
-            raw_timestamp = location.get("timestamp")
-            if raw_timestamp:
-                timestamp = datetime.fromisoformat(str(raw_timestamp).replace("Z", "+00:00"))
-                if timestamp.tzinfo is None:
-                    timestamp = timestamp.replace(tzinfo=timezone.utc)
-                location_age = (now - timestamp.astimezone(timezone.utc)).total_seconds()
-        except (KeyError, TypeError, ValueError, OverflowError):
-            coordinates = None
-            reasons.append("invalid_location_coordinates")
+    gps_result = _get_redis_location(
+        technician=technician,
+        redis_client=redis_client,
+        now=now,
+    )
 
-        if location_age is not None and location_age > _this_mod.LOCATION_MAX_AGE_SECONDS:
-            reasons.append("stale_location")
+    coordinates = gps_result["coordinates"]
 
-        max_accuracy = getattr(_this_mod, "LOCATION_MAX_ACCURACY_METERS", LOCATION_MAX_ACCURACY_METERS)
-        if accuracy is not None and accuracy > max_accuracy:
-            reasons.append("poor_location_accuracy")
+    location_age = gps_result["location_age_seconds"]
 
-    if coordinates is None:
-        saved_location = str(getattr(technician, "technician_location", "") or "")
-        try:
-            lat_text, lng_text = saved_location.split(",", 1)
-            lat, lng = float(lat_text.strip()), float(lng_text.strip())
-            if math.isfinite(lat) and math.isfinite(lng) and -90 <= lat <= 90 and -180 <= lng <= 180:
-                coordinates = (lat, lng)
-        except (TypeError, ValueError):
-            pass
+    accuracy = gps_result["accuracy_meters"]
 
+    location_source = None
+
+    if coordinates is not None:
+
+        location_source = "redis_gps"
+
+    # -----------------------------------------------------------------
+    # Saved technician location fallback
+    # -----------------------------------------------------------------
+
+    # Priority 1: Check live cached GPS from Redis availability (above)
+    # Priority 2: Check technician's live latitude & longitude from telemetry
+    # Note: Planning strictly relies on technician's current live location, NOT static house location.
     if coordinates is None:
         tech_lat = getattr(technician, "latitude", None)
         tech_lng = getattr(technician, "longitude", None)
@@ -125,27 +460,83 @@ def evaluate_technician_dispatch_eligibility(
                 lat, lng = float(tech_lat), float(tech_lng)
                 if math.isfinite(lat) and math.isfinite(lng) and -90 <= lat <= 90 and -180 <= lng <= 180:
                     coordinates = (lat, lng)
+                    location_source = "technician_telemetry_live"
             except (TypeError, ValueError):
                 pass
 
-    if coordinates is None and fallback_location is not None:
-        try:
-            lat, lng = float(fallback_location[0]), float(fallback_location[1])
-            if math.isfinite(lat) and math.isfinite(lng) and -90 <= lat <= 90 and -180 <= lng <= 180:
-                coordinates = (lat, lng)
-        except (TypeError, ValueError, IndexError):
-            pass
+    if coordinates is None:
+        coordinates = _parse_saved_location(technician)
+        if coordinates is not None:
+            location_source = "saved_technician_location"
+
+    # -----------------------------------------------------------------
+    # Organization location fallback
+    # -----------------------------------------------------------------
+    if coordinates is None:
+
+        coordinates = _parse_fallback_location(
+            fallback_location
+        )
+
+        if coordinates is not None:
+
+            location_source = "organization_location"
+
+    # -----------------------------------------------------------------
+    # Location requirement
+    # -----------------------------------------------------------------
 
     if coordinates is None:
-        if not has_raw_location or "invalid_location_coordinates" not in reasons:
-            reasons.append("location_unavailable")
+        if gps_result.get("reason"):
+            reasons.append(gps_result["reason"])
+        reasons.append("location_unavailable")
+
+    # -----------------------------------------------------------------
+    # Final result
+    # -----------------------------------------------------------------
+
+    eligible = not reasons
 
     return {
-        "eligible": not reasons,
-        "reason": ",".join(dict.fromkeys(reasons)) or None,
+        "eligible": eligible,
+
+        "reason": (
+            ",".join(dict.fromkeys(reasons))
+            if reasons
+            else None
+        ),
+
+        "technician_id": technician_id,
+
+        "tech_user_id": tech_user_id,
+
+        "tenant_id": tenant_id,
+
+        # Presence is informational only.
         "availability": status or "UNKNOWN",
-        "heartbeat_age_seconds": round(heartbeat_age, 1) if heartbeat_age is not None else None,
-        "location_age_seconds": round(location_age, 1) if location_age is not None else None,
+
+        # Workload is mandatory.
+        "workload": workload,
+
+        "workload_limit": MAX_TECHNICIAN_WORKLOAD,
+
+        "remaining_capacity": max(
+            0,
+            MAX_TECHNICIAN_WORKLOAD - workload,
+        ),
+
+        # Heartbeat is informational only.
+        "heartbeat_age_seconds": (
+            round(heartbeat_age, 1)
+            if heartbeat_age is not None
+            else None
+        ),
+
+        "location_age_seconds": location_age,
+
         "accuracy_meters": accuracy,
+
         "location_coordinates": coordinates,
+
+        "location_source": location_source,
     }

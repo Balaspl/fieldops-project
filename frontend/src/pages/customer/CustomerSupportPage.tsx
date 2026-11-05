@@ -1,3 +1,4 @@
+import { useActiveAutoRefresh } from "../../hooks/useActiveAutoRefresh";
 import {
   FormEvent,
   useEffect,
@@ -26,6 +27,7 @@ import {
   getCustomerJobs,
   getCustomerSupportRequests,
   getServiceHistory,
+  reopenCustomerSupportRequest,
   updateAdminCustomerSupportRequest,
 } from "../../services/customerPortalService";
 
@@ -44,7 +46,7 @@ const styles = {
   page: {
     minHeight: "100%",
     padding: "28px",
-    background: "#F8FAF9",
+    background: "#EEF4F1",
     boxSizing: "border-box",
   } as React.CSSProperties,
 
@@ -532,28 +534,21 @@ function CustomerSupportView() {
 
   const loadRequests = async (
     showRefreshState = false,
+    silent = false,
   ) => {
-    if (showRefreshState) {
-      setRefreshing(true);
-    } else {
-      setLoading(true);
-    }
+    if (showRefreshState) setRefreshing(true);
+    else if (!silent) setLoading(true);
 
     try {
       const response =
         await getCustomerSupportRequests();
 
-      setRequests(
-        response.data || [],
-      );
-
-      setErrorMessage("");
+      setRequests(response.data || []);
+      if (!silent) setErrorMessage("");
     } catch (error) {
-      setErrorMessage(
-        getErrorMessage(error),
-      );
+      if (!silent) setErrorMessage(getErrorMessage(error));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
       setRefreshing(false);
     }
   };
@@ -650,6 +645,9 @@ function CustomerSupportView() {
     };
   }, []);
 
+  // Refresh only the request list; keep the user's ticket form fields untouched.
+  useActiveAutoRefresh(() => loadRequests(false, true), !submitting);
+
   const handleSubmit = async (
     event: FormEvent<HTMLFormElement>,
   ) => {
@@ -717,6 +715,18 @@ function CustomerSupportView() {
       );
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const reopenCase = async (requestId: number) => {
+    if (!window.confirm("Ask the support team to continue working on this case?")) return;
+    try {
+      const response = await reopenCustomerSupportRequest(requestId);
+      setRequests((current) => current.map((item) => item.id === requestId ? response.data : item));
+      setSuccessMessage(`Support request ${response.data.request_number} has been reopened.`);
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
     }
   };
 
@@ -1071,6 +1081,10 @@ function CustomerSupportView() {
                     {item.description}
                   </p>
 
+                  <div style={{ fontSize: "12px", color: "#64748B", marginBottom: "8px" }}>
+                    {item.category.replaceAll("_", " ")} · {item.priority} priority · {item.assigned_staff_name ? `Assigned to ${item.assigned_staff_name}` : "Waiting for assignment"}
+                  </div>
+
                   {item.related_job_id !=
                     null && (
                     <div
@@ -1106,6 +1120,16 @@ function CustomerSupportView() {
                       {item.resolution_note}
                     </div>
                   )}
+
+                  {item.updates?.length > 0 && <div style={{ display: "grid", gap: 8, margin: "10px 0" }}>
+                    <strong style={{ fontSize: 12, color: "#334155" }}>Case updates</strong>
+                    {item.updates.map((update) => <div key={update.id} style={{ borderLeft: "2px solid #19A675", paddingLeft: 10 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700 }}>{update.author_name} · {formatDate(update.created_at)}</div>
+                      <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.5 }}>{update.message}</div>
+                    </div>)}
+                  </div>}
+
+                  {(["RESOLVED", "CLOSED"].includes(item.status)) && <button type="button" onClick={() => void reopenCase(item.id)} style={{ ...styles.secondaryButton, marginTop: 8 }}>Issue still needs help? Reopen request</button>}
 
                   <div
                     style={styles.requestMeta}
@@ -1212,6 +1236,8 @@ function StaffCustomerSupportView({
     resolutionNote,
     setResolutionNote,
   ] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("OTHER");
+  const [selectedPriority, setSelectedPriority] = useState("MEDIUM");
 
   const [loading, setLoading] =
     useState(true);
@@ -1232,8 +1258,8 @@ function StaffCustomerSupportView({
     setSuccessMessage,
   ] = useState("");
 
-  const loadRequests = async () => {
-    setLoading(true);
+  const loadRequests = async (silent = false) => {
+    if (!silent) setLoading(true);
 
     try {
       const response =
@@ -1247,7 +1273,7 @@ function StaffCustomerSupportView({
         response.data || [];
 
       setRequests(nextRequests);
-      setErrorMessage("");
+      if (!silent) setErrorMessage("");
 
       if (
         selectedRequestId != null &&
@@ -1269,19 +1295,28 @@ function StaffCustomerSupportView({
         setSelectedRequest(null);
       }
     } catch (error) {
-      setErrorMessage(
-        getErrorMessage(error),
-      );
-      setRequests([]);
-      setSelectedRequest(null);
+      if (!silent) {
+        setErrorMessage(getErrorMessage(error));
+        setRequests([]);
+        setSelectedRequest(null);
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
     void loadRequests();
   }, [statusFilter]);
+
+  useActiveAutoRefresh(
+    () => loadRequests(true),
+    !saving && !detailLoading &&
+      selectedStatus === (selectedRequest?.status || "OPEN") &&
+      resolutionNote === (selectedRequest?.resolution_note || "") &&
+      selectedCategory === (selectedRequest?.category || "OTHER") &&
+      selectedPriority === (selectedRequest?.priority || "MEDIUM"),
+  );
 
   useEffect(() => {
     if (
@@ -1298,30 +1333,6 @@ function StaffCustomerSupportView({
       selectedRequestId == null
     ) {
       setSelectedRequest(null);
-      return;
-    }
-
-    const listMatch =
-      requests.find(
-        (item) =>
-          item.id ===
-          selectedRequestId,
-      );
-
-    if (listMatch) {
-      setSelectedRequest(
-        listMatch,
-      );
-
-      setSelectedStatus(
-        listMatch.status as CustomerSupportAdminUpdate["status"],
-      );
-
-      setResolutionNote(
-        listMatch.resolution_note ||
-          "",
-      );
-
       return;
     }
 
@@ -1350,6 +1361,8 @@ function StaffCustomerSupportView({
               .resolution_note ||
               "",
           );
+          setSelectedCategory(response.data.category || "OTHER");
+          setSelectedPriority(response.data.priority || "MEDIUM");
 
           setErrorMessage("");
         }
@@ -1404,7 +1417,7 @@ function StaffCustomerSupportView({
     };
   }, [requests]);
 
-  const handleSave = async () => {
+  const handleSave = async (assignToMe = false) => {
     if (!selectedRequest) {
       return;
     }
@@ -1437,6 +1450,9 @@ function StaffCustomerSupportView({
             status: selectedStatus,
             resolution_note:
               trimmedNote || null,
+            category: selectedCategory,
+            priority: selectedPriority,
+            assign_to_me: assignToMe,
           },
         );
 
@@ -1452,6 +1468,8 @@ function StaffCustomerSupportView({
         response.data
           .resolution_note || "",
       );
+      setSelectedCategory(response.data.category || "OTHER");
+      setSelectedPriority(response.data.priority || "MEDIUM");
 
       setRequests((current) =>
         current.map((item) =>
@@ -1488,9 +1506,8 @@ function StaffCustomerSupportView({
         </div>
 
         <p style={styles.subtitle}>
-          Review customer support cases,
-          inspect related job information,
-          and send resolution updates.
+          Triage customer issues, take ownership,
+          review chat context, and keep the customer updated.
         </p>
       </div>
 
@@ -1760,6 +1777,10 @@ function StaffCustomerSupportView({
                   </strong>
                 </div>
 
+                <div style={{ fontSize: "11px", color: "#64748B", marginBottom: "8px" }}>
+                  {item.priority} priority · {item.category.replaceAll("_", " ")} · {item.assigned_staff_name ? `Assigned to ${item.assigned_staff_name}` : "Unassigned"}
+                </div>
+
                 <div
                   style={{
                     fontSize: "12px",
@@ -1890,6 +1911,35 @@ function StaffCustomerSupportView({
                   }
                 </span>
               </div>
+
+              {selectedRequest.updates?.length > 0 && <div style={styles.detailSection}>
+                <h3 style={styles.detailTitle}>Customer-visible case updates</h3>
+                <div style={{ display: "grid", gap: 10 }}>
+                  {selectedRequest.updates.map((update) => <div key={update.id} style={{ borderLeft: "3px solid #19A675", paddingLeft: 10 }}>
+                    <strong style={{ fontSize: 12 }}>{update.author_name}</strong>
+                    <div style={{ color: "#64748B", fontSize: 11 }}>{formatDate(update.created_at)}</div>
+                    <p style={{ margin: "4px 0 0", fontSize: 13, lineHeight: 1.5 }}>{update.message}</p>
+                  </div>)}
+                </div>
+              </div>}
+
+              {selectedRequest.chat_transcript?.length > 0 && <div style={styles.detailSection}>
+                {selectedRequest.sentiment_triage && <div style={{ background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 9, padding: 12, marginBottom: 12 }}>
+                  <strong style={{ fontSize: 12 }}>AI triage · staff aid</strong>
+                  <div style={{ fontSize: 12, color: "#475569", marginTop: 5 }}>
+                    {selectedRequest.sentiment_triage.sentiment} · {selectedRequest.sentiment_triage.emotion || "Emotion not recorded"} · Urgency {selectedRequest.sentiment_triage.urgency || "—"} · Severity {selectedRequest.sentiment_triage.severity || "—"} · {Math.round(selectedRequest.sentiment_triage.confidence * 100)}% confidence
+                  </div>
+                  {selectedRequest.sentiment_triage.issue_categories.length > 0 && <div style={{ fontSize: 12, color: "#475569", marginTop: 4 }}>Signals: {selectedRequest.sentiment_triage.issue_categories.map((value) => value.replaceAll("_", " ").toLowerCase()).join(", ")}</div>}
+                  {selectedRequest.sentiment_triage.recommended_action && <div style={{ fontSize: 12, marginTop: 5 }}>Suggested next step: {selectedRequest.sentiment_triage.recommended_action}</div>}
+                </div>}
+                <h3 style={styles.detailTitle}>Chat transcript attached to this case</h3>
+                <div style={{ display: "grid", gap: 8, maxHeight: 300, overflowY: "auto" }}>
+                  {selectedRequest.chat_transcript.map((message, index) => <div key={`${message.created_at}-${index}`} style={{ background: message.sender === "customer" ? "#F0FDF4" : "#F8FAFC", borderRadius: 8, padding: 9 }}>
+                    <strong style={{ fontSize: 11 }}>{message.sender === "customer" ? "Customer" : "FieldOps Assistant"}</strong>
+                    <div style={{ fontSize: 13, lineHeight: 1.5, marginTop: 3 }}>{message.content}</div>
+                  </div>)}
+                </div>
+              </div>}
 
               <div
                 style={styles.detailSection}
@@ -2141,6 +2191,11 @@ function StaffCustomerSupportView({
                   Handle Support Case
                 </h3>
 
+                <DetailRow label="Assigned staff" value={selectedRequest.assigned_staff_name || "Unassigned"} />
+                <button type="button" onClick={() => void handleSave(true)} disabled={saving} style={{ ...styles.secondaryButton, marginBottom: 12 }}>
+                  {selectedRequest.assigned_staff_id ? "Assign / reassign to me" : "Take ownership"}
+                </button>
+
                 <div style={styles.field}>
                   <label
                     htmlFor="support-update-status"
@@ -2174,11 +2229,25 @@ function StaffCustomerSupportView({
                 </div>
 
                 <div style={styles.field}>
+                  <label htmlFor="support-category" style={styles.label}>Category</label>
+                  <select id="support-category" value={selectedCategory} onChange={(event) => setSelectedCategory(event.target.value)} disabled={saving} style={styles.select}>
+                    {["OTHER", "GENERAL", "BILLING", "SERVICE_QUALITY", "TECHNICIAN", "SCHEDULING", "ACCOUNT"].map((value) => <option key={value} value={value}>{value.replaceAll("_", " ")}</option>)}
+                  </select>
+                </div>
+
+                <div style={styles.field}>
+                  <label htmlFor="support-priority" style={styles.label}>Priority</label>
+                  <select id="support-priority" value={selectedPriority} onChange={(event) => setSelectedPriority(event.target.value)} disabled={saving} style={styles.select}>
+                    {["LOW", "MEDIUM", "HIGH", "URGENT"].map((value) => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                </div>
+
+                <div style={styles.field}>
                   <label
                     htmlFor="support-resolution"
                     style={styles.label}
                   >
-                    Resolution / response
+                    Customer-visible update
                   </label>
 
                   <textarea
@@ -2189,7 +2258,7 @@ function StaffCustomerSupportView({
                         event.target.value,
                       )
                     }
-                    placeholder="Tell the customer what was fixed, checked, or decided. Required for RESOLVED/CLOSED."
+                    placeholder="Tell the customer what you checked or what happens next. A clear response is required to resolve or close the case."
                     maxLength={5000}
                     disabled={saving}
                     style={{

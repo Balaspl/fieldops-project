@@ -69,6 +69,7 @@ class TwilioSMSService:
         to_number: str,
         body: str,
         from_number: str | None = None,
+        status_callback: str | None = None,
     ) -> SMSResult:
         if not body or not body.strip():
             raise ValueError("SMS body cannot be empty")
@@ -147,6 +148,7 @@ class TwilioSMSService:
                 body=body,
                 from_number=sender,
                 to_number=formatted_number,
+                status_callback=status_callback,
             )
 
             logger.info(
@@ -303,14 +305,18 @@ class TwilioSMSService:
         from_number: str,
         to_number: str,
         max_retries: int = 3,
+        status_callback: str | None = None,
     ):
         for attempt in range(max_retries):
             try:
-                return self.client.messages.create(
-                    body=body,
-                    from_=from_number,
-                    to=to_number,
-                )
+                request = {
+                    "body": body,
+                    "from_": from_number,
+                    "to": to_number,
+                }
+                if status_callback:
+                    request["status_callback"] = status_callback
+                return self.client.messages.create(**request)
 
             except (TwilioRestException, TimeoutError) as exc:
                 if isinstance(exc, TwilioRestException):

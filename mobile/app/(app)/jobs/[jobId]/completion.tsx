@@ -61,6 +61,15 @@ interface PhotoDraft {
   uploadError?: string;
 }
 
+interface ClosureDecision {
+  work_summary: string;
+  customer_summary: string;
+  invoice_description: string;
+  follow_up_required: boolean;
+  follow_up_reason: string | null;
+  confidence: number;
+}
+
 interface CompletionDraft {
   version: 1;
   tenantId: string;
@@ -349,6 +358,11 @@ export default function JobCompletionScreen() {
   const [notes, setNotes] = useState("");
   const [partsUsedText, setPartsUsedText] = useState("");
   const [durationMinutes, setDurationMinutes] = useState("");
+  const [closureDecision, setClosureDecision] =
+    useState<ClosureDecision | null>(null);
+  const [isGeneratingClosure, setIsGeneratingClosure] =
+    useState(false);
+  const [followUpReviewed, setFollowUpReviewed] = useState(false);
   const [photos, setPhotos] = useState<PhotoDraft[]>([]);
   const [photoCategory, setPhotoCategory] =
     useState<CompletionPhotoCategory>("AFTER");
@@ -377,6 +391,50 @@ export default function JobCompletionScreen() {
     "saving" | "saved" | "error" | null
   >(null);
   const completionConfirmedRef = useRef(false);
+
+  const invalidateClosureDecision = useCallback(() => {
+    setClosureDecision(null);
+    setFollowUpReviewed(false);
+  }, []);
+
+  const handleGenerateClosureSummary = useCallback(async () => {
+    const numericJobId = Number(jobId);
+    const reportSummary = notes.trim();
+
+    const trimmedDuration = durationMinutes.trim();
+    if (!Number.isSafeInteger(numericJobId) || numericJobId <= 0) {
+      setError("Unable to identify this job.");
+      return;
+    }
+    if (reportSummary.length < 5 || reportSummary.length > 5000) {
+      setError("Enter work notes between 5 and 5000 characters to generate the closure summary.");
+      return;
+    }
+    if (!/^\d+$/.test(trimmedDuration) || !Number.isSafeInteger(Number(trimmedDuration))) {
+      setError("Enter work duration in whole minutes before generating the closure summary.");
+      return;
+    }
+    const partsUsed = partsUsedText.split(/\r?\n/).map((part) => part.trim()).filter(Boolean);
+    setIsGeneratingClosure(true);
+    setError(null);
+    setClosureDecision(null);
+    setFollowUpReviewed(false);
+    try {
+      const response = await apiClient.post<ClosureDecision>(
+        `/jobs/${numericJobId}/closure/summary`,
+        {
+          technician_notes: reportSummary,
+          parts_used: partsUsed,
+          duration_minutes: Number(trimmedDuration)
+        }
+      );
+      setClosureDecision(response.data);
+    } catch (generationError: unknown) {
+      setError(getApiErrorMessage(generationError, "Failed to generate the closure summary."));
+    } finally {
+      setIsGeneratingClosure(false);
+    }
+  }, [durationMinutes, jobId, notes, partsUsedText]);
   const draftWritePromiseRef = useRef<Promise<void>>(Promise.resolve());
 
   const draftKey =
@@ -886,6 +944,11 @@ export default function JobCompletionScreen() {
 
     const reportSummary = notes.trim();
 
+    if (closureDecision?.follow_up_required && !followUpReviewed) {
+      setError("Review the follow-up recommendation and confirm the job is ready to close before continuing.");
+      return;
+    }
+
     if (!reportSummary) {
       setError("Enter a work summary before completing the job.");
       return;
@@ -1150,7 +1213,7 @@ export default function JobCompletionScreen() {
       logEvent("customer_signature.saved_with_completion", {});
       logEvent("completion.job_and_signature_succeeded", {});
 
-      router.replace("/(app)/jobs");
+      router.replace("/(app)/history");
     } catch (submissionError: unknown) {
       logError(
         "completion_photo.job_submission_failed",
@@ -1882,7 +1945,10 @@ export default function JobCompletionScreen() {
         <TextInput
           accessibilityLabel="Work report summary"
           value={notes}
-          onChangeText={setNotes}
+          onChangeText={(value) => {
+            setNotes(value);
+            invalidateClosureDecision();
+          }}
           placeholder="Describe the fault, work performed, and outcome..."
           placeholderTextColor="#94A3B8"
           multiline
@@ -1903,7 +1969,10 @@ export default function JobCompletionScreen() {
         <TextInput
           accessibilityLabel="Parts used"
           value={partsUsedText}
-          onChangeText={setPartsUsedText}
+          onChangeText={(value) => {
+            setPartsUsedText(value);
+            invalidateClosureDecision();
+          }}
           placeholder={"Enter one part per line\nExample: Capacitor"}
           placeholderTextColor="#94A3B8"
           multiline
@@ -1919,7 +1988,10 @@ export default function JobCompletionScreen() {
         <TextInput
           accessibilityLabel="Work duration in minutes"
           value={durationMinutes}
-          onChangeText={setDurationMinutes}
+          onChangeText={(value) => {
+            setDurationMinutes(value);
+            invalidateClosureDecision();
+          }}
           placeholder="Example: 90"
           placeholderTextColor="#94A3B8"
           keyboardType="number-pad"
@@ -1930,6 +2002,55 @@ export default function JobCompletionScreen() {
             { minHeight: 50 }
           ]}
         />
+
+        <View style={styles.closureCard}>
+          <Text style={styles.closureTitle}>Closure Agent Summary</Text>
+          <Text style={styles.helperText}>
+            Generate completion summaries and a follow-up recommendation from the notes, parts, and duration you entered.
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            disabled={isGeneratingClosure || isSubmitting}
+            onPress={() => void handleGenerateClosureSummary()}
+            style={[styles.closureButton, (isGeneratingClosure || isSubmitting) && styles.disabled]}
+          >
+            {isGeneratingClosure ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.closureButtonText}>✦  Generate Closure Summary</Text>}
+          </Pressable>
+          {closureDecision ? (
+            <View accessibilityLiveRegion="polite">
+              <Text style={styles.closureSubheading}>Generated Closure Information</Text>
+              <View style={styles.closureResult}>
+                <Text style={styles.closureLabel}>Internal Work Summary</Text>
+                <Text style={styles.closureBody}>{closureDecision.work_summary}</Text>
+              </View>
+              <View style={styles.closureResult}>
+                <Text style={styles.closureLabel}>Customer Completion Summary</Text>
+                <Text style={styles.closureBody}>{closureDecision.customer_summary}</Text>
+              </View>
+              <View style={styles.closureResult}>
+                <Text style={styles.closureLabel}>Invoice Description</Text>
+                <Text style={styles.closureBody}>{closureDecision.invoice_description}</Text>
+              </View>
+              <View style={closureDecision.follow_up_required ? styles.followUpRequired : styles.followUpClear}>
+                <Text style={styles.closureLabel}>
+                  Follow-up Recommendation: {closureDecision.follow_up_required ? "Required" : "Not Required"}
+                </Text>
+                {closureDecision.follow_up_reason ? <Text style={styles.closureBody}>{closureDecision.follow_up_reason}</Text> : null}
+              </View>
+              {closureDecision.follow_up_required ? (
+                <Pressable
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: followUpReviewed }}
+                  onPress={() => setFollowUpReviewed((current) => !current)}
+                  style={styles.followUpCheckRow}
+                >
+                  <Text style={styles.followUpCheck}>{followUpReviewed ? "☑" : "☐"}</Text>
+                  <Text style={styles.closureBody}>I reviewed this recommendation and confirm the job is ready to close.</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ) : null}
+        </View>
       </View>
 
       {error ? (
@@ -1947,6 +2068,10 @@ export default function JobCompletionScreen() {
           !jobId
         }
         onPress={() => {
+          if (closureDecision?.follow_up_required && !followUpReviewed) {
+            setError("Review the follow-up recommendation and confirm the job is ready to close before continuing.");
+            return;
+          }
           setError(null);
           setIsCostStep(true);
         }}
@@ -2064,6 +2189,85 @@ const styles = StyleSheet.create({
     color: "#64748B",
     fontSize: 13,
     lineHeight: 19
+  },
+  closureCard: {
+    marginTop: 18,
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#B7DCC5",
+    backgroundColor: "#F3FAF5"
+  },
+  closureTitle: {
+    color: "#17633A",
+    fontSize: 17,
+    fontWeight: "800",
+    marginBottom: 6
+  },
+  closureButton: {
+    minHeight: 48,
+    marginTop: 12,
+    marginBottom: 12,
+    borderRadius: 9,
+    backgroundColor: "#16803C",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12
+  },
+  closureButtonText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "800"
+  },
+  closureSubheading: {
+    color: "#17633A",
+    fontSize: 15,
+    fontWeight: "700",
+    marginBottom: 10
+  },
+  closureResult: {
+    padding: 12,
+    marginBottom: 10,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: "#D6E8DB",
+    backgroundColor: "#FFFFFF"
+  },
+  closureLabel: {
+    color: "#17633A",
+    fontSize: 13,
+    fontWeight: "800",
+    marginBottom: 6
+  },
+  closureBody: {
+    color: "#334155",
+    fontSize: 14,
+    lineHeight: 20
+  },
+  followUpRequired: {
+    padding: 12,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: "#F5C78E",
+    backgroundColor: "#FFF7ED"
+  },
+  followUpClear: {
+    padding: 12,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: "#A7E8C3",
+    backgroundColor: "#ECFDF5"
+  },
+  followUpCheckRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    paddingVertical: 12
+  },
+  followUpCheck: {
+    color: "#17633A",
+    fontSize: 22,
+    lineHeight: 24
   },
   costSummaryRow: {
     flexDirection: "row",

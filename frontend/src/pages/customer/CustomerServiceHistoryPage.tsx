@@ -1,3 +1,4 @@
+import { useActiveAutoRefresh } from "../../hooks/useActiveAutoRefresh";
 import {
   useCallback,
   useEffect,
@@ -178,9 +179,9 @@ export default function CustomerServiceHistoryPage() {
     [],
   );
 
-  const loadHistory = useCallback(async () => {
-    setLoading(true);
-    setHistoryError(null);
+  const loadHistory = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
+    if (!silent) setHistoryError(null);
 
     try {
       const [historyRes, jobsRes] = await Promise.allSettled([
@@ -205,25 +206,35 @@ export default function CustomerServiceHistoryPage() {
       setJobsById(jMap);
       setJobsBySrId(srMap);
       setHistory(nextHistory);
-      setFeedbackByJob({});
-      setFeedbackErrorByJob({});
-      setFeedbackRatingByJob({});
-      setFeedbackCommentByJob({});
+      if (!silent) {
+        setFeedbackByJob({});
+        setFeedbackErrorByJob({});
+        setFeedbackRatingByJob({});
+        setFeedbackCommentByJob({});
+      }
 
       await loadFeedbackForHistory(nextHistory);
     } catch (error) {
-      setHistory([]);
-      setFeedbackByJob({});
-      setFeedbackErrorByJob({});
-      setHistoryError(getFeedbackErrorMessage(error));
+      if (!silent) {
+        setHistory([]);
+        setFeedbackByJob({});
+        setFeedbackErrorByJob({});
+        setHistoryError(getFeedbackErrorMessage(error));
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [loadFeedbackForHistory]);
 
   useEffect(() => {
     void loadHistory();
   }, [loadHistory]);
+  useActiveAutoRefresh(
+    () => loadHistory(true),
+    !loading && Object.keys(feedbackRatingByJob).length === 0 &&
+      Object.values(feedbackCommentByJob).every((value) => !value.trim()) &&
+      Object.keys(feedbackSubmittingByJob).length === 0,
+  );
 
   const handleSubmitFeedback = async (jobId: number) => {
     const rawRating = feedbackRatingByJob[jobId] || 0;
@@ -308,7 +319,7 @@ export default function CustomerServiceHistoryPage() {
         padding: "24px",
         height: "100%",
         overflowY: "auto",
-        background: "#F8FAFC",
+        background: "#EEF4F1",
         fontFamily: "'Inter', sans-serif",
       }}
     >

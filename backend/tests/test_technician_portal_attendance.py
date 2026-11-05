@@ -10,6 +10,7 @@ from fastapi.params import Depends
 from app.auth.dependencies import AuthenticatedUser
 from app.auth.rbac import Permission, UserRole
 from app.models import Technician, TechnicianProfile
+from app.portal_schemas import TechnicianPerformanceReportResponse
 from app.routes.technician_portal import (
     _build_technician_performance_report,
     _get_tech_for_user,
@@ -1492,6 +1493,29 @@ def test_performance_report_aggregates_real_completion_feedback_and_gps_data():
         {"status": "completed", "count": 1},
         {"status": "active", "count": 1},
     ]
+
+
+def test_performance_report_without_gps_data_returns_schema_compatible_distance():
+    class EmptyQuery:
+        def filter(self, *args):
+            return self
+
+        def all(self):
+            return []
+
+    class EmptyDB:
+        def query(self, model):
+            return EmptyQuery()
+
+    report = _build_technician_performance_report(
+        EmptyDB(),
+        SimpleNamespace(technician_id=7, tech_id="tech-7", tenant_id="tenant-1"),
+        "week",
+        now=datetime(2025, 5, 7, 12, tzinfo=timezone.utc),
+    )
+
+    response = TechnicianPerformanceReportResponse(**report)
+    assert response.total_distance_km == 0.0
 
 
 def test_performance_report_endpoint_returns_requested_period(monkeypatch):

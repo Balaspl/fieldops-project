@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { useFocusedAutoRefresh } from "../src/hooks/useFocusedAutoRefresh";
 import { Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import {
   router,
@@ -44,14 +45,11 @@ export default function CustomerInvoicesScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
-  const load = useCallback(async (pull = false) => {
-    if (pull) {
-      setRefreshing(true);
-    } else {
-      setLoading(true);
-    }
+  const load = useCallback(async (pull = false, silent = false) => {
+    if (pull) setRefreshing(true);
+    else if (!silent) setLoading(true);
 
-    setError("");
+    if (!silent) setError("");
 
     try {
       const [allInvoices, allPayments] = await Promise.all([
@@ -78,7 +76,7 @@ export default function CustomerInvoicesScreen() {
       setInvoices(filteredInvoices);
       setPayments(filteredPayments);
     } catch (e) {
-      setError(
+      if (!silent) setError(
         getApiErrorMessage(e, "Could not load invoices."),
       );
     } finally {
@@ -87,6 +85,8 @@ export default function CustomerInvoicesScreen() {
     }
   }, [hasJobFilter, validSelectedJobId, selectedJobId]);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
+  useFocusedAutoRefresh(() => load(false, true), busyJob === 0);
+
   const toggleDetails = async (invoice: CustomerInvoice) => {
     const id = invoice.job_id;
     if (details[id]) { setDetails((old) => { const next = { ...old }; delete next[id]; return next; }); return; }

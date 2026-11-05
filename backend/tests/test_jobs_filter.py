@@ -8060,6 +8060,9 @@ def test_get_jobs_stats_other_count_clamped_to_zero():
             self.count_index += 1
             return value
 
+        def all(self):
+            return []
+
         def __iter__(self):
             return iter([])
 
@@ -11259,3 +11262,37 @@ def test_get_jobs_stats_job_card_counts_by_status(setup_db):
 
     # Existing completed job.
     assert cards["completed"] == 1
+
+
+def test_get_jobs_stats_rejects_invalid_custom_date_range():
+    from datetime import datetime, timezone
+    from fastapi import HTTPException
+    from app.routes.jobs import get_jobs_stats
+    from app.auth.dependencies import AuthenticatedUser
+
+    user = AuthenticatedUser(
+        user_id="test-user",
+        tenant_id="tenant-1",
+        role="DISPATCHER",
+        jti="test-jti",
+        session_id="test-session",
+    )
+
+    with pytest.raises(HTTPException) as missing_end:
+        get_jobs_stats(
+            time_range="custom",
+            start_datetime=datetime(2026, 11, 1, tzinfo=timezone.utc),
+            user_tenant=(user, "tenant-1"),
+            db=object(),
+        )
+    assert missing_end.value.status_code == 422
+
+    with pytest.raises(HTTPException) as reversed_range:
+        get_jobs_stats(
+            time_range="custom",
+            start_datetime=datetime(2026, 11, 7, tzinfo=timezone.utc),
+            end_datetime=datetime(2026, 11, 1, tzinfo=timezone.utc),
+            user_tenant=(user, "tenant-1"),
+            db=object(),
+        )
+    assert reversed_range.value.status_code == 422

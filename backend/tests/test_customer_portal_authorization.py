@@ -15,6 +15,7 @@ from app.auth.dependencies import AuthenticatedUser, require_permission, require
 from app.auth.rbac import Permission, UserRole
 from app.database import Base
 from app.models import (
+    CustomerSupportCaseUpdate,
     CustomerSupportRequest,
     Job,
     JobClosure,
@@ -75,6 +76,7 @@ def customer_db():
             JobPaymentStatus.__table__,
             CustomerFeedback.__table__,
             CustomerSupportRequest.__table__,
+            CustomerSupportCaseUpdate.__table__,
             GPSPing.__table__,
             Technician.__table__,
             TechnicianProfile.__table__,
@@ -222,6 +224,7 @@ def customer_db():
                 JobClosure.__table__,
                 JobPaymentStatus.__table__,
                 CustomerSupportRequest.__table__,
+                CustomerSupportCaseUpdate.__table__,
                 ServiceRequest.__table__,
                 Job.__table__,
                 TechnicianProfile.__table__,
@@ -1545,15 +1548,18 @@ def test_customer_support_request_create_uses_authenticated_identity(
         )
     )
 
-    assert result.request_number.startswith("SUP-")
-    assert result.customer_user_id == "customer-1"
-    assert result.tenant_id == "customer-tenant"
-    assert result.subject == "Need help with my account"
+    assert result["request_number"].startswith("SUP-")
+    assert result["subject"] == "Need help with my account"
     assert (
-        result.description
+        result["description"]
         == "Please help me understand my recent service request."
     )
-    assert result.status == "OPEN"
+    assert result["status"] == "OPEN"
+    persisted = customer_db.query(CustomerSupportRequest).filter(
+        CustomerSupportRequest.id == result["id"]
+    ).one()
+    assert persisted.customer_user_id == "customer-1"
+    assert persisted.tenant_id == "customer-tenant"
 
 
 def test_customer_support_request_list_returns_only_authenticated_customer_requests(
@@ -1601,9 +1607,9 @@ def test_customer_support_request_list_returns_only_authenticated_customer_reque
     )
 
     assert len(result) == 1
-    assert result[0].request_number == "SUP-TEST-001"
-    assert result[0].customer_user_id == "customer-1"
-    assert result[0].tenant_id == "customer-tenant"
+    assert result[0]["request_number"] == "SUP-TEST-001"
+    assert "customer_user_id" not in result[0]
+    assert "tenant_id" not in result[0]
 
 
 def test_customer_support_request_list_excludes_same_customer_from_other_tenant(
@@ -1672,7 +1678,7 @@ def test_customer_support_request_persists_backend_authoritative_status(
 
     persisted = (
         customer_db.query(CustomerSupportRequest)
-        .filter(CustomerSupportRequest.id == result.id)
+        .filter(CustomerSupportRequest.id == result["id"])
         .one()
     )
 

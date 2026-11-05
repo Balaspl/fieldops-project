@@ -6,7 +6,9 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    JSON,
     ForeignKey,
+    Index,
 )
 
 from ..models_legacy import Base
@@ -51,7 +53,7 @@ class SentimentThreadMessage(Base):
             "jobs.id",
             ondelete="RESTRICT",
         ),
-        nullable=False,
+        nullable=True,
         index=True,
     )
 
@@ -97,9 +99,26 @@ class SentimentThreadMessage(Base):
         nullable=True,
     )
 
+    severity = Column(String(20), nullable=True)
+    issue_categories = Column(JSON, nullable=False, default=list)
+    recommended_action = Column(Text, nullable=True)
+    source_message_id = Column(
+        String(36),
+        ForeignKey("job_messages.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+    source_type = Column(String(30), nullable=True)
+    source_id = Column(String(64), nullable=True)
+
     created_at = Column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
         index=True,
+    )
+
+    __table_args__ = (
+        Index("uq_sentiment_thread_source", "source_type", "source_id", unique=True),
     )

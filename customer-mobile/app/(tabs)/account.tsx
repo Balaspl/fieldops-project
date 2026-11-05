@@ -6,11 +6,22 @@ import { useAuthStore } from "../../src/auth/authStore";
 import { Card, Header, LinkRow, Screen, AppButton } from "../../src/components/ui";
 import { colors } from "../../src/theme";
 import { customerApi } from "../../src/api/customer";
+import { useFocusedAutoRefresh } from "../../src/hooks/useFocusedAutoRefresh";
 
 export default function CustomerAccountScreen() {
   const user = useAuthStore((state) => state.user);
   const logout = useAuthStore((state) => state.logout);
   const [profileName, setProfileName] = useState("");
+
+  const refreshProfileName = useCallback(async () => {
+    try {
+      const profile = await customerApi.profile();
+      setProfileName(profile.full_name?.trim() || "");
+    } catch {
+      // Keep the current display name when a background refresh fails.
+    }
+  }, []);
+  useFocusedAutoRefresh(refreshProfileName);
 
   useFocusEffect(
     useCallback(() => {

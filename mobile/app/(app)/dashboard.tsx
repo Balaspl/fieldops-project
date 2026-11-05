@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   deleteOfflineRecord,
@@ -7,6 +7,7 @@ import {
 } from "../../src/offline/offlineStore";
 import {
   ActivityIndicator,
+  Animated,
   Image,
   ImageBackground,
   Pressable,
@@ -17,12 +18,19 @@ import {
   Text,
   View,
 } from "react-native";
+import * as Notifications from "expo-notifications";
+import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 
 import { useAuthStore } from "../../src/auth/authStore";
 import { getTechnicianDashboard } from "../../src/api/dashboard";
+import { getTechnicianNotifications } from "../../src/api/notifications";
+import { getTechnicianJobs, type TechnicianJob } from "../../src/api/technician";
+import { normalizeJobStatus, getJobStatusLabel } from "../../src/utils/jobStatus";
+import { apiClient } from "../../src/api/client";
 import { getApiErrorMessage } from "../../src/api/apiError";
+import { LoadingState } from "../../src/components/ScreenState";
 
 type DashboardData = Record<string, unknown>;
 
@@ -44,13 +52,6 @@ interface Metric {
   icon: DashboardIcon;
   color: string;
   backgroundColor: string;
-}
-
-interface QuickAccessItem {
-  title: string;
-  description: string;
-  icon: DashboardIcon;
-  route: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -143,94 +144,50 @@ function buildMetrics(data: DashboardData): Metric[] {
     }
   }
 
+  const pending = getMetricValue(sources, ["pending_acceptance", "pendingAcceptance", "pending_acceptance_jobs", "awaiting_acceptance", "pending_jobs", "pendingJobs", "pending_count"]);
+  const active = getMetricValue(sources, ["active_jobs", "activeJobs", "in_progress_jobs", "inProgressJobs"]);
+  const completed = getMetricValue(sources, ["total_completed", "completed_jobs", "completedJobs", "completed_count"]);
+  const rejected = getMetricValue(sources, ["rejected_jobs", "rejectedJobs"]);
+  const categoryCounts = [pending, active, completed, rejected].map((value) => Number(value));
+  const calculatedTotal = categoryCounts.every(Number.isFinite)
+    ? String(categoryCounts.reduce((total, count) => total + count, 0))
+    : getMetricValue(sources, ["total_jobs", "totalJobs", "total_count", "job_count", "total_assigned", "assigned_jobs", "assignedJobs", "assigned_count"]);
+
   return [
     {
       label: "Total Jobs",
-      value: getMetricValue(sources, [
-        "total_jobs",
-        "totalJobs",
-        "total_count",
-        "job_count",
-        "total_assigned",
-        "assigned_jobs",
-        "assignedJobs",
-        "assigned_count",
-      ]),
+      value: calculatedTotal,
       icon: "briefcase",
-      color: "#079653",
-      backgroundColor: "#EFFAF4",
+      color: "#1769E0",
+      backgroundColor: "#F0F6FF",
     },
     {
       label: "Pending Acceptance",
-      value: getMetricValue(sources, [
-        "pending_acceptance",
-        "pendingAcceptance",
-        "pending_acceptance_jobs",
-        "awaiting_acceptance",
-        "pending_jobs",
-        "pendingJobs",
-        "pending_count",
-      ]),
+      value: pending,
       icon: "time-outline",
-      color: "#F58212",
-      backgroundColor: "#FFF7ED",
+      color: "#E58A00",
+      backgroundColor: "#FFF8E8",
     },
     {
       label: "Active Jobs",
-      value: getMetricValue(sources, [
-        "active_jobs",
-        "activeJobs",
-        "in_progress_jobs",
-        "inProgressJobs",
-      ]),
+      value: active,
       icon: "pulse",
-      color: "#147DF5",
-      backgroundColor: "#F0F7FF",
+      color: "#087EBD",
+      backgroundColor: "#EAF8FF",
     },
     {
       label: "Completed Jobs",
-      value: getMetricValue(sources, [
-        "total_completed",
-        "completed_jobs",
-        "completedJobs",
-        "completed_count",
-      ]),
+      value: completed,
       icon: "checkmark-circle-outline",
-      color: "#079653",
-      backgroundColor: "#EFFAF4",
+      color: "#078A55",
+      backgroundColor: "#EAFBF2",
     },
   ];
 }
 
-const quickAccessItems: QuickAccessItem[] = [
-  {
-    title: "My Jobs",
-    description: "View assignments and open individual job details.",
-    icon: "document-text-outline",
-    route: "/(app)/jobs",
-  },
-  {
-    title: "Job History",
-    description: "Review previously completed service jobs.",
-    icon: "time-outline",
-    route: "/(app)/history",
-  },
-  {
-    title: "Notifications",
-    description: "View important updates and alerts.",
-    icon: "notifications-outline",
-    route: "/(app)/notifications",
-  },
-  {
-    title: "My Profile",
-    description: "View and manage your profile information.",
-    icon: "person-outline",
-    route: "/(app)/profile",
-  },
-];
-
 export default function DashboardScreen() {
   const router = useRouter();
+  const notificationShake = useRef(new Animated.Value(0)).current;
 
   const user = useAuthStore((state) => state.user);
   const logout = useAuthStore((state) => state.logout);
@@ -242,6 +199,57 @@ export default function DashboardScreen() {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [isCached, setIsCached] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
+  const [jobs, setJobs] = useState<TechnicianJob[]>([]);
+  const [performance, setPerformance] = useState<Record<string, unknown> | null>(null);
+  const [performancePeriod, setPerformancePeriod] = useState<"week" | "month">("week");
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      const refreshUnreadCount = async () => {
+        try {
+          const response = await getTechnicianNotifications();
+          if (!active) return;
+          const unreadCount = response.unread_count ?? response.items.filter(
+            (notification) => !(notification.read ?? notification.is_read ?? false)
+          ).length;
+          setUnreadNotificationCount(unreadCount);
+        } catch {
+          // Keep the last known unread count when the notification service is unavailable.
+        }
+      };
+
+      void refreshUnreadCount();
+      const subscription = Notifications.addNotificationReceivedListener(() => {
+        void refreshUnreadCount();
+      });
+
+      return () => {
+        active = false;
+        subscription.remove();
+      };
+    }, [])
+  );
+
+  useEffect(() => {
+    notificationShake.stopAnimation();
+    notificationShake.setValue(0);
+    if (unreadNotificationCount === 0) return;
+
+    const shake = Animated.sequence([
+      Animated.timing(notificationShake, { toValue: 1, duration: 75, useNativeDriver: true }),
+      Animated.timing(notificationShake, { toValue: -1, duration: 75, useNativeDriver: true }),
+      Animated.timing(notificationShake, { toValue: 1, duration: 75, useNativeDriver: true }),
+      Animated.timing(notificationShake, { toValue: -1, duration: 75, useNativeDriver: true }),
+      Animated.timing(notificationShake, { toValue: 0, duration: 75, useNativeDriver: true }),
+      Animated.delay(900),
+    ]);
+    const ringing = Animated.loop(shake);
+    ringing.start();
+
+    return () => ringing.stop();
+  }, [notificationShake, unreadNotificationCount]);
 
   const technicianId =
     user?.id == null ? null : String(user.id).trim() || null;
@@ -331,7 +339,15 @@ export default function DashboardScreen() {
     }
 
     try {
-      const result = await getTechnicianDashboard();
+      const [dashboardResult, jobResult] = await Promise.allSettled([
+        getTechnicianDashboard(),
+        getTechnicianJobs(),
+      ]);
+      if (jobResult.status === "fulfilled") {
+        setJobs(Array.isArray(jobResult.value) ? jobResult.value : []);
+      }
+      if (dashboardResult.status === "rejected") throw dashboardResult.reason;
+      const result = dashboardResult.value;
       const savedAt = new Date().toISOString();
 
       setData(result);
@@ -376,6 +392,18 @@ export default function DashboardScreen() {
   }, [tenantId, technicianId]);
 
   useEffect(() => {
+    let active = true;
+    apiClient.get<Record<string, unknown>>("/api/technician/performance-report", {
+      params: { period: performancePeriod },
+    }).then(({ data: report }) => {
+      if (active) setPerformance(report);
+    }).catch(() => {
+      if (active) setPerformance(null);
+    });
+    return () => { active = false; };
+  }, [performancePeriod]);
+
+  useEffect(() => {
     // Avoid showing the previous account's information during a session
     // change. The next request can then restore only the matching cache.
     setData(null);
@@ -408,6 +436,20 @@ export default function DashboardScreen() {
   const firstName = displayName.split(/\s+/)[0];
 
   const metrics = data ? buildMetrics(data) : [];
+  const metricValues = [
+    metrics.find((metric) => metric.label === "Total Jobs"),
+    metrics.find((metric) => metric.label === "Pending Acceptance"),
+    metrics.find((metric) => metric.label === "Active Jobs"),
+    metrics.find((metric) => metric.label === "Completed Jobs"),
+    { label: "Rejected Jobs", value: getMetricValue([data ?? {}], ["rejected_jobs", "rejectedJobs"]), icon: "close-circle-outline" as DashboardIcon, color: "#F0445B", backgroundColor: "#FFF5F5" },
+  ].filter(Boolean) as Metric[];
+  const currentJob = jobs.find((job) => ["ACTIVE", "ACCEPTED", "EN_ROUTE", "ON_SITE", "IN_PROGRESS", "PAUSED", "AWAITING_ACCEPTANCE"].includes(normalizeJobStatus(job.status))) ?? jobs[0];
+  const recentJobs = jobs.slice(0, 4);
+  const formatTime = (value?: string | null) => value && !Number.isNaN(Date.parse(value)) ? new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Not recorded";
+
+  if (isLoading) {
+    return <LoadingState label="Loading dashboard..." variant="dashboard" />;
+  }
 
   return (
     <View style={styles.screen}>
@@ -434,6 +476,18 @@ export default function DashboardScreen() {
             accessibilityLabel="FieldOps Commander"
           />
 
+          <Animated.View
+            style={{
+              transform: [
+                {
+                  rotate: notificationShake.interpolate({
+                    inputRange: [-1, 1],
+                    outputRange: ["-18deg", "18deg"],
+                  }),
+                },
+              ],
+            }}
+          >
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Notifications"
@@ -443,33 +497,22 @@ export default function DashboardScreen() {
             <Ionicons
               name="notifications-outline"
               size={28}
-              color="#FFFFFF"
+              color={unreadNotificationCount > 0 ? "#F04444" : "#FFFFFF"}
             />
 
-            <View style={styles.notificationBadge}>
-              <Text style={styles.notificationBadgeText}>3</Text>
-            </View>
+            {unreadNotificationCount > 0 ? (
+              <View style={styles.notificationBadge}>
+                <Text style={styles.notificationBadgeText}>
+                  {unreadNotificationCount > 99 ? "99+" : unreadNotificationCount}
+                </Text>
+              </View>
+            ) : null}
           </Pressable>
+          </Animated.View>
         </View>
 
-        {/* Hero banner */}
-        <ImageBackground
-          source={require("../../assets/images/fieldops-hero.png")}
-          style={styles.hero}
-          imageStyle={styles.heroImage}
-          resizeMode="cover"
-        >
-          <View style={styles.heroOverlay}>
-            <Text style={styles.greeting}>Good Morning,</Text>
-
-            <Text style={styles.greetingName}>
-              {firstName}!
-            </Text>
-
-            <Text style={styles.heroMessage}>
-              Your field operations are running smoothly.
-            </Text>
-          </View>
+        <ImageBackground source={require("../../assets/images/technician-banner.png")} style={styles.hero} imageStyle={styles.heroImage} resizeMode="cover">
+          <View style={styles.heroOverlay}><Text style={styles.greeting}>{new Date().getHours() < 12 ? "Good morning!" : new Date().getHours() < 18 ? "Good afternoon!" : "Good evening!"}</Text><Text style={styles.greetingName}>Welcome {firstName}</Text></View>
         </ImageBackground>
 
         {/* Job overview */}
@@ -483,13 +526,6 @@ export default function DashboardScreen() {
             <Text style={styles.viewJobs}>View jobs →</Text>
           </Pressable>
         </View>
-
-        {isLoading ? (
-          <View style={styles.loadingBox}>
-            <ActivityIndicator size="large" color="#079653" />
-            <Text style={styles.muted}>Loading dashboard...</Text>
-          </View>
-        ) : null}
 
         {error ? (
           <View style={styles.errorCard}>
@@ -531,37 +567,41 @@ export default function DashboardScreen() {
 
         {data ? (
           <View style={styles.metricsGrid}>
-            {metrics.map((metric) => (
-              <View
+            {metricValues.map((metric) => (
+              <LinearGradient
                 key={metric.label}
+                colors={[metric.backgroundColor, "#FFFFFF", `${metric.color}1C`]}
+                locations={[0, 0.52, 1]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
                 style={[
                   styles.metricCard,
-                  { backgroundColor: metric.backgroundColor },
+                  { borderColor: `${metric.color}55` },
                 ]}
               >
-                <View
-                  style={[
-                    styles.metricIcon,
-                    { backgroundColor: metric.color },
-                  ]}
-                >
-                  <Ionicons
-                    name={metric.icon}
-                    size={29}
-                    color="#FFFFFF"
-                  />
+                <LinearGradient colors={[metric.color, `${metric.color}D9`]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.metricCover}>
+                  <View style={styles.metricCoverIcon}><Ionicons name={metric.icon} size={21} color={metric.color} /></View>
+                  <View style={styles.metricCoverCopy}><Text style={styles.metricCoverEyebrow}>TECHNICIAN OVERVIEW</Text><Text style={styles.metricCoverTitle}>{metric.label}</Text></View>
+                  <View pointerEvents="none" style={styles.metricCoverOrb} />
+                  <View pointerEvents="none" style={styles.metricCoverOrbSmall} />
+                  <Ionicons name="sparkles-outline" size={18} color="rgba(255,255,255,0.9)" />
+                </LinearGradient>
+                <View style={styles.metricBody}>
+                  <Ionicons name={metric.icon} size={86} color={metric.color} style={styles.metricWatermark} />
+                  <View style={styles.metricLabelRow}>
+                    <Text style={styles.metricLabel} numberOfLines={2}>Current total</Text>
+                    <View style={[styles.metricTag, { backgroundColor: `${metric.color}20` }]}>
+                      <View style={[styles.metricFooterDot, { backgroundColor: metric.color }]} />
+                      <Text style={[styles.metricTagText, { color: metric.color }]}>LIVE</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.metricValue}>{metric.value}</Text>
+                  <View style={styles.metricFooter}>
+                    <Text style={styles.metricFooterText}>Updated from your jobs</Text>
+                    <View style={[styles.metricFooterLine, { backgroundColor: metric.color }]} />
+                  </View>
                 </View>
-
-                <View style={styles.metricDetails}>
-                  <Text style={styles.metricLabel}>
-                    {metric.label}
-                  </Text>
-
-                  <Text style={styles.metricValue}>
-                    {metric.value}
-                  </Text>
-                </View>
-              </View>
+              </LinearGradient>
             ))}
           </View>
         ) : null}
@@ -576,41 +616,31 @@ export default function DashboardScreen() {
           </Text>
         ) : null}
 
-        {/* Quick access */}
-        <Text style={styles.quickTitle}>Quick access</Text>
+        <View style={[styles.panel, styles.currentPanel]}>
+          <View style={styles.panelHeading}><Text style={styles.panelTitle}>▣  Current Job</Text>{currentJob ? <Text style={styles.statusPill}>{getJobStatusLabel(currentJob.status)}</Text> : null}</View>
+          {currentJob ? <>
+            <Text style={styles.currentTitle}>#{currentJob.id} — {currentJob.service_type || "Service"}</Text>
+            <Text style={styles.detailLine}>♙  {currentJob.customer_name || "Customer"}</Text>
+            <Text style={styles.detailLine}>⌖  {currentJob.location || currentJob.site_address || currentJob.address || "Service location not provided"}</Text>
+            <View style={styles.currentFooter}><Text style={styles.detailLine}>◷  Assigned  {formatTime(currentJob.assigned_at)}</Text><Pressable onPress={() => router.push("/(app)/jobs" as never)} style={styles.openJob}><Text style={styles.openJobText}>Open Job  →</Text></Pressable></View>
+          </> : <Text style={styles.emptyText}>No current job assigned.</Text>}
+        </View>
 
-        {quickAccessItems.map((item) => (
-          <Pressable
-            key={item.title}
-            accessibilityRole="button"
-            onPress={() => router.push(item.route as never)}
-            style={styles.navigationCard}
-          >
-            <View style={styles.navigationIcon}>
-              <Ionicons
-                name={item.icon}
-                size={28}
-                color="#075B3C"
-              />
-            </View>
+        <View style={styles.panel}>
+          <View style={styles.panelHeading}><Text style={styles.panelTitle}>▥  Performance</Text><View style={styles.periodSwitch}>{(["week", "month"] as const).map((period) => <Pressable key={period} onPress={() => setPerformancePeriod(period)} style={[styles.periodButton, performancePeriod === period && styles.periodButtonActive]}><Text style={[styles.periodText, performancePeriod === period && styles.periodTextActive]}>{period === "week" ? "Week" : "Month"}</Text></Pressable>)}</View></View>
+          <View style={styles.performanceRow}><View><Text style={styles.performanceValue}>{String(performance?.period_completed_jobs ?? "—")}</Text><Text style={styles.performanceLabel}>Completed jobs</Text></View><View><Text style={styles.performanceValue}>{performance?.average_completion_minutes == null ? "—" : `${Math.round(Number(performance.average_completion_minutes))}m`}</Text><Text style={styles.performanceLabel}>Avg. completion</Text></View><View><Text style={styles.performanceValue}>{performance?.customer_rating == null ? "—" : Number(performance.customer_rating).toFixed(1)}</Text><Text style={styles.performanceLabel}>Rating</Text></View></View>
+        </View>
 
-            <View style={styles.navigationText}>
-              <Text style={styles.navigationTitle}>
-                {item.title}
-              </Text>
+        <View style={[styles.panel, styles.activityPanel]}>
+          <Text style={styles.panelTitle}>◉  Today's Activity</Text>
+          {currentJob ? <><Text style={styles.detailLine}>●  {formatTime(currentJob.created_at as string)}   Job created · #{currentJob.id} — {currentJob.service_type || "Service"}</Text><Text style={styles.detailLine}>●  {formatTime(currentJob.updated_at as string)}   Current status: {getJobStatusLabel(currentJob.status)}</Text></> : <Text style={styles.emptyText}>Job activity will appear here when a job is assigned.</Text>}
+        </View>
 
-              <Text style={styles.navigationDescription}>
-                {item.description}
-              </Text>
-            </View>
+        <View style={[styles.panel, styles.recentPanel]}>
+          <View style={styles.panelHeading}><Text style={styles.panelTitle}>▤  Recent Assigned Jobs</Text><Pressable onPress={() => router.push("/(app)/jobs")}><Text style={styles.viewJobs}>View All Jobs</Text></Pressable></View>
+          {recentJobs.length ? recentJobs.map((job) => <Pressable key={String(job.id)} onPress={() => router.push("/(app)/jobs")} style={styles.recentRow}><View style={{ flex: 1 }}><Text style={styles.navigationTitle}>#{job.id} — {job.service_type || "Service"}</Text><Text style={styles.jobSub}>{job.location || job.customer_name || "Service location"}</Text></View><Text style={styles.recentStatus}>{getJobStatusLabel(job.status)}  ›</Text></Pressable>) : <Text style={styles.emptyText}>No assigned jobs yet.</Text>}
+        </View>
 
-            <Ionicons
-              name="chevron-forward"
-              size={24}
-              color="#718096"
-            />
-          </Pressable>
-        ))}
 
         <Pressable
           accessibilityRole="button"
@@ -692,13 +722,13 @@ const styles = StyleSheet.create({
   },
 
   hero: {
-    height: 220,
-    marginHorizontal: 10,
+    height: 184,
+    marginHorizontal: 0,
     marginTop: 0,
-    marginBottom: 25,
+    marginBottom: 20,
     justifyContent: "center",
     overflow: "hidden",
-    backgroundColor: "#06452F",
+    backgroundColor: "#05241A",
   },
 
   heroImage: {
@@ -706,11 +736,11 @@ const styles = StyleSheet.create({
   },
 
   heroOverlay: {
-    width: "68%",
-    minHeight: 164,
+    width: "100%",
+    minHeight: 184,
     justifyContent: "center",
-    backgroundColor: "rgba(0, 55, 37, 0.78)",
-    paddingHorizontal: 18,
+    backgroundColor: "rgba(5, 28, 20, 0.62)",
+    paddingHorizontal: 24,
     paddingVertical: 16,
     borderTopRightRadius: 18,
     borderBottomRightRadius: 18,
@@ -718,13 +748,13 @@ const styles = StyleSheet.create({
 
   greeting: {
     color: "#FFFFFF",
-    fontSize: 23,
+    fontSize: 16,
     fontWeight: "800",
   },
 
   greetingName: {
-    color: "#70E7B0",
-    fontSize: 28,
+    color: "#FFFFFF",
+    fontSize: 29,
     fontWeight: "900",
     marginTop: 2,
   },
@@ -754,11 +784,6 @@ const styles = StyleSheet.create({
     color: "#078A4D",
     fontSize: 13,
     fontWeight: "700",
-  },
-
-  loadingBox: {
-    alignItems: "center",
-    padding: 24,
   },
 
   muted: {
@@ -840,92 +865,136 @@ const styles = StyleSheet.create({
   },
 
   metricCard: {
-    width: "48%",
-    minHeight: 164,
-    borderRadius: 21,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: "#EEF2EF",
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 11,
+    overflow: "hidden",
+    width: "48.5%",
+    minHeight: 196,
+    borderRadius: 22,
+    borderWidth: 1.2,
+    shadowColor: "#123B32",
+    shadowOffset: { width: 0, height: 7 },
+    shadowOpacity: 0.14,
+    shadowRadius: 13,
+    elevation: 5,
   },
-
-  metricIcon: {
-    width: 49,
-    height: 49,
-    borderRadius: 15,
+  metricCover: {
+    minHeight: 70,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    overflow: "hidden",
+  },
+  metricCoverIcon: {
+    width: 39,
+    height: 39,
+    borderRadius: 13,
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.75)",
+    zIndex: 2,
   },
-
-  metricDetails: {
+  metricCoverCopy: { flex: 1, zIndex: 2 },
+  metricCoverEyebrow: { color: "rgba(255,255,255,0.82)", fontSize: 7, fontWeight: "800", letterSpacing: 0.8 },
+  metricCoverTitle: { color: "#FFFFFF", fontSize: 12, fontWeight: "900", marginTop: 2 },
+  metricCoverOrb: { position: "absolute", width: 88, height: 88, borderRadius: 44, right: -20, top: -42, backgroundColor: "rgba(255,255,255,0.14)" },
+  metricCoverOrbSmall: { position: "absolute", width: 42, height: 42, borderRadius: 22, right: 30, bottom: -28, backgroundColor: "rgba(255,255,255,0.12)" },
+  metricWatermark: { position: "absolute", right: -10, bottom: -8, opacity: 0.09, transform: [{ rotate: "-13deg" }] },
+  metricFooterLine: { width: 20, height: 3, borderRadius: 2 },
+  metricBody: {
     flex: 1,
-    paddingTop: 3,
+    minHeight: 126,
+    paddingHorizontal: 13,
+    paddingTop: 10,
+    paddingBottom: 10,
+    overflow: "hidden",
+    position: "relative",
   },
-
+  metricLabelRow: {
+    minHeight: 28,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 5,
+  },
+  metricTag: {
+    minHeight: 21,
+    paddingHorizontal: 6,
+    borderRadius: 7,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  metricTagText: { fontSize: 8, fontWeight: "900", letterSpacing: 0.5 },
+  metricFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 6,
+  },
+  metricFooterDot: { width: 6, height: 6, borderRadius: 3 },
+  metricFooterText: { color: "#64758A", fontSize: 9, fontWeight: "600" },
   metricLabel: {
-    color: "#172554",
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: "600",
+    color: "#43566F",
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: "700",
   },
 
   metricValue: {
-    color: "#0F172A",
-    fontSize: 30,
+    color: "#142B45",
+    fontSize: 29,
+    lineHeight: 34,
     fontWeight: "900",
-    marginTop: 7,
+    marginTop: 4,
   },
 
-  quickTitle: {
-    color: "#111827",
-    fontSize: 22,
-    fontWeight: "800",
-    marginHorizontal: 18,
-    marginBottom: 15,
-  },
-
-  navigationCard: {
-    minHeight: 92,
+  panel: {
     marginHorizontal: 16,
-    marginBottom: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    borderRadius: 18,
-    borderWidth: 1.2,
-    borderColor: "#DCE5EF",
+    marginBottom: 14,
+    padding: 17,
+    borderRadius: 15,
     backgroundColor: "#FFFFFF",
-    flexDirection: "row",
-    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#E3ECE7",
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
   },
-
-  navigationIcon: {
-    width: 54,
-    height: 54,
-    borderRadius: 16,
-    backgroundColor: "#F0FAF5",
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 13,
-  },
-
-  navigationText: {
-    flex: 1,
-    paddingRight: 8,
-  },
+  currentPanel: { backgroundColor: "#F4F9FF", borderColor: "#CFE4FA" },
+  activityPanel: { backgroundColor: "#F4FFF9", borderColor: "#CDEFE0" },
+  recentPanel: { backgroundColor: "#FFFBF3", borderColor: "#F4E2BD" },
+  panelHeading: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 12 },
+  panelTitle: { color: "#1F2933", fontSize: 16, fontWeight: "800" },
+  currentTitle: { color: "#14213D", fontSize: 18, lineHeight: 24, fontWeight: "800", marginBottom: 12 },
+  detailLine: { color: "#52627E", fontSize: 13, lineHeight: 21, marginBottom: 7 },
+  statusPill: { color: "#087447", backgroundColor: "#DFF7EA", borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5, overflow: "hidden", fontSize: 11, fontWeight: "800" },
+  currentFooter: { marginTop: 13, flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  openJob: { backgroundColor: "#078A4D", paddingHorizontal: 14, paddingVertical: 10, borderRadius: 9 },
+  openJobText: { color: "#FFFFFF", fontWeight: "800", fontSize: 13 },
+  emptyText: { color: "#718096", fontSize: 13, paddingVertical: 9 },
+  periodSwitch: { flexDirection: "row", padding: 3, borderRadius: 9, backgroundColor: "#EDF3F0" },
+  periodButton: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 7 },
+  periodButtonActive: { backgroundColor: "#078A4D" },
+  periodText: { color: "#52627E", fontSize: 11, fontWeight: "700" },
+  periodTextActive: { color: "#FFFFFF" },
+  performanceRow: { flexDirection: "row", justifyContent: "space-between", paddingTop: 8 },
+  performanceValue: { color: "#14213D", fontSize: 20, fontWeight: "900" },
+  performanceLabel: { color: "#718096", fontSize: 10, marginTop: 4 },
+  recentRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 12, borderTopWidth: 1, borderTopColor: "#F0E9DB" },
+  jobSub: { color: "#718096", fontSize: 12, marginTop: 4 },
+  recentStatus: { color: "#1682F8", fontWeight: "700", fontSize: 11, maxWidth: 100, textAlign: "right" },
 
   navigationTitle: {
     color: "#111827",
     fontSize: 16,
     fontWeight: "800",
     marginBottom: 5,
-  },
-
-  navigationDescription: {
-    color: "#718096",
-    fontSize: 12,
-    lineHeight: 19,
   },
 
   logoutButton: {

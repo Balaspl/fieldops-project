@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import {
   FileText,
   PlusCircle,
@@ -22,6 +22,9 @@ import {
   ExternalLink,
   ShieldCheck,
   MessageSquare,
+  Calendar,
+  Layers,
+  Filter,
 } from "lucide-react";
 
 import {
@@ -40,9 +43,113 @@ import JobLiveTrackingMap from "../../components/customer-tracking/JobLiveTracki
 import CustomerNewRequestMarketplace from "../../components/customer/CustomerNewRequestMarketplace";
 import JobMessagePanel from "../../components/customer-tracking/JobMessagePanel";
 import { useTrackingStore } from "../../store/trackingStore";
+import { SERVICE_CATALOGUE_TAXONOMY } from "../../data/serviceCatalogueTaxonomy";
 
 const OLA_STYLE =
   "https://api.olamaps.io/tiles/vector/v1/styles/default-light-standard/style.json";
+
+const ALL_CALENDAR_MONTHS = [
+  { value: "01", label: "01 - January" },
+  { value: "02", label: "02 - February" },
+  { value: "03", label: "03 - March" },
+  { value: "04", label: "04 - April" },
+  { value: "05", label: "05 - May" },
+  { value: "06", label: "06 - June" },
+  { value: "07", label: "07 - July" },
+  { value: "08", label: "08 - August" },
+  { value: "09", label: "09 - September" },
+  { value: "10", label: "10 - October" },
+  { value: "11", label: "11 - November" },
+  { value: "12", label: "12 - December" },
+];
+
+const ALL_CALENDAR_DAYS = Array.from({ length: 31 }, (_, i) => {
+  const d = String(i + 1).padStart(2, "0");
+  return { value: d, label: `Day ${d}` };
+});
+
+const matchServiceType = (sr: any, selectedType: string) => {
+  if (selectedType === "ALL") return true;
+  const selLower = selectedType.toLowerCase().trim();
+  const srType = (sr.service_type || "").trim().toLowerCase();
+  const srCat = (sr.category || sr.title || "").trim().toLowerCase();
+  const srDesc = (sr.description || "").toLowerCase();
+
+  // 1. Direct equality or substring
+  if (srType === selLower || srType.includes(selLower) || selLower.includes(srType)) {
+    return true;
+  }
+
+  // 2. Look up taxonomy entry to match category names or code
+  const taxonomyEntry = SERVICE_CATALOGUE_TAXONOMY.find(
+    (t) => t.name.toLowerCase() === selLower
+  );
+  if (taxonomyEntry) {
+    if (taxonomyEntry.code && srType === taxonomyEntry.code.toLowerCase()) return true;
+    const hasCategoryMatch = taxonomyEntry.categories.some(
+      (cat) =>
+        cat.name.toLowerCase() === srCat ||
+        srCat.includes(cat.name.toLowerCase()) ||
+        cat.name.toLowerCase().includes(srCat) ||
+        srDesc.includes(cat.name.toLowerCase())
+    );
+    if (hasCategoryMatch) return true;
+  }
+
+  // 3. Domain trade aliases
+  if (selLower.includes("electrical")) {
+    return (
+      srType.includes("electr") ||
+      srType.includes("light") ||
+      srCat.includes("light") ||
+      srType === "ele"
+    );
+  }
+  if (selLower.includes("plumbing")) {
+    return (
+      srType.includes("plumb") ||
+      srType.includes("plimb") ||
+      srCat.includes("pipe") ||
+      srCat.includes("tap") ||
+      srType === "plu"
+    );
+  }
+  if (selLower.includes("air conditioning")) {
+    return (
+      srType.includes("air") ||
+      srType.includes("ac") ||
+      srType.includes("hvac") ||
+      srType.includes("refrig")
+    );
+  }
+  if (selLower.includes("appliance")) {
+    return (
+      srType.includes("appliance") ||
+      srType.includes("washing") ||
+      srType.includes("tv") ||
+      srType === "app"
+    );
+  }
+  if (selLower.includes("security") || selLower.includes("cctv")) {
+    return (
+      srType.includes("cctv") ||
+      srType.includes("security") ||
+      srType === "sec"
+    );
+  }
+  if (selLower.includes("handyman")) {
+    return (
+      srType.includes("handyman") ||
+      srType.includes("general") ||
+      srType.includes("machanic") ||
+      srType.includes("mechanic") ||
+      srType === "hnd"
+    );
+  }
+
+  return false;
+};
+
 
 const getDisplayStatusText = (status: string) => {
   const s = String(status || "").trim().toUpperCase();
@@ -50,11 +157,13 @@ const getDisplayStatusText = (status: string) => {
     case "CREATED":
     case "PENDING":
     case "UNASSIGNED":
+    case "QUEUED":
       return "UNASSIGNED";
     case "ASSIGNED":
+    case "AWAITING_ACCEPTANCE":
       return "AWAITING ACCEPTANCE";
     case "ACCEPTED":
-      return "ASSIGNED";
+      return "ACCEPTED";
     case "EN_ROUTE":
       return "EN ROUTE";
     case "ON_SITE":
@@ -64,11 +173,11 @@ const getDisplayStatusText = (status: string) => {
     case "CLOSED":
       return "COMPLETED";
     case "CANCELLED":
-      return "CANCELLED";
-    case "QUEUED":
-      return "UNASSIGNED";
+    case "CANCELED":
     case "REJECTED_BY_TECHNICIAN":
-      return "REJECTED";
+    case "REJECTED":
+    case "TIMED_OUT":
+      return "CANCELLED";
     default:
       return s;
   }
@@ -80,12 +189,13 @@ const badge = (status: string) => {
   const colors: Record<string, { bg: string; color: string; border: string }> = {
     UNASSIGNED: { bg: "#FEF3C7", color: "#B45309", border: "#FDE68A" },
     "AWAITING ACCEPTANCE": { bg: "#FFF7ED", color: "#C2410C", border: "#FFEDD5" },
+    ACCEPTED: { bg: "#ECFDF5", color: "#059669", border: "#A7F3D0" },
     ASSIGNED: { bg: "#EFF6FF", color: "#1D4ED8", border: "#DBEAFE" },
     "EN ROUTE": { bg: "#F0F9FF", color: "#0284C7", border: "#BAE6FD" },
     "IN PROGRESS": { bg: "#F5F3FF", color: "#7C3AED", border: "#DDD6FE" },
     COMPLETED: { bg: "#ECFDF5", color: "#059669", border: "#A7F3D0" },
     CANCELLED: { bg: "#FEF2F2", color: "#DC2626", border: "#FECACA" },
-    REJECTED: { bg: "#FFF1F2", color: "#BE123C", border: "#FECDD3" },
+    REJECTED: { bg: "#FEF2F2", color: "#DC2626", border: "#FECACA" },
   };
 
   const style = colors[displayStatus] || { bg: "#F1F5F9", color: "#64748B", border: "#E2E8F0" };
@@ -215,13 +325,64 @@ export default function CustomerServiceRequestsPage({
     },
   ];
 
+  // Filters State: Service Type (16 Official Types), Year, Month (12 Calendar Months), Day
+  const [serviceTypeFilter, setServiceTypeFilter] = useState<string>("ALL");
+  const [yearFilter, setYearFilter] = useState<string>("ALL");
+  const [monthFilter, setMonthFilter] = useState<string>("ALL");
+  const [dayFilter, setDayFilter] = useState<string>("ALL");
+
+  // Only the 16 authoritative catalogue service types from New Request
+  const availableServiceTypes = useMemo(() => {
+    return SERVICE_CATALOGUE_TAXONOMY.map((st) => st.name);
+  }, []);
+
+  // Dynamically extract distinct Years present in requests + defaults
+  const availableYears = useMemo(() => {
+    const years = new Set<string>(["2026", "2025"]);
+    requests.forEach((r) => {
+      const raw = r.preferred_visit_date || r.created_at;
+      if (raw) {
+        const d = new Date(raw);
+        if (!isNaN(d.getTime())) {
+          years.add(String(d.getFullYear()));
+        }
+      }
+    });
+    return Array.from(years).sort((a, b) => b.localeCompare(a));
+  }, [requests]);
+
   const displayedRequests = requests.filter((sr) => {
     const s = normalizeStatus(sr.status);
-    if (activeCardFilter === "UNASSIGNED") return isUnassigned(s);
-    if (activeCardFilter === "ASSIGNED") return isAssigned(s);
-    if (activeCardFilter === "ACTIVE") return isActiveJob(s);
-    if (activeCardFilter === "COMPLETED") return isCompleted(s);
-    if (activeCardFilter === "CANCELLED") return isCancelled(s);
+    if (activeCardFilter === "UNASSIGNED" && !isUnassigned(s)) return false;
+    if (activeCardFilter === "ASSIGNED" && !isAssigned(s)) return false;
+    if (activeCardFilter === "ACTIVE" && !isActiveJob(s)) return false;
+    if (activeCardFilter === "COMPLETED" && !isCompleted(s)) return false;
+    if (activeCardFilter === "CANCELLED" && !isCancelled(s)) return false;
+
+    // 1. Service Type Filter
+    if (serviceTypeFilter !== "ALL") {
+      if (!matchServiceType(sr, serviceTypeFilter)) return false;
+    }
+
+    // 2. Date Filters (Year, Month, Day)
+    const raw = sr.preferred_visit_date || sr.created_at;
+    if (raw) {
+      const d = new Date(raw);
+      if (!isNaN(d.getTime())) {
+        const yyyy = String(d.getFullYear());
+        const mm = String(d.getMonth() + 1).padStart(2, "0");
+        const dd = String(d.getDate()).padStart(2, "0");
+
+        if (yearFilter !== "ALL" && yyyy !== yearFilter) return false;
+        if (monthFilter !== "ALL" && mm !== monthFilter) return false;
+        if (dayFilter !== "ALL" && dd !== dayFilter) return false;
+      } else if (yearFilter !== "ALL" || monthFilter !== "ALL" || dayFilter !== "ALL") {
+        return false;
+      }
+    } else if (yearFilter !== "ALL" || monthFilter !== "ALL" || dayFilter !== "ALL") {
+      return false;
+    }
+
     return true;
   });
   const [loading, setLoading] = useState(!createOnly);
@@ -277,9 +438,21 @@ export default function CustomerServiceRequestsPage({
 
   const handleOpenTracking = async (sr: any) => {
     setTrackingModalRequest(sr);
-    setTrackingJobDetails(null);
+    setTrackingJobDetails({
+      id: sr.linked_job_id || sr.id,
+      status: sr.status,
+      assigned_technician_id: sr.assigned_technician_id,
+      assigned_technician_name: sr.assigned_technician_name,
+      assigned_technician_phone: sr.assigned_technician_phone,
+      service_type: sr.service_type,
+      location: sr.location,
+      site_latitude: sr.site_latitude,
+      site_longitude: sr.site_longitude,
+      preferred_visit_date: sr.preferred_visit_date,
+      description: sr.description,
+    });
     setTrackingInvoiceDetails(null);
-    setTrackingLoading(true);
+    setTrackingLoading(false);
 
     try {
       if (sr.linked_job_id) {
@@ -1460,7 +1633,7 @@ export default function CustomerServiceRequestsPage({
       } catch (err) {
         // Silent background failure
       }
-    }, 4000);
+    }, 3000);
 
     return () => {
       isMounted = false;
@@ -2129,6 +2302,180 @@ export default function CustomerServiceRequestsPage({
           {success}
         </div>
       )}
+
+      {/* Filters Toolbar: Service Type (16 Official Taxonomy Types), Year, Month (All 12 Calendar Months), Day */}
+      <div
+        style={{
+          background: "#FFFFFF",
+          borderRadius: "14px",
+          border: "1px solid #E2E8F0",
+          padding: "12px 18px",
+          marginBottom: "20px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: "12px",
+          boxShadow: "0 2px 6px rgba(0, 0, 0, 0.03)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap", flex: 1 }}>
+          {/* Service Type Filter (Only the 16 Official Taxonomy Types from New Request) */}
+          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <span style={{ fontSize: "12px", fontWeight: 700, color: "#475569", display: "flex", alignItems: "center", gap: "4px" }}>
+              <Layers size={14} color="#059669" />
+              Service:
+            </span>
+            <select
+              value={serviceTypeFilter}
+              onChange={(e) => setServiceTypeFilter(e.target.value)}
+              style={{
+                padding: "6px 12px",
+                borderRadius: "8px",
+                border: "1.5px solid #CBD5E1",
+                background: "#FFFFFF",
+                fontSize: "12px",
+                fontWeight: 600,
+                color: "#0F172A",
+                outline: "none",
+                cursor: "pointer",
+                maxWidth: "200px",
+              }}
+            >
+              <option value="ALL">All Service Types</option>
+              {availableServiceTypes.map((st) => (
+                <option key={st} value={st}>
+                  {st}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Year Filter */}
+          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <span style={{ fontSize: "12px", fontWeight: 700, color: "#475569", display: "flex", alignItems: "center", gap: "4px" }}>
+              <Calendar size={14} color="#059669" />
+              Year:
+            </span>
+            <select
+              value={yearFilter}
+              onChange={(e) => setYearFilter(e.target.value)}
+              style={{
+                padding: "6px 10px",
+                borderRadius: "8px",
+                border: "1.5px solid #CBD5E1",
+                background: "#FFFFFF",
+                fontSize: "12px",
+                fontWeight: 600,
+                color: "#0F172A",
+                outline: "none",
+                cursor: "pointer",
+              }}
+            >
+              <option value="ALL">All Years</option>
+              {availableYears.map((y) => (
+                <option key={y} value={y}>
+                  {y}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Month-Wise Filter (All 12 Calendar Months) */}
+          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <span style={{ fontSize: "12px", fontWeight: 700, color: "#475569", display: "flex", alignItems: "center", gap: "4px" }}>
+              <Calendar size={14} color="#059669" />
+              Month:
+            </span>
+            <select
+              value={monthFilter}
+              onChange={(e) => setMonthFilter(e.target.value)}
+              style={{
+                padding: "6px 12px",
+                borderRadius: "8px",
+                border: "1.5px solid #CBD5E1",
+                background: "#FFFFFF",
+                fontSize: "12px",
+                fontWeight: 600,
+                color: "#0F172A",
+                outline: "none",
+                cursor: "pointer",
+              }}
+            >
+              <option value="ALL">All Months</option>
+              {ALL_CALENDAR_MONTHS.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Day-Wise Date Filter (1 to 31) */}
+          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <span style={{ fontSize: "12px", fontWeight: 700, color: "#475569", display: "flex", alignItems: "center", gap: "4px" }}>
+              <Clock size={14} color="#059669" />
+              Day:
+            </span>
+            <select
+              value={dayFilter}
+              onChange={(e) => setDayFilter(e.target.value)}
+              style={{
+                padding: "6px 10px",
+                borderRadius: "8px",
+                border: "1.5px solid #CBD5E1",
+                background: "#FFFFFF",
+                fontSize: "12px",
+                fontWeight: 600,
+                color: "#0F172A",
+                outline: "none",
+                cursor: "pointer",
+              }}
+            >
+              <option value="ALL">All Days</option>
+              {ALL_CALENDAR_DAYS.map((d) => (
+                <option key={d.value} value={d.value}>
+                  {d.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Reset Filters button */}
+          {(serviceTypeFilter !== "ALL" || yearFilter !== "ALL" || monthFilter !== "ALL" || dayFilter !== "ALL") && (
+            <button
+              type="button"
+              onClick={() => {
+                setServiceTypeFilter("ALL");
+                setYearFilter("ALL");
+                setMonthFilter("ALL");
+                setDayFilter("ALL");
+              }}
+              style={{
+                background: "#FEF2F2",
+                border: "1px solid #FECACA",
+                borderRadius: "8px",
+                padding: "5px 12px",
+                fontSize: "11.5px",
+                fontWeight: 700,
+                color: "#DC2626",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: "4px",
+              }}
+            >
+              <X size={13} />
+              Reset Filters
+            </button>
+          )}
+        </div>
+
+        {/* Total Shown Count */}
+        <div style={{ fontSize: "12px", fontWeight: 700, color: "#64748B" }}>
+          Showing <span style={{ color: "#059669" }}>{displayedRequests.length}</span> of {requests.length} requests
+        </div>
+      </div>
 
       {/* Request Cards */}
       {loading ? (
@@ -3540,11 +3887,11 @@ export default function CustomerServiceRequestsPage({
           <div
             style={{
               width: "100%",
-              maxWidth: "800px",
-              maxHeight: "90vh",
+              maxWidth: "680px",
+              maxHeight: "88vh",
               overflowY: "auto",
               background: "#FFFFFF",
-              borderRadius: "20px",
+              borderRadius: "18px",
               boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)",
               display: "flex",
               flexDirection: "column",
@@ -3553,14 +3900,14 @@ export default function CustomerServiceRequestsPage({
             {/* Modal Header */}
             <div
               style={{
-                padding: "20px 24px",
+                padding: "16px 20px",
                 borderBottom: "1px solid #E2E8F0",
                 display: "flex",
                 justifyContent: "space-between",
-                alignItems: "flex-start",
+                alignItems: "center",
                 background: "#F8FAFC",
-                borderTopLeftRadius: "20px",
-                borderTopRightRadius: "20px",
+                borderTopLeftRadius: "18px",
+                borderTopRightRadius: "18px",
               }}
             >
               <div>
@@ -3614,12 +3961,13 @@ export default function CustomerServiceRequestsPage({
             {/* 6-Step Animated Progress Bar */}
             <div
               style={{
-                padding: "16px 20px",
+                padding: "12px 18px",
                 borderBottom: "1px solid #E2E8F0",
                 background: "#FFFFFF",
               }}
             >
               <AnimatedJobProgress
+                compact={true}
                 jobId={trackingModalRequest.linked_job_id || trackingModalRequest.id}
                 status={trackingJobDetails?.status || trackingModalRequest.status}
                 workStartedAt={trackingJobDetails?.work_started_at}
@@ -3629,8 +3977,8 @@ export default function CustomerServiceRequestsPage({
             </div>
 
             {/* Modal Content Body */}
-            <div style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "20px" }}>
-              {trackingLoading ? (
+            <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: "14px" }}>
+              {trackingLoading && !trackingJobDetails ? (
                 <div style={{ padding: "40px", textAlign: "center", color: "#64748B" }}>
                   <Clock size={24} style={{ animation: "spin 1s linear infinite", margin: "0 auto 10px" }} />
                   <div>Loading job and technician status...</div>
@@ -3652,17 +4000,18 @@ export default function CustomerServiceRequestsPage({
                     <div
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-                        gap: "12px",
-                        fontSize: "13px",
+                        gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
+                        gap: "10px",
+                        fontSize: "12.5px",
+                        marginBottom: "10px",
                       }}
                     >
                       <div>
-                        <span style={{ color: "#64748B", display: "block", fontSize: "11px", fontWeight: 600 }}>SERVICE TYPE</span>
+                        <span style={{ color: "#64748B", display: "block", fontSize: "10.5px", fontWeight: 700, letterSpacing: "0.3px" }}>SERVICE TYPE</span>
                         <strong style={{ color: "#0F172A" }}>{trackingModalRequest.service_type || "General Service"}</strong>
                       </div>
                       <div>
-                        <span style={{ color: "#64748B", display: "block", fontSize: "11px", fontWeight: 600 }}>PREFERRED DATE</span>
+                        <span style={{ color: "#64748B", display: "block", fontSize: "10.5px", fontWeight: 700, letterSpacing: "0.3px" }}>PREFERRED DATE</span>
                         <strong style={{ color: "#0F172A" }}>
                           {trackingModalRequest.preferred_visit_date
                             ? new Date(trackingModalRequest.preferred_visit_date).toLocaleDateString()
@@ -3670,17 +4019,24 @@ export default function CustomerServiceRequestsPage({
                         </strong>
                       </div>
                       <div>
-                        <span style={{ color: "#64748B", display: "block", fontSize: "11px", fontWeight: 600 }}>CONTACT NUMBER</span>
-                        <strong style={{ color: "#0F172A" }}>{trackingModalRequest.contact_number || "N/A"}</strong>
+                        <span style={{ color: "#64748B", display: "block", fontSize: "10.5px", fontWeight: 700, letterSpacing: "0.3px" }}>PREFERRED TIME</span>
+                        <strong style={{ color: "#059669" }}>
+                          {trackingModalRequest.preferred_visit_time || trackingJobDetails?.preferred_service_time || "Flexible"}
+                        </strong>
                       </div>
                       <div>
-                        <span style={{ color: "#64748B", display: "block", fontSize: "11px", fontWeight: 600 }}>LOCATION</span>
-                        <div style={{ display: "flex", alignItems: "center", gap: "4px", color: "#0F172A", fontWeight: 600 }}>
-                          <MapPin size={13} color="#069660" />
-                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {trackingModalRequest.location || "Service address"}
-                          </span>
-                        </div>
+                        <span style={{ color: "#64748B", display: "block", fontSize: "10.5px", fontWeight: 700, letterSpacing: "0.3px" }}>CONTACT NUMBER</span>
+                        <strong style={{ color: "#0F172A" }}>{trackingModalRequest.contact_number || "N/A"}</strong>
+                      </div>
+                    </div>
+
+                    <div style={{ paddingTop: "8px", borderTop: "1px solid #E2E8F0" }}>
+                      <span style={{ color: "#64748B", display: "block", fontSize: "10.5px", fontWeight: 700, letterSpacing: "0.3px", marginBottom: "2px" }}>LOCATION</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: "5px", color: "#0F172A", fontWeight: 600, fontSize: "12.5px" }}>
+                        <MapPin size={13} color="#059669" />
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {trackingModalRequest.location || "Service address"}
+                        </span>
                       </div>
                     </div>
 
@@ -3775,7 +4131,7 @@ export default function CustomerServiceRequestsPage({
                         )}
                       </div>
                     </div>
-                  ) : normalizeStatus(trackingModalRequest.status) === "CANCELLED" ? (
+                  ) : (normalizeStatus(trackingModalRequest.status) === "CANCELLED" || normalizeStatus(trackingJobDetails?.status) === "CANCELLED" || normalizeStatus(trackingModalRequest.status) === "REJECTED" || normalizeStatus(trackingModalRequest.status) === "REJECTED_BY_TECHNICIAN" || normalizeStatus(trackingJobDetails?.status) === "REJECTED_BY_TECHNICIAN") ? (
                     <div
                       style={{
                         background: "#FEF2F2",

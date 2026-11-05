@@ -1352,6 +1352,10 @@ async def gps_ping(
         tech.longitude = payload.longitude
         tech.last_ping = datetime.now(timezone.utc)
         db.add(db_ping)
+        # Update technician's live coordinates & last ping
+        tech.latitude = float(payload.latitude)
+        tech.longitude = float(payload.longitude)
+        tech.last_ping = payload.timestamp
 
         # Race-condition protection before committing history.
         db.refresh(job)
@@ -2364,6 +2368,76 @@ async def gps_batch(
 # Pre-assignment location for the Planning Agent.
 # This is not job tracking.
 # ─────────────────────────────────────────────────────────────────────────────
+@router.get("/availability")
+async def get_technician_availability_location(
+    x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
+    redis_client=Depends(get_redis_client),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return only the authenticated technician's recent availability fix."""
+    if str(current_user.tenant_id) != str(x_tenant_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant access denied")
+
+    role_value = getattr(current_user.role, "value", current_user.role)
+    if str(role_value).strip().lower() != "technician":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only technicians can read availability location")
+
+    from .technician_portal import _get_tech_for_user
+
+    technician = _get_tech_for_user(db, str(current_user.user_id), str(current_user.tenant_id))
+    if not technician:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Technician GPS access denied")
+
+    _enforce_gps_actor(current_user, str(x_tenant_id), technician)
+
+    identities = [str(current_user.user_id), str(technician.technician_id)]
+    if technician.tech_id:
+        identities.append(str(technician.tech_id))
+
+    for identity in dict.fromkeys(identities):
+        try:
+            cached = redis_client.get(f"gps:availability:{x_tenant_id}:{identity}")
+            if not cached:
+                continue
+            location = json.loads(cached)
+            timestamp = datetime.fromisoformat(str(location.get("timestamp", "")).replace("Z", "+00:00"))
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+            age_seconds = (datetime.now(timezone.utc) - timestamp.astimezone(timezone.utc)).total_seconds()
+            if -30 <= age_seconds <= 120:
+                return location
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        except Exception:
+            logger.exception("Technician availability location lookup failed")
+            break
+
+    # The availability ping updates the technician row before Redis. Use that
+    # recent persisted fix when the short-lived Redis cache is empty or stale.
+    try:
+        latitude = technician.latitude
+        longitude = technician.longitude
+        last_ping = technician.last_ping
+        if latitude is not None and longitude is not None and last_ping is not None:
+            if last_ping.tzinfo is None:
+                last_ping = last_ping.replace(tzinfo=timezone.utc)
+            age_seconds = (datetime.now(timezone.utc) - last_ping.astimezone(timezone.utc)).total_seconds()
+            if -30 <= age_seconds <= 120:
+                return {
+                    "status": "stored",
+                    "technician_id": str(current_user.user_id),
+                    "tenant_id": str(current_user.tenant_id),
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "timestamp": last_ping.astimezone(timezone.utc).isoformat(),
+                }
+    except Exception:
+        logger.exception("Persisted technician availability location lookup failed")
+
+    return {"status": "unavailable", "technician_id": str(current_user.user_id)}
+
+
 @router.post(
     "/availability",
     status_code=status.HTTP_200_OK,

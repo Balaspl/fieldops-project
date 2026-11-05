@@ -1,3 +1,4 @@
+import { useActiveAutoRefresh } from "../../hooks/useActiveAutoRefresh";
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { io, Socket } from "socket.io-client";
@@ -346,7 +347,7 @@ export default function CustomerNotificationsPage({
 
       setUnread(nextUnread);
     } catch (requestError: any) {
-      setError(getNotificationErrorMessage(requestError));
+      if (showLoading) setError(getNotificationErrorMessage(requestError));
     } finally {
       if (showLoading) {
         setLoading(false);
@@ -406,7 +407,9 @@ export default function CustomerNotificationsPage({
           );
 
       if (activeJobExists && timer === undefined) {
-        timer = window.setInterval(() => void syncJobs(), 10_000);
+        timer = window.setInterval(() => {
+          if (document.visibilityState === "visible") void syncJobs();
+        }, 3000);
       } else if (!activeJobExists && timer !== undefined) {
         window.clearInterval(timer);
         timer = undefined;
@@ -424,6 +427,7 @@ export default function CustomerNotificationsPage({
   useEffect(() => {
     void load();
   }, [load]);
+  useActiveAutoRefresh(() => load(false));
 
   // Customer-specific real-time connection.
   useEffect(() => {

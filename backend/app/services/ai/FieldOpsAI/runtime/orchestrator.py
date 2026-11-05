@@ -650,6 +650,14 @@ class AIOrchestrator(RuntimeInterface):
                     "be a dictionary."
                 )
 
+            # Keep tenant metadata for internal runtime operations.
+            # Do not expose tenant_id in the AI prompt or provider context.
+            provider_context = {
+                key: value
+                for key, value in sanitized_context.items()
+                if key != "tenant_id"
+            }
+
             logger.info(
                 "Structured context sanitized "
                 "for task '%s'. Replacement "
@@ -666,7 +674,7 @@ class AIOrchestrator(RuntimeInterface):
             user_prompt = (
                 self._build_user_prompt(
                     task=task,
-                    context=sanitized_context,
+                    context=provider_context,
                 )
             )
 
@@ -1003,7 +1011,7 @@ class AIOrchestrator(RuntimeInterface):
                         generation_kwargs = {
                             "task": task,
                             "messages": messages,
-                            "context": sanitized_context,
+                            "context": provider_context,
                         }
                         if isinstance(provider_client, GroqClient):
                             generation_kwargs["temperature"] = (
@@ -1038,9 +1046,7 @@ class AIOrchestrator(RuntimeInterface):
                         raw_text = generate_method(
                             task=task,
                             messages=messages,
-                            context=(
-                                sanitized_context
-                            ),
+                            context=provider_context,
                         )
 
                         if isinstance(

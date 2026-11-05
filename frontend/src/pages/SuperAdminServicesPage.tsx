@@ -1,3 +1,4 @@
+import { useActiveAutoRefresh } from "../hooks/useActiveAutoRefresh";
 import React, { useState, useEffect, useMemo } from "react";
 import {
   Wrench,
@@ -31,116 +32,18 @@ import {
 import LoadingSpinner from "../components/ui/LoadingSpinner";
 import { useToast } from "../hooks/useToast";
 import useAuthStore from "../store/authStore";
+import { SERVICE_CATALOGUE_TAXONOMY } from "../data/serviceCatalogueTaxonomy";
 
-// Predefined fallback taxonomy suggestions
-const KNOWN_CATEGORIES_MAP: Record<string, string[]> = {
-  Electrical: [
-    "Wiring & Switchboards",
-    "Lighting & Fixtures",
-    "Inverter & UPS",
-    "MCB & Fuse Box",
-    "Ceiling Fans & Regulators",
-    "Earthing & Voltage Issue",
-  ],
-  Plumbing: [
-    "Taps & Mixers",
-    "Pipe Leakage & Burst",
-    "Toilet & Sanitary Fixtures",
-    "Water Tank & Motor Pump",
-    "Drainage & Pipe Blockage",
-    "Water Heater / Geyser Pipe",
-  ],
-  "AC & HVAC": [
-    "Cooling & Compressor",
-    "Gas Leakage Detection & Refill",
-    "Deep Cleaning & Jet Wash",
-    "Water Dripping & Drainage",
-    "Thermostat & Remote Control",
-  ],
-  "Home Appliances": [
-    "Washing Machine",
-    "Refrigerator & Freezer",
-    "Microwave & Induction",
-    "Water Purifier (RO/UV)",
-    "Chimney & Hob",
-  ],
-  "Carpentry & Woodwork": [
-    "Door Lock & Handle Fitting",
-    "Furniture Repair & Assembly",
-    "Window & Mosquito Mesh",
-    "Modular Kitchen & Drawer Channel",
-    "Wall Drilling & TV Hanging",
-  ],
-  "Security & Smart Home": [
-    "CCTV Camera & DVR/NVR",
-    "Smart Door Lock & Video Bell",
-    "WiFi Router & LAN Cabling",
-    "Motion Sensor & Alarm",
-  ],
-  "Cleaning & Maintenance": [
-    "Deep Home Cleaning",
-    "Pest Control & Fumigation",
-    "Water Tank Cleaning",
-    "House Painting & Patchwork",
-  ],
-};
+// Standard 16-type, 116-category, 958-issue taxonomy from FieldOps Service Catalogue
+const KNOWN_CATEGORIES_MAP: Record<string, string[]> = {};
+const KNOWN_ISSUES_MAP: Record<string, string[]> = {};
 
-const KNOWN_ISSUES_MAP: Record<string, string[]> = {
-  "Wiring & Switchboards": [
-    "Switchboard Rewiring & Short Circuit",
-    "Modular Switch Replacement & Sparking Fix",
-    "burnt wire",
-    "Power Socket 16A Burnt / Heavy Load Trip",
-    "Main Distribution Box Inspection",
-  ],
-  "Lighting & Fixtures": [
-    "Ceiling Light Burnt / Holder Loose",
-    "Chandelier Assembly & Master Fitting",
-    "LED Strip Driver Replacement",
-    "Flickering Light & Loose Connection",
-    "Tube Light Batten Replacement",
-  ],
-  "Inverter & UPS": [
-    "Inverter Not Charging / Beep Alarm",
-    "Battery Acid Top-up & Terminal Cleaning",
-    "Automatic Cut-off & Bypass Wire Fix",
-  ],
-  "MCB & Fuse Box": [
-    "MCB Tripping Repeatedly",
-    "Main Double-Pole Breaker Burnt",
-    "Sub-breaker Sizing & Distribution",
-  ],
-  "Ceiling Fans & Regulators": [
-    "Fan Speed Slow / Capacitor Replacement",
-    "Wobbling Fan Noise & Bearing Lubrication",
-    "Step Regulator Knob Stuck",
-  ],
-  "Taps & Mixers": [
-    "Continuous Water Dripping & Tap Spout Leak",
-    "Wall Mixer Diverter Jammed",
-    "Angle Valve Broken Inside Tile",
-  ],
-  "Pipe Leakage & Burst": [
-    "Concealed Wall Pipeline Seepage",
-    "PVC/CPVC Joint Crack Leak",
-    "Main Water Inlet Pipe Replacement",
-  ],
-  "Toilet & Sanitary Fixtures": [
-    "Flush Tank Siphon Leaking Nonstop",
-    "Health Faucet Hose Burst",
-    "Wash Basin Waste Coupling Leak",
-  ],
-  "Cooling & Compressor": [
-    "AC Not Cooling / Gas Leakage Detection",
-    "Compressor Tripping within 5 minutes",
-    "Split AC Indoor Ice Formation",
-  ],
-  "Washing Machine": [
-    "Drum Not Spinning / Drainage Error E02",
-    "Excessive Vibration During Spin Cycle",
-    "Water Not Filling In Drum",
-  ],
-};
+SERVICE_CATALOGUE_TAXONOMY.forEach((st) => {
+  KNOWN_CATEGORIES_MAP[st.name] = st.categories.map((c) => c.name);
+  st.categories.forEach((c) => {
+    KNOWN_ISSUES_MAP[c.name] = c.issues;
+  });
+});
 
 export default function SuperAdminServicesPage() {
   const { addToast } = useToast();
@@ -164,17 +67,20 @@ export default function SuperAdminServicesPage() {
 
   const [selectedIssuesByCat, setSelectedIssuesByCat] = useState<Record<string, string[]>>({});
   const [newIssueInputs, setNewIssueInputs] = useState<Record<string, string>>({});
+  const [activeCategory, setActiveCategory] = useState<string>("");
+  const [categorySearch, setCategorySearch] = useState<string>("");
+  const [issueSearch, setIssueSearch] = useState<string>("");
 
   // Load organization-scoped services
-  const loadServices = async () => {
+  const loadServices = async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const data = await getAdminServices();
       setServices(Array.isArray(data) ? data : []);
     } catch (err: any) {
-      addToast(err?.response?.data?.detail || "Failed to load services catalog", "error");
+      if (!silent) addToast(err?.response?.data?.detail || "Failed to load services catalog", "error");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -184,6 +90,7 @@ export default function SuperAdminServicesPage() {
       .then((data) => setTaxonomySuggestions(data))
       .catch((err) => console.warn("Failed to load taxonomy suggestions", err));
   }, []);
+  useActiveAutoRefresh(() => loadServices(true), !isModalOpen && !submitting);
 
   // Compute Metrics dynamically for logged-in organization
   const totalCount = (services || []).length;
@@ -276,13 +183,38 @@ export default function SuperAdminServicesPage() {
 
   // Open modal - cleanly resets all fields
   const handleOpenCreateModal = () => {
-    setSelectedType("");
+    const initType = availableServiceTypes[0] || "Electrical";
+    setSelectedType(initType);
     setCustomType("");
+    const cats = KNOWN_CATEGORIES_MAP[initType] || [];
+    setActiveCategory(cats[0] || "");
     setSelectedCategories([]);
     setNewCatInput("");
     setSelectedIssuesByCat({});
     setNewIssueInputs({});
+    setCategorySearch("");
+    setIssueSearch("");
     setIsModalOpen(true);
+  };
+
+  // Select all issues for active category
+  const handleSelectAllIssues = (catName: string) => {
+    const allIss = getAvailableIssuesForCategory(catName);
+    setSelectedIssuesByCat((prev) => ({
+      ...prev,
+      [catName]: allIss,
+    }));
+    if (!selectedCategories.includes(catName)) {
+      setSelectedCategories((prev) => [...prev, catName]);
+    }
+  };
+
+  // Clear all issues for active category
+  const handleClearIssues = (catName: string) => {
+    setSelectedIssuesByCat((prev) => ({
+      ...prev,
+      [catName]: [],
+    }));
   };
 
   // Toggle Category selection (multi-select) - NO AUTOMATIC ISSUE SELECTION!
@@ -319,18 +251,22 @@ export default function SuperAdminServicesPage() {
   const handleToggleIssue = (catName: string, issueName: string) => {
     setSelectedIssuesByCat((prev) => {
       const currentList = prev[catName] || [];
+      let updated: string[];
       if (currentList.includes(issueName)) {
-        return {
-          ...prev,
-          [catName]: currentList.filter((i) => i !== issueName),
-        };
+        updated = currentList.filter((i) => i !== issueName);
       } else {
-        return {
-          ...prev,
-          [catName]: [...currentList, issueName],
-        };
+        updated = [...currentList, issueName];
       }
+      return {
+        ...prev,
+        [catName]: updated,
+      };
     });
+
+    // Ensure category is in selectedCategories if an issue is selected
+    if (!selectedCategories.includes(catName)) {
+      setSelectedCategories((prev) => [...prev, catName]);
+    }
   };
 
   // Add custom issue to a category
@@ -998,7 +934,7 @@ export default function SuperAdminServicesPage() {
         </div>
       )}
 
-      {/* 5. CREATE SERVICE POP-UP MODAL (DIV CONTAINER - CANNOT SUBMIT FORM OR CAUSE BLANK PAGE) */}
+      {/* 5. LARGE SPACIOUS CREATE SERVICE POP-UP MODAL (Category & Sub-Issues Master-Detail) */}
       {isModalOpen && (
         <div
           style={{
@@ -1007,8 +943,8 @@ export default function SuperAdminServicesPage() {
             left: 0,
             right: 0,
             bottom: 0,
-            background: "rgba(15, 23, 42, 0.6)",
-            backdropFilter: "blur(4px)",
+            background: "rgba(15, 23, 42, 0.65)",
+            backdropFilter: "blur(6px)",
             zIndex: 2500,
             display: "flex",
             alignItems: "center",
@@ -1022,570 +958,623 @@ export default function SuperAdminServicesPage() {
           <div
             style={{
               background: "#FFFFFF",
-              borderRadius: "16px",
-              width: "680px",
+              borderRadius: "20px",
+              width: "1060px",
               maxWidth: "96vw",
-              maxHeight: "92vh",
-              boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)",
+              height: "88vh",
+              maxHeight: "840px",
+              boxShadow: "0 25px 60px -10px rgba(0, 0, 0, 0.3)",
               overflow: "hidden",
               display: "flex",
               flexDirection: "column",
+              border: "1px solid #E2E8F0",
             }}
           >
             {/* Modal Header */}
             <div
               style={{
-                padding: "16px 24px",
-                borderBottom: "1px solid #E2E8F0",
+                padding: "18px 26px",
+                borderBottom: "1.5px solid #E2E8F0",
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
                 background: "#FFFFFF",
               }}
             >
-              <div>
-                <h3 style={{ fontSize: "17px", fontWeight: 800, color: "#0F172A", margin: "0 0 2px" }}>
-                  Create New Service
-                </h3>
-                <p style={{ fontSize: "12px", color: "#64748B", margin: 0 }}>
-                  Configure Trade Domain, Categories, and Diagnostic Issues
-                </p>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                <div
+                  style={{
+                    width: "40px",
+                    height: "40px",
+                    borderRadius: "10px",
+                    background: "#069660",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "#FFFFFF",
+                  }}
+                >
+                  <PlusCircle size={22} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: "19px", fontWeight: 800, color: "#0F172A", margin: 0 }}>
+                    Create &amp; Publish Services
+                  </h3>
+                  <p style={{ fontSize: "12.5px", color: "#64748B", margin: "2px 0 0 0" }}>
+                    Select a category to immediately configure its diagnostic sub-issues
+                  </p>
+                </div>
               </div>
+
               <button
                 type="button"
                 onClick={() => setIsModalOpen(false)}
                 style={{
                   background: "#F1F5F9",
                   border: "none",
-                  borderRadius: "8px",
+                  borderRadius: "10px",
                   color: "#64748B",
                   cursor: "pointer",
-                  padding: "6px",
+                  padding: "8px",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
+                  transition: "background 0.15s ease",
                 }}
               >
-                <X size={18} />
+                <X size={20} />
               </button>
             </div>
 
-            {/* MINI FLOW DIAGRAM HEADER BANNER */}
+            {/* Top Bar: Trade Domain Selector */}
             <div
               style={{
-                padding: "14px 24px",
+                padding: "14px 26px",
                 background: "#F8FAFC",
-                borderBottom: "1px solid #E2E8F0",
+                borderBottom: "1.5px solid #E2E8F0",
+                display: "flex",
+                alignItems: "center",
+                gap: "16px",
+                flexWrap: "wrap",
               }}
             >
-              <div
+              <label style={{ fontSize: "13.5px", fontWeight: 800, color: "#0F172A", whiteSpace: "nowrap" }}>
+                1. Select Trade Domain:
+              </label>
+
+              <select
+                value={selectedType}
+                onChange={(e) => {
+                  const newT = e.target.value;
+                  setSelectedType(newT);
+                  const cats = KNOWN_CATEGORIES_MAP[newT] || [];
+                  setActiveCategory(cats[0] || "");
+                  setSelectedCategories([]);
+                  setSelectedIssuesByCat({});
+                }}
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  maxWidth: "560px",
-                  margin: "0 auto",
+                  flex: 1,
+                  maxWidth: "380px",
+                  padding: "9px 14px",
+                  borderRadius: "10px",
+                  border: "1.5px solid #CBD5E1",
+                  fontSize: "14px",
+                  fontWeight: 700,
+                  color: "#0F172A",
+                  background: "#FFFFFF",
+                  outline: "none",
+                  cursor: "pointer",
                 }}
               >
-                {/* Step 1: Service Type */}
-                <div
+                {availableServiceTypes.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+                <option value="__NEW__">+ Enter New Service Trade...</option>
+              </select>
+
+              {selectedType === "__NEW__" && (
+                <input
+                  type="text"
+                  placeholder="Enter custom service trade..."
+                  value={customType}
+                  onChange={(e) => setCustomType(e.target.value)}
                   style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    background: effectiveType ? "#DCFCE7" : "#FFFFFF",
-                    border: effectiveType ? "1.5px solid #16A34A" : "1.5px solid #CBD5E1",
+                    padding: "9px 14px",
                     borderRadius: "10px",
-                    padding: "6px 14px",
-                    boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
+                    border: "1.5px solid #069660",
+                    fontSize: "13.5px",
+                    color: "#0F172A",
+                    outline: "none",
+                    flex: 1,
                   }}
-                >
-                  <div
-                    style={{
-                      width: "20px",
-                      height: "20px",
-                      borderRadius: "50%",
-                      background: effectiveType ? "#16A34A" : "#94A3B8",
-                      color: "#FFFFFF",
-                      fontSize: "11px",
-                      fontWeight: 700,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    1
-                  </div>
-                  <div>
-                    <div style={{ fontSize: "10px", fontWeight: 700, color: "#64748B", textTransform: "uppercase" }}>
-                      Trade Domain
-                    </div>
-                    <div style={{ fontSize: "12.5px", fontWeight: 700, color: effectiveType ? "#15803D" : "#334155" }}>
-                      {effectiveType || "Select Type"}
-                    </div>
-                  </div>
-                </div>
+                />
+              )}
 
-                {/* Arrow 1 */}
-                <div style={{ display: "flex", alignItems: "center", color: effectiveType ? "#16A34A" : "#CBD5E1" }}>
-                  <div style={{ width: "24px", height: "2px", background: effectiveType ? "#16A34A" : "#CBD5E1" }} />
-                  <ArrowRight size={14} style={{ marginLeft: "-2px" }} />
-                </div>
-
-                {/* Step 2: Categories */}
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    background: selectedCategories.length > 0 ? "#DCFCE7" : "#FFFFFF",
-                    border: selectedCategories.length > 0 ? "1.5px solid #16A34A" : "1.5px solid #CBD5E1",
-                    borderRadius: "10px",
-                    padding: "6px 14px",
-                    boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
-                  }}
-                >
-                  <div
-                    style={{
-                      width: "20px",
-                      height: "20px",
-                      borderRadius: "50%",
-                      background: selectedCategories.length > 0 ? "#16A34A" : "#94A3B8",
-                      color: "#FFFFFF",
-                      fontSize: "11px",
-                      fontWeight: 700,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    2
-                  </div>
-                  <div>
-                    <div style={{ fontSize: "10px", fontWeight: 700, color: "#64748B", textTransform: "uppercase" }}>
-                      Multi Categories
-                    </div>
-                    <div
-                      style={{
-                        fontSize: "12.5px",
-                        fontWeight: 700,
-                        color: selectedCategories.length > 0 ? "#15803D" : "#334155",
-                      }}
-                    >
-                      {selectedCategories.length > 0 ? `${selectedCategories.length} Selected` : "Categories"}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Arrow 2 */}
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    color: totalSelectedIssuesCount > 0 ? "#16A34A" : "#CBD5E1",
-                  }}
-                >
-                  <div
-                    style={{
-                      width: "24px",
-                      height: "2px",
-                      background: totalSelectedIssuesCount > 0 ? "#16A34A" : "#CBD5E1",
-                    }}
-                  />
-                  <ArrowRight size={14} style={{ marginLeft: "-2px" }} />
-                </div>
-
-                {/* Step 3: Issues */}
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    background: totalSelectedIssuesCount > 0 ? "#DCFCE7" : "#FFFFFF",
-                    border: totalSelectedIssuesCount > 0 ? "1.5px solid #16A34A" : "1.5px solid #CBD5E1",
-                    borderRadius: "10px",
-                    padding: "6px 14px",
-                    boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
-                  }}
-                >
-                  <div
-                    style={{
-                      width: "20px",
-                      height: "20px",
-                      borderRadius: "50%",
-                      background: totalSelectedIssuesCount > 0 ? "#16A34A" : "#94A3B8",
-                      color: "#FFFFFF",
-                      fontSize: "11px",
-                      fontWeight: 700,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    3
-                  </div>
-                  <div>
-                    <div style={{ fontSize: "10px", fontWeight: 700, color: "#64748B", textTransform: "uppercase" }}>
-                      Multi Issues
-                    </div>
-                    <div
-                      style={{
-                        fontSize: "12.5px",
-                        fontWeight: 700,
-                        color: totalSelectedIssuesCount > 0 ? "#15803D" : "#334155",
-                      }}
-                    >
-                      {totalSelectedIssuesCount > 0 ? `${totalSelectedIssuesCount} Selected` : "Issues"}
-                    </div>
-                  </div>
-                </div>
+              <div style={{ marginLeft: "auto", fontSize: "12.5px", fontWeight: 700, color: "#059669" }}>
+                ✓ {totalSelectedIssuesCount} Total Issues Selected
               </div>
             </div>
 
-            {/* Modal Body Container (Using DIV instead of FORM to prevent any page reloads) */}
-            <div
-              style={{
-                padding: "20px 24px",
-                overflowY: "auto",
-                flex: 1,
-                display: "flex",
-                flexDirection: "column",
-                gap: "18px",
-              }}
-            >
-              {/* Field 1: Service Type */}
-              <div>
-                <label style={{ display: "block", fontSize: "13px", fontWeight: 700, color: "#0F172A", marginBottom: "6px" }}>
-                  1. Service Type <span style={{ color: "#DC2626" }}>*</span>
-                </label>
-                <select
-                  required
-                  value={selectedType}
-                  onChange={(e) => {
-                    setSelectedType(e.target.value);
-                    setSelectedCategories([]);
-                    setSelectedIssuesByCat({});
-                  }}
-                  style={{
-                    width: "100%",
-                    padding: "10px 14px",
-                    borderRadius: "8px",
-                    border: "1.5px solid #CBD5E1",
-                    fontSize: "13.5px",
-                    color: selectedType ? "#0F172A" : "#64748B",
-                    background: "#FFFFFF",
-                    fontWeight: selectedType ? 600 : 400,
-                    outline: "none",
-                  }}
-                >
-                  <option value="">-- Select Service Type or Enter New --</option>
-                  {availableServiceTypes.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                  <option value="__NEW__">+ Enter New Service Type...</option>
-                </select>
-
-                {selectedType === "__NEW__" && (
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Electrical, Plumbing, HVAC..."
-                    value={customType}
-                    onChange={(e) => setCustomType(e.target.value)}
-                    style={{
-                      width: "100%",
-                      marginTop: "8px",
-                      padding: "10px 14px",
-                      borderRadius: "8px",
-                      border: "1.5px solid #069660",
-                      fontSize: "13.5px",
-                      color: "#0F172A",
-                      outline: "none",
-                    }}
-                  />
-                )}
-              </div>
-
-              {/* Field 2: Categories (Only appears AFTER type is selected) */}
-              {effectiveType ? (
-                <div>
+            {/* Main Interactive Master-Detail Workspace: Categories on Left, Sub-Issues on Right */}
+            <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+              {/* LEFT COLUMN: Categories for Selected Trade */}
+              <div
+                style={{
+                  width: "360px",
+                  borderRight: "1.5px solid #E2E8F0",
+                  display: "flex",
+                  flexDirection: "column",
+                  background: "#F8FAFC",
+                }}
+              >
+                <div style={{ padding: "14px 16px", borderBottom: "1px solid #E2E8F0" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                    <label style={{ fontSize: "13px", fontWeight: 700, color: "#0F172A" }}>
-                      2. Categories for &quot;{effectiveType}&quot; (Multiple Allowed) <span style={{ color: "#DC2626" }}>*</span>
-                    </label>
-                    <span style={{ fontSize: "11.5px", fontWeight: 700, color: "#059669" }}>
-                      {selectedCategories.length} Categories Selected
+                    <span style={{ fontSize: "13px", fontWeight: 800, color: "#0F172A" }}>
+                      Categories ({availableCategoriesForType.length})
+                    </span>
+                    <span style={{ fontSize: "11.5px", color: "#64748B" }}>
+                      Click to configure
                     </span>
                   </div>
+                  <div style={{ position: "relative" }}>
+                    <input
+                      type="text"
+                      placeholder="Search categories..."
+                      value={categorySearch}
+                      onChange={(e) => setCategorySearch(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "7px 10px 7px 30px",
+                        borderRadius: "8px",
+                        border: "1px solid #CBD5E1",
+                        fontSize: "12px",
+                        outline: "none",
+                        boxSizing: "border-box",
+                        background: "#FFFFFF",
+                      }}
+                    />
+                    <Search
+                      size={14}
+                      color="#94A3B8"
+                      style={{ position: "absolute", left: "9px", top: "50%", transform: "translateY(-50%)" }}
+                    />
+                  </div>
+                </div>
 
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "10px" }}>
-                    {availableCategoriesForType.map((cat) => {
-                      const isSelected = selectedCategories.includes(cat);
+                {/* Categories List */}
+                <div style={{ flex: 1, overflowY: "auto", padding: "10px 12px" }}>
+                  {availableCategoriesForType
+                    .filter((c) => c.toLowerCase().includes(categorySearch.toLowerCase()))
+                    .map((cat) => {
+                      const isActive = activeCategory === cat;
+                      const selectedIssuesCount = selectedIssuesByCat[cat]?.length || 0;
+
                       return (
-                        <button
+                        <div
                           key={cat}
-                          type="button"
-                          onClick={() => handleToggleCategory(cat)}
+                          onClick={() => {
+                            setActiveCategory(cat);
+                            setIssueSearch("");
+                          }}
                           style={{
-                            background: isSelected ? "#069660" : "#F1F5F9",
-                            color: isSelected ? "#FFFFFF" : "#334155",
-                            border: isSelected ? "1px solid #069660" : "1px solid #E2E8F0",
-                            borderRadius: "20px",
-                            padding: "6px 14px",
-                            fontSize: "12.5px",
-                            fontWeight: 600,
+                            padding: "12px 14px",
+                            borderRadius: "12px",
+                            marginBottom: "6px",
                             cursor: "pointer",
-                            display: "inline-flex",
+                            background: isActive ? "#FFFFFF" : "transparent",
+                            border: isActive ? "2px solid #069660" : "1px solid transparent",
+                            boxShadow: isActive ? "0 4px 12px rgba(6, 150, 96, 0.12)" : "none",
+                            display: "flex",
                             alignItems: "center",
-                            gap: "6px",
+                            justifyContent: "space-between",
                             transition: "all 0.15s ease",
                           }}
                         >
-                          {isSelected && <Check size={14} strokeWidth={3} />}
-                          <span>{cat}</span>
-                        </button>
+                          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                            <div
+                              style={{
+                                width: "26px",
+                                height: "26px",
+                                borderRadius: "6px",
+                                background: isActive ? "#ECFDF5" : "#E2E8F0",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                color: isActive ? "#069660" : "#64748B",
+                              }}
+                            >
+                              <Layers size={14} />
+                            </div>
+                            <span
+                              style={{
+                                fontSize: "13.5px",
+                                fontWeight: isActive ? 800 : 600,
+                                color: isActive ? "#069660" : "#1E293B",
+                              }}
+                            >
+                              {cat}
+                            </span>
+                          </div>
+
+                          {selectedIssuesCount > 0 ? (
+                            <span
+                              style={{
+                                background: "#069660",
+                                color: "#FFFFFF",
+                                fontSize: "11px",
+                                fontWeight: 800,
+                                padding: "3px 8px",
+                                borderRadius: "999px",
+                              }}
+                            >
+                              {selectedIssuesCount}
+                            </span>
+                          ) : (
+                            <span style={{ fontSize: "11px", color: "#94A3B8" }}>0</span>
+                          )}
+                        </div>
                       );
                     })}
-                  </div>
+                </div>
 
-                  <div style={{ display: "flex", gap: "8px" }}>
+                {/* Add Custom Category at Bottom */}
+                <div style={{ padding: "12px 14px", borderTop: "1px solid #E2E8F0", background: "#FFFFFF" }}>
+                  <div style={{ display: "flex", gap: "6px" }}>
                     <input
                       type="text"
-                      placeholder="Add custom category name (e.g. Geyser, Inverter, Tank)..."
+                      placeholder="Add custom category..."
                       value={newCatInput}
                       onChange={(e) => setNewCatInput(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           e.preventDefault();
-                          handleAddCustomCategory();
+                          const trimmed = newCatInput.trim();
+                          if (trimmed) {
+                            handleAddCustomCategory();
+                            setActiveCategory(trimmed);
+                          }
                         }
                       }}
                       style={{
                         flex: 1,
-                        padding: "8px 12px",
+                        padding: "7px 10px",
                         borderRadius: "8px",
                         border: "1px solid #CBD5E1",
-                        fontSize: "13px",
+                        fontSize: "12px",
                         outline: "none",
                       }}
                     />
                     <button
                       type="button"
-                      onClick={handleAddCustomCategory}
+                      onClick={() => {
+                        const trimmed = newCatInput.trim();
+                        if (trimmed) {
+                          handleAddCustomCategory();
+                          setActiveCategory(trimmed);
+                        }
+                      }}
                       style={{
                         background: "#0F172A",
                         color: "#FFFFFF",
                         border: "none",
                         borderRadius: "8px",
-                        padding: "8px 14px",
-                        fontSize: "12.5px",
-                        fontWeight: 600,
+                        padding: "7px 12px",
+                        fontSize: "12px",
+                        fontWeight: 700,
                         cursor: "pointer",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "4px",
                       }}
                     >
-                      <Plus size={14} />
-                      <span>Add</span>
+                      + Add
                     </button>
                   </div>
                 </div>
-              ) : null}
+              </div>
 
-              {/* Field 3: Issues (ZERO AUTO-SELECTION: user manually clicks to select!) */}
-              {selectedCategories.length > 0 ? (
-                <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                    <label style={{ fontSize: "13px", fontWeight: 700, color: "#0F172A" }}>
-                      3. Specific Issues (Click to Select) <span style={{ color: "#DC2626" }}>*</span>
-                    </label>
-                    <span style={{ fontSize: "11.5px", fontWeight: 700, color: totalSelectedIssuesCount > 0 ? "#059669" : "#64748B" }}>
-                      {totalSelectedIssuesCount} Total Issues Selected
-                    </span>
-                  </div>
-
-                  <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                    {selectedCategories.map((cat) => {
-                      const availableIssues = getAvailableIssuesForCategory(cat);
-                      const currentSelected = selectedIssuesByCat[cat] || [];
-
-                      return (
-                        <div
-                          key={cat}
-                          style={{
-                            background: "#F8FAFC",
-                            border: "1px solid #E2E8F0",
-                            borderRadius: "10px",
-                            padding: "12px 16px",
-                          }}
-                        >
-                          <div
-                            style={{
-                              display: "flex",
-                              justifyContent: "space-between",
-                              alignItems: "center",
-                              marginBottom: "10px",
-                            }}
-                          >
-                            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                              <Layers size={15} color="#D97706" />
-                              <span style={{ fontSize: "13px", fontWeight: 700, color: "#1E293B" }}>
-                                {cat}
-                              </span>
-                            </div>
-                            <span style={{ fontSize: "11px", fontWeight: 700, color: currentSelected.length > 0 ? "#059669" : "#64748B" }}>
-                              {currentSelected.length} selected
-                            </span>
-                          </div>
-
-                          {/* Issues Chips: Starts completely unselected */}
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "10px" }}>
-                            {availableIssues.map((iss) => {
-                              const isChecked = currentSelected.includes(iss);
-                              return (
-                                <button
-                                  key={iss}
-                                  type="button"
-                                  onClick={() => handleToggleIssue(cat, iss)}
-                                  style={{
-                                    background: isChecked ? "#069660" : "#FFFFFF",
-                                    color: isChecked ? "#FFFFFF" : "#334155",
-                                    border: isChecked ? "1px solid #069660" : "1px solid #CBD5E1",
-                                    borderRadius: "8px",
-                                    padding: "6px 12px",
-                                    fontSize: "12px",
-                                    fontWeight: 600,
-                                    cursor: "pointer",
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    gap: "6px",
-                                    textAlign: "left",
-                                    transition: "all 0.15s ease",
-                                  }}
-                                >
-                                  {isChecked && <Check size={13} strokeWidth={3} />}
-                                  <span>{iss}</span>
-                                </button>
-                              );
-                            })}
-                          </div>
-
-                          {/* Add Custom Issue Input */}
-                          <div style={{ display: "flex", gap: "8px" }}>
-                            <input
-                              type="text"
-                              placeholder={`Add custom issue for "${cat}" (e.g. burnt wire)...`}
-                              value={newIssueInputs[cat] || ""}
-                              onChange={(e) =>
-                                setNewIssueInputs((prev) => ({
-                                  ...prev,
-                                  [cat]: e.target.value,
-                                }))
-                              }
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  e.preventDefault();
-                                  handleAddCustomIssue(cat);
-                                }
-                              }}
-                              style={{
-                                flex: 1,
-                                padding: "7px 10px",
-                                borderRadius: "6px",
-                                border: "1px solid #CBD5E1",
-                                fontSize: "12px",
-                                background: "#FFFFFF",
-                                outline: "none",
-                              }}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => handleAddCustomIssue(cat)}
-                              style={{
-                                background: "#0F172A",
-                                color: "#FFFFFF",
-                                border: "none",
-                                borderRadius: "6px",
-                                padding: "7px 12px",
-                                fontSize: "12px",
-                                fontWeight: 600,
-                                cursor: "pointer",
-                              }}
-                            >
-                              Add Issue
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : null}
-
-              {/* Bottom Actions Row */}
+              {/* RIGHT COLUMN: Diagnostic Sub-Issues for Active Category */}
               <div
                 style={{
+                  flex: 1,
                   display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  paddingTop: "14px",
-                  borderTop: "1px solid #E2E8F0",
-                  marginTop: "6px",
+                  flexDirection: "column",
+                  background: "#FFFFFF",
+                  overflow: "hidden",
                 }}
               >
-                <div style={{ fontSize: "12px", color: "#64748B", fontWeight: 600 }}>
-                  {effectiveType && selectedCategories.length > 0 && totalSelectedIssuesCount > 0 ? (
-                    <span style={{ color: "#059669" }}>
-                      ✓ 1 Domain • {selectedCategories.length} Categories • {totalSelectedIssuesCount} Issues
-                    </span>
-                  ) : (
-                    <span>Configure Type, Category, and Issues</span>
-                  )}
-                </div>
+                {activeCategory ? (
+                  <>
+                    {/* Active Category Header Bar */}
+                    <div
+                      style={{
+                        padding: "16px 24px",
+                        borderBottom: "1.5px solid #E2E8F0",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        background: "#F8FAFC",
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontSize: "11px", fontWeight: 800, color: "#64748B", textTransform: "uppercase" }}>
+                          Configuring Sub-Issues For:
+                        </div>
+                        <h4 style={{ fontSize: "17px", fontWeight: 800, color: "#0F172A", margin: "2px 0 0 0" }}>
+                          {activeCategory}
+                        </h4>
+                      </div>
 
-                <div style={{ display: "flex", gap: "10px" }}>
-                  <button
-                    type="button"
-                    onClick={() => setIsModalOpen(false)}
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectAllIssues(activeCategory)}
+                          style={{
+                            padding: "6px 14px",
+                            borderRadius: "8px",
+                            background: "#ECFDF5",
+                            border: "1px solid #A7F3D0",
+                            color: "#069660",
+                            fontSize: "12.5px",
+                            fontWeight: 700,
+                            cursor: "pointer",
+                          }}
+                        >
+                          Select All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleClearIssues(activeCategory)}
+                          style={{
+                            padding: "6px 12px",
+                            borderRadius: "8px",
+                            background: "#F1F5F9",
+                            border: "1px solid #CBD5E1",
+                            color: "#64748B",
+                            fontSize: "12.5px",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                          }}
+                        >
+                          Clear
+                        </button>
+                        <span
+                          style={{
+                            fontSize: "12px",
+                            fontWeight: 800,
+                            color: "#069660",
+                            background: "#DCFCE7",
+                            padding: "4px 10px",
+                            borderRadius: "999px",
+                          }}
+                        >
+                          {selectedIssuesByCat[activeCategory]?.length || 0} selected
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Search / Filter Sub-Issues */}
+                    <div style={{ padding: "12px 24px", borderBottom: "1px solid #F1F5F9" }}>
+                      <div style={{ position: "relative", maxWidth: "400px" }}>
+                        <input
+                          type="text"
+                          placeholder={`Filter issues in ${activeCategory}...`}
+                          value={issueSearch}
+                          onChange={(e) => setIssueSearch(e.target.value)}
+                          style={{
+                            width: "100%",
+                            padding: "7px 10px 7px 32px",
+                            borderRadius: "8px",
+                            border: "1px solid #CBD5E1",
+                            fontSize: "12.5px",
+                            outline: "none",
+                            boxSizing: "border-box",
+                          }}
+                        />
+                        <Search
+                          size={15}
+                          color="#94A3B8"
+                          style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)" }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Sub-Issues Grid */}
+                    <div style={{ flex: 1, overflowY: "auto", padding: "16px 24px" }}>
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+                          gap: "10px",
+                        }}
+                      >
+                        {getAvailableIssuesForCategory(activeCategory)
+                          .filter((iss) => iss.toLowerCase().includes(issueSearch.toLowerCase()))
+                          .map((iss) => {
+                            const isChecked = (selectedIssuesByCat[activeCategory] || []).includes(iss);
+
+                            return (
+                              <div
+                                key={iss}
+                                onClick={() => handleToggleIssue(activeCategory, iss)}
+                                style={{
+                                  padding: "12px 14px",
+                                  borderRadius: "10px",
+                                  cursor: "pointer",
+                                  background: isChecked ? "#ECFDF5" : "#FFFFFF",
+                                  border: isChecked ? "2px solid #069660" : "1.5px solid #E2E8F0",
+                                  boxShadow: isChecked ? "0 2px 8px rgba(6, 150, 96, 0.12)" : "none",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "space-between",
+                                  transition: "all 0.15s ease",
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    fontSize: "13px",
+                                    fontWeight: isChecked ? 700 : 500,
+                                    color: isChecked ? "#065F46" : "#1E293B",
+                                    lineHeight: 1.3,
+                                  }}
+                                >
+                                  {iss}
+                                </span>
+
+                                <div
+                                  style={{
+                                    width: "20px",
+                                    height: "20px",
+                                    borderRadius: "6px",
+                                    border: isChecked ? "none" : "1.5px solid #CBD5E1",
+                                    background: isChecked ? "#069660" : "transparent",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    color: "#FFFFFF",
+                                    flexShrink: 0,
+                                    marginLeft: "8px",
+                                  }}
+                                >
+                                  {isChecked && <Check size={14} strokeWidth={3} />}
+                                </div>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
+
+                    {/* Add Custom Issue at Bottom */}
+                    <div
+                      style={{
+                        padding: "12px 24px",
+                        borderTop: "1px solid #E2E8F0",
+                        background: "#F8FAFC",
+                        display: "flex",
+                        gap: "8px",
+                        alignItems: "center",
+                      }}
+                    >
+                      <input
+                        type="text"
+                        placeholder={`Add custom diagnostic issue for "${activeCategory}"...`}
+                        value={newIssueInputs[activeCategory] || ""}
+                        onChange={(e) =>
+                          setNewIssueInputs((prev) => ({
+                            ...prev,
+                            [activeCategory]: e.target.value,
+                          }))
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            handleAddCustomIssue(activeCategory);
+                          }
+                        }}
+                        style={{
+                          flex: 1,
+                          padding: "8px 12px",
+                          borderRadius: "8px",
+                          border: "1px solid #CBD5E1",
+                          fontSize: "12.5px",
+                          background: "#FFFFFF",
+                          outline: "none",
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleAddCustomIssue(activeCategory)}
+                        style={{
+                          background: "#0F172A",
+                          color: "#FFFFFF",
+                          border: "none",
+                          borderRadius: "8px",
+                          padding: "8px 16px",
+                          fontSize: "12.5px",
+                          fontWeight: 700,
+                          cursor: "pointer",
+                        }}
+                      >
+                        + Add Issue
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div
                     style={{
-                      padding: "9px 18px",
-                      border: "1px solid #CBD5E1",
-                      borderRadius: "8px",
-                      background: "#FFFFFF",
-                      color: "#475569",
-                      fontSize: "13px",
-                      fontWeight: 600,
-                      cursor: "pointer",
+                      flex: 1,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      color: "#94A3B8",
+                      fontSize: "14px",
                     }}
                   >
-                    Cancel
-                  </button>
+                    Select a category on the left to configure diagnostic issues
+                  </div>
+                )}
+              </div>
+            </div>
 
-                  <button
-                    type="button"
-                    onClick={handlePublishServices}
-                    disabled={submitting || totalSelectedIssuesCount === 0}
-                    style={{
-                      padding: "9px 22px",
-                      border: "none",
-                      borderRadius: "8px",
-                      background: totalSelectedIssuesCount > 0 ? "#069660" : "#94A3B8",
-                      color: "#FFFFFF",
-                      fontSize: "13px",
-                      fontWeight: 700,
-                      cursor: submitting || totalSelectedIssuesCount === 0 ? "not-allowed" : "pointer",
-                      boxShadow: totalSelectedIssuesCount > 0 ? "0 2px 6px rgba(6, 150, 96, 0.25)" : "none",
-                      transition: "all 0.15s ease",
-                    }}
-                  >
-                    {submitting
-                      ? "Publishing..."
-                      : `Publish Service (${totalSelectedIssuesCount})`}
-                  </button>
-                </div>
+            {/* Bottom Actions Row */}
+            <div
+              style={{
+                padding: "16px 26px",
+                borderTop: "1.5px solid #E2E8F0",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                background: "#FFFFFF",
+              }}
+            >
+              <div style={{ fontSize: "13px", color: "#475569", fontWeight: 600 }}>
+                {totalSelectedIssuesCount > 0 ? (
+                  <span style={{ color: "#069660", fontWeight: 700 }}>
+                    ✓ Ready to publish {totalSelectedIssuesCount} diagnostic issues across {selectedCategories.length} categories under &quot;{effectiveType}&quot;
+                  </span>
+                ) : (
+                  <span>Select categories and check their diagnostic issues above to publish</span>
+                )}
+              </div>
+
+              <div style={{ display: "flex", gap: "10px" }}>
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(false)}
+                  style={{
+                    padding: "10px 20px",
+                    border: "1.5px solid #CBD5E1",
+                    borderRadius: "10px",
+                    background: "#FFFFFF",
+                    color: "#475569",
+                    fontSize: "13.5px",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handlePublishServices}
+                  disabled={submitting || totalSelectedIssuesCount === 0}
+                  style={{
+                    padding: "10px 26px",
+                    border: "none",
+                    borderRadius: "10px",
+                    background: totalSelectedIssuesCount > 0 ? "#069660" : "#94A3B8",
+                    color: "#FFFFFF",
+                    fontSize: "14px",
+                    fontWeight: 800,
+                    cursor: submitting || totalSelectedIssuesCount === 0 ? "not-allowed" : "pointer",
+                    boxShadow: totalSelectedIssuesCount > 0 ? "0 4px 12px rgba(6, 150, 96, 0.25)" : "none",
+                    transition: "all 0.15s ease",
+                  }}
+                >
+                  {submitting
+                    ? "Publishing Services..."
+                    : `Publish Services (${totalSelectedIssuesCount}) ➔`}
+                </button>
               </div>
             </div>
           </div>

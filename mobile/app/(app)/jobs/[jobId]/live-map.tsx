@@ -1,7 +1,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Pressable,
   StyleSheet,
   Text,
@@ -9,6 +8,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { LoadingState } from "../../../../src/components/ScreenState";
 import * as Location from "expo-location";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
@@ -879,10 +879,7 @@ export default function JobLiveMapScreen() {
 
       <View style={styles.mapContainer}>
         {loadingJob ? (
-          <View style={styles.centered}>
-            <ActivityIndicator size="large" color="#087653" />
-            <Text style={styles.centeredText}>Loading job location...</Text>
-          </View>
+          <LoadingState label="Loading job location..." variant="map" />
         ) : !job ? (
           <View style={styles.centered}>
             <Ionicons name="alert-circle-outline" size={34} color="#B91C1C" />

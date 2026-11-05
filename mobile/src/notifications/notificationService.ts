@@ -75,8 +75,7 @@ export async function configureNotifications(): Promise<void> {
 }
 
 /**
- * Request notification permission and register the native
- * Android/iOS device token with the existing backend.
+ * Request permission and register an Expo push token with the backend.
  *
  * The backend remains authoritative for identity and tenant
  * authorization. Device tokens are never written to logs.
@@ -123,7 +122,7 @@ export async function registerPushTokenForTechnician(
   // Create the Android notification channel before registration.
   if (deviceType === "android") {
     await Notifications.setNotificationChannelAsync(
-      "job_assignments",
+      "fieldops_job_assignments_v2",
       {
         name: "FieldOps job assignments",
         importance: Notifications.AndroidImportance.HIGH,
@@ -148,12 +147,14 @@ export async function registerPushTokenForTechnician(
     return;
   }
 
-  // This is the native FCM/APNs token expected by the
-  // existing backend, not an Expo push-service token.
-  const nativeToken =
-    await Notifications.getDevicePushTokenAsync();
-
-  const token = String(nativeToken.data ?? "").trim();
+  const projectId =
+    Constants.easConfig?.projectId ||
+    Constants.expoConfig?.extra?.eas?.projectId;
+  if (!projectId) {
+    throw new Error("The FieldOps mobile EAS project ID is missing.");
+  }
+  const pushToken = await Notifications.getExpoPushTokenAsync({ projectId });
+  const token = String(pushToken.data ?? "").trim();
 
   if (!token || token.length > 4096) {
     throw new Error(

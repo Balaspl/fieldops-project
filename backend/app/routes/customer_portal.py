@@ -69,8 +69,17 @@ from ..portal_schemas import (
     CustomerPaymentHistoryResponse,
     CustomerSupportRequestCreate,
     CustomerSupportRequestResponse,
+    CustomerSupportReopenRequest,
 )
+from ..schemas import FCMTokenRegistration
 from ..services.enterprise_audit import audit_log, AuditAction
+from ..services.customer_support_cases import (
+    create_support_case,
+    customer_case_payload,
+    notify_support_staff,
+    support_updates,
+)
+from ..models import CustomerSupportCaseUpdate
 from ..services.ola_map_client import OlaMapsClient, is_valid_coordinate
 from ..services.eta_service import ETAService
 from ..redis_client import get_redis_client
@@ -709,10 +718,10 @@ async def list_service_requests(
 
         if sr_status_str in {"CANCELLED", "CANCELED"} or job_status_str in {"CANCELLED", "CANCELED"}:
             service_request.status = "CANCELLED"
-        elif job_status_str == "REJECTED_BY_TECHNICIAN" or sr_status_str == "REJECTED_BY_TECHNICIAN":
-            service_request.status = "REJECTED_BY_TECHNICIAN"
-        elif job_status_str == "QUEUED" or sr_status_str == "QUEUED":
-            service_request.status = "UNASSIGNED"
+        elif job_status_str in {"REJECTED_BY_TECHNICIAN", "EXHAUSTED", "FAILED"} or sr_status_str in {"REJECTED_BY_TECHNICIAN", "EXHAUSTED", "FAILED"}:
+            service_request.status = "CANCELLED"
+        elif job_status_str in {"ASSIGNED", "AWAITING_ACCEPTANCE", "QUEUED", "DISPATCHED", "PENDING"} or sr_status_str in {"ASSIGNED", "AWAITING_ACCEPTANCE", "QUEUED"}:
+            service_request.status = "AWAITING_ACCEPTANCE"
         elif job_status_str in ["COMPLETED", "CLOSED"] or sr_status_str in ["COMPLETED", "CLOSED"]:
             service_request.status = job_status_str or sr_status_str
         elif job_status_str:
@@ -976,6 +985,22 @@ async def create_service_request(
     selected_settings = getattr(selected_organization, "settings", None) or {}
     selected_timezone = selected_settings.get("timezone", DEFAULT_TIMEZONE) if isinstance(selected_settings, dict) else DEFAULT_TIMEZONE
 
+    parsed_visit_time = DEFAULT_VISIT_TIME
+    raw_visit_time = getattr(data, 'preferred_service_time', None) or getattr(data, 'preferred_visit_time', None)
+    if raw_visit_time:
+        if isinstance(raw_visit_time, str):
+            for fmt in ("%I:%M %p", "%H:%M:%S", "%H:%M"):
+                try:
+                    parsed_visit_time = datetime.strptime(raw_visit_time.strip(), fmt).time()
+                    break
+                except Exception:
+                    pass
+        else:
+            try:
+                parsed_visit_time = raw_visit_time
+            except Exception:
+                pass
+
     new_job = Job(
         id=real_job_id,
         tenant_id=selected_tenant_id,
@@ -997,7 +1022,7 @@ async def create_service_request(
                 timezone.utc
             ).date()
         ),
-        preferred_service_time=data.preferred_service_time or DEFAULT_VISIT_TIME,
+        preferred_service_time=parsed_visit_time,
         preferred_service_timezone=selected_timezone or DEFAULT_TIMEZONE,
         required_skill=req_skill,
         status="CREATED",
@@ -1032,7 +1057,7 @@ async def create_service_request(
             images=data.images,
             location=customer_address,
             contact_number=data.contact_number,
-            status="UNASSIGNED",
+            status="AWAITING_ACCEPTANCE",
             linked_job_id=new_job.id,
         )
         db.add(sr)
@@ -1759,9 +1784,13 @@ async def _customer_eta_payload(
         redis_client = get_redis_client()
         maps_client = OlaMapsClient(redis_client)
         eta_service = ETAService(db, redis_client, maps_client)
-        result = await eta_service.calculate_eta(
-            str(technician.tech_id),
-            job.id,
+        import asyncio
+        result = await asyncio.wait_for(
+            eta_service.calculate_eta(
+                str(technician.tech_id),
+                job.id,
+            ),
+            timeout=0.8,
         )
     except HTTPException as exc:
         if exc.status_code == 403:
@@ -1910,9 +1939,17 @@ async def track_customer_jobs(
     results = []
 
     for job in jobs:
-        effective_job_status = job.status
-        if str(effective_job_status or "").upper() == "QUEUED":
-            effective_job_status = "UNASSIGNED"
+        status_upper = str(job.status or "").upper()
+        technician_accepted, accepted_at = _customer_job_acceptance(db, job)
+
+        if status_upper in {"CANCELLED", "CANCELED", "REJECTED_BY_TECHNICIAN", "EXHAUSTED", "FAILED"}:
+            effective_job_status = "CANCELLED"
+        elif not technician_accepted and status_upper in {"ASSIGNED", "AWAITING_ACCEPTANCE", "QUEUED", "DISPATCHED", "PENDING"}:
+            effective_job_status = "AWAITING_ACCEPTANCE"
+        elif status_upper == "QUEUED":
+            effective_job_status = "AWAITING_ACCEPTANCE"
+        else:
+            effective_job_status = job.status
 
         tech_name = None
         tech_photo = None
@@ -2083,9 +2120,17 @@ async def get_customer_job_detail(
     # Technician details
     # ──────────────────────────────────────────────
 
-    effective_job_status = job.status
-    if str(effective_job_status or "").upper() == "QUEUED":
-        effective_job_status = "UNASSIGNED"
+    status_upper = str(job.status or "").upper()
+    technician_accepted, accepted_at = _customer_job_acceptance(db, job)
+
+    if status_upper in {"CANCELLED", "CANCELED", "REJECTED_BY_TECHNICIAN", "EXHAUSTED", "FAILED"}:
+        effective_job_status = "CANCELLED"
+    elif not technician_accepted and status_upper in {"ASSIGNED", "AWAITING_ACCEPTANCE", "QUEUED", "DISPATCHED", "PENDING"}:
+        effective_job_status = "AWAITING_ACCEPTANCE"
+    elif status_upper == "QUEUED":
+        effective_job_status = "AWAITING_ACCEPTANCE"
+    else:
+        effective_job_status = job.status
 
     tech_name = None
     tech_photo = None
@@ -2317,7 +2362,7 @@ async def list_customer_support_requests(
     within the authenticated tenant.
     """
 
-    return (
+    requests = (
         db.query(CustomerSupportRequest)
         .filter(
             CustomerSupportRequest.customer_user_id
@@ -2331,6 +2376,7 @@ async def list_customer_support_requests(
         )
         .all()
     )
+    return [customer_case_payload(db, row) for row in requests]
 
 
 @router.post(
@@ -2350,40 +2396,79 @@ async def create_customer_support_request(
     authenticated user and are never accepted from the request body.
     """
 
-    related_job_id = data.related_job_id
-
-    if related_job_id is not None:
-        related_request = (
-            db.query(ServiceRequest)
-            .filter(
-                ServiceRequest.linked_job_id == related_job_id,
-                ServiceRequest.customer_user_id == current_user.user_id,
-                ServiceRequest.tenant_id == current_user.tenant_id,
-            )
-            .first()
-        )
-
-        if not related_request:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Related job not found for this customer.",
-            )
-
-    support_request = CustomerSupportRequest(
-        request_number=_generate_support_request_number(),
-        customer_user_id=current_user.user_id,
+    support_request, _ = create_support_case(
+        db,
+        customer_id=current_user.user_id,
         tenant_id=current_user.tenant_id,
         subject=data.subject,
         description=data.description,
-        status="OPEN",
-        related_job_id=related_job_id,
+        related_job_id=data.related_job_id,
     )
+    return customer_case_payload(db, support_request)
 
-    db.add(support_request)
+
+@router.post(
+    "/support-requests/{support_request_id}/reopen",
+    response_model=CustomerSupportRequestResponse,
+)
+async def reopen_customer_support_request(
+    support_request_id: int,
+    data: CustomerSupportReopenRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    support_request = db.query(CustomerSupportRequest).filter(
+        CustomerSupportRequest.id == support_request_id,
+        CustomerSupportRequest.customer_user_id == current_user.user_id,
+        CustomerSupportRequest.tenant_id == current_user.tenant_id,
+    ).first()
+    if support_request is None:
+        raise HTTPException(status_code=404, detail="Support request not found.")
+    if support_request.status not in {"RESOLVED", "CLOSED"}:
+        raise HTTPException(status_code=409, detail="This request is already open for support.")
+    old_status = support_request.status
+    support_request.status = "OPEN"
+    support_request.resolution_note = None
+    support_request.resolved_at = None
+    support_request.resolved_by = None
+    note = data.message or "The issue is not resolved yet. Please continue helping me."
+    customer_update = CustomerSupportCaseUpdate(
+        support_request_id=support_request.id,
+        author_user_id=current_user.user_id,
+        author_role="customer",
+        message=note,
+    )
+    db.add(customer_update)
+    audit_log(
+        db,
+        action=AuditAction.CUSTOMER_SUPPORT_UPDATED,
+        tenant_id=support_request.tenant_id,
+        user_id=current_user.user_id,
+        role=current_user.role.value,
+        entity_type="customer_support_request",
+        entity_id=str(support_request.id),
+        old_value={"status": old_status},
+        new_value={"status": "OPEN", "customer_message": note},
+    )
+    notify_support_staff(
+        db,
+        support_request,
+        f"Support case {support_request.request_number} reopened",
+        f"The customer asked for more help: {note[:250]}",
+        f"reopened:{uuid.uuid4().hex[:10]}",
+    )
     db.commit()
     db.refresh(support_request)
+    db.refresh(customer_update)
+    try:
+        from app.sentiment.job_message_tasks import analyze_customer_support_case
 
-    return support_request
+        analyze_customer_support_case.delay(support_request.id, customer_update.id)
+    except Exception:
+        logger.exception(
+            "Could not queue sentiment analysis for support case update %s", customer_update.id
+        )
+    return customer_case_payload(db, support_request)
 
 # ──────────────────────────────────────────────────
 # Service History
@@ -2452,10 +2537,10 @@ async def get_service_history(
 
         if sr_status_str in ["CANCELLED", "CANCELED"] or job_status_str in ["CANCELLED", "CANCELED"]:
             sr.status = "CANCELLED"
-        elif sr_status_str == "REJECTED_BY_TECHNICIAN" or job_status_str == "REJECTED_BY_TECHNICIAN":
-            sr.status = "REJECTED_BY_TECHNICIAN"
-        elif sr_status_str == "QUEUED" or job_status_str == "QUEUED":
-            sr.status = "UNASSIGNED"
+        elif sr_status_str in ["REJECTED_BY_TECHNICIAN", "EXHAUSTED", "FAILED"] or job_status_str in ["REJECTED_BY_TECHNICIAN", "EXHAUSTED", "FAILED"]:
+            sr.status = "CANCELLED"
+        elif job_status_str in ["ASSIGNED", "AWAITING_ACCEPTANCE", "QUEUED", "DISPATCHED", "PENDING"] or sr_status_str in ["ASSIGNED", "AWAITING_ACCEPTANCE", "QUEUED"]:
+            sr.status = "AWAITING_ACCEPTANCE"
         elif job_status_str in ["COMPLETED", "CLOSED"] or sr_status_str in ["COMPLETED", "CLOSED"]:
             sr.status = "COMPLETED"
         elif job and job.status:
@@ -2671,6 +2756,15 @@ async def submit_customer_feedback(
             detail="Feedback has already been submitted for this job.",
         )
 
+    if (feedback.comment or "").strip():
+        try:
+            from app.sentiment.job_message_tasks import analyze_customer_job_feedback
+
+            analyze_customer_job_feedback.delay(feedback.id)
+        except Exception:
+            # Persisting feedback must not depend on the sentiment queue being available.
+            logger.exception("Could not queue sentiment analysis for feedback %s", feedback.id)
+
     # Customer feedback is also a dispatch event. Persist one notification
     # per active dispatcher/admin and publish it only to this job's tenant.
     try:
@@ -2758,6 +2852,66 @@ async def submit_customer_feedback(
 # ──────────────────────────────────────────────────
 # Customer Notification Preferences
 # ──────────────────────────────────────────────────
+
+@router.put("/notification-device")
+async def register_customer_notification_device(
+    payload: FCMTokenRegistration,
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.NOTIFICATIONS_VIEW_OWN)
+    ),
+    db: Session = Depends(get_db),
+):
+    """Register the authenticated customer's native push token."""
+    user = (
+        db.query(User)
+        .filter(
+            User.id == str(current_user.user_id),
+            User.tenant_id == str(current_user.tenant_id),
+            User.role == UserRole.CUSTOMER.value,
+            User.is_active.is_(True),
+            User.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if user is None:
+        raise HTTPException(status_code=404, detail="Customer account not found.")
+    user.fcm_token = payload.token
+    user.device_type = payload.device_type
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Customer notification device registration failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to register this device for push notifications.",
+        ) from exc
+    return {"status": "registered"}
+
+
+@router.delete("/notification-device")
+async def unregister_customer_notification_device(
+    current_user: AuthenticatedUser = Depends(
+        require_permission(Permission.NOTIFICATIONS_VIEW_OWN)
+    ),
+    db: Session = Depends(get_db),
+):
+    """Remove the push token belonging to the authenticated customer account."""
+    user = (
+        db.query(User)
+        .filter(
+            User.id == str(current_user.user_id),
+            User.tenant_id == str(current_user.tenant_id),
+            User.role == UserRole.CUSTOMER.value,
+        )
+        .first()
+    )
+    if user is None:
+        raise HTTPException(status_code=404, detail="Customer account not found.")
+    user.fcm_token = None
+    user.device_type = None
+    db.commit()
+    return {"status": "unregistered"}
 
 @router.get(
     "/notification-preferences",

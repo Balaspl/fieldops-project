@@ -6,8 +6,23 @@ import {
   IndianRupee,
   Image as ImageIcon,
   Upload,
+  Sparkles,
 } from "lucide-react";
 import { closeJob, type JobClosureData } from "../../services/planningService";
+
+export interface ClosureAgentRequest {
+  technician_notes: string;
+  parts_used: string[];
+  duration_minutes: number;
+}
+
+export interface ClosureDecision {
+  work_summary: string;
+  customer_summary: string;
+  invoice_description: string;
+  follow_up_required: boolean;
+  follow_up_reason: string | null;
+}
 
 interface JobClosureModalProps {
   jobId: number | string;
@@ -15,6 +30,9 @@ interface JobClosureModalProps {
   onClose: () => void;
   onSuccess: (data: JobClosureData) => void;
   paymentFlow?: boolean;
+  onGenerateClosure?: (
+    input: ClosureAgentRequest
+  ) => Promise<ClosureDecision>;
 }
 
 const compressImage = (
@@ -110,6 +128,7 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
   onClose,
   onSuccess,
   paymentFlow = false,
+  onGenerateClosure,
 }) => {
   const [workSummary, setWorkSummary] = useState("");
   const [partsUsedText, setPartsUsedText] = useState("");
@@ -134,6 +153,87 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [closureDecision, setClosureDecision] =
+    useState<ClosureDecision | null>(null);
+
+  const [followUpReviewed, setFollowUpReviewed] =
+    useState(false);
+
+  const [isGeneratingClosure, setIsGeneratingClosure] =
+    useState(false);
+
+  const [closureError, setClosureError] =
+    useState<string | null>(null);
+
+    const handleGenerateClosure = async () => {
+    setClosureError(null);
+
+    if (!onGenerateClosure) {
+      setClosureError(
+        "Closure summary generation is not connected yet. Backend integration is required."
+      );
+      return;
+    }
+
+    const technicianNotes = workSummary.trim();
+
+    if (!technicianNotes) {
+      setClosureError("Technician notes are required.");
+      return;
+    }
+
+    const normalizedDuration = durationMinutes.trim();
+
+    if (normalizedDuration === "") {
+      setClosureError("Enter the work duration before generating the summary.");
+      return;
+    }
+
+    const parsedDuration = Number(normalizedDuration);
+
+    if (
+      !Number.isInteger(parsedDuration) ||
+      parsedDuration < 0
+    ) {
+      setClosureError(
+        "Duration must be a whole number of minutes greater than or equal to 0."
+      );
+      return;
+    }
+
+    const partsUsed = partsUsedText
+      .split(/\r?\n/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    setIsGeneratingClosure(true);
+    setClosureDecision(null);
+    setFollowUpReviewed(false);
+
+    try {
+      const result = await onGenerateClosure({
+        technician_notes: technicianNotes,
+        parts_used: partsUsed,
+        duration_minutes: parsedDuration,
+      });
+
+      setClosureDecision(result);
+    } catch (err: any) {
+      const message =
+        err?.response?.data?.detail ||
+        err?.message ||
+        "Failed to generate the closure summary.";
+
+      setClosureError(
+        typeof message === "string"
+          ? message
+          : JSON.stringify(message)
+      );
+    } finally {
+      setIsGeneratingClosure(false);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -253,6 +353,13 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
     if (step === "upi_demo") return;
 
     if (step === "service") {
+      if (closureDecision?.follow_up_required && !followUpReviewed) {
+        setError(
+          "Review the follow-up recommendation and confirm the job is ready to close before continuing."
+        );
+        return;
+      }
+
       const canonicalWorkSummary = workSummary.trim();
       if (!canonicalWorkSummary) {
         setError("Work summary is required.");
@@ -506,9 +613,11 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
               rows={3}
               maxLength={5000}
               value={workSummary}
-              onChange={(e) =>
-                setWorkSummary(e.target.value)
-              }
+              onChange={(e) => {
+  setWorkSummary(e.target.value);
+  setClosureDecision(null);
+  setClosureError(null);
+}}
               placeholder="Describe work completed, tests run, and final status..."
               required
             />
@@ -538,7 +647,11 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
                 style={styles.textarea}
                 rows={4}
                 value={partsUsedText}
-                onChange={(e) => setPartsUsedText(e.target.value)}
+                onChange={(e) => {
+  setPartsUsedText(e.target.value);
+  setClosureDecision(null);
+  setClosureError(null);
+}}
                 placeholder="Enter one part per line..."
               />
 
@@ -560,14 +673,249 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
                 step="1"
                 style={styles.input}
                 value={durationMinutes}
-                onChange={(e) => setDurationMinutes(e.target.value)}
-                placeholder="Optional"
+                onChange={(e) => {
+  setDurationMinutes(e.target.value);
+  setClosureDecision(null);
+  setClosureError(null);
+}}
+                placeholder="Enter minutes"
               />
 
               <div style={styles.helperText}>
-                Optional whole-number duration for the completed work.
+                 Enter the whole-number duration. Required for closure summary generation.
               </div>
             </div>
+          </div>
+
+          {/* Closure Agent Generation */}
+          <div
+            style={{
+              padding: "16px",
+              border: "1px solid #BBE7CC",
+              borderRadius: "12px",
+              background: "#F5FBF7",
+              display: "flex",
+              flexDirection: "column",
+              gap: "12px",
+            }}
+          >
+            <div>
+              <h4
+                style={{
+                  margin: 0,
+                  color: "#166534",
+                  fontSize: "15px",
+                  fontWeight: 700,
+                }}
+              >
+                Closure Agent Summary
+              </h4>
+
+              <p
+                style={{
+                  margin: "5px 0 0",
+                  color: "#64748B",
+                  fontSize: "12px",
+                }}
+              >
+                Generate completion summaries from the technician's
+                notes, parts used and work duration.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleGenerateClosure}
+              disabled={isGeneratingClosure}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "8px",
+                minHeight: "42px",
+                padding: "10px 16px",
+                border: "1px solid #15803D",
+                borderRadius: "9px",
+                background: isGeneratingClosure
+                  ? "#94A3B8"
+                  : "linear-gradient(135deg, #16A34A, #15803D)",
+                color: "#FFFFFF",
+                fontSize: "13px",
+                fontWeight: 700,
+                cursor: isGeneratingClosure
+                  ? "not-allowed"
+                  : "pointer",
+              }}
+            >
+              <Sparkles size={16} />
+              {isGeneratingClosure
+                ? "Generating Summary..."
+                : "Generate Closure Summary"}
+            </button>
+
+            {closureError && (
+              <div
+                role="alert"
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: "8px",
+                  background: "#FEF2F2",
+                  border: "1px solid #FECACA",
+                  color: "#991B1B",
+                  fontSize: "12px",
+                }}
+              >
+                {closureError}
+              </div>
+            )}
+
+            {closureDecision && (
+              <div
+                aria-live="polite"
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "12px",
+                  marginTop: "4px",
+                }}
+              >
+                <h4
+                  style={{
+                    margin: 0,
+                    color: "#166534",
+                    fontSize: "14px",
+                  }}
+                >
+                  Generated Closure Information
+                </h4>
+
+                {[
+                  {
+                    title: "Internal Work Summary",
+                    value: closureDecision.work_summary,
+                  },
+                  {
+                    title: "Customer Completion Summary",
+                    value: closureDecision.customer_summary,
+                  },
+                  {
+                    title: "Invoice Description",
+                    value: closureDecision.invoice_description,
+                  },
+                ].map((item) => (
+                  <div
+                    key={item.title}
+                    style={{
+                      padding: "12px",
+                      borderRadius: "8px",
+                      background: "#FFFFFF",
+                      border: "1px solid #DCECE1",
+                    }}
+                  >
+                    <div
+                      style={{
+                        marginBottom: "6px",
+                        color: "#166534",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                      }}
+                    >
+                      {item.title}
+                    </div>
+
+                    <div
+                      style={{
+                        color: "#334155",
+                        fontSize: "13px",
+                        lineHeight: 1.6,
+                        whiteSpace: "pre-wrap",
+                      }}
+                    >
+                      {item.value}
+                    </div>
+                  </div>
+                ))}
+
+                <div
+                  style={{
+                    padding: "12px",
+                    borderRadius: "8px",
+                    background: closureDecision.follow_up_required
+                      ? "#FFF7ED"
+                      : "#ECFDF5",
+                    border: closureDecision.follow_up_required
+                      ? "1px solid #FED7AA"
+                      : "1px solid #A7F3D0",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "12px",
+                      fontWeight: 700,
+                      color: closureDecision.follow_up_required
+                        ? "#9A3412"
+                        : "#047857",
+                    }}
+                  >
+                    Follow-up Recommendation:{" "}
+                    {closureDecision.follow_up_required
+                      ? "Required"
+                      : "Not Required"}
+                  </div>
+
+                  {closureDecision.follow_up_reason && (
+                    <p
+                      style={{
+                        margin: "6px 0 0",
+                        fontSize: "12px",
+                        color: "#475569",
+                      }}
+                    >
+                      {closureDecision.follow_up_reason}
+                    </p>
+                  )}
+
+                  {closureDecision.follow_up_required && (
+                    <label
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: "8px",
+                        marginTop: "12px",
+                        paddingTop: "12px",
+                        borderTop: "1px solid #FED7AA",
+                        color: "#7C2D12",
+                        fontSize: "12px",
+                        lineHeight: 1.5,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={followUpReviewed}
+                        onChange={(event) => {
+                          setFollowUpReviewed(event.target.checked);
+                          setError(null);
+                        }}
+                        style={{ marginTop: "2px" }}
+                      />
+                      <span>
+                        I reviewed this recommendation and confirm the job is ready to close.
+                        <span
+                          style={{
+                            display: "block",
+                            marginTop: "3px",
+                            color: "#9A3412",
+                          }}
+                        >
+                          This confirmation does not schedule a visit or change the job status.
+                        </span>
+                      </span>
+                    </label>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Images Section */}
@@ -575,45 +923,29 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
 
             {/* Before Images */}
             <div style={styles.formGroup}>
-              <label style={styles.label}>
-                Before Images (Optional)
-              </label>
+              <label style={styles.label}>Before Images (Optional)</label>
 
               <div style={styles.imagePreviewList}>
                 {beforeImages.map((img, idx) => (
-                  <div
-                    key={idx}
-                    style={styles.imagePreviewRow}
-                  >
-                    {img.startsWith("data:") ||
-                    img.startsWith("http") ? (
+                  <div key={idx} style={styles.imagePreviewRow}>
+                    {img.startsWith("data:") || img.startsWith("http") ? (
                       <img
                         src={img}
                         alt={`Before ${idx + 1}`}
                         style={styles.thumbnail}
                       />
                     ) : (
-                      <ImageIcon
-                        size={14}
-                        color="#64748b"
-                      />
+                      <ImageIcon size={14} color="#64748b" />
                     )}
 
-                    <span style={styles.imageLabel}>
-                      Before #{idx + 1}
-                    </span>
+                    <span style={styles.imageLabel}>Before #{idx + 1}</span>
 
                     <button
                       type="button"
                       style={styles.iconBtn}
-                      onClick={() =>
-                        handleRemoveBeforeImage(idx)
-                      }
+                      onClick={() => handleRemoveBeforeImage(idx)}
                     >
-                      <Trash2
-                        size={14}
-                        color="#ef4444"
-                      />
+                      <Trash2 size={14} color="#ef4444" />
                     </button>
                   </div>
                 ))}
@@ -621,17 +953,11 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
 
               <label style={styles.fileUploadBtn}>
                 <Upload size={13} />
-
-                {beforeImages.length > 0
-                  ? "+ Add Another Image"
-                  : "Choose File"}
-
+                {beforeImages.length > 0 ? "+ Add Another Image" : "Choose File"}
                 <input
                   type="file"
                   accept="image/*"
-                  onChange={(e) =>
-                    handleFileUpload(e, "before")
-                  }
+                  onChange={(event) => handleFileUpload(event, "before")}
                   style={{ display: "none" }}
                 />
               </label>
@@ -692,13 +1018,13 @@ export const JobClosureModal: React.FC<JobClosureModalProps> = ({
                   : "Choose File"}
 
                 <input
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) =>
-                    handleFileUpload(e, "after")
-                  }
-                  style={{ display: "none" }}
-                />
+  type="file"
+  accept="image/*"
+  onChange={(e) =>
+    handleFileUpload(e, "after")
+  }
+  style={{ display: "none" }}
+/>
               </label>
             </div>
           </div>

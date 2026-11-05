@@ -1226,6 +1226,16 @@ async def admin_override_assignment(
 
         )
 
+    from app.services.assignment_push import send_assignment_push
+
+    await send_assignment_push(
+        job_id=job.id,
+        tenant_id=str(new_technician.tenant_id),
+        technician_id=str(new_technician.tech_id),
+        job_title=job.service_type,
+        location=job.location,
+    )
+
 
 
     # ------------------------------------------------------------------

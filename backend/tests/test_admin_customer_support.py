@@ -39,6 +39,9 @@ class FakeQuery:
         self.filters.extend(expressions)
         return self
 
+    def outerjoin(self, *expressions):
+        return self
+
     def order_by(self, *expressions):
         return self
 
@@ -74,7 +77,15 @@ class FakeDB:
         self.refresh_count = 0
         self.rollback_count = 0
 
-    def query(self, model):
+    def query(self, *models):
+        # Case update and author reads use a two-model join. This focused fake
+        # has no case updates, so return an empty joined result.
+        if len(models) > 1:
+            query = FakeQuery()
+            self.queries.append((models, query))
+            return query
+
+        model = models[0]
         if model is CustomerSupportRequest:
             query = self.support_query
         elif model is User:
@@ -127,8 +138,12 @@ def support(*, tenant_id="tenant-1"):
         tenant_id=tenant_id,
         subject="Invoice problem",
         description="Please check the invoice amount for my completed service.",
+        category="OTHER",
+        priority="MEDIUM",
         status="OPEN",
         related_job_id=101,
+        assigned_staff_id=None,
+        source_chat_conversation_id=None,
         resolution_note=None,
         resolved_at=None,
         resolved_by=None,

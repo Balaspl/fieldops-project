@@ -1,5 +1,6 @@
 import logging
 import json
+import os
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 import hashlib
@@ -3659,7 +3660,19 @@ def send_sms_async(
             logger.info("SMS delivery skipped: duplicate or already claimed", extra={"delivery_id": safe_delivery_id})
             return {"success": True, "skipped": "already_claimed"}
     try:
-        result = service.send_sms(to_number=to_number, body=body, from_number=from_number)
+        status_callback = (
+            os.getenv("TWILIO_STATUS_CALLBACK_URL")
+            if safe_delivery_id is not None
+            else None
+        )
+        send_args = {
+            "to_number": to_number,
+            "body": body,
+            "from_number": from_number,
+        }
+        if status_callback:
+            send_args["status_callback"] = status_callback
+        result = service.send_sms(**send_args)
     except Exception as exc:
         if safe_delivery_id is not None:
             from .services.ai.FieldOpsAI.agents.communication_agent.channels import mark_delivery
@@ -3684,6 +3697,173 @@ def send_sms_async(
         if not result.success and self.request.retries < self.max_retries:
             raise self.retry(exc=RuntimeError(result.error_message or "SMS delivery failed"), countdown=2 ** (self.request.retries + 1))
     return result
+
+
+class PermanentPushDeliveryError(Exception):
+    pass
+
+
+@shared_task(bind=True, name="app.tasks.send_push_async", max_retries=3)
+def send_push_async(self, title: str, body: str, delivery_id: int):
+    """Deliver one tracked push via Expo Push Service or Firebase Cloud Messaging."""
+    from .models.user import User
+    from .models_legacy import InAppNotification, NotificationChannelDelivery
+    from .services.ai.FieldOpsAI.agents.communication_agent.channels import (
+        begin_delivery_attempt,
+        mark_delivery,
+    )
+
+    delivery_id = int(delivery_id)
+    db = SessionLocal()
+    try:
+        if not begin_delivery_attempt(db, delivery_id):
+            return {"success": True, "skipped": "already_claimed"}
+        delivery = db.get(NotificationChannelDelivery, delivery_id)
+        notification = (
+            db.get(InAppNotification, delivery.notification_id)
+            if delivery
+            else None
+        )
+        if not delivery or not notification or delivery.channel != "push":
+            mark_delivery(db, delivery_id, "permanent_failure", "push delivery context is missing", increment_attempt=False)
+            return {"success": False, "status": "permanent_failure"}
+
+        recipient = None
+        if notification.recipient_role == "technician":
+            recipient = (
+                db.query(models.Technician)
+                .filter(
+                    models.Technician.tech_id == notification.recipient_id,
+                    models.Technician.tenant_id == delivery.tenant_id,
+                )
+                .first()
+            )
+        else:
+            recipient = (
+                db.query(User)
+                .filter(
+                    User.id == notification.recipient_id,
+                    User.tenant_id == delivery.tenant_id,
+                    User.is_active.is_(True),
+                    User.deleted_at.is_(None),
+                )
+                .first()
+            )
+        token = str(getattr(recipient, "fcm_token", "") or "").strip()
+        device_type = str(getattr(recipient, "device_type", "") or "").lower()
+        if not token:
+            mark_delivery(db, delivery_id, "permanent_failure", "recipient has no registered push device", increment_attempt=False)
+            return {"success": False, "status": "permanent_failure"}
+
+        data = {
+            "notification_id": str(notification.id),
+            "type": str(notification.type or "update"),
+            "job_id": str(notification.job_id or ""),
+        }
+        is_expo_token = token.startswith(("ExponentPushToken[", "ExpoPushToken["))
+    finally:
+        db.close()
+
+    try:
+        if is_expo_token:
+            import requests
+
+            response = requests.post(
+                "https://exp.host/--/api/v2/push/send",
+                json={
+                    "to": token,
+                    "title": title[:50],
+                    "body": body[:160],
+                    "sound": "default",
+                    "priority": "high",
+                    "channelId": "fieldops_updates",
+                    "data": data,
+                },
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            ticket = response.json().get("data", {})
+            if ticket.get("status") != "ok":
+                error_code = (ticket.get("details") or {}).get("error")
+                permanent = error_code == "DeviceNotRegistered"
+                if permanent:
+                    raise PermanentPushDeliveryError("Expo push provider rejected the device token")
+                raise RuntimeError("Expo push provider temporarily rejected the message")
+            provider_id = ticket.get("id")
+        else:
+            import firebase_admin
+            from firebase_admin import messaging
+
+            if not firebase_admin._apps:
+                firebase_admin.initialize_app()
+
+            android_config = messaging.AndroidConfig(
+                priority="high",
+                notification=messaging.AndroidNotification(
+                    channel_id="fieldops_updates",
+                ),
+            ) if device_type == "android" else None
+            provider_id = messaging.send(
+                messaging.Message(
+                    token=token,
+                    notification=messaging.Notification(
+                        title=title[:50],
+                        body=body[:160],
+                    ),
+                    data=data,
+                    android=android_config,
+                )
+            )
+    except Exception as exc:
+        error_type = type(exc).__name__
+        permanent = isinstance(exc, PermanentPushDeliveryError) or error_type in {
+            "UnregisteredError",
+            "InvalidArgumentError",
+        }
+        failed_db = SessionLocal()
+        try:
+            mark_delivery(
+                failed_db,
+                delivery_id,
+                "permanent_failure" if permanent else "failed",
+                f"Push provider error: {error_type}",
+                increment_attempt=False,
+            )
+            if permanent:
+                from .models_legacy import Technician
+
+                if notification.recipient_role == "technician":
+                    failed_db.query(Technician).filter(
+                        Technician.tech_id == notification.recipient_id,
+                        Technician.tenant_id == delivery.tenant_id,
+                        Technician.fcm_token == token,
+                    ).update({"fcm_token": None, "device_type": None}, synchronize_session=False)
+                else:
+                    failed_db.query(User).filter(
+                        User.id == notification.recipient_id,
+                        User.tenant_id == delivery.tenant_id,
+                        User.fcm_token == token,
+                    ).update({"fcm_token": None, "device_type": None}, synchronize_session=False)
+                failed_db.commit()
+        finally:
+            failed_db.close()
+        if not permanent and self.request.retries < self.max_retries:
+            raise self.retry(exc=RuntimeError("Push delivery temporarily failed"), countdown=2 ** (self.request.retries + 1))
+        return {"success": False, "status": "permanent_failure" if permanent else "failed"}
+
+    result_db = SessionLocal()
+    try:
+        mark_delivery(
+            result_db,
+            delivery_id,
+            "accepted",
+            provider_id=str(provider_id) if provider_id else None,
+            increment_attempt=False,
+        )
+    finally:
+        result_db.close()
+    return {"success": True, "status": "accepted"}
 
 
 def _build_customer_invoice_pdf_attachment(

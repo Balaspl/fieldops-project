@@ -11,7 +11,7 @@ import dispatcherService, {
 } from "../../services/dispatcherService";
 
 const PAGE_SIZE = 8;
-const REFRESH_MS = 60_000;
+const REFRESH_MS = 3000;
 
 
 const styles = {
@@ -304,6 +304,119 @@ const styles = {
     alignItems: "center",
     justifyContent: "center",
     color: "#16a34a",
+  } as React.CSSProperties,
+
+    dispatcherProfileCard: {
+    background: "#FFFFFF",
+    border: "1px solid #E3ECE7",
+    borderRadius: "16px",
+    padding: "24px",
+    boxShadow: "0 4px 18px rgba(47,79,62,.06)",
+    maxWidth: "760px",
+    width: "100%",
+    margin: "24px auto",
+    boxSizing: "border-box",
+  } as React.CSSProperties,
+
+  dispatcherProfileHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "16px",
+    paddingBottom: "20px",
+    borderBottom: "1px solid #EAF0EC",
+  } as React.CSSProperties,
+
+  dispatcherProfileIdentity: {
+    display: "flex",
+    alignItems: "center",
+    gap: "16px",
+    minWidth: 0,
+  } as React.CSSProperties,
+
+  dispatcherLargeAvatar: {
+    width: "64px",
+    height: "64px",
+    minWidth: "64px",
+    borderRadius: "16px",
+    background: "linear-gradient(135deg, #7AAE8A, #5C9470)",
+    color: "#FFFFFF",
+    fontSize: "20px",
+    fontWeight: 700,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  } as React.CSSProperties,
+
+  dispatcherProfileName: {
+    fontSize: "18px",
+    fontWeight: 700,
+    color: "#1F2933",
+    marginBottom: "5px",
+  } as React.CSSProperties,
+
+  dispatcherProfileRole: {
+    fontSize: "11px",
+    color: "#6B7280",
+  } as React.CSSProperties,
+
+  dispatcherStatusBadge: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "6px",
+    padding: "6px 10px",
+    borderRadius: "20px",
+    fontSize: "10px",
+    fontWeight: 700,
+    whiteSpace: "nowrap",
+  } as React.CSSProperties,
+
+  dispatcherProfileGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+    gap: "14px",
+    marginTop: "20px",
+  } as React.CSSProperties,
+
+  dispatcherInfoBox: {
+    padding: "14px",
+    background: "#F8FBF9",
+    border: "1px solid #EAF0EC",
+    borderRadius: "10px",
+  } as React.CSSProperties,
+
+  dispatcherInfoLabel: {
+    fontSize: "9px",
+    fontWeight: 700,
+    color: "#7A8B82",
+    textTransform: "uppercase",
+    letterSpacing: ".05em",
+    marginBottom: "6px",
+  } as React.CSSProperties,
+
+  dispatcherInfoValue: {
+    fontSize: "12px",
+    fontWeight: 600,
+    color: "#1F2933",
+    wordBreak: "break-word",
+  } as React.CSSProperties,
+
+  dispatcherDutyRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "12px",
+    marginTop: "20px",
+    paddingTop: "18px",
+    borderTop: "1px solid #EAF0EC",
+  } as React.CSSProperties,
+
+  dispatcherDutyBadge: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "6px",
+    fontSize: "11px",
+    fontWeight: 700,
   } as React.CSSProperties,
 
   stateCell: {
@@ -661,7 +774,9 @@ export default function DispatcherPage() {
 
   useEffect(() => {
     const timer = setInterval(() => {
-      fetchDispatchers(true);
+      if (document.visibilityState === "visible" && document.hasFocus()) {
+        fetchDispatchers(true);
+      }
     }, REFRESH_MS);
 
     return () => clearInterval(timer);
@@ -814,220 +929,180 @@ export default function DispatcherPage() {
           </div>
         )}
 
-        {/* FILTERS */}
-        <div className="dispatcher-filter" style={styles.filterBar}>
-          <div
-            className="dispatcher-filter-group"
-            style={{ ...styles.filterGroup, ...styles.searchGroup }}
-          >
-            <label style={styles.filterLabel}>Search</label>
-
-            <div style={{ position: "relative" }}>
-              <span
-                style={{
-                  position: "absolute",
-                  left: "10px",
-                  top: "50%",
-                  transform: "translateY(-50%)",
-                  color: "#A0B5A8",
-                  fontSize: "13px",
-                }}
-              >
-                🔍
-              </span>
-
-              <input
-                className="dispatcher-search"
-                style={styles.searchInput}
-                placeholder="Name, email, phone, organization…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
+                {/* DISPATCHER PROFILE */}
+        <div style={{ flex: 1, minHeight: 0 }}>
+          {loading && (
+            <div style={styles.stateCell}>
+              Loading dispatcher...
             </div>
-          </div>
-
-          <div className="dispatcher-filter-group" style={styles.filterGroup}>
-            <label style={styles.filterLabel}>Status</label>
-
-            <select
-              className="dispatcher-select"
-              style={styles.select}
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-            >
-              <option value="ALL">All Statuses</option>
-              <option value="ACTIVE">Active</option>
-              <option value="INACTIVE">Inactive</option>
-            </select>
-          </div>
-
-          <div className="dispatcher-filter-group" style={styles.filterGroup}>
-            <label style={styles.filterLabel}>Duty</label>
-
-            <select
-              className="dispatcher-select"
-              style={styles.select}
-              value={dutyFilter}
-              onChange={(e) => setDutyFilter(e.target.value)}
-            >
-              <option value="ALL">All Duty Status</option>
-              <option value="ON_DUTY">On Duty</option>
-              <option value="OFF_DUTY">Off Duty</option>
-            </select>
-          </div>
-
-          {hasFilters && (
-            <button
-              className="dispatcher-clear"
-              style={styles.clearButton}
-              onClick={clearFilters}
-            >
-              Clear
-            </button>
           )}
-        </div>
 
-        {/* META */}
-        <div style={styles.meta}>
-          <p style={styles.resultCount}>
-            Showing <strong>{pageSlice.length}</strong> of{" "}
-            <strong>{filteredDispatchers.length}</strong> dispatcher
-            {filteredDispatchers.length !== 1 ? "s" : ""}
-          </p>
-        </div>
+          {!loading && error && (
+            <div style={styles.stateCell}>
+              <div style={{ marginBottom: "10px" }}>{error}</div>
 
-        {/* TABLE */}
-        <div className="dispatcher-table-wrap" style={styles.tableWrap}>
-          <table className="dispatcher-table" style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>Dispatcher</th>
-                <th style={styles.th}>Email</th>
-                <th style={styles.th}>Organization</th>
-                <th style={styles.th}>Status</th>
-                <th style={styles.th}>Duty</th>
-                <th style={styles.th}>Actions</th>
-              </tr>
-            </thead>
+              <button
+                style={{
+                  ...styles.refreshButton,
+                  margin: "0 auto",
+                }}
+                onClick={() => fetchDispatchers(false)}
+              >
+                Retry
+              </button>
+            </div>
+          )}
 
-            <tbody>
-              {loading && (
-                <tr>
-                  <td colSpan={6} style={styles.stateCell}>
-                    Loading dispatchers...
-                  </td>
-                </tr>
-              )}
+          {!loading && !error && dispatchers.length === 0 && (
+            <div style={styles.stateCell}>
+              No dispatcher found.
+            </div>
+          )}
 
-              {!loading && error && (
-                <tr>
-                  <td colSpan={6} style={styles.stateCell}>
-                    <div style={{ marginBottom: "10px" }}>{error}</div>
+          {!loading && !error && dispatchers.length > 0 && (
+            <div style={styles.dispatcherProfileCard}>
+              {(() => {
+                const dispatcher = dispatchers[0];
 
-                    <button
-                      style={{
-                        ...styles.refreshButton,
-                        margin: "0 auto",
-                      }}
-                      onClick={() => fetchDispatchers(false)}
-                    >
-                      Retry
-                    </button>
-                  </td>
-                </tr>
-              )}
-
-              {!loading && !error && pageSlice.length === 0 && (
-                <tr>
-                  <td colSpan={6} style={styles.stateCell}>
-                    {hasFilters
-                      ? "No dispatchers match your filters."
-                      : "No dispatchers found."}
-                  </td>
-                </tr>
-              )}
-
-              {!loading &&
-                !error &&
-                pageSlice.map((dispatcher) => (
-                  <tr
-                    key={dispatcher.id}
-                    className="dispatcher-row"
-                    onClick={() => openSidebar(dispatcher)}
-                    style={{ cursor: "pointer" }}
-                  >
-                    <td data-label="Dispatcher" style={styles.td}>
-                      <div style={styles.nameCell}>
-                        <div style={styles.avatar}>
+                return (
+                  <>
+                    <div style={styles.dispatcherProfileHeader}>
+                      <div style={styles.dispatcherProfileIdentity}>
+                        <div style={styles.dispatcherLargeAvatar}>
                           {getInitials(dispatcher.name)}
                         </div>
 
-                        <div style={styles.nameInfo}>
-                          <span style={styles.name}>{dispatcher.name}</span>
+                        <div>
+                          <div style={styles.dispatcherProfileName}>
+                            {dispatcher.name}
+                          </div>
 
-                          <span style={styles.secondary}>
-                            ID: {dispatcher.id}
-                          </span>
+                          <div style={styles.dispatcherProfileRole}>
+                            Dispatcher
+                          </div>
                         </div>
                       </div>
-                    </td>
 
-                    <td data-label="Email" style={styles.td}>
-                      {dispatcher.email}
-                    </td>
-
-                    <td data-label="Organization" style={styles.td}>
                       <span
                         style={{
-                          color: "#475569",
-                          fontWeight: 500,
+                          ...styles.dispatcherStatusBadge,
+                          background: dispatcher.is_active
+                            ? "#DDEEE5"
+                            : "#F0F4F2",
+                          color: dispatcher.is_active
+                            ? "#2F4F3E"
+                            : "#6B7280",
                         }}
                       >
-                        {dispatcher.organization_name || "—"}
-                      </span>
-                    </td>
+                        <span>
+                          •
+                        </span>
 
-                    <td data-label="Status" style={styles.td}>
+                        {dispatcher.is_active
+                          ? "Active"
+                          : "Inactive"}
+                      </span>
+                    </div>
+
+                    <div style={styles.dispatcherProfileGrid}>
+                      <div style={styles.dispatcherInfoBox}>
+                        <div style={styles.dispatcherInfoLabel}>
+                          Email
+                        </div>
+
+                        <div style={styles.dispatcherInfoValue}>
+                          {dispatcher.email || "—"}
+                        </div>
+                      </div>
+
+                      <div style={styles.dispatcherInfoBox}>
+                        <div style={styles.dispatcherInfoLabel}>
+                          Phone
+                        </div>
+
+                        <div style={styles.dispatcherInfoValue}>
+                          {dispatcher.phone_number || "—"}
+                        </div>
+                      </div>
+
+                      <div style={styles.dispatcherInfoBox}>
+                        <div style={styles.dispatcherInfoLabel}>
+                          Organization
+                        </div>
+
+                        <div style={styles.dispatcherInfoValue}>
+                          {dispatcher.organization_name || "—"}
+                        </div>
+                      </div>
+
+                      <div style={styles.dispatcherInfoBox}>
+                        <div style={styles.dispatcherInfoLabel}>
+                          Dispatcher ID
+                        </div>
+
+                        <div style={styles.dispatcherInfoValue}>
+                          {dispatcher.id}
+                        </div>
+                      </div>
+
+                      <div style={styles.dispatcherInfoBox}>
+                        <div style={styles.dispatcherInfoLabel}>
+                          Tenant ID
+                        </div>
+
+                        <div style={styles.dispatcherInfoValue}>
+                          {dispatcher.tenant_id || "—"}
+                        </div>
+                      </div>
+
+                      <div style={styles.dispatcherInfoBox}>
+                        <div style={styles.dispatcherInfoLabel}>
+                          Last Login
+                        </div>
+
+                        <div style={styles.dispatcherInfoValue}>
+                          {formatLastLogin(dispatcher.last_login)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={styles.dispatcherDutyRow}>
                       <span
-                        style={
-                          dispatcher.is_active
-                            ? styles.statusActive
-                            : styles.statusInactive
-                        }
+                        style={{
+                          ...styles.dispatcherDutyBadge,
+                          color: dispatcher.is_on_duty
+                            ? "#2F7A3A"
+                            : "#9B3A3A",
+                        }}
                       >
-                        ● {dispatcher.is_active ? "Active" : "Inactive"}
-                      </span>
-                    </td>
+                        <span>
+                          •
+                        </span>
 
-                    <td data-label="Duty" style={styles.td}>
-                      <span
-                        style={
-                          dispatcher.is_on_duty ? styles.dutyOn : styles.dutyOff
-                        }
-                      >
-                        {dispatcher.is_on_duty ? "On Duty" : "Off Duty"}
+                        {dispatcher.is_on_duty
+                          ? "On Duty"
+                          : "Off Duty"}
                       </span>
-                    </td>
 
-                    <td
-                      data-label="Actions"
-                      style={styles.td}
-                      onClick={(e) => e.stopPropagation()}
-                    >
                       <button
                         className="dispatcher-action"
-                        style={styles.actionButton}
+                        style={{
+                          ...styles.refreshButton,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "6px",
+                        }}
                         onClick={() => openSidebar(dispatcher)}
-                        title="View dispatcher"
-                        aria-label="View dispatcher"
                       >
-                        <Eye size={15} />
+                        <Eye size={13} />
+                        View Details
                       </button>
-                    </td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          )}
         </div>
 
         {/* PAGINATION */}

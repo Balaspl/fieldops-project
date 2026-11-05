@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Image,
@@ -16,6 +16,7 @@ import { useRouter } from "expo-router";
 import Feather from "@expo/vector-icons/Feather";
 import { customerApi } from "../../src/api/customer";
 import type { ServiceCatalogItem } from "../../src/types/api";
+import { useFocusedAutoRefresh } from "../../src/hooks/useFocusedAutoRefresh";
 
 const ASSETS =
   "https://raw.githubusercontent.com/ryeswanthkumar/fieldops-project/feature/current-work/frontend/public/services";
@@ -187,26 +188,23 @@ export default function CustomerHomeScreen() {
   const [catalogLoaded, setCatalogLoaded] = useState(false);
   const [catalogLoadFailed, setCatalogLoadFailed] = useState(false);
 
-  useEffect(() => {
-    let active = true;
-
-    void customerApi
-      .catalog()
-      .then((items) => {
-        if (!active) return;
-        setServiceCatalog(items.filter((item) => item.is_active !== false));
-        setCatalogLoaded(true);
-      })
-      .catch(() => {
-        if (!active) return;
-        setCatalogLoadFailed(true);
-        setCatalogLoaded(true);
-      });
-
-    return () => {
-      active = false;
-    };
+  const refreshCatalog = useCallback(async () => {
+    try {
+      const items = await customerApi.catalog();
+      setServiceCatalog(items.filter((item) => item.is_active !== false));
+      setCatalogLoadFailed(false);
+      setCatalogLoaded(true);
+    } catch {
+      setCatalogLoadFailed(true);
+      setCatalogLoaded(true);
+    }
   }, []);
+
+  useEffect(() => {
+    void refreshCatalog();
+  }, [refreshCatalog]);
+
+  useFocusedAutoRefresh(refreshCatalog);
 
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = {};
