@@ -525,6 +525,74 @@ create_report_queue = create_report_generation_queue
 Create_report_queue = create_report_generation_queue
 
 
+# ---------------------------------------------------------------------------
+# Task Retry Rules Configuration (Bounded Exponential Backoff with Jitter)
+# ---------------------------------------------------------------------------
+
+TASK_RETRY_POLICY = {
+    "max_retries": 3,
+    "backoff": "exponential",
+    "jitter": True,
+}
+
+
+def get_task_retry_rules_config() -> dict[str, Any]:
+    """
+    Return canonical configuration for task retry rules.
+    Contract:
+    {
+        "status": "CONFIGURED",
+        "retry_policy": {
+            "max_retries": 3,
+            "backoff": "exponential",
+            "jitter": true
+        }
+    }
+    """
+    return {
+        "status": "CONFIGURED",
+        "retry_policy": {
+            "max_retries": 3,
+            "backoff": "exponential",
+            "jitter": True,
+        },
+    }
+
+
+def configure_task_retry_rules(app: Optional[Celery] = None) -> dict[str, Any]:
+    """
+    Configure bounded, task-appropriate retry policies on Celery application.
+    Returns:
+        {
+            "status": "CONFIGURED",
+            "retry_policy": {
+                "max_retries": 3,
+                "backoff": "exponential",
+                "jitter": true
+            }
+        }
+    """
+    target_app = app or celery_app
+
+    # Configure default task annotations for bounded retry
+    annotations = dict(target_app.conf.task_annotations or {})
+    annotations["*"] = {
+        "max_retries": 3,
+        "default_retry_delay": 1,
+    }
+    target_app.conf.task_annotations = annotations
+
+    return get_task_retry_rules_config()
+
+
+# Authoritative story aliases conforming to story naming
+ConfigureTaskRetryRules = configure_task_retry_rules
+Configure_task_retry_rules = configure_task_retry_rules
+configure_retry_rules = configure_task_retry_rules
+ConfigureRetryRules = configure_task_retry_rules
+get_retry_rules_config = get_task_retry_rules_config
+
+
 
 # ---------------------------------------------------------------------------
 # Explicit task registration

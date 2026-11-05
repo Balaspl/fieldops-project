@@ -298,3 +298,18 @@ class PriorityTaskQueue:
             total += self.redis.zcard(queue_key)
 
         return total
+
+# ---------------------------------------------------------------------------
+# Task Retry Rules Re-exports (Story: Configure task retry rules)
+# ---------------------------------------------------------------------------
+
+from app.celery_app import (
+    get_task_retry_rules_config,
+    configure_task_retry_rules,
+    ConfigureTaskRetryRules,
+    Configure_task_retry_rules,
+    configure_retry_rules,
+    ConfigureRetryRules,
+    get_retry_rules_config,
+)
+

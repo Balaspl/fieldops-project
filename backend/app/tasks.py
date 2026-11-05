@@ -3552,6 +3552,96 @@ def create_report_generation_queue_task(
     return create_report_generation_queue()
 
 
+# ---------------------------------------------------------------------------
+# Task Retry Rules (Bounded Exponential Backoff with Jitter & DLQ Routing)
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    name="app.tasks.configure_task_retry_rules_task",
+)
+def configure_task_retry_rules_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Celery task to verify and activate task retry rules."""
+    from app.celery_app import configure_task_retry_rules
+    return configure_task_retry_rules()
+
+
+def handle_task_failure_with_retry_policy(
+    *,
+    celery_task=None,
+    error: BaseException,
+    task_payload: dict,
+    tenant_id: str,
+    retry_count: int = 0,
+    correlation_id: Optional[str] = None,
+    redis=None,
+    db=None,
+) -> dict[str, Any]:
+    """
+    Handle task failure adhering to bounded retry policy:
+    - Non-retryable (validation/auth/guardrail) -> moved to DLQ immediately.
+    - Retryable (network/timeout/transient) and retry_count < 3 -> retried with exponential backoff & jitter.
+    - Retryable but retry_count >= 3 -> moved to DLQ (no infinite loops).
+    """
+    from app.runtime.retry import RetryDecision, RetryManager
+    from app.runtime.dlq import DeadLetterQueue
+
+    evaluation = RetryManager.evaluate(error, retry_count)
+
+    if evaluation.decision == RetryDecision.RETRY and retry_count < RetryManager.MAX_RETRIES:
+        delay = RetryManager.calculate_backoff_with_jitter(evaluation.retry_number, jitter=True)
+        logger.warning(
+            "Task failed with transient error; scheduling bounded retry %d with backoff %.3fs. error=%s",
+            evaluation.retry_number,
+            delay,
+            error,
+        )
+        if celery_task is not None:
+            raise celery_task.retry(exc=error, countdown=delay)
+        return {
+            "status": "RETRY_SCHEDULED",
+            "retry_number": evaluation.retry_number,
+            "delay_seconds": delay,
+            "reason": evaluation.reason,
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+        }
+
+    # Move to DLQ
+    logger.error(
+        "Task failure cannot be retried (decision=%s, reason=%s); moving to DLQ.",
+        evaluation.decision,
+        evaluation.reason,
+    )
+    redis_client = redis or get_redis_client()
+    dlq = DeadLetterQueue(redis_client, db)
+    dlq_entry = {
+        "tenant_id": tenant_id,
+        "payload": {
+            "task": task_payload,
+            "correlation_id": correlation_id,
+            "task_type": task_payload.get("task_type", "task") if isinstance(task_payload, dict) else "task",
+        },
+    }
+    dlq_record = dlq.add(
+        task=dlq_entry,
+        reason=evaluation.reason,
+        retry_count=retry_count,
+        error=error,
+        celery_task_id=getattr(getattr(celery_task, "request", None), "id", None) if celery_task else None,
+    )
+    return {
+        "status": "MOVED_TO_DLQ",
+        "dlq_id": dlq_record.get("id"),
+        "reason": evaluation.reason,
+        "retry_count": retry_count,
+        "tenant_id": tenant_id,
+        "correlation_id": correlation_id,
+    }
+
+
 
 
 

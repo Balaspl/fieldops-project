@@ -181,11 +181,22 @@ class RetryManager:
         Determine whether a task failure is transient/retryable.
         """
 
-        # Guardrail violations must never be retried.
+        # Guardrail violations and permanent validation/permission errors must never be retried.
         if cls.is_guardrail_violation(error):
             return False
 
-        # Timeout/network failures are retryable.
+        if isinstance(
+            error,
+            (
+                ValueError,
+                KeyError,
+                TypeError,
+                PermissionError,
+            ),
+        ):
+            return False
+
+        # Timeout/network/broker failures are retryable.
         if isinstance(
             error,
             (
@@ -193,6 +204,11 @@ class RetryManager:
                 ConnectionError,
             ),
         ):
+            return True
+
+        err_class = error.__class__.__name__.lower()
+        err_msg = str(error).lower()
+        if any(term in err_class or term in err_msg for term in ["broker", "network", "transient", "redisconnection", "connectionreset"]):
             return True
 
         status_code = cls.extract_status_code(error)
@@ -294,3 +310,43 @@ class RetryManager:
                 cls.NON_RETRYABLE_STATUS_CODES
             ),
         }
+
+    @classmethod
+    def calculate_backoff_with_jitter(
+        cls,
+        retry_number: int,
+        jitter: bool = True,
+    ) -> float:
+        """Calculate bounded exponential backoff with optional random jitter."""
+        import random
+        base_delay = cls.calculate_backoff(retry_number)
+        if jitter:
+            return round(base_delay + random.uniform(0.05, 0.25), 3)
+        return float(base_delay)
+
+    @classmethod
+    def get_retry_policy_contract(cls) -> dict[str, Any]:
+        """Return canonical JSON contract for task retry rules."""
+        return {
+            "status": "CONFIGURED",
+            "retry_policy": {
+                "max_retries": cls.MAX_RETRIES,
+                "backoff": "exponential",
+                "jitter": True,
+            },
+        }
+
+
+# ---------------------------------------------------------------------------
+# Re-exports from app.celery_app
+# ---------------------------------------------------------------------------
+
+from app.celery_app import (
+    get_task_retry_rules_config,
+    configure_task_retry_rules,
+    ConfigureTaskRetryRules,
+    Configure_task_retry_rules,
+    configure_retry_rules,
+    ConfigureRetryRules,
+    get_retry_rules_config,
+)

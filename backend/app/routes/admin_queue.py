@@ -288,3 +288,63 @@ def get_report_generation_status_alias() -> dict:
 def configure_report_generation_endpoint_alias() -> dict:
     return configure_report_queue_endpoint()
 
+@router.get(
+    "/retry-rules",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_retry_rules_status() -> dict:
+    """Return the configuration and status of task retry rules."""
+    from app.celery_app import get_task_retry_rules_config
+    return get_task_retry_rules_config()
+
+
+@router.post(
+    "/retry-rules/configure",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def configure_retry_rules_endpoint() -> dict:
+    """Ensure task retry rules are configured on the Celery application."""
+    from app.celery_app import configure_task_retry_rules
+    return configure_task_retry_rules()
+
+
+# Aliases for /retry-policy
+@router.get(
+    "/retry-policy",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_retry_policy_status_alias() -> dict:
+    return get_retry_rules_status()
+
+
+@router.post(
+    "/retry-policy/configure",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def configure_retry_policy_endpoint_alias() -> dict:
+    return configure_retry_rules_endpoint()
+
