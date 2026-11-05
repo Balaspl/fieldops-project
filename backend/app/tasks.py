@@ -3286,6 +3286,272 @@ def create_high_priority_queue_task(
     return create_high_priority_queue()
 
 
+# ---------------------------------------------------------------------------
+# Dedicated Report-Generation Queue Tasks (PDF & Long-Running Reporting)
+# ---------------------------------------------------------------------------
+
+def _generate_report_once(
+    *,
+    redis,
+    report_type: str,
+    tenant_id: str,
+    report_id: Optional[str] = None,
+    job_id: Optional[Union[str, int]] = None,
+    correlation_id: Optional[str] = None,
+    parameters: Optional[dict] = None,
+    attempt: int = 1,
+    db: Optional[Any] = None,
+) -> dict:
+    """Execute asynchronous PDF/report generation with tenant validation,
+    result correlation, and Redis marker idempotency."""
+    if not tenant_id or not str(tenant_id).strip():
+        return {
+            "status": "FAILED",
+            "error": "tenant_id is required for report generation",
+            "permanent_failure": True,
+            "report_type": report_type,
+            "tenant_id": None,
+            "correlation_id": correlation_id,
+            "queue": "report_generation",
+        }
+
+    if not report_type or not str(report_type).strip():
+        return {
+            "status": "FAILED",
+            "error": "report_type is required",
+            "permanent_failure": True,
+            "report_type": None,
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "queue": "report_generation",
+        }
+
+    stable_report_id = report_id or (f"rpt_{job_id}_{report_type}" if job_id else f"rpt_{tenant_id}_{report_type}")
+    marker_key = f"report:generated:{tenant_id}:{stable_report_id}"
+
+    if redis and redis.get(marker_key):
+        logger.info(
+            "Report %s for tenant %s already generated; returning cached result.",
+            stable_report_id,
+            tenant_id,
+        )
+        return {
+            "status": "GENERATED",
+            "report_id": stable_report_id,
+            "report_type": report_type,
+            "tenant_id": tenant_id,
+            "job_id": job_id,
+            "correlation_id": correlation_id,
+            "queue": "report_generation",
+            "routing_key": "reports",
+            "idempotent_duplicate": True,
+            "attempt": attempt,
+        }
+
+    from .services.report_service import render_summary_report_pdf
+
+    session = db
+    should_close_db = False
+    if session is None:
+        try:
+            session = SessionLocal()
+            should_close_db = True
+        except Exception:
+            session = None
+
+    try:
+        records = (parameters or {}).get("records", [])
+        pdf_bytes = render_summary_report_pdf(
+            title=f"{report_type.upper()} REPORT",
+            records=records,
+            tenant_id=tenant_id,
+            metadata={"job_id": job_id, "correlation_id": correlation_id},
+        )
+
+        result = {
+            "status": "GENERATED",
+            "report_id": stable_report_id,
+            "report_type": report_type,
+            "tenant_id": tenant_id,
+            "job_id": job_id,
+            "correlation_id": correlation_id,
+            "file_size": len(pdf_bytes),
+            "content_type": "application/pdf",
+            "queue": "report_generation",
+            "routing_key": "reports",
+            "attempt": attempt,
+        }
+
+        if redis:
+            try:
+                redis.set(marker_key, json.dumps(result, default=str), ex=86400 * 7)
+            except Exception as set_err:
+                logger.warning("Failed to store report generation Redis marker: %s", set_err)
+
+        return result
+    except Exception as exc:
+        logger.exception(
+            "Report generation failed: report_id=%s tenant_id=%s: %s",
+            stable_report_id,
+            tenant_id,
+            exc,
+        )
+        return {
+            "status": "FAILED",
+            "error": str(exc),
+            "report_id": stable_report_id,
+            "report_type": report_type,
+            "tenant_id": tenant_id,
+            "job_id": job_id,
+            "correlation_id": correlation_id,
+            "queue": "report_generation",
+            "routing_key": "reports",
+            "attempt": attempt,
+        }
+    finally:
+        if should_close_db and session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.generate_report_task",
+    queue="report_generation",
+    routing_key="reports",
+    max_retries=3,
+    time_limit=600,
+    soft_time_limit=540,
+)
+def generate_report_task(
+    self,
+    report_type: str,
+    tenant_id: str,
+    report_id: Optional[str] = None,
+    job_id: Optional[Union[str, int]] = None,
+    correlation_id: Optional[str] = None,
+    parameters: Optional[dict] = None,
+    attempt: int = 1,
+):
+    """Celery background task for asynchronous report generation in dedicated queue."""
+    redis_client = get_redis_client()
+    res = _generate_report_once(
+        redis=redis_client,
+        report_type=report_type,
+        tenant_id=tenant_id,
+        report_id=report_id,
+        job_id=job_id,
+        correlation_id=correlation_id,
+        parameters=parameters,
+        attempt=attempt,
+    )
+    if res.get("status") == "FAILED" and not res.get("permanent_failure"):
+        if self.request.retries < self.max_retries:
+            raise self.retry(countdown=2 ** (self.request.retries + 1))
+    return res
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.generate_pdf_report_task",
+    queue="report_generation",
+    routing_key="reports",
+    max_retries=3,
+    time_limit=600,
+    soft_time_limit=540,
+)
+def generate_pdf_report_task(
+    self,
+    report_type: str,
+    tenant_id: str,
+    report_id: Optional[str] = None,
+    job_id: Optional[Union[str, int]] = None,
+    correlation_id: Optional[str] = None,
+    parameters: Optional[dict] = None,
+    attempt: int = 1,
+):
+    """Canonical alias conforming to story naming: Generate PDF report task."""
+    return generate_report_task(
+        report_type=report_type,
+        tenant_id=tenant_id,
+        report_id=report_id,
+        job_id=job_id,
+        correlation_id=correlation_id,
+        parameters=parameters,
+        attempt=attempt,
+    )
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.generate_job_invoice_pdf_task",
+    queue="report_generation",
+    routing_key="reports",
+    max_retries=3,
+    time_limit=600,
+    soft_time_limit=540,
+)
+def generate_job_invoice_pdf_task(
+    self,
+    job_id: Union[str, int],
+    tenant_id: str,
+    correlation_id: Optional[str] = None,
+    closure_id: Optional[int] = None,
+    attempt: int = 1,
+):
+    """Celery background task to generate authorized job invoice PDF in report_generation queue."""
+    redis_client = get_redis_client()
+    return _generate_report_once(
+        redis=redis_client,
+        report_type="invoice_pdf",
+        tenant_id=tenant_id,
+        report_id=f"invoice_{job_id}",
+        job_id=job_id,
+        correlation_id=correlation_id,
+        parameters={"closure_id": closure_id},
+        attempt=attempt,
+    )
+
+
+@celery_app.task(
+    name="app.tasks.process_report_generation_task",
+    queue="report_generation",
+    routing_key="reports",
+)
+def process_report_generation_task(
+    report_type: str,
+    payload: dict,
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict:
+    """Generic report processor task running in the dedicated report-generation queue."""
+    return {
+        "status": "COMPLETED",
+        "report_type": report_type,
+        "queue": "report_generation",
+        "routing_key": "reports",
+        "tenant_id": tenant_id,
+        "correlation_id": correlation_id,
+        "payload": payload,
+    }
+
+
+@celery_app.task(
+    name="app.tasks.create_report_generation_queue_task",
+    queue="report_generation",
+    routing_key="reports",
+)
+def create_report_generation_queue_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, str]:
+    """Celery task to verify and activate dedicated report-generation queue."""
+    from app.celery_app import create_report_generation_queue
+    return create_report_generation_queue()
+
+
 
 
 

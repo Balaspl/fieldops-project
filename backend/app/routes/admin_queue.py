@@ -228,3 +228,63 @@ def get_priority_queue_status_alias() -> dict:
 def configure_priority_queue_endpoint_alias() -> dict:
     return configure_high_priority_queue_endpoint()
 
+@router.get(
+    "/reports",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_report_queue_status() -> dict:
+    """Return the configuration and status of the dedicated report-generation Celery queue."""
+    from app.celery_app import get_report_generation_queue_config
+    return get_report_generation_queue_config()
+
+
+@router.post(
+    "/reports/configure",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def configure_report_queue_endpoint() -> dict:
+    """Ensure the report-generation queue is configured on the Celery application."""
+    from app.celery_app import create_report_generation_queue
+    return create_report_generation_queue()
+
+
+# Aliases for /report-generation
+@router.get(
+    "/report-generation",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_report_generation_status_alias() -> dict:
+    return get_report_queue_status()
+
+
+@router.post(
+    "/report-generation/configure",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def configure_report_generation_endpoint_alias() -> dict:
+    return configure_report_queue_endpoint()
+

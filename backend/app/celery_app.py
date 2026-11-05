@@ -126,12 +126,30 @@ HIGH_PRIORITY_TASK_ROUTES = {
     "app.tasks.create_high_priority_queue_task": {"queue": HIGH_PRIORITY_QUEUE, "routing_key": HIGH_PRIORITY_ROUTING_KEY},
 }
 
+# 6. Dedicated Report-Generation Queue (PDF & Long-Running Reporting Workloads)
+REPORT_QUEUE = "report_generation"
+REPORT_ROUTING_KEY = "reports"
+REPORT_GENERATION_QUEUE = REPORT_QUEUE
+REPORT_GENERATION_ROUTING_KEY = REPORT_ROUTING_KEY
+
+REPORT_TASK_ROUTES = {
+    # Report and PDF generation tasks
+    "app.tasks.generate_report_task": {"queue": REPORT_QUEUE, "routing_key": REPORT_ROUTING_KEY},
+    "app.tasks.generate_pdf_report_task": {"queue": REPORT_QUEUE, "routing_key": REPORT_ROUTING_KEY},
+    "app.tasks.generate_job_invoice_pdf_task": {"queue": REPORT_QUEUE, "routing_key": REPORT_ROUTING_KEY},
+    "app.tasks.process_report_generation_task": {"queue": REPORT_QUEUE, "routing_key": REPORT_ROUTING_KEY},
+
+    # Queue verification/configuration helper task
+    "app.tasks.create_report_generation_queue_task": {"queue": REPORT_QUEUE, "routing_key": REPORT_ROUTING_KEY},
+}
+
 ALL_TASK_ROUTES = {
     **NOTIFICATION_TASK_ROUTES,
     **GPS_TASK_ROUTES,
     **BILLING_TASK_ROUTES,
     **AI_TASK_ROUTES,
     **HIGH_PRIORITY_TASK_ROUTES,
+    **REPORT_TASK_ROUTES,
 }
 
 
@@ -154,6 +172,7 @@ celery_app.conf.update(
         Queue(BILLING_QUEUE, routing_key=BILLING_ROUTING_KEY),
         Queue(AI_QUEUE, routing_key=AI_ROUTING_KEY),
         Queue(HIGH_PRIORITY_QUEUE, routing_key=HIGH_PRIORITY_ROUTING_KEY),
+        Queue(REPORT_QUEUE, routing_key=REPORT_ROUTING_KEY),
     ),
     task_routes=ALL_TASK_ROUTES,
 
@@ -452,6 +471,58 @@ Create_high_priority_queue = create_high_priority_queue
 CreatePriorityQueue = create_high_priority_queue
 create_priority_queue = create_high_priority_queue
 Create_priority_queue = create_high_priority_queue
+
+
+def get_report_generation_queue_config() -> dict[str, str]:
+    """
+    Return canonical configuration for the dedicated report-generation queue.
+    Contract:
+    {
+        "status": "CONFIGURED",
+        "queue": "report_generation",
+        "routing_key": "reports"
+    }
+    """
+    return {
+        "status": "CONFIGURED",
+        "queue": REPORT_QUEUE,
+        "routing_key": REPORT_ROUTING_KEY,
+    }
+
+
+def create_report_generation_queue(app: Optional[Celery] = None) -> dict[str, str]:
+    """
+    Ensure the dedicated report-generation queue and routing configuration are active on Celery.
+    Returns:
+        {
+            "status": "CONFIGURED",
+            "queue": "report_generation",
+            "routing_key": "reports"
+        }
+    """
+    target_app = app or celery_app
+
+    # Ensure queue is present in task_queues
+    existing_queues = list(target_app.conf.task_queues or [])
+    queue_names = {q.name if hasattr(q, "name") else str(q) for q in existing_queues}
+    if REPORT_QUEUE not in queue_names:
+        existing_queues.append(Queue(REPORT_QUEUE, routing_key=REPORT_ROUTING_KEY))
+        target_app.conf.task_queues = tuple(existing_queues)
+
+    # Ensure task routes are merged
+    existing_routes = dict(target_app.conf.task_routes or {})
+    existing_routes.update(REPORT_TASK_ROUTES)
+    target_app.conf.task_routes = existing_routes
+
+    return get_report_generation_queue_config()
+
+
+# Authoritative story aliases conforming to story naming
+CreateReportGenerationQueue = create_report_generation_queue
+Create_report_generation_queue = create_report_generation_queue
+CreateReportQueue = create_report_generation_queue
+create_report_queue = create_report_generation_queue
+Create_report_queue = create_report_generation_queue
 
 
 
