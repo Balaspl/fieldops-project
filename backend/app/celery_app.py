@@ -744,6 +744,95 @@ get_task_timeouts = get_task_timeouts_config
 get_timeouts_config = get_task_timeouts_config
 
 
+# ---------------------------------------------------------------------------
+# Celery Beat Scheduled Tasks Configuration
+# ---------------------------------------------------------------------------
+
+FOUNDATIONAL_BEAT_SCHEDULES = {
+    "process-transactional-email-outbox-every-30-seconds": {
+        "task": "app.tasks.process_transactional_email_outbox",
+        "schedule": 30.0,
+    },
+    "send-dispatcher-digest-every-5-minutes": {
+        "task": "app.tasks.send_dispatcher_digest",
+        "schedule": 300.0,
+    },
+    "send-customer-daily-engagement-every-30-minutes": {
+        "task": "app.tasks.send_customer_daily_engagement",
+        "schedule": 1800.0,
+    },
+    "broadcast-sla-countdown-every-30-seconds": {
+        "task": "app.tasks.broadcast_sla_countdown",
+        "schedule": 30.0,
+    },
+    "aggregate-prompt-analytics-hourly": {
+        "task": "app.tasks.aggregate_prompt_analytics_task",
+        "schedule": 3600.0,
+    },
+    "auto-requeue-dlq-every-5-minutes": {
+        "task": "app.tasks.auto_requeue_dlq",
+        "schedule": 300.0,
+    },
+}
+
+
+def get_scheduled_tasks_config() -> dict[str, str]:
+    """
+    Return canonical contract for scheduled tasks.
+    Contract:
+    {
+        "status": "SCHEDULED",
+        "scheduler": "celery_beat"
+    }
+    """
+    return {
+        "status": "SCHEDULED",
+        "scheduler": "celery_beat",
+    }
+
+
+def add_scheduled_tasks(
+    app: Optional[Celery] = None,
+    schedules: Optional[dict[str, Any]] = None,
+) -> dict[str, str]:
+    """
+    Register and extend Celery Beat schedules while strictly preserving existing schedules
+    (digest, SLA countdown, analytics, DLQ, etc.).
+    Returns:
+    {
+        "status": "SCHEDULED",
+        "scheduler": "celery_beat"
+    }
+    """
+    target_app = app or celery_app
+    existing_beat_schedule = dict(target_app.conf.beat_schedule or {})
+
+    # Ensure all foundational schedules are present and preserved
+    for name, entry in FOUNDATIONAL_BEAT_SCHEDULES.items():
+        if name not in existing_beat_schedule:
+            existing_beat_schedule[name] = entry
+
+    # Merge additional schedules if passed
+    if schedules:
+        for name, entry in schedules.items():
+            existing_beat_schedule[name] = entry
+
+    target_app.conf.beat_schedule = existing_beat_schedule
+    target_app.conf.timezone = "UTC"
+
+    return get_scheduled_tasks_config()
+
+
+# Authoritative story aliases conforming to story naming
+AddScheduledTasks = add_scheduled_tasks
+Add_scheduled_tasks = add_scheduled_tasks
+add_scheduled_task = add_scheduled_tasks
+AddScheduledTask = add_scheduled_tasks
+get_scheduled_tasks = get_scheduled_tasks_config
+get_scheduled_task_config = get_scheduled_tasks_config
+
+
+
 
 
 

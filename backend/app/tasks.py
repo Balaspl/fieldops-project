@@ -3773,6 +3773,71 @@ def handle_task_timeout(
     }
 
 
+# ---------------------------------------------------------------------------
+# Story 8.10: Celery Beat Scheduled Tasks & Idempotency Wrappers
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    name="app.tasks.add_scheduled_tasks_task",
+)
+def add_scheduled_tasks_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    schedules: Optional[dict[str, Any]] = None,
+) -> dict[str, str]:
+    """Celery task to verify and register Celery Beat scheduled tasks."""
+    from app.celery_app import add_scheduled_tasks
+    return add_scheduled_tasks(schedules=schedules)
+
+
+from app.celery_app import (
+    FOUNDATIONAL_BEAT_SCHEDULES,
+    get_scheduled_tasks_config,
+    add_scheduled_tasks,
+    AddScheduledTasks,
+    Add_scheduled_tasks,
+    add_scheduled_task,
+    AddScheduledTask,
+    get_scheduled_tasks,
+    get_scheduled_task_config,
+)
+
+
+def run_scheduled_task_idempotently(
+    schedule_key: str,
+    interval_seconds: int,
+    func,
+    *args,
+    redis=None,
+    **kwargs,
+) -> Any:
+    """
+    Execute a recurring scheduled task idempotently:
+    Uses a Redis lock key for the current time bucket to guarantee
+    only one worker process runs the task within that interval.
+    """
+    if redis is None:
+        from app.redis_client import get_redis_client
+        redis = get_redis_client()
+
+    now_epoch = int(time.time())
+    bucket = now_epoch // max(interval_seconds, 1)
+    lock_key = f"scheduled_task_lock:{schedule_key}:{bucket}"
+
+    if redis is not None:
+        acquired = redis.set(lock_key, "locked", nx=True, ex=int(interval_seconds * 1.5))
+        if not acquired:
+            logger.info(
+                "Skipping duplicate scheduled run for key=%s bucket=%s",
+                schedule_key,
+                bucket,
+            )
+            return {"status": "SKIPPED_DUPLICATE", "schedule_key": schedule_key}
+
+    return func(*args, **kwargs)
+
+
+
 
 
 

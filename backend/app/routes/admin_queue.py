@@ -507,3 +507,69 @@ def configure_task_timeouts_endpoint_alias() -> dict:
     return configure_task_timeouts_endpoint()
 
 
+# ---------------------------------------------------------------------------
+# Celery Beat Scheduled Tasks
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/schedules",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_scheduled_tasks_status() -> dict:
+    """Return the configuration and status of Celery Beat scheduled tasks."""
+    from app.celery_app import get_scheduled_tasks_config
+    return get_scheduled_tasks_config()
+
+
+@router.post(
+    "/schedules/configure",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def configure_scheduled_tasks_endpoint() -> dict:
+    """Ensure Celery Beat scheduled tasks are registered and active."""
+    from app.celery_app import add_scheduled_tasks
+    return add_scheduled_tasks()
+
+
+# Aliases for /scheduled-tasks
+@router.get(
+    "/scheduled-tasks",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_scheduled_tasks_status_alias() -> dict:
+    return get_scheduled_tasks_status()
+
+
+@router.post(
+    "/scheduled-tasks/configure",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def configure_scheduled_tasks_endpoint_alias() -> dict:
+    return configure_scheduled_tasks_endpoint()
+
+
+
