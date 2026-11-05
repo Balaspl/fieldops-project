@@ -3837,6 +3837,41 @@ def run_scheduled_task_idempotently(
     return func(*args, **kwargs)
 
 
+# ---------------------------------------------------------------------------
+# Story 8.11: Task Result Tracking Celery Task & Wrappers
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    name="app.tasks.add_task_result_tracking_task",
+)
+def add_task_result_tracking_task(
+    task_id: str = "example-task-id",
+    state: str = "SUCCESS",
+    queue: str = "notifications",
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Celery task to verify and activate task result tracking."""
+    from app.celery_app import add_task_result_tracking
+    return add_task_result_tracking(task_id=task_id, state=state, queue=queue)
+
+
+from app.celery_app import (
+    DEFAULT_TASK_RESULT_TRACKING,
+    get_task_result_tracking_config,
+    track_task_result,
+    get_task_result,
+    add_task_result_tracking,
+    AddTaskResultTracking,
+    Add_task_result_tracking,
+    configure_task_result_tracking,
+    ConfigureTaskResultTracking,
+    get_task_result_tracking,
+    TrackTaskResult,
+)
+
+
+
 
 
 

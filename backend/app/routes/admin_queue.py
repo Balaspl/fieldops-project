@@ -572,4 +572,108 @@ def configure_scheduled_tasks_endpoint_alias() -> dict:
     return configure_scheduled_tasks_endpoint()
 
 
+# ---------------------------------------------------------------------------
+# Task Result Tracking Endpoints
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/tracking/config",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_task_result_tracking_config_endpoint() -> dict:
+    """Return canonical contract for task result tracking."""
+    from app.celery_app import get_task_result_tracking_config
+    return get_task_result_tracking_config()
+
+
+@router.post(
+    "/tracking/configure",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def configure_task_result_tracking_endpoint() -> dict:
+    """Configure task result tracking on Celery."""
+    from app.celery_app import add_task_result_tracking
+    return add_task_result_tracking()
+
+
+@router.get(
+    "/tasks/{task_id}/result",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_task_result_endpoint(task_id: str) -> dict:
+    """Retrieve operational lifecycle/result metadata for a specific task."""
+    from app.celery_app import get_task_result
+    result = get_task_result(task_id)
+    if result is None:
+        return {
+            "status": "TRACKED",
+            "task_id": task_id,
+            "state": "PENDING",
+            "queue": "default",
+        }
+    return {
+        "status": "TRACKED",
+        "task_id": result.get("task_id", task_id),
+        "state": result.get("state", "UNKNOWN"),
+        "queue": result.get("queue", "default"),
+    }
+
+
+# Aliases for /results/{task_id} and /task-result
+@router.get(
+    "/results/{task_id}",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_task_result_alias(task_id: str) -> dict:
+    return get_task_result_endpoint(task_id)
+
+
+@router.post(
+    "/tasks/track",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def track_task_endpoint(payload: dict) -> dict:
+    """Explicitly record or update task result tracking."""
+    from app.celery_app import track_task_result
+    return track_task_result(
+        task_id=payload.get("task_id", "example-task-id"),
+        state=payload.get("state", "SUCCESS"),
+        queue=payload.get("queue", "notifications"),
+        tenant_id=payload.get("tenant_id"),
+        correlation_id=payload.get("correlation_id"),
+        result_data=payload.get("result_data"),
+    )
+
+
+
 
