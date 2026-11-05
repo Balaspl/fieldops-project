@@ -14,6 +14,7 @@ Comprehensive test suite verifying:
 """
 
 import pytest
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 from app.services.ai.FieldOpsAI.graph.intake_graph import intake_graph
@@ -314,7 +315,7 @@ def _make_mock_db(org_data: list[dict], tech_data: list[dict]):
             self.deleted_at = None
 
     class FakeTech:
-        def __init__(self, id, name, tenant_id, skill, workload, lat=None, lng=None, loc=None):
+        def __init__(self, id, name, tenant_id, skill, workload, lat=None, lng=None, loc=None, last_ping=None):
             self.technician_id = id
             self.technician_name = name
             self.tenant_id = tenant_id
@@ -324,6 +325,7 @@ def _make_mock_db(org_data: list[dict], tech_data: list[dict]):
             self.latitude = lat
             self.longitude = lng
             self.technician_location = loc
+            self.last_ping = last_ping or datetime.now(timezone.utc)
 
     org_objs = [FakeOrg(**o) for o in org_data]
     tech_objs = [FakeTech(**t) for t in tech_data]

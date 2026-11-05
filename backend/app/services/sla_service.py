@@ -243,3 +243,22 @@ class SLAService:
                 db.rollback()
             finally:
                 db.close()
+
+# ---------------------------------------------------------------------------
+# High-Priority Queue Management (Story: Create high-priority queue)
+# ---------------------------------------------------------------------------
+
+from app.celery_app import (
+    HIGH_PRIORITY_QUEUE,
+    HIGH_PRIORITY_ROUTING_KEY,
+    PRIORITY_QUEUE,
+    PRIORITY_ROUTING_KEY,
+    get_high_priority_queue_config,
+    create_high_priority_queue,
+    CreateHighPriorityQueue,
+    Create_high_priority_queue,
+    CreatePriorityQueue,
+    create_priority_queue,
+    Create_priority_queue,
+)
+

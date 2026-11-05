@@ -464,6 +464,11 @@ def evaluate_technician_dispatch_eligibility(
             except (TypeError, ValueError):
                 pass
 
+    if coordinates is None:
+        coordinates = _parse_saved_location(technician)
+        if coordinates is not None:
+            location_source = "saved_technician_location"
+
     # -----------------------------------------------------------------
     # Organization location fallback
     # -----------------------------------------------------------------

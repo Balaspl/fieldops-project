@@ -1,4 +1,5 @@
 import logging
+import json
 import os
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
@@ -7,7 +8,7 @@ from sqlalchemy import delete, text
 from sqlalchemy.orm import Session
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from .runtime.dlq import DeadLetterQueue
 from .services.enterprise_audit import AuditAction, audit_log
 from .celery_app import celery_app
@@ -25,7 +26,7 @@ from celery import shared_task
 from .services.email.smtp_email import SMTPEmailService
 import re
 
-@celery_app.task(name="app.tasks.aggregate_prompt_analytics_task")
+@celery_app.task(name="app.tasks.aggregate_prompt_analytics_task", queue="ai_processing", routing_key="ai")
 def aggregate_prompt_analytics_task():
     """Refresh 7-day and 30-day prompt analytics for every tenant with usage."""
     from .prompts.analytics import PromptAnalytics
@@ -289,7 +290,7 @@ def execute_job_gps_purge_sync(db: Session, job_id: int, tenant_id: str, purge_t
     return deleted_count
 
 
-@celery_app.task(name="app.tasks.daily_gps_purge_task")
+@celery_app.task(name="app.tasks.daily_gps_purge_task", queue="gps_processing", routing_key="gps")
 def daily_gps_purge_task(correlation_id: str = None):
     db = SessionLocal()
     try:
@@ -298,7 +299,7 @@ def daily_gps_purge_task(correlation_id: str = None):
         db.close()
 
 
-@celery_app.task(bind=True, max_retries=3, name="app.tasks.purge_job_gps_data_task")
+@celery_app.task(bind=True, max_retries=3, name="app.tasks.purge_job_gps_data_task", queue="gps_processing", routing_key="gps")
 def purge_job_gps_data(self, job_id: int, tenant_id: str, purge_type: str = "event_based", correlation_id: str = None):
     import json
     import time
@@ -404,7 +405,7 @@ def purge_job_gps_data(self, job_id: int, tenant_id: str, purge_type: str = "eve
 purge_job_gps_data_task = purge_job_gps_data
 
 
-@celery_app.task(bind=True, max_retries=2, name="app.tasks.update_eta_task")
+@celery_app.task(bind=True, max_retries=2, name="app.tasks.update_eta_task", queue="gps_processing", routing_key="gps")
 def update_eta_task(self, technician_id: str, job_id, ping_id: str = None, correlation_id: str = None):
     """
     Recalculate ETA for a technician/job pair and broadcast the result to job WebSocket subscribers.
@@ -2558,6 +2559,999 @@ def add_kafka_monitoring_dashboard_task(
     )
 
 
+def _process_broker_restart_recovery_once(
+    event_payload: Any = None,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+    redis: Optional[Any] = None,
+    redis_client: Optional[Any] = None,
+    raw_message: Any = None,
+) -> dict:
+    """Process an event with Kafka broker restart recovery coordinator."""
+    import asyncio
+    from .services.broker_restart_recovery import BrokerRestartRecovery
+
+    r_client = redis if redis is not None else redis_client
+    msg = event_payload if event_payload is not None else raw_message
+    if isinstance(msg, str):
+        try:
+            msg = json.loads(msg)
+        except Exception:
+            pass
+
+    consumer = BrokerRestartRecovery(redis_client=r_client)
+    result = asyncio.run(
+        consumer.process_event(
+            message=msg,
+            topic=topic,
+            partition=partition,
+            offset=offset,
+            attempt=attempt,
+        )
+    )
+    return dict(result)
+
+
+@celery_app.task(name="app.tasks.process_broker_restart_recovery_task")
+def process_broker_restart_recovery_task(
+    event_payload: Any = None,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+    raw_message: Any = None,
+):
+    """Celery background task to process event during broker recovery."""
+    redis_client = get_redis_client()
+    return _process_broker_restart_recovery_once(
+        event_payload=event_payload,
+        raw_message=raw_message,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        attempt=attempt,
+        redis=redis_client,
+    )
+
+
+@celery_app.task(name="app.tasks.test_broker_restart_task")
+def test_broker_restart_task(
+    event_payload: Any = None,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+    raw_message: Any = None,
+):
+    """Celery task alias conforming to story naming: Test broker restart."""
+    return process_broker_restart_recovery_task(
+        event_payload=event_payload,
+        raw_message=raw_message,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        attempt=attempt,
+    )
+
+
+def _process_consumer_recovery_once(
+    event_payload: Any = None,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+    redis: Optional[Any] = None,
+    redis_client: Optional[Any] = None,
+    raw_message: Any = None,
+) -> dict:
+    """Process an event with Kafka consumer recovery coordinator."""
+    import asyncio
+    from .services.consumer_recovery import ConsumerRecoveryCoordinator
+
+    r_client = redis if redis is not None else redis_client
+    msg = event_payload if event_payload is not None else raw_message
+    if isinstance(msg, str):
+        try:
+            msg = json.loads(msg)
+        except Exception:
+            pass
+
+    coordinator = ConsumerRecoveryCoordinator(redis_client=r_client)
+    result = asyncio.run(
+        coordinator.process_event(
+            message=msg,
+            topic=topic,
+            partition=partition,
+            offset=offset,
+            attempt=attempt,
+        )
+    )
+    return dict(result)
+
+
+@celery_app.task(name="app.tasks.process_consumer_recovery_task")
+def process_consumer_recovery_task(
+    event_payload: Any = None,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+    raw_message: Any = None,
+):
+    """Celery background task to process event during consumer recovery."""
+    redis_client = get_redis_client()
+    return _process_consumer_recovery_once(
+        event_payload=event_payload,
+        raw_message=raw_message,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        attempt=attempt,
+        redis=redis_client,
+    )
+
+
+@celery_app.task(name="app.tasks.test_consumer_recovery_task")
+def test_consumer_recovery_task(
+    event_payload: Any = None,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+    raw_message: Any = None,
+):
+    """Celery task alias conforming to story naming: Test consumer recovery."""
+    return process_consumer_recovery_task(
+        event_payload=event_payload,
+        raw_message=raw_message,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        attempt=attempt,
+    )
+
+
+def _process_kafka_failure_recovery_once(
+    event_payload: Any = None,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+    redis: Optional[Any] = None,
+    redis_client: Optional[Any] = None,
+    raw_message: Any = None,
+    simulate_failure_mode: Optional[str] = None,
+) -> dict:
+    """Process an event with Kafka failure recovery coordinator."""
+    import asyncio
+    from .services.kafka_failure_recovery import KafkaFailureRecoveryCoordinator
+
+    r_client = redis if redis is not None else redis_client
+    msg = event_payload if event_payload is not None else raw_message
+    if isinstance(msg, str):
+        try:
+            msg = json.loads(msg)
+        except Exception:
+            pass
+
+    coordinator = KafkaFailureRecoveryCoordinator(redis_client=r_client)
+    result = asyncio.run(
+        coordinator.process_event(
+            message=msg,
+            topic=topic,
+            partition=partition,
+            offset=offset,
+            attempt=attempt,
+            simulate_failure_mode=simulate_failure_mode,
+        )
+    )
+    return dict(result)
+
+
+@celery_app.task(name="app.tasks.process_kafka_failure_recovery_task")
+def process_kafka_failure_recovery_task(
+    event_payload: Any = None,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+    raw_message: Any = None,
+    simulate_failure_mode: Optional[str] = None,
+):
+    """Celery background task to process event during Kafka failure recovery."""
+    redis_client = get_redis_client()
+    return _process_kafka_failure_recovery_once(
+        event_payload=event_payload,
+        raw_message=raw_message,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        attempt=attempt,
+        redis=redis_client,
+        simulate_failure_mode=simulate_failure_mode,
+    )
+
+
+@celery_app.task(name="app.tasks.test_kafka_failure_recovery_task")
+def test_kafka_failure_recovery_task(
+    event_payload: Any = None,
+    topic: Optional[str] = None,
+    partition: int = 0,
+    offset: int = 0,
+    attempt: int = 1,
+    raw_message: Any = None,
+    simulate_failure_mode: Optional[str] = None,
+):
+    """Celery task alias conforming to story naming: Test Kafka failure recovery."""
+    return process_kafka_failure_recovery_task(
+        event_payload=event_payload,
+        raw_message=raw_message,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        attempt=attempt,
+        simulate_failure_mode=simulate_failure_mode,
+    )
+
+
+@celery_app.task(
+    name="app.tasks.create_notification_queue_task",
+    queue="notifications",
+    routing_key="notifications",
+)
+def create_notification_queue_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, str]:
+    """Celery task to verify and activate dedicated notification queue."""
+    from app.celery_app import create_notification_queue
+    return create_notification_queue()
+
+
+@celery_app.task(
+    name="app.tasks.create_gps_processing_queue_task",
+    queue="gps_processing",
+    routing_key="gps",
+)
+def create_gps_processing_queue_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, str]:
+    """Celery task to verify and activate dedicated GPS processing queue."""
+    from app.celery_app import create_gps_processing_queue
+    return create_gps_processing_queue()
+
+
+@celery_app.task(
+    name="app.tasks.create_billing_queue_task",
+    queue="billing",
+    routing_key="billing",
+)
+def create_billing_queue_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, str]:
+    """Celery task to verify and activate dedicated billing queue."""
+    from app.celery_app import create_billing_queue
+    return create_billing_queue()
+
+
+# ---------------------------------------------------------------------------
+# Dedicated AI Processing Queue Tasks (LangGraph & Model Workloads)
+# ---------------------------------------------------------------------------
+
+def _execute_ai_workflow_once(
+    *,
+    redis,
+    request_data: dict,
+    tenant_id: str,
+    job_id: Optional[Union[str, int]] = None,
+    correlation_id: Optional[str] = None,
+    workflow_id: Optional[str] = None,
+    attempt: int = 1,
+    db: Optional[Any] = None,
+) -> dict:
+    """Execute LangGraph AI workflow once with tenant context and Redis idempotency guard."""
+    if not tenant_id or not str(tenant_id).strip():
+        return {
+            "status": "FAILED",
+            "error": "tenant_id is required for AI workflow execution",
+            "permanent_failure": True,
+            "tenant_id": None,
+            "correlation_id": correlation_id,
+            "queue": "ai_processing",
+        }
+
+    if not isinstance(request_data, dict):
+        return {
+            "status": "FAILED",
+            "error": "request_data must be a dictionary",
+            "permanent_failure": True,
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "queue": "ai_processing",
+        }
+
+    stable_id = workflow_id or (f"{tenant_id}:{job_id}" if job_id else None)
+    marker_key = f"ai:workflow_executed:{stable_id}" if stable_id else None
+
+    if redis and marker_key:
+        cached = redis.get(marker_key)
+        if cached:
+            logger.info("AI workflow %s already executed; returning idempotent result.", stable_id)
+            try:
+                cached_data = json.loads(cached.decode("utf-8") if isinstance(cached, bytes) else cached)
+            except Exception:
+                cached_data = {"status": "COMPLETED"}
+            cached_data["idempotent_duplicate"] = True
+            cached_data["queue"] = "ai_processing"
+            return cached_data
+
+    from app.services.ai.FieldOpsAI.graph import execute_fieldops_workflow
+
+    session = db
+    should_close_db = False
+    if session is None:
+        try:
+            session = SessionLocal()
+            should_close_db = True
+        except Exception:
+            session = None
+
+    try:
+        raw_result = execute_fieldops_workflow(
+            request_data=request_data,
+            db=session,
+            job_id=job_id,
+        )
+
+        result = {
+            "status": "COMPLETED" if raw_result.get("valid") else "VALIDATION_FAILED",
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "job_id": job_id or (raw_result.get("job_requirement", {}).get("job_id") if isinstance(raw_result, dict) else None),
+            "workflow_id": workflow_id or stable_id,
+            "queue": "ai_processing",
+            "attempt": attempt,
+            "output": raw_result,
+        }
+
+        if redis and marker_key and result.get("status") in {"COMPLETED", "VALIDATION_FAILED"}:
+            try:
+                redis.set(marker_key, json.dumps(result, default=str), ex=86400 * 7)
+            except Exception as set_err:
+                logger.warning("Failed to store Redis AI workflow marker: %s", set_err)
+
+        return result
+    except Exception as exc:
+        logger.exception("AI workflow execution failed: tenant_id=%s correlation_id=%s: %s", tenant_id, correlation_id, exc)
+        return {
+            "status": "FAILED",
+            "error": str(exc),
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "job_id": job_id,
+            "workflow_id": workflow_id or stable_id,
+            "queue": "ai_processing",
+            "attempt": attempt,
+        }
+    finally:
+        if should_close_db and session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.execute_fieldops_workflow_async_task",
+    queue="ai_processing",
+    routing_key="ai",
+    max_retries=3,
+    time_limit=300,
+    soft_time_limit=270,
+)
+def execute_fieldops_workflow_async_task(
+    self,
+    request_data: dict,
+    tenant_id: str,
+    job_id: Optional[Union[str, int]] = None,
+    correlation_id: Optional[str] = None,
+    workflow_id: Optional[str] = None,
+    attempt: int = 1,
+):
+    """Execute LangGraph FieldOps workflow asynchronously in dedicated AI queue."""
+    redis_client = get_redis_client()
+    res = _execute_ai_workflow_once(
+        redis=redis_client,
+        request_data=request_data,
+        tenant_id=tenant_id,
+        job_id=job_id,
+        correlation_id=correlation_id,
+        workflow_id=workflow_id,
+        attempt=attempt,
+    )
+    if res.get("status") == "FAILED" and not res.get("permanent_failure"):
+        if self.request.retries < self.max_retries:
+            raise self.retry(countdown=2 ** (self.request.retries + 1))
+    return res
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.execute_ai_workflow_task",
+    queue="ai_processing",
+    routing_key="ai",
+    max_retries=3,
+    time_limit=300,
+    soft_time_limit=270,
+)
+def execute_ai_workflow_task(
+    self,
+    request_data: dict,
+    tenant_id: str,
+    job_id: Optional[Union[str, int]] = None,
+    correlation_id: Optional[str] = None,
+    workflow_id: Optional[str] = None,
+    attempt: int = 1,
+):
+    """Canonical alias for async AI workflow execution in dedicated AI queue."""
+    return execute_fieldops_workflow_async_task(
+        request_data=request_data,
+        tenant_id=tenant_id,
+        job_id=job_id,
+        correlation_id=correlation_id,
+        workflow_id=workflow_id,
+        attempt=attempt,
+    )
+
+
+@celery_app.task(
+    name="app.tasks.process_ai_workload_task",
+    queue="ai_processing",
+    routing_key="ai",
+)
+def process_ai_workload_task(
+    workload_type: str,
+    payload: dict,
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict:
+    """Generic AI background processor task running in the dedicated AI queue."""
+    return {
+        "status": "COMPLETED",
+        "workload_type": workload_type,
+        "queue": "ai_processing",
+        "routing_key": "ai",
+        "tenant_id": tenant_id,
+        "correlation_id": correlation_id,
+        "payload": payload,
+    }
+
+
+@celery_app.task(
+    name="app.tasks.create_ai_processing_queue_task",
+    queue="ai_processing",
+    routing_key="ai",
+)
+def create_ai_processing_queue_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, str]:
+    """Celery task to verify and activate dedicated AI processing queue."""
+    from app.celery_app import create_ai_processing_queue
+    return create_ai_processing_queue()
+
+
+# ---------------------------------------------------------------------------
+# Dedicated High-Priority Queue Tasks (Emergency Dispatch & Urgent SLA)
+# ---------------------------------------------------------------------------
+
+ELIGIBLE_HIGH_PRIORITY_LEVELS = {"EMERGENCY", "CRITICAL", "HIGH", "URGENT"}
+
+
+def _process_emergency_dispatch_once(
+    *,
+    redis,
+    job_id: Union[str, int],
+    tenant_id: str,
+    priority: str = "EMERGENCY",
+    correlation_id: Optional[str] = None,
+    reason: Optional[str] = None,
+    payload: Optional[dict] = None,
+    attempt: int = 1,
+    db: Optional[Any] = None,
+) -> dict:
+    """Execute emergency dispatch with strict priority eligibility, tenant validation,
+    and Redis marker idempotency to prevent duplicate operational actions."""
+    normalized_priority = str(priority).upper().strip() if priority else "EMERGENCY"
+
+    # 1. Prevent priority traffic from becoming an uncontrolled bypass
+    if normalized_priority not in ELIGIBLE_HIGH_PRIORITY_LEVELS:
+        logger.warning(
+            "Rejected unauthorized bypass attempt to high_priority queue: job_id=%s priority=%s",
+            job_id,
+            priority,
+        )
+        return {
+            "status": "REJECTED_UNAUTHORIZED_BYPASS",
+            "error": "Task is not eligible for high_priority queue; routine workloads must use standard queues",
+            "permanent_failure": True,
+            "priority": priority,
+            "job_id": job_id,
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "queue": "high_priority",
+        }
+
+    # 2. Strict tenant context check
+    if not tenant_id or not str(tenant_id).strip():
+        return {
+            "status": "FAILED",
+            "error": "tenant_id is required for high-priority dispatch execution",
+            "permanent_failure": True,
+            "priority": normalized_priority,
+            "job_id": job_id,
+            "tenant_id": None,
+            "correlation_id": correlation_id,
+            "queue": "high_priority",
+        }
+
+    # 3. Idempotency Check to prevent duplicate operational side effects
+    marker_key = f"dispatch:emergency_processed:{tenant_id}:{job_id}:{correlation_id or 'default'}"
+    if redis and redis.get(marker_key):
+        logger.info(
+            "Emergency dispatch for job %s already processed; skipping duplicate.",
+            job_id,
+        )
+        return {
+            "status": "PROCESSED",
+            "job_id": job_id,
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "priority": normalized_priority,
+            "queue": "high_priority",
+            "routing_key": "priority",
+            "idempotent_duplicate": True,
+            "attempt": attempt,
+        }
+
+    session = db
+    should_close_db = False
+    if session is None:
+        try:
+            session = SessionLocal()
+            should_close_db = True
+        except Exception:
+            session = None
+
+    try:
+        if session is not None:
+            try:
+                from .models import Job, AuditEvent
+                target_job = (
+                    session.query(Job)
+                    .filter(Job.id == int(job_id) if str(job_id).isdigit() else Job.id == job_id)
+                    .first()
+                )
+                if target_job:
+                    audit = AuditEvent(
+                        event_type="EMERGENCY_DISPATCH",
+                        tech_id=str(target_job.assigned_technician_id) if target_job.assigned_technician_id else "system",
+                        tenant_id=tenant_id,
+                        old_status=target_job.status,
+                        new_status=target_job.status,
+                        reason=reason or f"Urgent priority dispatch: {normalized_priority}",
+                        job_id=str(job_id),
+                        details={
+                            "priority": normalized_priority,
+                            "correlation_id": correlation_id,
+                            "reason": reason,
+                        },
+                    )
+                    session.add(audit)
+                    session.commit()
+            except Exception as db_err:
+                logger.warning("Audit recording for emergency dispatch encountered: %s", db_err)
+                if session:
+                    session.rollback()
+
+        result = {
+            "status": "PROCESSED",
+            "job_id": job_id,
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "priority": normalized_priority,
+            "reason": reason,
+            "queue": "high_priority",
+            "routing_key": "priority",
+            "attempt": attempt,
+        }
+
+        if redis:
+            try:
+                redis.set(marker_key, json.dumps(result, default=str), ex=86400 * 7)
+            except Exception as set_err:
+                logger.warning("Failed to store emergency dispatch Redis marker: %s", set_err)
+
+        return result
+    except Exception as exc:
+        logger.exception(
+            "Emergency dispatch processing failed: job_id=%s tenant_id=%s: %s",
+            job_id,
+            tenant_id,
+            exc,
+        )
+        return {
+            "status": "FAILED",
+            "error": str(exc),
+            "priority": normalized_priority,
+            "job_id": job_id,
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "queue": "high_priority",
+            "routing_key": "priority",
+            "attempt": attempt,
+        }
+    finally:
+        if should_close_db and session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.process_emergency_dispatch_task",
+    queue="high_priority",
+    routing_key="priority",
+    max_retries=3,
+    time_limit=60,
+    soft_time_limit=50,
+)
+def process_emergency_dispatch_task(
+    self,
+    job_id: Union[str, int],
+    tenant_id: str,
+    priority: str = "EMERGENCY",
+    correlation_id: Optional[str] = None,
+    reason: Optional[str] = None,
+    payload: Optional[dict] = None,
+    attempt: int = 1,
+):
+    """Celery background task for urgent emergency dispatch running in high_priority queue."""
+    redis_client = get_redis_client()
+    res = _process_emergency_dispatch_once(
+        redis=redis_client,
+        job_id=job_id,
+        tenant_id=tenant_id,
+        priority=priority,
+        correlation_id=correlation_id,
+        reason=reason,
+        payload=payload,
+        attempt=attempt,
+    )
+    if res.get("status") == "FAILED" and not res.get("permanent_failure"):
+        if self.request.retries < self.max_retries:
+            raise self.retry(countdown=2 ** (self.request.retries + 1))
+    return res
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.emergency_dispatch_task",
+    queue="high_priority",
+    routing_key="priority",
+    max_retries=3,
+    time_limit=60,
+    soft_time_limit=50,
+)
+def emergency_dispatch_task(
+    self,
+    job_id: Union[str, int],
+    tenant_id: str,
+    priority: str = "EMERGENCY",
+    correlation_id: Optional[str] = None,
+    reason: Optional[str] = None,
+    payload: Optional[dict] = None,
+    attempt: int = 1,
+):
+    """Canonical alias conforming to story naming: Emergency dispatch task."""
+    return process_emergency_dispatch_task(
+        job_id=job_id,
+        tenant_id=tenant_id,
+        priority=priority,
+        correlation_id=correlation_id,
+        reason=reason,
+        payload=payload,
+        attempt=attempt,
+    )
+
+
+@celery_app.task(
+    name="app.tasks.create_high_priority_queue_task",
+    queue="high_priority",
+    routing_key="priority",
+)
+def create_high_priority_queue_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, str]:
+    """Celery task to verify and activate dedicated high-priority queue."""
+    from app.celery_app import create_high_priority_queue
+    return create_high_priority_queue()
+
+
+# ---------------------------------------------------------------------------
+# Dedicated Report-Generation Queue Tasks (PDF & Long-Running Reporting)
+# ---------------------------------------------------------------------------
+
+def _generate_report_once(
+    *,
+    redis,
+    report_type: str,
+    tenant_id: str,
+    report_id: Optional[str] = None,
+    job_id: Optional[Union[str, int]] = None,
+    correlation_id: Optional[str] = None,
+    parameters: Optional[dict] = None,
+    attempt: int = 1,
+    db: Optional[Any] = None,
+) -> dict:
+    """Execute asynchronous PDF/report generation with tenant validation,
+    result correlation, and Redis marker idempotency."""
+    if not tenant_id or not str(tenant_id).strip():
+        return {
+            "status": "FAILED",
+            "error": "tenant_id is required for report generation",
+            "permanent_failure": True,
+            "report_type": report_type,
+            "tenant_id": None,
+            "correlation_id": correlation_id,
+            "queue": "report_generation",
+        }
+
+    if not report_type or not str(report_type).strip():
+        return {
+            "status": "FAILED",
+            "error": "report_type is required",
+            "permanent_failure": True,
+            "report_type": None,
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "queue": "report_generation",
+        }
+
+    stable_report_id = report_id or (f"rpt_{job_id}_{report_type}" if job_id else f"rpt_{tenant_id}_{report_type}")
+    marker_key = f"report:generated:{tenant_id}:{stable_report_id}"
+
+    if redis and redis.get(marker_key):
+        logger.info(
+            "Report %s for tenant %s already generated; returning cached result.",
+            stable_report_id,
+            tenant_id,
+        )
+        return {
+            "status": "GENERATED",
+            "report_id": stable_report_id,
+            "report_type": report_type,
+            "tenant_id": tenant_id,
+            "job_id": job_id,
+            "correlation_id": correlation_id,
+            "queue": "report_generation",
+            "routing_key": "reports",
+            "idempotent_duplicate": True,
+            "attempt": attempt,
+        }
+
+    from .services.report_service import render_summary_report_pdf
+
+    session = db
+    should_close_db = False
+    if session is None:
+        try:
+            session = SessionLocal()
+            should_close_db = True
+        except Exception:
+            session = None
+
+    try:
+        records = (parameters or {}).get("records", [])
+        pdf_bytes = render_summary_report_pdf(
+            title=f"{report_type.upper()} REPORT",
+            records=records,
+            tenant_id=tenant_id,
+            metadata={"job_id": job_id, "correlation_id": correlation_id},
+        )
+
+        result = {
+            "status": "GENERATED",
+            "report_id": stable_report_id,
+            "report_type": report_type,
+            "tenant_id": tenant_id,
+            "job_id": job_id,
+            "correlation_id": correlation_id,
+            "file_size": len(pdf_bytes),
+            "content_type": "application/pdf",
+            "queue": "report_generation",
+            "routing_key": "reports",
+            "attempt": attempt,
+        }
+
+        if redis:
+            try:
+                redis.set(marker_key, json.dumps(result, default=str), ex=86400 * 7)
+            except Exception as set_err:
+                logger.warning("Failed to store report generation Redis marker: %s", set_err)
+
+        return result
+    except Exception as exc:
+        logger.exception(
+            "Report generation failed: report_id=%s tenant_id=%s: %s",
+            stable_report_id,
+            tenant_id,
+            exc,
+        )
+        return {
+            "status": "FAILED",
+            "error": str(exc),
+            "report_id": stable_report_id,
+            "report_type": report_type,
+            "tenant_id": tenant_id,
+            "job_id": job_id,
+            "correlation_id": correlation_id,
+            "queue": "report_generation",
+            "routing_key": "reports",
+            "attempt": attempt,
+        }
+    finally:
+        if should_close_db and session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.generate_report_task",
+    queue="report_generation",
+    routing_key="reports",
+    max_retries=3,
+    time_limit=600,
+    soft_time_limit=540,
+)
+def generate_report_task(
+    self,
+    report_type: str,
+    tenant_id: str,
+    report_id: Optional[str] = None,
+    job_id: Optional[Union[str, int]] = None,
+    correlation_id: Optional[str] = None,
+    parameters: Optional[dict] = None,
+    attempt: int = 1,
+):
+    """Celery background task for asynchronous report generation in dedicated queue."""
+    redis_client = get_redis_client()
+    res = _generate_report_once(
+        redis=redis_client,
+        report_type=report_type,
+        tenant_id=tenant_id,
+        report_id=report_id,
+        job_id=job_id,
+        correlation_id=correlation_id,
+        parameters=parameters,
+        attempt=attempt,
+    )
+    if res.get("status") == "FAILED" and not res.get("permanent_failure"):
+        if self.request.retries < self.max_retries:
+            raise self.retry(countdown=2 ** (self.request.retries + 1))
+    return res
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.generate_pdf_report_task",
+    queue="report_generation",
+    routing_key="reports",
+    max_retries=3,
+    time_limit=600,
+    soft_time_limit=540,
+)
+def generate_pdf_report_task(
+    self,
+    report_type: str,
+    tenant_id: str,
+    report_id: Optional[str] = None,
+    job_id: Optional[Union[str, int]] = None,
+    correlation_id: Optional[str] = None,
+    parameters: Optional[dict] = None,
+    attempt: int = 1,
+):
+    """Canonical alias conforming to story naming: Generate PDF report task."""
+    return generate_report_task(
+        report_type=report_type,
+        tenant_id=tenant_id,
+        report_id=report_id,
+        job_id=job_id,
+        correlation_id=correlation_id,
+        parameters=parameters,
+        attempt=attempt,
+    )
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.generate_job_invoice_pdf_task",
+    queue="report_generation",
+    routing_key="reports",
+    max_retries=3,
+    time_limit=600,
+    soft_time_limit=540,
+)
+def generate_job_invoice_pdf_task(
+    self,
+    job_id: Union[str, int],
+    tenant_id: str,
+    correlation_id: Optional[str] = None,
+    closure_id: Optional[int] = None,
+    attempt: int = 1,
+):
+    """Celery background task to generate authorized job invoice PDF in report_generation queue."""
+    redis_client = get_redis_client()
+    return _generate_report_once(
+        redis=redis_client,
+        report_type="invoice_pdf",
+        tenant_id=tenant_id,
+        report_id=f"invoice_{job_id}",
+        job_id=job_id,
+        correlation_id=correlation_id,
+        parameters={"closure_id": closure_id},
+        attempt=attempt,
+    )
+
+
+@celery_app.task(
+    name="app.tasks.process_report_generation_task",
+    queue="report_generation",
+    routing_key="reports",
+)
+def process_report_generation_task(
+    report_type: str,
+    payload: dict,
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict:
+    """Generic report processor task running in the dedicated report-generation queue."""
+    return {
+        "status": "COMPLETED",
+        "report_type": report_type,
+        "queue": "report_generation",
+        "routing_key": "reports",
+        "tenant_id": tenant_id,
+        "correlation_id": correlation_id,
+        "payload": payload,
+    }
+
+
+@celery_app.task(
+    name="app.tasks.create_report_generation_queue_task",
+    queue="report_generation",
+    routing_key="reports",
+)
+def create_report_generation_queue_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, str]:
+    """Celery task to verify and activate dedicated report-generation queue."""
+    from app.celery_app import create_report_generation_queue
+    return create_report_generation_queue()
+
+
 
 
 
@@ -2905,6 +3899,8 @@ def auto_requeue_dlq(limit: int = 100):
     autoretry_for=(Exception,),
     retry_backoff=True,
     max_retries=3,
+    queue="notifications",
+    routing_key="notifications",
 )
 def send_sms_async(
     self,
@@ -2912,6 +3908,9 @@ def send_sms_async(
     body: str,
     from_number: str | None = None,
     delivery_id: int | None = None,
+    tenant_id: str | None = None,
+    correlation_id: str | None = None,
+    **kwargs,
 ):
     # Send SMS in a Celery worker so the API request remains non-blocking.
     service = TwilioSMSService()
@@ -3236,6 +4235,9 @@ def send_bulk_sms_async(
     recipients: list[str],
     body: str,
     from_number: str | None = None,
+    tenant_id: str | None = None,
+    correlation_id: str | None = None,
+    **kwargs,
 ):
     # Process bulk SMS delivery in a Celery worker.
     # Each recipient is handled independently by the SMS service.
@@ -3265,6 +4267,9 @@ def send_email_async(
     delivery_id: int | None = None,
     invoice_job_id: int | None = None,
     invoice_closure_id: int | None = None,
+    tenant_id: str | None = None,
+    correlation_id: str | None = None,
+    **kwargs,
 ):
     """
     Send an email asynchronously through the configured SMTP relay.

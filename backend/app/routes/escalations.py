@@ -258,15 +258,11 @@ async def force_assign(
             detail="Technician not found",
         )
 
-    # Do not force-assign jobs to unavailable technicians.
-    technician_status = (
-        tech.technician_status or ""
-    ).strip().upper()
-
-    if technician_status != "AVAILABLE":
+    tech_status = (tech.technician_status or "").strip().upper()
+    if tech_status in ("BUSY", "OFFLINE"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Technician is unavailable for assignment",
+            detail="Technician is unavailable. Busy or offline technicians cannot be assigned jobs.",
         )
 
     if not tech.tech_id:
@@ -297,7 +293,7 @@ async def force_assign(
         old_status=old_status,
         new_status="ASSIGNED",
         reason=(
-            f"Force-assigned by {current_user.role.value}: "
+            f"Force-assigned by {current_user.role.value if hasattr(current_user.role, 'value') else current_user.role}: "
             f"{payload.reason}"
         ),
     )

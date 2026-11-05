@@ -2313,3 +2313,17 @@ async def route_escalation(
             )
 
     return results
+
+# ---------------------------------------------------------------------------
+# Notification Queue Management (Story: Create notification queue)
+# ---------------------------------------------------------------------------
+
+from app.celery_app import (
+    NOTIFICATION_QUEUE,
+    NOTIFICATION_ROUTING_KEY,
+    get_notification_queue_config,
+    create_notification_queue,
+    CreateNotificationQueue,
+    Create_notification_queue,
+)
+

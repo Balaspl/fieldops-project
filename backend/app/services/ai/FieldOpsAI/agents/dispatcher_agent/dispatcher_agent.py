@@ -123,6 +123,11 @@ class DispatcherState(TypedDict, total=False):
     # Planning flags.
     planning_required: bool
     replanning_required: bool
+    pending_retry: bool
+    dispatch_exhausted: bool
+    batch_exhausted: bool
+    offer_status: str | None
+    last_offer_outcome: str | None
 
     # Error information.
     error: str | None

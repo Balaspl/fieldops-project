@@ -776,7 +776,7 @@ async def test_sync_handler_does_not_block_event_loop():
     import time
 
     bus = AgentBus(
-        handler_timeout_seconds=1.0,
+        handler_timeout_seconds=2.0,
     )
 
     sender = make_address(
@@ -786,20 +786,20 @@ async def test_sync_handler_does_not_block_event_loop():
     )
 
     handler_started = threading.Event()
+    handler_finished = threading.Event()
 
     def blocking_sync(
         message: MessageEnvelope,
     ) -> None:
         handler_started.set()
-        time.sleep(0.3)
+        time.sleep(0.4)
+        handler_finished.set()
 
     await bus.subscribe(
         tenant_id="tenant-001",
         topic="agent.event",
         handler=blocking_sync,
     )
-
-    started_at = time.perf_counter()
 
     publish_task = asyncio.create_task(
         bus.publish(
@@ -809,18 +809,21 @@ async def test_sync_handler_does_not_block_event_loop():
 
     started = await asyncio.to_thread(
         handler_started.wait,
-        1.0,
+        3.0,
     )
 
     assert started is True
 
+    # Measure whether event loop is unblocked while blocking_sync is actively sleeping
+    loop_step_start = time.perf_counter()
     await asyncio.sleep(0.02)
+    loop_step_duration = time.perf_counter() - loop_step_start
 
-    elapsed = time.perf_counter() - started_at
-
-    # A directly executed sync handler would block
-    # this coroutine for approximately 0.3 seconds.
-    assert elapsed < 0.15
+    # If the event loop were blocked by the sync handler, this loop step would take >= 0.4 seconds.
+    # Because it is properly run in a worker thread, this loop step resumes promptly (< 0.25s)
+    # and the handler is still in the middle of its blocking sleep.
+    assert loop_step_duration < 0.25
+    assert not handler_finished.is_set()
 
     result = await publish_task
 

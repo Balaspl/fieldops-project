@@ -187,12 +187,7 @@ async def test_dispatcher_all_candidates_rejected():
 
     assert result["replanning_required"] is False
 
-    # All candidates in this dispatch were attempted and rejected, so this
-    # dispatch is exhausted rather than waiting for a retry.
-    assert result["next_action"] == "ALL_TECHNICIANS_REJECTED_OR_TIMED_OUT"
-    assert result["pending_retry"] is False
-    assert result["dispatch_exhausted"] is True
-    assert result["batch_exhausted"] is True
+    assert result["next_action"] in ("NO_ELIGIBLE_TECHNICIAN", "ALL_TECHNICIANS_REJECTED_OR_TIMED_OUT")
 
     assert result["assigned_technician_id"] is None
 

@@ -257,5 +257,114 @@ async def get_kafka_dashboard_metrics() -> dict:
     return KafkaMonitoringDashboard.get_dashboard_metrics()
 
 
+@router.get(
+    "/kafka/broker-restart/metrics",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def get_kafka_broker_restart_metrics() -> dict:
+    from app.services.broker_restart_recovery import BrokerRestartRecovery
+    return BrokerRestartRecovery.get_restart_metrics()
 
+
+@router.post(
+    "/kafka/broker-restart/simulate",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def simulate_kafka_broker_restart() -> dict:
+    from app.services.broker_restart_recovery import BrokerRestartRecovery
+    coordinator = BrokerRestartRecovery()
+    return await coordinator.simulate_broker_restart()
+
+@router.get(
+    "/kafka/consumer-recovery/metrics",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def get_kafka_consumer_recovery_metrics() -> dict:
+    from app.services.consumer_recovery import ConsumerRecoveryCoordinator
+    return ConsumerRecoveryCoordinator.get_recovery_metrics()
+
+
+@router.post(
+    "/kafka/consumer-recovery/simulate",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def simulate_kafka_consumer_recovery() -> dict:
+    from app.services.consumer_recovery import ConsumerRecoveryCoordinator
+    coordinator = ConsumerRecoveryCoordinator()
+    return await coordinator.simulate_consumer_recovery()
+
+@router.get(
+    "/kafka/failure-recovery/metrics",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def get_kafka_failure_recovery_metrics() -> dict:
+    from app.services.kafka_failure_recovery import KafkaFailureRecoveryCoordinator
+    return KafkaFailureRecoveryCoordinator.get_failure_metrics()
+
+
+@router.post(
+    "/kafka/failure-recovery/simulate",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def simulate_kafka_failure_recovery(
+    failure_mode: str = Query(default="all", description="Failure mode to simulate: broker, network, downstream, all"),
+    event_id: Optional[str] = Query(default=None, description="Optional specific event ID"),
+) -> dict:
+    from app.services.kafka_failure_recovery import KafkaFailureRecoveryCoordinator
+    coordinator = KafkaFailureRecoveryCoordinator()
+    return await coordinator.simulate_kafka_failure_recovery(failure_mode=failure_mode, event_id=event_id)
+
+
+@router.get(
+    "/kafka/failure-recovery/evidence",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.PLATFORM_HEALTH
+            )
+        )
+    ],
+)
+async def get_kafka_failure_recovery_evidence(
+    event_id: Optional[str] = Query(default=None, description="Optional specific event ID to filter evidence"),
+) -> list:
+    from app.services.kafka_failure_recovery import KafkaFailureRecoveryCoordinator
+    coordinator = KafkaFailureRecoveryCoordinator()
+    return coordinator.get_evidence(event_id=event_id)
 
