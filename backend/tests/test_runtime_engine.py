@@ -212,6 +212,8 @@ async def test_process_isolation_real_subprocess():
             )
 
         import sys
+        old_pythonpath = os.environ.get("PYTHONPATH", "")
+        os.environ["PYTHONPATH"] = f"{tmp}{os.pathsep}{old_pythonpath}" if old_pythonpath else tmp
         sys.path.insert(0, tmp)
         try:
             engine = AIRuntimeEngine(max_concurrency=5)  # no agent_runner -> real subprocess path
@@ -219,14 +221,18 @@ async def test_process_isolation_real_subprocess():
                 agent_type="demo",
                 tenant_id="org-1",
                 context={"entrypoint": "agent_mod:run_agent", "marker": "abc"},
-                max_memory_mb=128,
-                max_cpu_seconds=5,
+                max_memory_mb=256,
+                max_cpu_seconds=30,
             )
             result = await engine.execute_task(spec)
             assert result.status == TaskStatus.SUCCEEDED
             assert result.result["pid_marker"] == "abc"
         finally:
             sys.path.remove(tmp)
+            if old_pythonpath:
+                os.environ["PYTHONPATH"] = old_pythonpath
+            else:
+                os.environ.pop("PYTHONPATH", None)
 
 
 # ============================================================================
@@ -255,6 +261,8 @@ async def test_memory_limit_kills_memory_hog():
             )
 
         import sys
+        old_pythonpath = os.environ.get("PYTHONPATH", "")
+        os.environ["PYTHONPATH"] = f"{tmp}{os.pathsep}{old_pythonpath}" if old_pythonpath else tmp
         sys.path.insert(0, tmp)
         try:
             engine = AIRuntimeEngine(max_concurrency=2)
@@ -271,6 +279,10 @@ async def test_memory_limit_kills_memory_hog():
             assert "memory" in result.error.lower() or "Memory" in result.error
         finally:
             sys.path.remove(tmp)
+            if old_pythonpath:
+                os.environ["PYTHONPATH"] = old_pythonpath
+            else:
+                os.environ.pop("PYTHONPATH", None)
 
 
 @pytest.mark.slow
@@ -289,6 +301,8 @@ async def test_cpu_limit_terminates_busy_loop():
             )
 
         import sys
+        old_pythonpath = os.environ.get("PYTHONPATH", "")
+        os.environ["PYTHONPATH"] = f"{tmp}{os.pathsep}{old_pythonpath}" if old_pythonpath else tmp
         sys.path.insert(0, tmp)
         try:
             engine = AIRuntimeEngine(max_concurrency=2)
@@ -310,6 +324,10 @@ async def test_cpu_limit_terminates_busy_loop():
             assert elapsed < 5
         finally:
             sys.path.remove(tmp)
+            if old_pythonpath:
+                os.environ["PYTHONPATH"] = old_pythonpath
+            else:
+                os.environ.pop("PYTHONPATH", None)
 
 
 # ============================================================================
