@@ -3856,6 +3856,30 @@ def add_task_result_tracking_task(
     return add_task_result_tracking(task_id=task_id, state=state, queue=queue)
 
 
+@celery_app.task(
+    name="app.tasks.add_celery_monitoring_task",
+)
+def add_celery_monitoring_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Celery task to verify and activate Celery monitoring."""
+    from app.celery_app import add_celery_monitoring
+    return add_celery_monitoring()
+
+
+@celery_app.task(
+    name="app.tasks.check_celery_health_task",
+)
+def check_celery_health_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Periodic or operational task to inspect Celery worker and queue health."""
+    from app.celery_app import get_celery_monitoring_metrics
+    return get_celery_monitoring_metrics()
+
+
 from app.celery_app import (
     DEFAULT_TASK_RESULT_TRACKING,
     get_task_result_tracking_config,
@@ -3868,6 +3892,27 @@ from app.celery_app import (
     ConfigureTaskResultTracking,
     get_task_result_tracking,
     TrackTaskResult,
+    DEFAULT_CELERY_MONITORING,
+    ALL_KNOWN_QUEUES,
+    get_celery_monitoring_config,
+    add_celery_monitoring,
+    get_celery_queue_depth,
+    get_all_queue_depths,
+    record_task_failure,
+    record_task_retry,
+    record_task_latency,
+    detect_abnormal_queue_growth,
+    get_celery_worker_health,
+    detect_stalled_workers,
+    get_celery_monitoring_metrics,
+    AddCeleryMonitoring,
+    Add_celery_monitoring,
+    configure_celery_monitoring,
+    ConfigureCeleryMonitoring,
+    get_celery_monitoring,
+    GetCeleryMonitoring,
+    CeleryMonitoring,
+    CeleryMonitoringService,
 )
 
 

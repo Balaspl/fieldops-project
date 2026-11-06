@@ -675,5 +675,151 @@ def track_task_endpoint(payload: dict) -> dict:
     )
 
 
+# =============================================================================
+# Story: Add Celery Monitoring Endpoints
+# =============================================================================
+
+@router.get(
+    "/monitoring",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_celery_monitoring_status_endpoint() -> dict:
+    """Return the configuration and status of Celery operational monitoring."""
+    from app.celery_app import get_celery_monitoring_config
+    return get_celery_monitoring_config()
+
+
+@router.get(
+    "/monitoring/config",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_celery_monitoring_config_endpoint() -> dict:
+    """Return canonical Celery monitoring configuration contract."""
+    from app.celery_app import get_celery_monitoring_config
+    return get_celery_monitoring_config()
+
+
+@router.post(
+    "/monitoring/configure",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def configure_celery_monitoring_endpoint() -> dict:
+    """Ensure Celery operational monitoring is active."""
+    from app.celery_app import add_celery_monitoring
+    return add_celery_monitoring()
+
+
+@router.get(
+    "/monitoring/metrics",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_celery_monitoring_metrics_endpoint() -> dict:
+    """Return aggregated Celery operational telemetry (queue depth, latency, failures, worker health)."""
+    from app.celery_app import get_celery_monitoring_metrics
+    return get_celery_monitoring_metrics()
+
+
+@router.get(
+    "/monitoring/health",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_celery_worker_health_endpoint() -> dict:
+    """Inspect and return Celery worker health and availability."""
+    from app.celery_app import get_celery_worker_health
+    return get_celery_worker_health()
+
+
+@router.get(
+    "/monitoring/queues",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def get_celery_queues_depth_endpoint() -> dict:
+    """Return current queue depths across all registered operational queues."""
+    from app.celery_app import get_all_queue_depths
+    return get_all_queue_depths()
+
+
+@router.post(
+    "/monitoring/record",
+    dependencies=[
+        Depends(
+            require_permission(
+                Permission.DISPATCH_QUEUE_VIEW
+            )
+        )
+    ],
+)
+def record_celery_metric_endpoint(payload: dict) -> dict:
+    """Record a metric event (failure, retry, latency) into Celery monitoring telemetry."""
+    from app.celery_app import record_task_failure, record_task_retry, record_task_latency
+
+    metric_type = payload.get("metric", "task_failures")
+    queue = payload.get("queue", "default")
+    task_id = payload.get("task_id", "unknown")
+    tenant_id = payload.get("tenant_id")
+    correlation_id = payload.get("correlation_id")
+
+    if metric_type == "task_retries":
+        return record_task_retry(
+            queue=queue,
+            task_id=task_id,
+            retry_count=payload.get("retry_count", 1),
+            tenant_id=tenant_id,
+            correlation_id=correlation_id,
+        )
+    elif metric_type == "task_latency":
+        return record_task_latency(
+            queue=queue,
+            task_id=task_id,
+            latency_seconds=float(payload.get("latency_seconds", 0.0)),
+            tenant_id=tenant_id,
+            correlation_id=correlation_id,
+        )
+    else:
+        return record_task_failure(
+            queue=queue,
+            task_id=task_id,
+            error=payload.get("error"),
+            tenant_id=tenant_id,
+            correlation_id=correlation_id,
+        )
+
+
 
 
