@@ -358,7 +358,7 @@ class ResourceLimiter:
                 # separately above; this prevents a task from hanging
                 # forever while merely sleeping (not burning CPU).
                 wall_time = loop.time() - started_monotonic
-                safety_timeout = max_cpu_seconds * 2
+                safety_timeout = max(30.0, max_cpu_seconds * 3)
 
                 if wall_time >= safety_timeout:
                     process.terminate()

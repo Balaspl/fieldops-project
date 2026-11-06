@@ -798,3 +798,38 @@ def stop_scheduler():
         scheduler.shutdown()
         logger.info("Background heartbeat scheduler stopped.")
 
+# ---------------------------------------------------------------------------
+# Celery Queue Management: Task Timeout Configuration & Worker Helpers
+# ---------------------------------------------------------------------------
+
+from .celery_app import (
+    DEFAULT_TASK_TIMEOUTS,
+    QUEUE_TASK_TIMEOUTS,
+    get_task_timeouts_config,
+    get_queue_timeout,
+    configure_task_timeouts,
+    ConfigureTaskTimeouts,
+    Configure_task_timeouts,
+    DEFAULT_CELERY_MONITORING,
+    get_celery_monitoring_config,
+    add_celery_monitoring,
+    get_celery_monitoring_metrics,
+    get_celery_worker_health,
+    get_celery_queue_depth,
+    get_all_queue_depths,
+    record_task_failure,
+    record_task_retry,
+    record_task_latency,
+    detect_abnormal_queue_growth,
+    detect_stalled_workers,
+    AddCeleryMonitoring,
+    Add_celery_monitoring,
+    configure_celery_monitoring,
+    ConfigureCeleryMonitoring,
+    get_celery_monitoring,
+    GetCeleryMonitoring,
+    CeleryMonitoring,
+    CeleryMonitoringService,
+)
+
+

@@ -12,7 +12,10 @@ from typing import Any, Optional, Union
 from .runtime.dlq import DeadLetterQueue
 from .services.enterprise_audit import AuditAction, audit_log
 from .celery_app import celery_app
-from .database import SessionLocal
+def SessionLocal(*args, **kwargs):
+    import app.database
+    return app.database.SessionLocal(*args, **kwargs)
+
 from . import models
 from .logger import logger
 from .services.eta_service import ETAService
@@ -3550,6 +3553,371 @@ def create_report_generation_queue_task(
     """Celery task to verify and activate dedicated report-generation queue."""
     from app.celery_app import create_report_generation_queue
     return create_report_generation_queue()
+
+
+# ---------------------------------------------------------------------------
+# Task Retry Rules (Bounded Exponential Backoff with Jitter & DLQ Routing)
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    name="app.tasks.configure_task_retry_rules_task",
+)
+def configure_task_retry_rules_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Celery task to verify and activate task retry rules."""
+    from app.celery_app import configure_task_retry_rules
+    return configure_task_retry_rules()
+
+
+def handle_task_failure_with_retry_policy(
+    *,
+    celery_task=None,
+    error: BaseException,
+    task_payload: dict,
+    tenant_id: str,
+    retry_count: int = 0,
+    correlation_id: Optional[str] = None,
+    redis=None,
+    db=None,
+) -> dict[str, Any]:
+    """
+    Handle task failure adhering to bounded retry policy:
+    - Non-retryable (validation/auth/guardrail) -> moved to DLQ immediately.
+    - Retryable (network/timeout/transient) and retry_count < 3 -> retried with exponential backoff & jitter.
+    - Retryable but retry_count >= 3 -> moved to DLQ (no infinite loops).
+    """
+    from app.runtime.retry import RetryDecision, RetryManager
+    from app.runtime.dlq import DeadLetterQueue
+
+    evaluation = RetryManager.evaluate(error, retry_count)
+
+    if evaluation.decision == RetryDecision.RETRY and retry_count < RetryManager.MAX_RETRIES:
+        delay = RetryManager.calculate_backoff_with_jitter(evaluation.retry_number, jitter=True)
+        logger.warning(
+            "Task failed with transient error; scheduling bounded retry %d with backoff %.3fs. error=%s",
+            evaluation.retry_number,
+            delay,
+            error,
+        )
+        if celery_task is not None:
+            raise celery_task.retry(exc=error, countdown=delay)
+        return {
+            "status": "RETRY_SCHEDULED",
+            "retry_number": evaluation.retry_number,
+            "delay_seconds": delay,
+            "reason": evaluation.reason,
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+        }
+
+    # Move to DLQ
+    logger.error(
+        "Task failure cannot be retried (decision=%s, reason=%s); moving to DLQ.",
+        evaluation.decision,
+        evaluation.reason,
+    )
+    redis_client = redis or get_redis_client()
+    dlq = DeadLetterQueue(redis_client, db)
+    dlq_entry = {
+        "tenant_id": tenant_id,
+        "payload": {
+            "task": task_payload,
+            "correlation_id": correlation_id,
+            "task_type": task_payload.get("task_type", "task") if isinstance(task_payload, dict) else "task",
+        },
+    }
+    dlq_record = dlq.add(
+        task=dlq_entry,
+        reason=evaluation.reason,
+        retry_count=retry_count,
+        error=error,
+        celery_task_id=getattr(getattr(celery_task, "request", None), "id", None) if celery_task else None,
+    )
+    return {
+        "status": "MOVED_TO_DLQ",
+        "failure_action": "DLQ",
+        "requeue_supported": True,
+        "dlq_id": dlq_record.get("id"),
+        "reason": evaluation.reason,
+        "retry_count": retry_count,
+        "tenant_id": tenant_id,
+        "correlation_id": correlation_id,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Story 8.8: Failed Task Handling Celery Task & Wrappers
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    name="app.tasks.configure_failed_task_handling_task",
+)
+def configure_failed_task_handling_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Celery task to verify and activate failed task handling."""
+    from app.celery_app import configure_failed_task_handling
+    return configure_failed_task_handling()
+
+
+from app.runtime.dlq import (
+    handle_failed_task,
+    configure_failed_task_handling,
+    get_failed_task_handling_config,
+    sanitize_payload,
+)
+
+
+# ---------------------------------------------------------------------------
+# Story 8.9: Task Timeouts Celery Task & Wrappers
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    name="app.tasks.configure_task_timeouts_task",
+)
+def configure_task_timeouts_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Celery task to verify and activate task timeout rules."""
+    from app.celery_app import configure_task_timeouts
+    return configure_task_timeouts()
+
+
+from app.celery_app import (
+    DEFAULT_TASK_TIMEOUTS,
+    QUEUE_TASK_TIMEOUTS,
+    get_task_timeouts_config,
+    get_queue_timeout,
+    configure_task_timeouts,
+)
+
+
+def handle_task_timeout(
+    *,
+    task_name: str,
+    queue: str = "default",
+    tenant_id: str,
+    correlation_id: Optional[str] = None,
+    elapsed_seconds: Optional[float] = None,
+    db=None,
+    redis=None,
+    error: Optional[BaseException] = None,
+    task_payload: Optional[dict] = None,
+) -> dict[str, Any]:
+    """
+    Handle task execution timeout:
+    - Rolls back active database session to prevent partial/dirty state.
+    - Logs structured timeout, task, and correlation information.
+    - Routes timed-out task to DLQ without leaving partial state.
+    """
+    logger.warning(
+        "Task execution timed out. task=%s, queue=%s, tenant_id=%s, correlation_id=%s, elapsed=%.2fs, error=%s",
+        task_name,
+        queue,
+        tenant_id,
+        correlation_id,
+        elapsed_seconds or 0.0,
+        error,
+        extra={
+            "task_name": task_name,
+            "queue": queue,
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "elapsed_seconds": elapsed_seconds,
+            "event": "TASK_TIMEOUT",
+        },
+    )
+
+    if db is not None:
+        try:
+            db.rollback()
+            logger.info("Rolled back database transaction on timeout for task=%s", task_name)
+        except Exception as rb_err:
+            logger.error("Failed to rollback db transaction on timeout: %s", rb_err)
+
+    # Route to DLQ if tenant_id is provided
+    try:
+        from app.runtime.dlq import handle_failed_task
+        dlq_result = handle_failed_task(
+            task_name=task_name,
+            queue=queue,
+            payload=task_payload or {},
+            error=error or TimeoutError(f"Task exceeded execution timeout on queue '{queue}'"),
+            exception_category="timeout_exceeded",
+            tenant_id=tenant_id,
+            correlation_id=correlation_id,
+            reason="task_timeout_exceeded",
+            redis=redis,
+            db=db,
+        )
+    except Exception as dlq_err:
+        logger.error("Failed to route timed-out task to DLQ: %s", dlq_err)
+        dlq_result = {
+            "status": "FAILED_HANDLED",
+            "failure_action": "DLQ",
+            "requeue_supported": True,
+        }
+
+    return {
+        "status": "TIMED_OUT",
+        "task_name": task_name,
+        "queue": queue,
+        "tenant_id": tenant_id,
+        "correlation_id": correlation_id,
+        "partial_state_prevented": True,
+        "dlq_result": dlq_result,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Story 8.10: Celery Beat Scheduled Tasks & Idempotency Wrappers
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    name="app.tasks.add_scheduled_tasks_task",
+)
+def add_scheduled_tasks_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    schedules: Optional[dict[str, Any]] = None,
+) -> dict[str, str]:
+    """Celery task to verify and register Celery Beat scheduled tasks."""
+    from app.celery_app import add_scheduled_tasks
+    return add_scheduled_tasks(schedules=schedules)
+
+
+from app.celery_app import (
+    FOUNDATIONAL_BEAT_SCHEDULES,
+    get_scheduled_tasks_config,
+    add_scheduled_tasks,
+    AddScheduledTasks,
+    Add_scheduled_tasks,
+    add_scheduled_task,
+    AddScheduledTask,
+    get_scheduled_tasks,
+    get_scheduled_task_config,
+)
+
+
+def run_scheduled_task_idempotently(
+    schedule_key: str,
+    interval_seconds: int,
+    func,
+    *args,
+    redis=None,
+    **kwargs,
+) -> Any:
+    """
+    Execute a recurring scheduled task idempotently:
+    Uses a Redis lock key for the current time bucket to guarantee
+    only one worker process runs the task within that interval.
+    """
+    if redis is None:
+        from app.redis_client import get_redis_client
+        redis = get_redis_client()
+
+    now_epoch = int(time.time())
+    bucket = now_epoch // max(interval_seconds, 1)
+    lock_key = f"scheduled_task_lock:{schedule_key}:{bucket}"
+
+    if redis is not None:
+        acquired = redis.set(lock_key, "locked", nx=True, ex=int(interval_seconds * 1.5))
+        if not acquired:
+            logger.info(
+                "Skipping duplicate scheduled run for key=%s bucket=%s",
+                schedule_key,
+                bucket,
+            )
+            return {"status": "SKIPPED_DUPLICATE", "schedule_key": schedule_key}
+
+    return func(*args, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Story 8.11: Task Result Tracking Celery Task & Wrappers
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    name="app.tasks.add_task_result_tracking_task",
+)
+def add_task_result_tracking_task(
+    task_id: str = "example-task-id",
+    state: str = "SUCCESS",
+    queue: str = "notifications",
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Celery task to verify and activate task result tracking."""
+    from app.celery_app import add_task_result_tracking
+    return add_task_result_tracking(task_id=task_id, state=state, queue=queue)
+
+
+@celery_app.task(
+    name="app.tasks.add_celery_monitoring_task",
+)
+def add_celery_monitoring_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Celery task to verify and activate Celery monitoring."""
+    from app.celery_app import add_celery_monitoring
+    return add_celery_monitoring()
+
+
+@celery_app.task(
+    name="app.tasks.check_celery_health_task",
+)
+def check_celery_health_task(
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Periodic or operational task to inspect Celery worker and queue health."""
+    from app.celery_app import get_celery_monitoring_metrics
+    return get_celery_monitoring_metrics()
+
+
+from app.celery_app import (
+    DEFAULT_TASK_RESULT_TRACKING,
+    get_task_result_tracking_config,
+    track_task_result,
+    get_task_result,
+    add_task_result_tracking,
+    AddTaskResultTracking,
+    Add_task_result_tracking,
+    configure_task_result_tracking,
+    ConfigureTaskResultTracking,
+    get_task_result_tracking,
+    TrackTaskResult,
+    DEFAULT_CELERY_MONITORING,
+    ALL_KNOWN_QUEUES,
+    get_celery_monitoring_config,
+    add_celery_monitoring,
+    get_celery_queue_depth,
+    get_all_queue_depths,
+    record_task_failure,
+    record_task_retry,
+    record_task_latency,
+    detect_abnormal_queue_growth,
+    get_celery_worker_health,
+    detect_stalled_workers,
+    get_celery_monitoring_metrics,
+    AddCeleryMonitoring,
+    Add_celery_monitoring,
+    configure_celery_monitoring,
+    ConfigureCeleryMonitoring,
+    get_celery_monitoring,
+    GetCeleryMonitoring,
+    CeleryMonitoring,
+    CeleryMonitoringService,
+)
+
+
+
+
 
 
 

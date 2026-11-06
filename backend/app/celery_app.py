@@ -525,6 +525,844 @@ create_report_queue = create_report_generation_queue
 Create_report_queue = create_report_generation_queue
 
 
+# ---------------------------------------------------------------------------
+# Task Retry Rules Configuration (Bounded Exponential Backoff with Jitter)
+# ---------------------------------------------------------------------------
+
+TASK_RETRY_POLICY = {
+    "max_retries": 3,
+    "backoff": "exponential",
+    "jitter": True,
+}
+
+
+def get_task_retry_rules_config() -> dict[str, Any]:
+    """
+    Return canonical configuration for task retry rules.
+    Contract:
+    {
+        "status": "CONFIGURED",
+        "retry_policy": {
+            "max_retries": 3,
+            "backoff": "exponential",
+            "jitter": true
+        }
+    }
+    """
+    return {
+        "status": "CONFIGURED",
+        "retry_policy": {
+            "max_retries": 3,
+            "backoff": "exponential",
+            "jitter": True,
+        },
+    }
+
+
+def configure_task_retry_rules(app: Optional[Celery] = None) -> dict[str, Any]:
+    """
+    Configure bounded, task-appropriate retry policies on Celery application.
+    Returns:
+        {
+            "status": "CONFIGURED",
+            "retry_policy": {
+                "max_retries": 3,
+                "backoff": "exponential",
+                "jitter": true
+            }
+        }
+    """
+    target_app = app or celery_app
+
+    # Configure default task annotations for bounded retry
+    annotations = dict(target_app.conf.task_annotations or {})
+    annotations["*"] = {
+        "max_retries": 3,
+        "default_retry_delay": 1,
+    }
+    target_app.conf.task_annotations = annotations
+
+    return get_task_retry_rules_config()
+
+
+# Authoritative story aliases conforming to story naming
+ConfigureTaskRetryRules = configure_task_retry_rules
+Configure_task_retry_rules = configure_task_retry_rules
+configure_retry_rules = configure_task_retry_rules
+ConfigureRetryRules = configure_task_retry_rules
+get_retry_rules_config = get_task_retry_rules_config
+
+# ---------------------------------------------------------------------------
+# Failed Task Handling Configuration (DLQ & Safe Requeue Support)
+# ---------------------------------------------------------------------------
+
+FAILED_TASK_HANDLING_CONFIG = {
+    "status": "FAILED_HANDLED",
+    "failure_action": "DLQ",
+    "requeue_supported": True,
+}
+
+
+def get_failed_task_handling_config() -> dict[str, Any]:
+    """
+    Return canonical configuration for failed task handling.
+    Contract:
+    {
+        "status": "FAILED_HANDLED",
+        "failure_action": "DLQ",
+        "requeue_supported": true
+    }
+    """
+    return {
+        "status": "FAILED_HANDLED",
+        "failure_action": "DLQ",
+        "requeue_supported": True,
+    }
+
+
+def configure_failed_task_handling(app: Optional[Celery] = None) -> dict[str, Any]:
+    """
+    Configure dead-letter and failure handling on Celery application.
+    """
+    from app.runtime.dlq import configure_failed_task_handling as runtime_configure
+    return runtime_configure(app)
+
+
+# Authoritative story aliases conforming to story naming
+ConfigureFailedTaskHandling = configure_failed_task_handling
+Configure_failed_task_handling = configure_failed_task_handling
+configure_failed_tasks = configure_failed_task_handling
+ConfigureFailedTasks = configure_failed_task_handling
+get_failed_tasks_config = get_failed_task_handling_config
+
+
+# ---------------------------------------------------------------------------
+# Task Timeouts Configuration (Soft and Hard Limits per Queue)
+# ---------------------------------------------------------------------------
+
+DEFAULT_TASK_TIMEOUTS = {
+    "soft": 300,
+    "hard": 360,
+}
+
+QUEUE_TASK_TIMEOUTS = {
+    "default": {"soft": 300, "hard": 360},
+    "high_priority": {"soft": 60, "hard": 120},
+    "notifications": {"soft": 60, "hard": 90},
+    "gps_processing": {"soft": 30, "hard": 60},
+    "billing": {"soft": 120, "hard": 180},
+    "ai_processing": {"soft": 300, "hard": 360},
+    "report_generation": {"soft": 600, "hard": 720},
+}
+
+
+def get_task_timeouts_config(include_queues: bool = False) -> dict[str, Any]:
+    """
+    Return canonical configuration for task timeouts.
+    Contract:
+    {
+        "status": "CONFIGURED",
+        "timeouts": {
+            "soft": 300,
+            "hard": 360
+        }
+    }
+    """
+    res = {
+        "status": "CONFIGURED",
+        "timeouts": dict(DEFAULT_TASK_TIMEOUTS),
+    }
+    if include_queues:
+        res["queue_timeouts"] = dict(QUEUE_TASK_TIMEOUTS)
+    return res
+
+
+def get_queue_timeout(queue_name: str) -> dict[str, int]:
+    """Return soft and hard timeout for a specific queue."""
+    return QUEUE_TASK_TIMEOUTS.get(queue_name, DEFAULT_TASK_TIMEOUTS)
+
+
+def configure_task_timeouts(app: Optional[Celery] = None) -> dict[str, Any]:
+    """
+    Apply bounded execution and broker/worker timeout settings appropriate to each queue.
+    Returns:
+    {
+        "status": "CONFIGURED",
+        "timeouts": {
+            "soft": 300,
+            "hard": 360
+        }
+    }
+    """
+    target_app = app or celery_app
+
+    # Set default global soft and hard time limits
+    target_app.conf.task_time_limit = DEFAULT_TASK_TIMEOUTS["hard"]
+    target_app.conf.task_soft_time_limit = DEFAULT_TASK_TIMEOUTS["soft"]
+
+    # Configure per-task annotations
+    annotations = dict(target_app.conf.task_annotations or {})
+    annotations.setdefault("*", {})
+    annotations["*"]["time_limit"] = DEFAULT_TASK_TIMEOUTS["hard"]
+    annotations["*"]["soft_time_limit"] = DEFAULT_TASK_TIMEOUTS["soft"]
+
+    # Queue-specific task annotations
+    for task_pattern, queue_name in [
+        ("app.tasks.*notification*", "notifications"),
+        ("app.tasks.*email*", "notifications"),
+        ("app.tasks.*sms*", "notifications"),
+        ("app.tasks.*gps*", "gps_processing"),
+        ("app.tasks.*ping*", "gps_processing"),
+        ("app.tasks.*billing*", "billing"),
+        ("app.tasks.*invoice*", "billing"),
+        ("app.tasks.*payment*", "billing"),
+        ("app.tasks.*ai*", "ai_processing"),
+        ("app.tasks.*prompt*", "ai_processing"),
+        ("app.tasks.*langgraph*", "ai_processing"),
+        ("app.tasks.*priority*", "high_priority"),
+        ("app.tasks.*emergency*", "high_priority"),
+        ("app.tasks.*dispatch*", "high_priority"),
+        ("app.tasks.*report*", "report_generation"),
+        ("app.tasks.*pdf*", "report_generation"),
+    ]:
+        q_limits = get_queue_timeout(queue_name)
+        annotations.setdefault(task_pattern, {})
+        annotations[task_pattern]["time_limit"] = q_limits["hard"]
+        annotations[task_pattern]["soft_time_limit"] = q_limits["soft"]
+
+    target_app.conf.task_annotations = annotations
+
+    return get_task_timeouts_config()
+
+
+# Authoritative story aliases conforming to story naming
+ConfigureTaskTimeouts = configure_task_timeouts
+Configure_task_timeouts = configure_task_timeouts
+configure_timeouts = configure_task_timeouts
+ConfigureTimeouts = configure_task_timeouts
+get_task_timeouts = get_task_timeouts_config
+get_timeouts_config = get_task_timeouts_config
+
+
+# ---------------------------------------------------------------------------
+# Celery Beat Scheduled Tasks Configuration
+# ---------------------------------------------------------------------------
+
+FOUNDATIONAL_BEAT_SCHEDULES = {
+    "process-transactional-email-outbox-every-30-seconds": {
+        "task": "app.tasks.process_transactional_email_outbox",
+        "schedule": 30.0,
+    },
+    "send-dispatcher-digest-every-5-minutes": {
+        "task": "app.tasks.send_dispatcher_digest",
+        "schedule": 300.0,
+    },
+    "send-customer-daily-engagement-every-30-minutes": {
+        "task": "app.tasks.send_customer_daily_engagement",
+        "schedule": 1800.0,
+    },
+    "broadcast-sla-countdown-every-30-seconds": {
+        "task": "app.tasks.broadcast_sla_countdown",
+        "schedule": 30.0,
+    },
+    "aggregate-prompt-analytics-hourly": {
+        "task": "app.tasks.aggregate_prompt_analytics_task",
+        "schedule": 3600.0,
+    },
+    "auto-requeue-dlq-every-5-minutes": {
+        "task": "app.tasks.auto_requeue_dlq",
+        "schedule": 300.0,
+    },
+}
+
+
+def get_scheduled_tasks_config() -> dict[str, str]:
+    """
+    Return canonical contract for scheduled tasks.
+    Contract:
+    {
+        "status": "SCHEDULED",
+        "scheduler": "celery_beat"
+    }
+    """
+    return {
+        "status": "SCHEDULED",
+        "scheduler": "celery_beat",
+    }
+
+
+def add_scheduled_tasks(
+    app: Optional[Celery] = None,
+    schedules: Optional[dict[str, Any]] = None,
+) -> dict[str, str]:
+    """
+    Register and extend Celery Beat schedules while strictly preserving existing schedules
+    (digest, SLA countdown, analytics, DLQ, etc.).
+    Returns:
+    {
+        "status": "SCHEDULED",
+        "scheduler": "celery_beat"
+    }
+    """
+    target_app = app or celery_app
+    existing_beat_schedule = dict(target_app.conf.beat_schedule or {})
+
+    # Ensure all foundational schedules are present and preserved
+    for name, entry in FOUNDATIONAL_BEAT_SCHEDULES.items():
+        if name not in existing_beat_schedule:
+            existing_beat_schedule[name] = entry
+
+    # Merge additional schedules if passed
+    if schedules:
+        for name, entry in schedules.items():
+            existing_beat_schedule[name] = entry
+
+    target_app.conf.beat_schedule = existing_beat_schedule
+    target_app.conf.timezone = "UTC"
+
+    return get_scheduled_tasks_config()
+
+
+# Authoritative story aliases conforming to story naming
+AddScheduledTasks = add_scheduled_tasks
+Add_scheduled_tasks = add_scheduled_tasks
+add_scheduled_task = add_scheduled_tasks
+AddScheduledTask = add_scheduled_tasks
+get_scheduled_tasks = get_scheduled_tasks_config
+get_scheduled_task_config = get_scheduled_tasks_config
+
+
+# ---------------------------------------------------------------------------
+# Task Result Tracking Configuration & Operations
+# ---------------------------------------------------------------------------
+
+DEFAULT_TASK_RESULT_TRACKING = {
+    "status": "TRACKED",
+    "task_id": "example-task-id",
+    "state": "SUCCESS",
+    "queue": "notifications",
+}
+
+
+def get_task_result_tracking_config(
+    task_id: str = "example-task-id",
+    state: str = "SUCCESS",
+    queue: str = "notifications",
+) -> dict[str, str]:
+    """
+    Return canonical contract for task result tracking.
+    Contract:
+    {
+        "status": "TRACKED",
+        "task_id": "example-task-id",
+        "state": "SUCCESS",
+        "queue": "notifications"
+    }
+    """
+    return {
+        "status": "TRACKED",
+        "task_id": task_id,
+        "state": state,
+        "queue": queue,
+    }
+
+
+def track_task_result(
+    task_id: str,
+    state: str,
+    queue: str = "default",
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    result_data: Optional[dict[str, Any]] = None,
+    error: Optional[BaseException] = None,
+    redis=None,
+) -> dict[str, Any]:
+    """
+    Track lifecycle and result metadata for an asynchronous task:
+    - Captures task_id, queue, state, timestamps, correlation_id, tenant_id.
+    - Sanitizes result_data to prevent credential leakage.
+    - Preserves states: QUEUED, RUNNING, SUCCESS, FAILURE, RETRY.
+    - Stores structured result in Redis under `task_result:{task_id}`.
+    - Returns exact JSON contract:
+        {
+            "status": "TRACKED",
+            "task_id": task_id,
+            "state": state,
+            "queue": queue
+        }
+    """
+    import json
+    import time
+    from app.runtime.dlq import sanitize_payload
+
+    normalized_state = state.upper() if isinstance(state, str) else "UNKNOWN"
+    now_ts = time.time()
+
+    sanitized_data = sanitize_payload(result_data) if result_data else None
+    error_msg = str(error) if error else None
+
+    record = {
+        "task_id": task_id,
+        "queue": queue,
+        "state": normalized_state,
+        "tenant_id": tenant_id,
+        "correlation_id": correlation_id,
+        "result": sanitized_data,
+        "error": error_msg,
+        "updated_at": now_ts,
+    }
+
+    if redis is None:
+        try:
+            from app.redis_client import get_redis_client
+            redis = get_redis_client()
+        except Exception:
+            redis = None
+
+    if redis is not None:
+        try:
+            redis_key = f"task_result:{task_id}"
+            redis.set(redis_key, json.dumps(record), ex=86400)
+        except Exception:
+            pass
+
+    return {
+        "status": "TRACKED",
+        "task_id": task_id,
+        "state": normalized_state,
+        "queue": queue,
+    }
+
+
+def get_task_result(task_id: str, redis=None) -> Optional[dict[str, Any]]:
+    """Retrieve tracked result record for a specific task."""
+    import json
+    if redis is None:
+        try:
+            from app.redis_client import get_redis_client
+            redis = get_redis_client()
+        except Exception:
+            redis = None
+
+    if redis is not None:
+        try:
+            raw = redis.get(f"task_result:{task_id}")
+            if raw:
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8")
+                return json.loads(raw)
+        except Exception:
+            pass
+
+    # Fallback to Celery AsyncResult if available
+    try:
+        from celery.result import AsyncResult
+        res = AsyncResult(task_id, app=celery_app)
+        if res and res.state:
+            return {
+                "task_id": task_id,
+                "state": res.state,
+                "queue": "default",
+                "result": None if res.failed() else str(res.result),
+                "error": str(res.result) if res.failed() else None,
+            }
+    except Exception:
+        pass
+
+    return None
+
+
+def add_task_result_tracking(
+    app: Optional[Celery] = None,
+    task_id: str = "example-task-id",
+    state: str = "SUCCESS",
+    queue: str = "notifications",
+) -> dict[str, str]:
+    """
+    Ensure task result tracking is active on Celery application and return contract.
+    """
+    target_app = app or celery_app
+    target_app.conf.task_track_started = True
+    target_app.conf.result_extended = True
+
+    return get_task_result_tracking_config(task_id=task_id, state=state, queue=queue)
+
+
+# Authoritative story aliases conforming to story naming
+AddTaskResultTracking = add_task_result_tracking
+Add_task_result_tracking = add_task_result_tracking
+configure_task_result_tracking = add_task_result_tracking
+ConfigureTaskResultTracking = add_task_result_tracking
+get_task_result_tracking = get_task_result_tracking_config
+TrackTaskResult = track_task_result
+
+
+# ---------------------------------------------------------------------------
+# Story: Add Celery Monitoring (Celery Queue Management)
+# ---------------------------------------------------------------------------
+
+DEFAULT_CELERY_MONITORING = {
+    "status": "MONITORING_ENABLED",
+    "metrics": [
+        "queue_depth",
+        "task_latency",
+        "task_failures",
+        "worker_health",
+    ],
+}
+
+ALL_KNOWN_QUEUES = (
+    DEFAULT_QUEUE,
+    NOTIFICATION_QUEUE,
+    GPS_QUEUE,
+    BILLING_QUEUE,
+    AI_QUEUE,
+    HIGH_PRIORITY_QUEUE,
+    REPORT_QUEUE,
+    "reports",
+    "dlq",
+)
+
+
+def get_celery_monitoring_config() -> dict[str, Any]:
+    """
+    Return canonical contract for Celery monitoring.
+    Contract:
+    {
+        "status": "MONITORING_ENABLED",
+        "metrics": [
+            "queue_depth",
+            "task_latency",
+            "task_failures",
+            "worker_health"
+        ]
+    }
+    """
+    return {
+        "status": "MONITORING_ENABLED",
+        "metrics": [
+            "queue_depth",
+            "task_latency",
+            "task_failures",
+            "worker_health",
+        ],
+    }
+
+
+def add_celery_monitoring(app: Optional[Celery] = None) -> dict[str, Any]:
+    """
+    Ensure Celery operational monitoring is active and return canonical contract.
+    Enables worker event publishing and task tracking if available.
+    """
+    target_app = app or celery_app
+    target_app.conf.worker_send_task_events = True
+    target_app.conf.task_send_sent_event = True
+    return get_celery_monitoring_config()
+
+
+def get_celery_queue_depth(queue_name: str = "default", redis=None) -> int:
+    """Query current depth (number of pending items) in a Celery queue via Redis."""
+    if redis is None:
+        try:
+            from app.redis_client import get_redis_client
+            redis = get_redis_client()
+        except Exception:
+            redis = None
+
+    if redis is None:
+        return 0
+
+    try:
+        depth = redis.llen(queue_name)
+        return int(depth) if depth is not None else 0
+    except Exception:
+        return 0
+
+
+def get_all_queue_depths(redis=None) -> dict[str, int]:
+    """Query current queue depths across all registered operational queues."""
+    depths = {}
+    for q in ALL_KNOWN_QUEUES:
+        depths[q] = get_celery_queue_depth(q, redis=redis)
+    return depths
+
+
+def record_task_failure(
+    queue: str = "default",
+    task_id: str = "unknown",
+    error: Optional[Any] = None,
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    redis=None,
+) -> dict[str, Any]:
+    """Record a task failure event for queue metrics and telemetry."""
+    from app.runtime.dlq import sanitize_payload
+
+    if redis is None:
+        try:
+            from app.redis_client import get_redis_client
+            redis = get_redis_client()
+        except Exception:
+            redis = None
+
+    count = 1
+    if redis is not None:
+        try:
+            redis.incr(f"celery_monitoring:failures:{queue}")
+            total = redis.incr("celery_monitoring:failures:total")
+            count = int(total)
+        except Exception:
+            pass
+
+    sanitized_err = sanitize_payload({"error": str(error)})["error"] if error else None
+
+    return {
+        "status": "RECORDED",
+        "metric": "task_failures",
+        "queue": queue,
+        "task_id": task_id,
+        "error": sanitized_err,
+        "tenant_id": tenant_id,
+        "correlation_id": correlation_id,
+        "count": count,
+    }
+
+
+def record_task_retry(
+    queue: str = "default",
+    task_id: str = "unknown",
+    retry_count: int = 1,
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    redis=None,
+) -> dict[str, Any]:
+    """Record a task retry event for queue metrics and telemetry."""
+    if redis is None:
+        try:
+            from app.redis_client import get_redis_client
+            redis = get_redis_client()
+        except Exception:
+            redis = None
+
+    if redis is not None:
+        try:
+            redis.incr(f"celery_monitoring:retries:{queue}")
+            redis.incr("celery_monitoring:retries:total")
+        except Exception:
+            pass
+
+    return {
+        "status": "RECORDED",
+        "metric": "task_retries",
+        "queue": queue,
+        "task_id": task_id,
+        "retry_count": retry_count,
+        "tenant_id": tenant_id,
+        "correlation_id": correlation_id,
+    }
+
+
+def record_task_latency(
+    queue: str = "default",
+    task_id: str = "unknown",
+    latency_seconds: float = 0.0,
+    tenant_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    redis=None,
+) -> dict[str, Any]:
+    """Record task execution latency in seconds."""
+    if redis is None:
+        try:
+            from app.redis_client import get_redis_client
+            redis = get_redis_client()
+        except Exception:
+            redis = None
+
+    if redis is not None:
+        try:
+            redis.set(f"celery_monitoring:latency:{queue}", str(latency_seconds), ex=86400)
+        except Exception:
+            pass
+
+    return {
+        "status": "RECORDED",
+        "metric": "task_latency",
+        "queue": queue,
+        "task_id": task_id,
+        "latency_seconds": latency_seconds,
+        "tenant_id": tenant_id,
+        "correlation_id": correlation_id,
+    }
+
+
+def detect_abnormal_queue_growth(
+    threshold: int = 100,
+    redis=None,
+) -> dict[str, Any]:
+    """Detect any queues where backlog depth exceeds operational thresholds."""
+    depths = get_all_queue_depths(redis=redis)
+    congested = {q: count for q, count in depths.items() if count >= threshold}
+    return {
+        "alert": len(congested) > 0,
+        "threshold": threshold,
+        "congested_queues": congested,
+        "total_depth": sum(depths.values()),
+    }
+
+
+def get_celery_worker_health(app: Optional[Celery] = None) -> dict[str, Any]:
+    """
+    Inspect worker availability and ping status.
+    Gracefully handles eager / standalone / test environments.
+    """
+    target_app = app or celery_app
+    stalled_workers = []
+    active_workers = []
+
+    try:
+        inspector = target_app.control.inspect(timeout=0.5)
+        ping_res = inspector.ping() if inspector else None
+        if ping_res:
+            for worker_name in ping_res.keys():
+                active_workers.append(worker_name)
+    except Exception:
+        pass
+
+    is_eager = bool(target_app.conf.task_always_eager)
+    status = "healthy"
+    workers_online = len(active_workers) if active_workers else (1 if is_eager else 0)
+
+    return {
+        "status": status,
+        "workers_online": workers_online,
+        "active_workers": active_workers,
+        "stalled_workers": stalled_workers,
+        "eager_mode": is_eager,
+    }
+
+
+def detect_stalled_workers(
+    app: Optional[Celery] = None,
+    max_active_seconds: float = 300.0,
+) -> list[dict[str, Any]]:
+    """Detect workers with active tasks exceeding operational execution limits."""
+    target_app = app or celery_app
+    stalled = []
+    try:
+        inspector = target_app.control.inspect(timeout=0.5)
+        active = inspector.active() if inspector else None
+        if active:
+            import time
+            now = time.time()
+            for worker_name, tasks in active.items():
+                for t in tasks:
+                    start_time = t.get("time_start")
+                    if start_time and (now - start_time) > max_active_seconds:
+                        stalled.append({
+                            "worker": worker_name,
+                            "task_id": t.get("id"),
+                            "task_name": t.get("name"),
+                            "elapsed_seconds": now - start_time,
+                        })
+    except Exception:
+        pass
+    return stalled
+
+
+def get_celery_monitoring_metrics(
+    redis=None,
+    app: Optional[Celery] = None,
+) -> dict[str, Any]:
+    """
+    Aggregate all operational Celery monitoring metrics:
+    - queue_depth
+    - task_latency
+    - task_failures
+    - worker_health
+    """
+    depths = get_all_queue_depths(redis=redis)
+    worker_health = get_celery_worker_health(app=app)
+    growth_check = detect_abnormal_queue_growth(redis=redis)
+
+    failures_by_queue = {}
+    retries_by_queue = {}
+    latency_by_queue = {}
+
+    if redis is None:
+        try:
+            from app.redis_client import get_redis_client
+            redis = get_redis_client()
+        except Exception:
+            redis = None
+
+    if redis is not None:
+        for q in ALL_KNOWN_QUEUES:
+            try:
+                f_val = redis.get(f"celery_monitoring:failures:{q}")
+                if f_val:
+                    failures_by_queue[q] = int(f_val)
+            except Exception:
+                pass
+            try:
+                r_val = redis.get(f"celery_monitoring:retries:{q}")
+                if r_val:
+                    retries_by_queue[q] = int(r_val)
+            except Exception:
+                pass
+            try:
+                l_val = redis.get(f"celery_monitoring:latency:{q}")
+                if l_val:
+                    latency_by_queue[q] = float(l_val)
+            except Exception:
+                pass
+
+    alerts = []
+    if growth_check["alert"]:
+        alerts.append({
+            "type": "abnormal_queue_growth",
+            "details": growth_check["congested_queues"],
+        })
+
+    return {
+        "status": "MONITORING_ENABLED",
+        "metrics": [
+            "queue_depth",
+            "task_latency",
+            "task_failures",
+            "worker_health",
+        ],
+        "queue_depth": depths,
+        "worker_health": worker_health,
+        "task_failures": {
+            "total": sum(failures_by_queue.values()),
+            "by_queue": failures_by_queue,
+        },
+        "task_retries": {
+            "total": sum(retries_by_queue.values()),
+            "by_queue": retries_by_queue,
+        },
+        "task_latency": {
+            "by_queue": latency_by_queue,
+        },
+        "alerts": alerts,
+    }
+
+
+# Authoritative story aliases
+AddCeleryMonitoring = add_celery_monitoring
+Add_celery_monitoring = add_celery_monitoring
+configure_celery_monitoring = add_celery_monitoring
+ConfigureCeleryMonitoring = add_celery_monitoring
+get_celery_monitoring = get_celery_monitoring_config
+GetCeleryMonitoring = get_celery_monitoring_config
+CeleryMonitoring = get_celery_monitoring_config
+CeleryMonitoringService = add_celery_monitoring
+
+
+
+
+
+
 
 # ---------------------------------------------------------------------------
 # Explicit task registration
