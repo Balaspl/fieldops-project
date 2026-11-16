@@ -722,6 +722,9 @@ function AppInner() {
 
       return "dashboard";
     });
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
+  const servicesPreviousTabRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (activeTab === "closure_agent") {
@@ -833,12 +836,18 @@ function AppInner() {
     }
     if (targetTab === activeTab) return;
 
+    if (targetTab === "services") {
+      servicesPreviousTabRef.current = activeTab;
+    }
+
     window.history.pushState(
       {
         ...(window.history.state || {}),
         fieldOps: {
           ...(window.history.state?.fieldOps || {}),
           tab: targetTab,
+          previousTab: activeTab,
+          appNavigation: true,
           ...(targetTab === "cust_create_request"
             ? { bookingLevel: "SERVICES" }
             : {}),
@@ -849,6 +858,7 @@ function AppInner() {
     );
 
     setIsNavigating(true);
+    activeTabRef.current = targetTab;
     setActiveTab(targetTab);
 
     setTimeout(() => {
@@ -872,9 +882,21 @@ function AppInner() {
     );
 
     const handlePopState = (event: PopStateEvent) => {
-      const previousTab = event.state?.fieldOps?.tab;
-      if (typeof previousTab === "string") {
-        setActiveTab(previousTab);
+      const historyTab = event.state?.fieldOps?.tab;
+      if (historyTab === "services") {
+        servicesPreviousTabRef.current =
+          event.state?.fieldOps?.previousTab || servicesPreviousTabRef.current;
+      }
+
+      // Browser history can contain duplicate or stale SPA entries. When
+      // leaving Services, honor the tab that was open immediately before it.
+      const targetTab =
+        activeTabRef.current === "services" && servicesPreviousTabRef.current
+          ? servicesPreviousTabRef.current
+          : historyTab;
+      if (typeof targetTab === "string") {
+        activeTabRef.current = targetTab;
+        setActiveTab(targetTab);
       }
     };
 
@@ -2015,7 +2037,17 @@ function AppInner() {
                 overflow: "hidden",
                 position: "relative",
               }
-            : { display: "contents" }
+            : {
+                display: "flex",
+                flexDirection: "row",
+                flex: 1,
+                minWidth: 0,
+                minHeight: 0,
+                width: "100%",
+                overflow: "hidden",
+                position: "relative",
+                boxSizing: "border-box",
+              }
         }
       >
         <aside

@@ -13,6 +13,7 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { goBackOrReplace } from "../../src/navigation/backNavigation";
 
 import { useAuthStore } from "../../src/auth/authStore";
 import { getTechnicianDashboard } from "../../src/api/dashboard";
@@ -424,7 +425,7 @@ export default function ProfileScreen() {
         <View pointerEvents="none" style={styles.heroOrbit} />
         <View pointerEvents="none" style={styles.heroAccent} />
         <View style={styles.heroNav}>
-          <Pressable accessibilityRole="button" accessibilityLabel="Go back" onPress={() => router.back()} style={styles.heroNavButton}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Go back" onPress={() => goBackOrReplace(router, "/(app)/dashboard")} style={styles.heroNavButton}>
             <Ionicons name="arrow-back" size={21} color="#FFFFFF" />
           </Pressable>
           <Text style={styles.heroNavTitle}>My Profile</Text>

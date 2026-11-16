@@ -462,7 +462,8 @@ export default function CustomerProfilePage({ onClose, onNavigate }: CustomerPro
             type="button"
             onClick={() => {
               if (onClose) {
-                onClose();
+                if (window.history.state?.fieldOps?.appNavigation) window.history.back();
+                else onClose();
               } else if (onNavigate) {
                 onNavigate("cust_create_request");
               } else {

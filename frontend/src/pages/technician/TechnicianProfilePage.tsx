@@ -590,7 +590,7 @@ export default function TechnicianProfilePage({
             <button
               type="button"
               onClick={() => {
-                if (window.history.state?.fieldOps?.tab) window.history.back();
+                if (window.history.state?.fieldOps?.appNavigation) window.history.back();
                 else onNavigate("tech_dashboard");
               }}
               style={{ display: "inline-flex", alignItems: "center", gap: 7, border: 0, padding: "4px 0", background: "transparent", color: "#078A72", fontSize: 13, fontWeight: 700, cursor: "pointer" }}

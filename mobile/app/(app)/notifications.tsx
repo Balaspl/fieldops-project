@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { goBackOrReplace } from "../../src/navigation/backNavigation";
 import {
   dismissTechnicianNotification,
   getTechnicianNotifications,
@@ -222,7 +223,7 @@ export default function NotificationsScreen() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Go back"
-            onPress={() => router.back()}
+            onPress={() => goBackOrReplace(router, "/(app)/dashboard")}
             hitSlop={8}
             style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
           >

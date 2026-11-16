@@ -43,6 +43,89 @@ interface CustomerNewRequestMarketplaceProps {
   onNavigate?: (tab: string) => void;
 }
 
+const SECURITY_ISSUE_DESCRIPTIONS: Record<string, string> = {
+  "No Picture / Video Feed": "Camera is powered on, but no picture appears on the monitor.",
+  "Blurry Camera Footage": "Check focus, lens condition and camera settings to restore a clear image.",
+  "Night Vision Not Working": "Inspect the infrared lights and night recording settings.",
+  "Camera Offline / Disconnected": "Restore the camera's power or network connection.",
+  "New CCTV Camera Installation": "Install and configure a CCTV camera at the required location.",
+  "Camera Angle Adjustment / Relocation": "Adjust the viewing angle or move the camera to a better position.",
+  "Camera Cable Damaged": "Inspect and replace damaged CCTV cable or connectors.",
+  "Camera Lens Cleaning / Fogging": "Clean the lens and check for moisture or fogging in the housing.",
+  "Camera Microphone / Audio Fault": "Check the camera microphone, audio wiring and recording settings.",
+  "PTZ Camera Movement Not Working": "Repair pan, tilt or zoom movement and check the camera controls.",
+  "Other CCTV Camera Issue": "Describe the camera issue so a technician can assess it.",
+  "Camera Power Supply Fault": "Check the camera adapter, power connection and voltage supply.",
+  "Camera Not Recording": "Check camera recording settings, connections and storage on the recorder.",
+  "DVR / NVR Not Turning On": "Diagnose the recorder power supply and startup fault.",
+  "Hard Disk Not Detected": "Check the recorder hard disk, connections and storage health.",
+  "No Display on Monitor": "Check the video output cable, monitor input and recorder display settings.",
+  "Recording Storage Full": "Review storage capacity and recording retention settings.",
+  "DVR / NVR Password Reset": "Reset recorder access credentials and restore authorised access.",
+  "Recorded Video Not Playing": "Diagnose playback, recording and timeline settings on the recorder.",
+  "Mobile / Remote Viewing Setup": "Configure secure CCTV viewing on a phone or remote device.",
+  "Date & Time Incorrect": "Correct the recorder clock, time zone and synchronisation settings.",
+  "CCTV Mobile App Not Connecting": "Restore the app connection to the recorder and camera system.",
+  "Video Recording Backup / Export": "Export selected recordings to a suitable storage device.",
+  "Other DVR / NVR Issue": "Describe the recorder issue so a technician can assess it.",
+  "Fingerprint Not Recognized": "Check the fingerprint reader and improve recognition reliability.",
+  "Access Door Lock Not Working": "Inspect the access-controlled door lock and its power connection.",
+  "Access Card Not Reading": "Check the card reader and access card configuration.",
+  "Face Recognition Not Working": "Check camera positioning, lighting and face recognition settings.",
+  "Attendance Data Not Syncing": "Restore attendance data synchronisation with the management system.",
+  "Magnetic Door Lock Not Working": "Inspect the magnetic lock, power supply and access controller.",
+  "New Access Control Installation": "Install and configure an access control system at the site.",
+  "User Registration / Access Management": "Add users and configure their access permissions.",
+  "Other Biometric / Access Control Issue": "Describe the access control issue for technician assessment.",
+  "False Alarm Triggering": "Check alarm settings and sensors that are triggering false alerts.",
+  "Alarm Siren Not Working": "Inspect the siren, wiring and alarm control panel.",
+  "Motion Sensor Not Detecting": "Check sensor placement, power and motion detection settings.",
+  "Door / Window Sensor Not Working": "Inspect the contact sensor and its connection to the alarm panel.",
+  "Fire Alarm Control Panel Fault": "Diagnose the fire alarm panel, zones and connected devices.",
+  "Smoke Detector Beeping / Low Battery": "Check the detector battery and confirm the unit is operating normally.",
+  "Gas Leak Detector Not Working": "Check the gas detector power, sensor status and alarm connection.",
+  "Emergency Panic Button Not Working": "Test the panic button and confirm its alert reaches the control panel.",
+  "Other Alarm / Sensor Issue": "Describe the alarm or sensor issue for technician assessment.",
+  "Indoor Monitor Screen Not Working": "Check the indoor monitor display, power and video connection.",
+  "No Sound / Audio Not Working": "Inspect the microphone, speaker and audio wiring.",
+  "Doorbell Call Not Ringing": "Check the call button, chime and indoor monitor connection.",
+  "New Video Door Phone Installation": "Install and configure a video door phone at the entrance.",
+  "Door Phone Wiring / Cable Fault": "Inspect and repair the door phone cable or wiring connection.",
+  "Door Unlock Button Not Working": "Check the unlock control and its connection to the door lock.",
+  "Indoor Monitor Replacement": "Replace and configure a faulty indoor monitor.",
+  "Other Video Door Phone Issue": "Describe the door phone issue for technician assessment.",
+  "Sliding Gate Motor Not Working": "Diagnose the sliding gate motor, power and drive mechanism.",
+  "Gate Remote Not Working": "Check the gate receiver and pair or repair the remote.",
+  "Swing Gate Motor Not Working": "Inspect the swing gate motor, arms and control unit.",
+  "Boom Barrier Not Opening / Closing": "Diagnose the barrier motor, controls and safety devices.",
+  "Gate Limit Switch Fault": "Adjust or replace the gate limit switch to restore travel limits.",
+  "Safety Sensor Not Working": "Check and align the gate safety sensor and its wiring.",
+  "Gate Stops or Reverses Midway": "Inspect gate travel, obstruction detection and motor settings.",
+  "Additional Remote Programming": "Pair an additional authorised remote with the gate receiver.",
+  "Other Gate Automation Issue": "Describe the gate automation issue for technician assessment.",
+  "Electric Fence Has No Power": "Check the energizer, fence circuit and power connection.",
+  "Electric Fence False Alarm": "Inspect fence zones and connections causing repeated alerts.",
+  "Fence Energizer Not Working": "Diagnose the energizer and its power and output connections.",
+  "Electric Fence Wire Damaged": "Inspect and repair damaged fence wire and insulators.",
+  "New Electric Fence Installation": "Install an electric fence and verify its operation.",
+  "Other Electric Fence Issue": "Describe the fence issue for technician assessment.",
+  "Electric Fence Voltage Too Low": "Measure fence output and check for leakage or poor connections.",
+  "Electric Fence Short Circuit / Ground Fault": "Locate and repair a short or ground fault in the fence circuit.",
+  "Electric Fence Maintenance & Inspection": "Inspect the energizer, wiring, insulators and fence output.",
+};
+
+const getIssueDescription = (serviceTypeId: string, categoryId: string, issueTitle: string) => {
+  if (serviceTypeId !== "security_systems") {
+    return `Troubleshooting & verified repair for ${issueTitle.toLowerCase()}.`;
+  }
+
+  const description = SECURITY_ISSUE_DESCRIPTIONS[issueTitle]
+    || `Service and repair for ${issueTitle.toLowerCase()}.`;
+  return categoryId === "electric_fence"
+    ? `${description} High-voltage fence work must be handled by a qualified technician.`
+    : description;
+};
+
 // 30-minute interval slots from 08:00 AM to 07:00 PM
 const TIME_SLOTS = [
   "08:00 AM",
@@ -111,6 +194,65 @@ const normalize = (s?: string) =>
     .toLowerCase()
     .replace(/[^a-z0-9]/g, "");
 
+const autoFitPaddedImage = (image: HTMLImageElement) => {
+  const source = image.currentSrc || image.src;
+  if (image.dataset.autoFitSource === source || !image.naturalWidth || !image.naturalHeight) return;
+  image.dataset.autoFitSource = source;
+  image.style.transform = "";
+  image.style.transformOrigin = "";
+
+  try {
+    const scanWidth = 80;
+    const scanHeight = 50;
+    const canvas = document.createElement("canvas");
+    canvas.width = scanWidth;
+    canvas.height = scanHeight;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return;
+    context.drawImage(image, 0, 0, scanWidth, scanHeight);
+
+    const { data } = context.getImageData(0, 0, scanWidth, scanHeight);
+    let minX = scanWidth;
+    let minY = scanHeight;
+    let maxX = -1;
+    let maxY = -1;
+    for (let y = 0; y < scanHeight; y += 1) {
+      for (let x = 0; x < scanWidth; x += 1) {
+        const offset = (y * scanWidth + x) * 4;
+        const alpha = data[offset + 3];
+        const isNearWhite = data[offset] > 238 && data[offset + 1] > 238 && data[offset + 2] > 238;
+        if (alpha > 16 && !isNearWhite) {
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+        }
+      }
+    }
+
+    const contentWidth = maxX - minX + 1;
+    const contentHeight = maxY - minY + 1;
+    if (contentWidth <= 0 || contentHeight <= 0 || (contentWidth / scanWidth > 0.78 && contentHeight / scanHeight > 0.78)) return;
+
+    const box = image.parentElement;
+    if (!box) return;
+    const fitScale = Math.min(box.clientWidth / image.naturalWidth, box.clientHeight / image.naturalHeight);
+    const widthFraction = contentWidth / scanWidth;
+    const heightFraction = contentHeight / scanHeight;
+    const zoom = Math.min(
+      box.clientWidth / (image.naturalWidth * fitScale * widthFraction),
+      box.clientHeight / (image.naturalHeight * fitScale * heightFraction),
+      8,
+    );
+    if (zoom <= 1.15) return;
+
+    image.style.transform = `scale(${zoom})`;
+    image.style.transformOrigin = `${((minX + maxX + 1) / 2 / scanWidth) * 100}% ${((minY + maxY + 1) / 2 / scanHeight) * 100}%`;
+  } catch {
+    // Cross-origin images cannot be scanned; their natural frame still fits in the card.
+  }
+};
+
 // Check if a catalog item matches a taxonomy service type
 const itemMatchesServiceType = (
   item: ServiceCatalogItem,
@@ -151,8 +293,19 @@ const itemMatchesCategory = (
   const catNameNorm = normalize(cat.name);
   const catIdNorm = normalize(cat.id);
 
+  const cleaningCategoryAliases: Record<string, string> = {
+    "sofacarpetmattressandcurtain": "sofacarpetmattresscurtaincleaning",
+    "watertankandsumpcleaning": "watertanksumpcleaning",
+    "kitchencleaning": "kitchendeepcleaning",
+    "bathroomcleaning": "bathroomdeepcleaning",
+    "officeandcommercialcleaning": "officecommercialcleaning",
+    "specialisedcleaning": "specialisedcleaningservices",
+  };
+  const itemCategoryAlias = cleaningCategoryAliases[itemCatNorm];
+
   return (
     itemCatNorm === catNameNorm ||
+    itemCategoryAlias === catNameNorm ||
     itemCatNorm === catIdNorm ||
     itemCatNorm.includes(catNameNorm) ||
     catNameNorm.includes(itemCatNorm)
@@ -234,8 +387,6 @@ export default function CustomerNewRequestMarketplace({
   const [selectedIssue, setSelectedIssue] = useState<string>("");
 
   // Category and Issue filtering switches: ALL | ACTIVE | INACTIVE
-  const [categoryFilter, setCategoryFilter] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
-  const [issueFilter, setIssueFilter] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
   const [unavailableModalIssue, setUnavailableModalIssue] = useState<string | null>(null);
 
   // 5-Day window options: Today (slots >= 3h from now) + Next 4 Days
@@ -422,31 +573,30 @@ export default function CustomerNewRequestMarketplace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewLevel]);
 
-  // Compute active item counts per service type
-  const getActiveItemsForType = (sType: TaxonomyServiceType) => {
-    return catalogItems.filter((item) => itemMatchesServiceType(item, sType));
-  };
-
-  const getActiveCountForServiceType = (sType: TaxonomyServiceType) => {
-    return getActiveItemsForType(sType).length;
-  };
-
-  // Compute active item counts per category
-  const getActiveItemsForCategory = (
+  // An issue is available when at least one organization currently offers it.
+  const isTaxonomyIssueActive = (
     sType: TaxonomyServiceType,
-    cat: TaxonomyCategory
-  ) => {
-    return catalogItems.filter(
-      (item) => itemMatchesServiceType(item, sType) && itemMatchesCategory(item, cat)
-    );
+    category: TaxonomyCategory,
+    issueName: string,
+  ): boolean => {
+    const normIssue = normalize(issueName);
+    return catalogItems.some((item) => {
+      const itemIssue = normalize(item.issue || item.category || item.service_type);
+      const matchesIssue = normIssue.length > 0 && (
+        itemIssue === normIssue ||
+        itemIssue.includes(normIssue) ||
+        normIssue.includes(itemIssue)
+      );
+      return itemMatchesServiceType(item, sType) && itemMatchesCategory(item, category) && matchesIssue;
+    });
   };
 
-  const getActiveCountForCategory = (
-    sType: TaxonomyServiceType,
-    cat: TaxonomyCategory
-  ) => {
-    return getActiveItemsForCategory(sType, cat).length;
-  };
+  // Count each taxonomy issue once, even when several organizations offer it.
+  const getActiveCountForCategory = (sType: TaxonomyServiceType, cat: TaxonomyCategory) =>
+    cat.issues.filter((issue) => isTaxonomyIssueActive(sType, cat, issue)).length;
+
+  const getActiveCountForServiceType = (sType: TaxonomyServiceType) =>
+    sType.categories.reduce((count, cat) => count + getActiveCountForCategory(sType, cat), 0);
 
   // Handle clicking a Service Type Card (Level 1 ➔ Level 2)
   const handleServiceTypeClick = (sType: TaxonomyServiceType) => {
@@ -456,35 +606,14 @@ export default function CustomerNewRequestMarketplace({
     changeViewLevel("CATEGORIES");
   };
 
-  // Helper to check if a specific issue is actively offered by organizations
-  const isIssueActive = (issueName: string): boolean => {
-    if (!selectedServiceType || !selectedCategory) return false;
-    const normIssue = normalize(issueName);
-    const normCat = normalize(selectedCategory.name);
-    const normType = normalize(selectedServiceType.name);
+  const isIssueActive = (issueName: string): boolean =>
+    Boolean(selectedServiceType && selectedCategory && isTaxonomyIssueActive(selectedServiceType, selectedCategory, issueName));
 
-    return catalogItems.some((item) => {
-      const itemType = normalize(item.service_type);
-      const itemCat = normalize(item.category);
-      const itemIssue = normalize(item.issue || item.category || item.service_type);
-
-      const matchesType = !itemType || itemType === normType;
-      const matchesCat = !itemCat || itemCat === normCat;
-      const matchesIssue =
-        itemIssue === normIssue ||
-        (normIssue && itemIssue.includes(normIssue)) ||
-        (normIssue && normIssue.includes(itemIssue));
-
-      return matchesType && matchesCat && matchesIssue;
-    });
-  };
-
-  // Handle clicking a Category Card (Always open Level 3 to explore all issues)
+  // Open the issue list for the selected available category.
   const handleCategoryClick = (cat: TaxonomyCategory) => {
     if (!selectedServiceType) return;
     setSelectedCategory(cat);
     setSelectedIssue("");
-    setIssueFilter("ALL");
     changeViewLevel("ISSUES");
   };
 
@@ -1001,7 +1130,7 @@ export default function CustomerNewRequestMarketplace({
                 }}
               >
                 <Sparkles size={13} color="#059669" />
-                <span>16 Verified Trades</span>
+                <span>Available Service Types ({SERVICE_CATALOGUE_TAXONOMY.filter((sType) => getActiveCountForServiceType(sType) > 0).length})</span>
               </div>
             </div>
 
@@ -1013,7 +1142,17 @@ export default function CustomerNewRequestMarketplace({
                 gap: "14px",
               }}
             >
-              {SERVICE_CATALOGUE_TAXONOMY.map((sType) => {
+              {loadingCatalog && catalogItems.length === 0 ? (
+                <div style={{ gridColumn: "1 / -1", color: "#64748B", fontSize: "13px", padding: "16px" }}>
+                  Loading available services...
+                </div>
+              ) : null}
+              {!loadingCatalog && SERVICE_CATALOGUE_TAXONOMY.every((sType) => getActiveCountForServiceType(sType) === 0) ? (
+                <div style={{ gridColumn: "1 / -1", color: "#64748B", fontSize: "13px", padding: "16px" }}>
+                  No services are currently available to book.
+                </div>
+              ) : null}
+              {SERVICE_CATALOGUE_TAXONOMY.filter((sType) => getActiveCountForServiceType(sType) > 0).map((sType) => {
                 const liveCount = getActiveCountForServiceType(sType);
 
                 return (
@@ -1066,13 +1205,12 @@ export default function CustomerNewRequestMarketplace({
                         src={sType.image}
                         alt={sType.name}
                         loading="lazy"
+                        onLoad={(e) => autoFitPaddedImage(e.currentTarget)}
                         style={{
                           height: "95%",
                           width: "95%",
                           objectFit: "contain",
-                          transform: "scale(1.15)",
                           filter: "drop-shadow(0 4px 8px rgba(0, 0, 0, 0.08))",
-                          transition: "transform 0.25s ease",
                         }}
                       />
                       {liveCount > 0 && (
@@ -1181,14 +1319,9 @@ export default function CustomerNewRequestMarketplace({
           const activeCategoriesCount = allCategories.filter(
             (c) => getActiveCountForCategory(selectedServiceType, c) > 0
           ).length;
-          const inactiveCategoriesCount = allCategories.length - activeCategoriesCount;
-
-          const displayedCategories = allCategories.filter((cat) => {
-            const liveCount = getActiveCountForCategory(selectedServiceType, cat);
-            if (categoryFilter === "ACTIVE") return liveCount > 0;
-            if (categoryFilter === "INACTIVE") return liveCount === 0;
-            return true;
-          });
+          const displayedCategories = allCategories.filter(
+            (cat) => getActiveCountForCategory(selectedServiceType, cat) > 0,
+          );
 
           return (
             <div
@@ -1281,6 +1414,7 @@ export default function CustomerNewRequestMarketplace({
                   <img
                     src={selectedServiceType.image}
                     alt={selectedServiceType.name}
+                    onLoad={(e) => autoFitPaddedImage(e.currentTarget)}
                     style={{
                       maxHeight: "90%",
                       maxWidth: "90%",
@@ -1314,72 +1448,28 @@ export default function CustomerNewRequestMarketplace({
                 </div>
               </div>
 
-              {/* Compact Filter Switcher: ALL | ACTIVE | INACTIVE */}
+              {/* Show available categories only. */}
               <div
                 style={{
                   display: "flex",
                   alignItems: "center",
                   gap: "8px",
                   marginBottom: "18px",
-                  flexWrap: "wrap",
                 }}
               >
-                <button
-                  type="button"
-                  onClick={() => setCategoryFilter("ALL")}
+                <span
                   style={{
                     padding: "6px 14px",
                     borderRadius: "999px",
                     fontSize: "12px",
                     fontWeight: 700,
-                    cursor: "pointer",
-                    border: categoryFilter === "ALL" ? "2px solid #0F172A" : "1.5px solid #CBD5E1",
-                    background: categoryFilter === "ALL" ? "#0F172A" : "#FFFFFF",
-                    color: categoryFilter === "ALL" ? "#FFFFFF" : "#475569",
+                    border: "1.5px solid #A7F3D0",
+                    background: "#ECFDF5",
+                    color: "#065F46",
                   }}
                 >
-                  All Categories ({allCategories.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCategoryFilter("ACTIVE")}
-                  style={{
-                    padding: "6px 14px",
-                    borderRadius: "999px",
-                    fontSize: "12px",
-                    fontWeight: 700,
-                    cursor: "pointer",
-                    border: categoryFilter === "ACTIVE" ? "2px solid #059669" : "1.5px solid #CBD5E1",
-                    background: categoryFilter === "ACTIVE" ? "#ECFDF5" : "#FFFFFF",
-                    color: categoryFilter === "ACTIVE" ? "#065F46" : "#475569",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "5px",
-                  }}
-                >
-                  <span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#059669" }} />
-                  <span>Active Services ({activeCategoriesCount})</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCategoryFilter("INACTIVE")}
-                  style={{
-                    padding: "6px 14px",
-                    borderRadius: "999px",
-                    fontSize: "12px",
-                    fontWeight: 700,
-                    cursor: "pointer",
-                    border: categoryFilter === "INACTIVE" ? "2px solid #64748B" : "1.5px solid #CBD5E1",
-                    background: categoryFilter === "INACTIVE" ? "#F1F5F9" : "#FFFFFF",
-                    color: categoryFilter === "INACTIVE" ? "#1E293B" : "#475569",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "5px",
-                  }}
-                >
-                  <span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#94A3B8" }} />
-                  <span>Unavailable ({inactiveCategoriesCount})</span>
-                </button>
+                  Available Categories ({activeCategoriesCount})
+                </span>
               </div>
 
               {/* Categories Grid (Compact HD Photographic Cards) */}
@@ -1430,7 +1520,7 @@ export default function CustomerNewRequestMarketplace({
                       {/* Compact HD Photographic Image Container */}
                       <div
                         style={{
-                          height: "115px",
+                          height: "105px",
                           width: "100%",
                           position: "relative",
                           overflow: "hidden",
@@ -1442,19 +1532,30 @@ export default function CustomerNewRequestMarketplace({
                           alt={cat.name}
                           loading="lazy"
                           style={{
+                            display: "block",
                             width: "100%",
                             height: "100%",
-                            objectFit: "cover",
-                            transition: "transform 0.3s ease",
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.transform = "scale(1.05)";
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.transform = "scale(1.0)";
+                            maxWidth: "100%",
+                            maxHeight: "100%",
+                            objectFit: "contain",
+                            objectPosition: "center",
                           }}
                           onError={(e) => {
-                            e.currentTarget.src = selectedServiceType.image;
+                            const image = e.currentTarget;
+                            const fallbackImage = selectedServiceType.image;
+
+                            // Try the service image once; if that also fails,
+                            // hide the broken image instead of looping onError.
+                            if (
+                              image.dataset.fallbackApplied === "true" ||
+                              !fallbackImage
+                            ) {
+                              image.style.visibility = "hidden";
+                              return;
+                            }
+
+                            image.dataset.fallbackApplied = "true";
+                            image.src = fallbackImage;
                           }}
                         />
                         {catLiveCount > 0 && (
@@ -1507,7 +1608,7 @@ export default function CustomerNewRequestMarketplace({
                               margin: 0,
                             }}
                           >
-                            {cat.issues.length} Diagnostic Checks
+                            {cat.issues.filter((issue) => isTaxonomyIssueActive(selectedServiceType, cat, issue)).length} Available Services
                           </p>
                         </div>
 
@@ -1546,7 +1647,7 @@ export default function CustomerNewRequestMarketplace({
                                 gap: "3px",
                               }}
                             >
-                              <span>Explore Issues ({cat.issues.length})</span>
+                              <span>Explore Issues ({cat.issues.filter((issue) => isTaxonomyIssueActive(selectedServiceType, cat, issue)).length})</span>
                               <ChevronRight size={11} color="#94A3B8" />
                             </span>
                           )}
@@ -1561,19 +1662,12 @@ export default function CustomerNewRequestMarketplace({
         })()}
 
         {/* ─────────────────────────────────────────────────────────────
-            LEVEL 3: DIAGNOSTIC ISSUES WITH COMPACT IMAGE CARDS & ACTIVE SWITCH
+            LEVEL 3: AVAILABLE DIAGNOSTIC ISSUES
         ───────────────────────────────────────────────────────────── */}
         {viewLevel === "ISSUES" && selectedServiceType && selectedCategory && (() => {
           const allIssues = selectedCategory.issues;
           const activeIssuesCount = allIssues.filter((iss) => isIssueActive(iss)).length;
-          const inactiveIssuesCount = allIssues.length - activeIssuesCount;
-
-          const displayedIssues = allIssues.filter((iss) => {
-            const active = isIssueActive(iss);
-            if (issueFilter === "ACTIVE") return active;
-            if (issueFilter === "INACTIVE") return !active;
-            return true;
-          });
+          const displayedIssues = allIssues.filter((iss) => isIssueActive(iss));
 
           return (
             <div
@@ -1647,82 +1741,55 @@ export default function CustomerNewRequestMarketplace({
                     letterSpacing: "-0.3px",
                   }}
                 >
-                  Select Diagnostic Issue in {selectedCategory.name}
+                  {selectedServiceType.id === "painting"
+                    ? ({
+                        interior_painting: "Select Interior Painting Service",
+                        exterior_painting: "Select Exterior Painting Service",
+                        wood_metal_painting: "Select Painting Service",
+                        wall_defects: "Select Wall Problem",
+                        waterproofing: "Select Waterproofing Service",
+                        special_finishes: "Select Special Finish",
+                      } as Record<string, string>)[selectedCategory.id]
+                    : ["custom_furniture", "furniture_assembly"].includes(selectedCategory.id)
+                    ? "Select the Service You Need"
+                    : selectedServiceType.id === "plumbing"
+                    ? `Select a Plumbing Service in ${selectedCategory.name}`
+                    : `Select Diagnostic Issue in ${selectedCategory.name}`}
                 </h2>
                 <p style={{ fontSize: "12.5px", color: "#475569", fontWeight: 500, margin: 0 }}>
-                  Choose the specific issue you are experiencing to proceed to appointment booking and scheduling.
+                  {selectedServiceType.id === "painting"
+                    ? "Choose the service you need to proceed to appointment booking and scheduling."
+                    : ["custom_furniture", "furniture_assembly"].includes(selectedCategory.id)
+                    ? "Choose the furniture service you need to proceed to appointment booking and scheduling."
+                    : "Choose the specific issue you are experiencing to proceed to appointment booking and scheduling."}
                 </p>
               </div>
 
-              {/* Compact Filter Switcher: ALL | ACTIVE | INACTIVE */}
+              {/* Show bookable issues only. */}
               <div
                 style={{
                   display: "flex",
                   alignItems: "center",
                   gap: "8px",
                   marginBottom: "18px",
-                  flexWrap: "wrap",
                 }}
               >
-                <button
-                  type="button"
-                  onClick={() => setIssueFilter("ALL")}
+                <span
                   style={{
                     padding: "6px 14px",
                     borderRadius: "999px",
                     fontSize: "12px",
                     fontWeight: 700,
-                    cursor: "pointer",
-                    border: issueFilter === "ALL" ? "2px solid #0F172A" : "1.5px solid #CBD5E1",
-                    background: issueFilter === "ALL" ? "#0F172A" : "#FFFFFF",
-                    color: issueFilter === "ALL" ? "#FFFFFF" : "#475569",
+                    border: "1.5px solid #A7F3D0",
+                    background: "#ECFDF5",
+                    color: "#065F46",
                   }}
                 >
-                  All Diagnostic Issues ({allIssues.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIssueFilter("ACTIVE")}
-                  style={{
-                    padding: "6px 14px",
-                    borderRadius: "999px",
-                    fontSize: "12px",
-                    fontWeight: 700,
-                    cursor: "pointer",
-                    border: issueFilter === "ACTIVE" ? "2px solid #059669" : "1.5px solid #CBD5E1",
-                    background: issueFilter === "ACTIVE" ? "#ECFDF5" : "#FFFFFF",
-                    color: issueFilter === "ACTIVE" ? "#065F46" : "#475569",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "5px",
-                  }}
-                >
-                  <span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#059669" }} />
-                  <span>Active Services ({activeIssuesCount})</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIssueFilter("INACTIVE")}
-                  style={{
-                    padding: "6px 14px",
-                    borderRadius: "999px",
-                    fontSize: "12px",
-                    fontWeight: 700,
-                    cursor: "pointer",
-                    border: issueFilter === "INACTIVE" ? "2px solid #64748B" : "1.5px solid #CBD5E1",
-                    background: issueFilter === "INACTIVE" ? "#F1F5F9" : "#FFFFFF",
-                    color: issueFilter === "INACTIVE" ? "#1E293B" : "#475569",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "5px",
-                  }}
-                >
-                  <span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#94A3B8" }} />
-                  <span>Unavailable ({inactiveIssuesCount})</span>
-                </button>
+                  Available Services ({activeIssuesCount})
+                </span>
               </div>
 
-              {/* Issues Grid (ALL CARDS WITH COMPACT HD IMAGES, EVEN IF UNAVAILABLE!) */}
+              {/* Available issue cards */}
               <div
                 style={{
                   display: "grid",
@@ -1732,7 +1799,12 @@ export default function CustomerNewRequestMarketplace({
               >
                 {displayedIssues.map((issueTitle, idx) => {
                   const active = isIssueActive(issueTitle);
-                  const issueImg = getIssueCardImage(issueTitle, selectedCategory.id, selectedServiceType.id, idx);
+                  const issueImg = getIssueCardImage(
+                    issueTitle,
+                    selectedCategory.id,
+                    selectedServiceType.id,
+                    idx,
+                  );
 
                   return (
                     <div
@@ -1787,18 +1859,15 @@ export default function CustomerNewRequestMarketplace({
                           src={issueImg}
                           alt={issueTitle}
                           loading="lazy"
+                          onLoad={(e) => autoFitPaddedImage(e.currentTarget)}
                           style={{
+                            display: "block",
                             width: "100%",
                             height: "100%",
-                            objectFit: "cover",
-                            transition: "transform 0.3s ease",
+                            objectFit: "contain",
+                            objectPosition: "center",
+                            transition: "filter 0.2s ease",
                             filter: active ? "none" : "grayscale(25%)",
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.transform = "scale(1.05)";
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.transform = "scale(1.0)";
                           }}
                           onError={(e) => {
                             e.currentTarget.src = selectedServiceType.image;
@@ -1884,7 +1953,7 @@ export default function CustomerNewRequestMarketplace({
                               overflow: "hidden",
                             }}
                           >
-                            Troubleshooting & verified repair for {issueTitle.toLowerCase()}.
+                            {getIssueDescription(selectedServiceType.id, selectedCategory.id, issueTitle)}
                           </p>
                         </div>
 
@@ -3001,7 +3070,6 @@ export default function CustomerNewRequestMarketplace({
               <button
                 type="button"
                 onClick={() => {
-                  setIssueFilter("ACTIVE");
                   setUnavailableModalIssue(null);
                 }}
                 style={{
@@ -3015,7 +3083,7 @@ export default function CustomerNewRequestMarketplace({
                   cursor: "pointer",
                 }}
               >
-                Show Active Issues in this Category
+                Return to Available Services
               </button>
               <button
                 type="button"

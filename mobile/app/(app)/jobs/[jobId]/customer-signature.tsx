@@ -9,6 +9,7 @@ import {
 } from "react-native";
 import SignatureCanvas from "react-native-signature-canvas";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { goBackOrReplace } from "../../../../src/navigation/backNavigation";
 
 import {
   uploadCustomerSignature
@@ -139,7 +140,7 @@ export default function CustomerSignatureScreen() {
       <Pressable
         accessibilityRole="button"
         disabled={isSubmitting}
-        onPress={() => router.back()}
+        onPress={() => goBackOrReplace(router, "/(app)/jobs")}
         style={styles.backButton}
       >
         <Text style={styles.backText}>

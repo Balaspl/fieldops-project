@@ -45,7 +45,7 @@ from ..models import (
     JobAssignment,
     CustomerFeedback,
     CustomerSupportRequest,
-    
+    ServiceCatalogItem,
 )
 from ..models.customer_profile import CustomerProfileModel
 from app.services.dispatch_scheduling import DEFAULT_VISIT_TIME, DEFAULT_TIMEZONE
@@ -1009,6 +1009,29 @@ async def create_service_request(
             "preferred_visit_date": str(data.preferred_visit_date) if data.preferred_visit_date else None,
         }
 
+    # Customer marketplace bookings must match an active provider catalogue
+    # entry at all three taxonomy levels. Keep the submitted values as the
+    # canonical values passed to the Planning Agent.
+    service_type_for_catalog = str(
+        data.service_type or job_req.get("service_type") or job_req.get("service") or ""
+    ).strip()
+    category_for_catalog = str(
+        category_val or job_req.get("category") or job_req.get("title") or ""
+    ).strip()
+    issue_for_catalog = str(issue_val or job_req.get("issue") or "").strip()
+
+    if not (service_type_for_catalog and category_for_catalog and issue_for_catalog):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Please select a service type, category, and issue from the service catalogue.",
+        )
+
+    job_req["service"] = service_type_for_catalog
+    job_req["service_type"] = service_type_for_catalog
+    job_req["category"] = category_for_catalog
+    job_req["issue"] = issue_for_catalog
+    job_req["requires_catalog_offering"] = True
+
     # Step 2: Determine next real Job ID from DB
     from sqlalchemy import func, text
     max_id = db.query(func.max(Job.id)).scalar()
@@ -1071,22 +1094,36 @@ async def create_service_request(
     if top_3:
         selected_tenant_id = top_3[0]["organization_id"]
     else:
-        # Keep ownership in the nearest active organization when no eligible
-        # technicians are available; the scheduler will retry at dispatch time.
+        # A provider without an eligible technician may still own the request
+        # for scheduler retry, but it must explicitly offer this exact active
+        # service type, category, and issue. Never fall back to an unrelated
+        # nearest organization.
         organizations = (
             db.query(Organization)
+            .join(
+                ServiceCatalogItem,
+                ServiceCatalogItem.tenant_id == Organization.id,
+            )
             .filter(
                 Organization.site_latitude.isnot(None),
                 Organization.site_longitude.isnot(None),
                 Organization.deleted_at.is_(None),
                 Organization.status == "ACTIVE",
+                ServiceCatalogItem.is_active.is_(True),
+                func.lower(ServiceCatalogItem.service_type) == service_type_for_catalog.lower(),
+                func.lower(ServiceCatalogItem.category) == category_for_catalog.lower(),
+                func.lower(ServiceCatalogItem.issue) == issue_for_catalog.lower(),
             )
+            .distinct()
             .all()
         )
         if not organizations:
             raise HTTPException(
-                status_code=400,
-                detail=f"No organization is available with the required skill '{req_skill}' and a valid location.",
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "No active service provider currently offers the selected "
+                    "service, category, and issue. Please choose another service."
+                ),
             )
         nearest_organization = min(
             organizations,
@@ -1114,7 +1151,44 @@ async def create_service_request(
     # This is intentional.
     # ──────────────────────────────────────────────
 
-    selected_organization = db.query(Organization).filter(Organization.id == selected_tenant_id).first()
+    selected_organization = (
+        db.query(Organization)
+        .filter(
+            Organization.id == selected_tenant_id,
+            Organization.status == "ACTIVE",
+            Organization.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if not selected_organization:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The selected service provider is no longer available. Please try again.",
+        )
+
+    # Re-check the exact active offering immediately before creating the Job.
+    # This also protects against a catalogue entry being disabled while AI
+    # planning is running.
+    selected_offering = (
+        db.query(ServiceCatalogItem.id)
+        .filter(
+            ServiceCatalogItem.tenant_id == str(selected_organization.id),
+            ServiceCatalogItem.is_active.is_(True),
+            func.lower(ServiceCatalogItem.service_type) == service_type_for_catalog.lower(),
+            func.lower(ServiceCatalogItem.category) == category_for_catalog.lower(),
+            func.lower(ServiceCatalogItem.issue) == issue_for_catalog.lower(),
+        )
+        .first()
+    )
+    if not selected_offering:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "The selected provider no longer offers this exact service. "
+                "Please refresh the catalogue and try again."
+            ),
+        )
+
     selected_settings = getattr(selected_organization, "settings", None) or {}
     selected_timezone = selected_settings.get("timezone", DEFAULT_TIMEZONE) if isinstance(selected_settings, dict) else DEFAULT_TIMEZONE
 

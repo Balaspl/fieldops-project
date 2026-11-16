@@ -343,10 +343,14 @@ export default function AppLayout() {
   ]);
 
   useEffect(() => {
-    if (!isAuthenticated || user?.role.toLowerCase() !== "technician" || Platform.OS !== "android" || pathname !== "/dashboard") return;
+    if (!isAuthenticated || user?.role.toLowerCase() !== "technician" || Platform.OS !== "android") return;
     let lastBackPress = 0;
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
       if (router.canGoBack()) return false;
+      if (pathname !== "/dashboard") {
+        router.replace("/(app)/dashboard");
+        return true;
+      }
       const now = Date.now();
       if (now - lastBackPress < 2000) BackHandler.exitApp();
       else {

@@ -1,7 +1,7 @@
 {
-  "total": 307,
-  "passed": 307,
-  "failed": 0,
+  "total": 308,
+  "passed": 305,
+  "failed": 3,
   "skipped": 0,
   "tests": [
     {
@@ -1006,11 +1006,15 @@
     },
     {
       "nodeid": "tests/agents/test_dispatcher_runtime_handoff.py::test_runtime_hands_planning_ranking_to_dispatcher_without_replanning",
-      "outcome": "passed"
+      "outcome": "failed"
     },
     {
       "nodeid": "tests/agents/test_dispatcher_runtime_handoff.py::test_offer_is_persisted_and_realtime_notification_is_sent",
-      "outcome": "passed"
+      "outcome": "failed"
+    },
+    {
+      "nodeid": "tests/agents/test_dispatcher_runtime_handoff.py::test_cross_tenant_offer_reassigns_job_tenant",
+      "outcome": "failed"
     },
     {
       "nodeid": "tests/agents/test_dispatcher_runtime_handoff.py::test_future_job_registers_dispatch_at_one_hour_before_visit",

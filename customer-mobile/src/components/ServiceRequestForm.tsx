@@ -167,10 +167,18 @@ function matchesTaxonomyType(item: ServiceCatalogItem, type: TaxonomyServiceType
 function findCatalogIssue(items: ServiceCatalogItem[], type: TaxonomyServiceType, category: string, issue: string): ServiceCatalogItem | undefined {
   const normalize = (value?: string) => String(value ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
   const issueName = normalize(issue);
+  const cleaningCategoryAliases: Record<string, string> = {
+    sofacarpetmattressandcurtain: "sofacarpetmattresscurtaincleaning",
+    watertankandsumpcleaning: "watertanksumpcleaning",
+    kitchencleaning: "kitchendeepcleaning",
+    bathroomcleaning: "bathroomdeepcleaning",
+    officeandcommercialcleaning: "officecommercialcleaning",
+    specialisedcleaning: "specialisedcleaningservices",
+  };
+  const requestedCategory = normalize(category);
   return items.find((item) => {
     const itemCategory = normalize(item.category);
-    const requestedCategory = normalize(category);
-    const categoryMatches = !itemCategory || itemCategory === requestedCategory || itemCategory.includes(requestedCategory) || requestedCategory.includes(itemCategory);
+    const categoryMatches = !itemCategory || itemCategory === requestedCategory || cleaningCategoryAliases[itemCategory] === requestedCategory || itemCategory.includes(requestedCategory) || requestedCategory.includes(itemCategory);
     const itemIssue = normalize(item.issue);
     const issueMatches = itemIssue === issueName || itemIssue.includes(issueName) || issueName.includes(itemIssue);
     return categoryMatches && issueMatches && matchesTaxonomyType(item, type);
@@ -387,7 +395,9 @@ const visibleCatalog = useMemo(
   const categories = useMemo(
     () =>
       homeTaxonomy && !editing
-        ? homeTaxonomy.categories.map((entry) => entry.name)
+        ? homeTaxonomy.categories
+            .filter((entry) => entry.issues.some((issueName) => findCatalogIssue(visibleCatalog, homeTaxonomy, entry.name, issueName)))
+            .map((entry) => entry.name)
         : Array.from(
         new Set(
           visibleCatalog
@@ -404,9 +414,11 @@ const visibleCatalog = useMemo(
   const issues = useMemo(
     () =>
       homeTaxonomy && !editing
-        ? (homeTaxonomy.categories.find((entry) => entry.name === category)?.issues || []).map((issueName, index) => {
+        ? (homeTaxonomy.categories.find((entry) => entry.name === category)?.issues || []).flatMap((issueName) => {
             const item = findCatalogIssue(visibleCatalog, homeTaxonomy, category, issueName);
-            return item || { id: -(index + 1), service_type: homeTaxonomy.name, category, issue: issueName, is_active: false } as ServiceCatalogItem;
+            return item
+              ? [{ ...item, service_type: homeTaxonomy.name, category, issue: issueName }]
+              : [];
           })
         : visibleCatalog.filter(
         (item) =>
@@ -938,12 +950,20 @@ const visibleCatalog = useMemo(
                   {homeTaxonomy && taxonomyBrowseLevel === "issues" ? <Pressable accessibilityRole="button" accessibilityLabel="Back to categories" onPress={() => setTaxonomyBrowseLevel("categories")}><Ionicons name="arrow-back-circle" size={25} color={colors.brand} /></Pressable> : null}
                   <Text style={{ color: colors.text, fontSize: 15, fontWeight: "900", flex: 1 }}>{homeTaxonomy && taxonomyBrowseLevel === "issues" ? category : "Category"}</Text>
                 </View>
-                {homeTaxonomy && taxonomyBrowseLevel === "categories" ? <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", rowGap: 10 }}>{homeTaxonomy.categories.map((entry) => {
+                {homeTaxonomy && taxonomyBrowseLevel === "categories" ? <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", rowGap: 10 }}>{homeTaxonomy.categories.filter((entry) => entry.issues.some((issueName) => findCatalogIssue(visibleCatalog, homeTaxonomy, entry.name, issueName))).map((entry) => {
                   const activeCount = entry.issues.filter((issueName) => findCatalogIssue(visibleCatalog, homeTaxonomy, entry.name, issueName)).length;
                   const selected = category === entry.name;
-                  return <Pressable key={entry.id} onPress={() => { chooseCategory(entry.name); setTaxonomyBrowseLevel("issues"); }} style={{ width: "48.5%", borderRadius: 14, overflow: "hidden", backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: selected ? colors.brand : colors.border }}><Image source={{ uri: mobileCategoryImage(entry.id, homeTaxonomy.id) }} style={{ width: "100%", height: 84 }} resizeMode="cover" /><View style={{ padding: 9, gap: 4 }}><Text style={{ color: colors.text, fontSize: 12, lineHeight: 16, fontWeight: "800" }}>{entry.name}</Text><Text style={{ color: colors.muted, fontSize: 10 }}>{activeCount ? `${activeCount} services` : "Explore issues"}</Text></View></Pressable>;
+                  return <Pressable key={entry.id} onPress={() => { chooseCategory(entry.name); setTaxonomyBrowseLevel("issues"); }} style={{ width: "48.5%", borderRadius: 14, overflow: "hidden", backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: selected ? colors.brand : colors.border }}><Image source={{ uri: mobileCategoryImage(entry.id, homeTaxonomy.id) }} style={{ width: "100%", height: 84, backgroundColor: "#F1F5F9" }} resizeMode="contain" /><View style={{ padding: 9, gap: 4 }}><Text style={{ color: colors.text, fontSize: 12, lineHeight: 16, fontWeight: "800" }}>{entry.name}</Text><Text style={{ color: colors.muted, fontSize: 10 }}>{activeCount ? `${activeCount} services` : "Explore issues"}</Text></View></Pressable>;
                 })}</View> : !homeTaxonomy ? <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>{categories.map((value) => <Pressable key={value} onPress={() => chooseCategory(value)} style={{ backgroundColor: category === value ? colors.brand : "#FFFFFF", borderWidth: 1, borderColor: category === value ? colors.brand : colors.border, borderRadius: 99, paddingHorizontal: 13, paddingVertical: 10 }}><Text style={{ color: category === value ? "#FFFFFF" : colors.muted, fontWeight: "700", fontSize: 12 }}>{value}</Text></Pressable>)}</View> : null}
               </View>
+              {homeTaxonomy?.id === "painting" && taxonomyBrowseLevel === "issues" ? <Text style={{ color: colors.text, fontSize: 15, fontWeight: "900" }}>{({
+                "Interior Painting": "Select Interior Painting Service",
+                "Exterior Painting": "Select Exterior Painting Service",
+                "Wood & Metal Painting": "Select Painting Service",
+                "Wall Repair & Crack Filling": "Select Wall Problem",
+                "Waterproofing Services": "Select Waterproofing Service",
+                "Special Finishes": "Select Special Finish",
+              } as Record<string, string>)[category] || "Select Painting Service"}</Text> : null}
               {(!homeTaxonomy || taxonomyBrowseLevel === "issues") ? <View style={{ gap: 9 }}>
                 {!homeTaxonomy ? <Text style={{ color: colors.text, fontSize: 15, fontWeight: "900" }}>Choose an issue</Text> : null}
                 <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", rowGap: 10 }}>{issues.map((item, index) => {
@@ -951,7 +971,7 @@ const visibleCatalog = useMemo(
                   const selected = issue === item.issue;
                   const taxonomyCategory = homeTaxonomy?.categories.find((entry) => entry.name === category);
                   return <Pressable key={`${item.id}-${item.issue}`} accessibilityRole="radio" accessibilityState={{ checked: selected, disabled: !active }} onPress={() => { if (!active) { Alert.alert("Service unavailable", `${item.issue} is not currently offered. Please choose another issue.`); return; } chooseIssue(item.issue); if (homeTaxonomy) { setError(""); setStep(2); } }} style={{ width: "48.5%", borderRadius: 15, borderWidth: 1.2, borderColor: selected ? colors.brandMid : colors.border, backgroundColor: selected ? colors.brandSoft : "#FFFFFF", overflow: "hidden", opacity: active ? 1 : 0.52 }}>
-                    {homeTaxonomy && taxonomyCategory ? <Image source={{ uri: getIssueCardImage(item.issue, taxonomyCategory.id, homeTaxonomy.id, index) }} style={{ width: "100%", height: 96 }} resizeMode="cover" /> : null}
+                    {homeTaxonomy && taxonomyCategory ? <Image source={{ uri: getIssueCardImage(item.issue, taxonomyCategory.id, homeTaxonomy.id, index) }} style={{ width: "100%", height: 96, backgroundColor: "#F1F5F9" }} resizeMode="contain" /> : null}
                     <View style={{ gap: 5, padding: 10 }}><View style={{ flexDirection: "row", alignItems: "flex-start", gap: 5 }}><Text style={{ flex: 1, color: colors.text, fontSize: 12, fontWeight: "800", lineHeight: 16 }}>{item.issue}</Text><Ionicons name={selected ? "checkmark-circle" : active ? "chevron-forward" : "lock-closed"} size={16} color={selected ? colors.brandMid : colors.muted} /></View>{item.description ? <Text style={{ color: colors.muted, fontSize: 11, lineHeight: 15 }} numberOfLines={3}>{item.description}</Text> : null}<Text style={{ color: active ? colors.brandMid : colors.muted, fontSize: 10, fontWeight: "700" }}>{active ? "Available" : "Currently unavailable"}</Text></View>
                   </Pressable>;
                 })}</View>

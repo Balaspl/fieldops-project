@@ -2,7 +2,7 @@ import asyncio
 from datetime import date
 
 import pytest
-from fastapi import BackgroundTasks, Request, Response
+from fastapi import BackgroundTasks, HTTPException, Request, Response
 from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 from app.auth.dependencies import AuthenticatedUser
 from app.auth.rbac import UserRole
 from app.database import Base
-from app.models import Job, Organization, ServiceRequest, Technician, User
+from app.models import Job, Organization, ServiceCatalogItem, ServiceRequest, Technician, User
 from app.portal_schemas import ServiceRequestCreate
 from app.routes import customer_portal
 from app.routes.jobs import get_jobs, get_pending_jobs
@@ -74,6 +74,16 @@ def db_session():
                     technician_location="Chennai",
                     technician_status="AVAILABLE",
                 ),
+                ServiceCatalogItem(
+                    tenant_id="provider-tenant",
+                    created_by_user_id="provider-admin",
+                    service_type="Plumbing",
+                    category="Taps & Faucets",
+                    issue="Tap Leakage Repair",
+                    description="Repair leaking taps and faucets.",
+                    required_skill="Plumbing Technician",
+                    is_active=True,
+                ),
             ]
         )
 
@@ -117,6 +127,8 @@ def _payload() -> ServiceRequestCreate:
         title="Plumbing repair request",
         description="There is a leak under the kitchen sink.",
         service_type="Plumbing",
+        category="Taps & Faucets",
+        issue="Tap Leakage Repair",
         priority="HIGH",
         preferred_visit_date=date.today(),
         location="12 Anna Nagar Main Road, Chennai",
@@ -140,10 +152,14 @@ def test_service_request_creation_commits_one_canonical_provider_job(
         "eligible": True,
     }
     monkeypatch.setattr(intake_graph, "invoke", lambda state: {"valid": False})
-    monkeypatch.setattr(
-        planning_graph,
-        "invoke",
-        lambda state: {
+
+    def planning_with_catalog_requirement(state):
+        requirement = state["job_requirement"]
+        assert requirement["requires_catalog_offering"] is True
+        assert requirement["service_type"] == "Plumbing"
+        assert requirement["category"] == "Taps & Faucets"
+        assert requirement["issue"] == "Tap Leakage Repair"
+        return {
             "planning_response": {
                 "action": "ranked_candidates",
                 "top_3": [candidate],
@@ -151,8 +167,9 @@ def test_service_request_creation_commits_one_canonical_provider_job(
                 "total_eligible_technicians": 1,
             },
             "all_ranked_technicians": [candidate],
-        },
-    )
+        }
+
+    monkeypatch.setattr(planning_graph, "invoke", planning_with_catalog_requirement)
     background_tasks = BackgroundTasks()
     response = asyncio.run(
         customer_portal.create_service_request(
@@ -383,3 +400,97 @@ def test_service_request_rejects_invalid_location_coordinates(
             site_latitude=latitude,
             site_longitude=longitude,
         )
+
+
+
+def test_customer_booking_rejects_service_not_offered_by_any_provider(
+    db_session,
+    monkeypatch,
+):
+    from app.services.ai.FieldOpsAI.graph import intake_graph, planning_graph
+
+    db_session.query(ServiceCatalogItem).delete(synchronize_session=False)
+    db_session.commit()
+    monkeypatch.setattr(intake_graph, "invoke", lambda state: {"valid": False})
+    monkeypatch.setattr(
+        planning_graph,
+        "invoke",
+        lambda state: {
+            "planning_response": {
+                "action": "no_candidates",
+                "top_3": [],
+                "total_eligible_technicians": 0,
+            },
+            "all_ranked_technicians": [],
+        },
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            customer_portal.create_service_request(
+                _payload(),
+                _request(),
+                BackgroundTasks(),
+                current_user=_customer(),
+                db=db_session,
+            )
+        )
+
+    assert exc_info.value.status_code == 409
+    assert db_session.query(Job).count() == 0
+    assert db_session.query(ServiceRequest).count() == 0
+
+
+def test_customer_booking_rejects_planner_candidate_without_exact_catalog_offering(
+    db_session,
+    monkeypatch,
+):
+    from app.services.ai.FieldOpsAI.graph import intake_graph, planning_graph
+
+    db_session.add(
+        Organization(
+            id="other-provider",
+            name="Other Provider",
+            slug="other-provider",
+            site_latitude=13.09,
+            site_longitude=80.28,
+        )
+    )
+    db_session.commit()
+
+    candidate = {
+        "technician_id": 99,
+        "technician_name": "Other Provider Tech",
+        "organization_id": "other-provider",
+        "rank": 1,
+        "eligible": True,
+    }
+    monkeypatch.setattr(intake_graph, "invoke", lambda state: {"valid": False})
+    monkeypatch.setattr(
+        planning_graph,
+        "invoke",
+        lambda state: {
+            "planning_response": {
+                "action": "ranked_candidates",
+                "top_3": [candidate],
+                "all_ranked_technicians": [candidate],
+                "total_eligible_technicians": 1,
+            },
+            "all_ranked_technicians": [candidate],
+        },
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            customer_portal.create_service_request(
+                _payload(),
+                _request(),
+                BackgroundTasks(),
+                current_user=_customer(),
+                db=db_session,
+            )
+        )
+
+    assert exc_info.value.status_code == 409
+    assert db_session.query(Job).count() == 0
+    assert db_session.query(ServiceRequest).count() == 0
