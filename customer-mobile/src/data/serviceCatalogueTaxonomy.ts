@@ -1,5 +1,5 @@
 // Authoritative Service Catalogue Taxonomy for FieldOps Commander
-// Generated from FieldOps Commander Service Catalogue (16 Service Types, 116 Categories, 958 Issues)
+// Generated from FieldOps Commander Service Catalogue (16 Service Types, 115 Categories, 1070 Issues)
 
 export interface TaxonomyIssue {
   name: string;
@@ -41,179 +41,157 @@ export const SERVICE_CATALOGUE_TAXONOMY: TaxonomyServiceType[] = [
     "categories": [
       {
         "id": "lights_lighting",
-        "name": "Lights and Lighting",
+        "name": "Lights, Bulbs & Tube Lights",
         "code": "ELE-01",
         "issues": [
-          "Light not working",
-          "Flickering or blinking light",
-          "Tube light replacement",
-          "LED bulb or panel replacement",
-          "Light holder or fitting broken",
-          "Dimmer not working",
-          "Chandelier or decorative light installation",
-          "Outdoor or garden light fault",
-          "Emergency light not working",
-          "Light making buzzing noise",
-          "New light point installation",
-          "Street or gate light not switching on",
-          "Other (please describe)"
+          "Bulb & holder replacement",
+          "Tube light repair or installation",
+          "Ceiling light installation or replacement",
+          "Wall light installation or replacement",
+          "Outdoor light installation or replacement",
+          "Decorative light or chandelier installation"
         ]
       },
       {
         "id": "wiring_cabling",
-        "name": "Wiring and Cabling",
+        "name": "House Wiring & Cables",
         "code": "ELE-02",
         "issues": [
-          "Exposed or loose wire",
-          "Burning smell from wiring",
-          "Sparking in wires",
-          "Short circuit",
-          "Old wiring replacement",
-          "New point wiring",
-          "Wires damaged by rats",
-          "Concealed wiring fault",
-          "Extension wiring or conduit work",
-          "Loose connections in wall",
-          "Wire overheating",
-          "Cable tray or trunking work",
-          "Other (please describe)"
+          "New House Wiring Installation",
+          "Old Wiring Replacement",
+          "Damaged or Exposed Wire Repair",
+          "Short Circuit & Wiring Repair",
+          "Burning Smell & Overheating Check",
+          "Loose Wire Connection Repair",
+          "Hidden Wiring Fault Detection",
+          "Rat-Damaged Wire Repair",
+          "Electrical Conduit & Casing Installation",
+          "Additional Wiring & New Connection"
         ]
       },
       {
         "id": "switches_sockets",
-        "name": "Switches, Sockets and Switchboards",
+        "name": "Switches, Sockets & Plug Points",
         "code": "ELE-03",
         "issues": [
-          "Switch not working",
-          "Switch sparking",
-          "Socket loose",
-          "Burnt switch board",
-          "Replace switch or socket",
-          "Add new switch or socket point",
-          "USB socket installation",
-          "Modular switch upgrade",
-          "Switchboard hot to touch",
-          "Switchboard cracked or broken",
-          "Two-way or staircase switch fault",
-          "Other (please describe)"
+          "Switch Repair & Replacement",
+          "Socket Repair & Replacement",
+          "Switchboard Repair & Replacement",
+          "New Switchboard Installation",
+          "New Plug Point Installation",
+          "Plug Top Replacement",
+          "Modular Switch Upgrade",
+          "USB Charging Socket Installation",
+          "Sparking Switch or Socket Repair",
+          "Burnt or Overheated Switchboard Repair",
+          "Two-Way & Staircase Switch Repair"
         ]
       },
       {
         "id": "fans_ventilation",
-        "name": "Fans and Ventilation",
+        "name": "Fans & Exhaust Fans",
         "code": "ELE-04",
         "issues": [
-          "Fan not rotating",
-          "Fan running slow",
-          "Fan making noise",
-          "Fan wobbling",
-          "Regulator faulty",
-          "New fan installation",
-          "Capacitor replacement",
-          "Exhaust fan not working",
-          "Exhaust fan installation",
-          "Fan blade bent or damaged",
-          "Other (please describe)"
+          "Ceiling Fan Repair",
+          "Fan Speed & Noise Repair",
+          "Fan Wobbling & Balancing",
+          "Fan Regulator Repair & Replacement",
+          "Ceiling Fan Installation",
+          "Fan Replacement & Uninstallation",
+          "Fan Capacitor Replacement",
+          "Fan Blade Repair & Replacement",
+          "Exhaust Fan Repair",
+          "Exhaust Fan Installation",
+          "Decorative & BLDC Fan Installation"
         ]
       },
       {
         "id": "mcb_fuse_db",
-        "name": "MCB, Fuse and Distribution Board",
+        "name": "MCB, Fuse & Distribution Box",
         "code": "ELE-05",
         "issues": [
-          "MCB tripping frequently",
-          "MCB not switching on",
-          "Fuse blown",
-          "Distribution board overheating",
-          "RCCB or ELCB tripping",
-          "Replace MCB",
-          "Distribution board upgrade",
-          "Phase imbalance",
-          "Burning smell near DB",
-          "New DB installation",
-          "Other (please describe)"
-        ]
-      },
-      {
-        "id": "power_supply_meter",
-        "name": "Power Supply and Meter",
-        "code": "ELE-06",
-        "issues": [
-          "Power cut in house only",
-          "Voltage fluctuation",
-          "Low voltage",
-          "High voltage damaging appliances",
-          "Electricity meter fault",
-          "Meter shifting",
-          "One phase missing",
-          "Electric shock from wall or tap",
-          "New service connection",
-          "Neutral or earth fault",
-          "Other (please describe)"
+          "MCB Tripping Problem",
+          "MCB Not Turning On",
+          "Fuse Replacement",
+          "RCCB / ELCB Tripping Repair",
+          "MCB Replacement",
+          "Distribution Box Repair",
+          "New Distribution Box Installation",
+          "Distribution Box Upgrade",
+          "Burning Smell & Overheating Repair",
+          "Phase Problem & Load Balancing",
+          "Other Electrical Issue"
         ]
       },
       {
         "id": "inverter_ups",
-        "name": "Inverter, UPS and Battery",
+        "name": "Inverter, UPS & Battery",
         "code": "ELE-07",
         "issues": [
-          "Inverter not charging",
-          "Battery not holding backup",
-          "Inverter beeping",
-          "Inverter installation",
-          "Battery replacement",
-          "Change-over wiring",
-          "Inverter overload tripping",
-          "UPS not turning on",
-          "Battery water top-up",
-          "Other (please describe)"
+          "Inverter Not Charging Repair",
+          "Inverter Backup Problem",
+          "Inverter Beeping & Warning Repair",
+          "Inverter Installation",
+          "Inverter Replacement",
+          "Battery Replacement",
+          "Battery Water Level Check & Top-Up",
+          "Inverter Overload & Tripping Repair",
+          "UPS Repair & Installation",
+          "Inverter Changeover Switch Repair",
+          "Other Electrical Issue"
         ]
       },
       {
         "id": "appliance_points",
-        "name": "Appliance Electrical Points",
+        "name": "Appliance Connections & New Points",
         "code": "ELE-08",
         "issues": [
-          "Geyser point wiring",
-          "AC point wiring",
-          "Washing machine point",
-          "Induction or electric stove point",
-          "Heavy load point",
-          "Fridge or oven point",
-          "EV charger point installation",
-          "Stabilizer installation",
-          "Other (please describe)"
+          "Geyser Power Point Installation",
+          "AC Power Point Installation",
+          "Washing Machine Power Point",
+          "Induction & Electric Stove Connection",
+          "Heavy-Duty Power Point Installation",
+          "Fridge & Oven Power Point",
+          "EV Charger Point Installation",
+          "Voltage Stabilizer Installation",
+          "Appliance Wiring & Connection Repair",
+          "New Appliance Power Point Installation",
+          "Other Electrical Issue"
         ]
       },
       {
         "id": "doorbell_intercom",
-        "name": "Doorbell, Intercom and Low-voltage",
+        "name": "Doorbell & Intercom",
         "code": "ELE-09",
         "issues": [
-          "Doorbell not ringing",
-          "Doorbell installation",
-          "Intercom not working",
-          "TV or dish cable fault",
-          "Telephone line fault",
-          "Landscape or garden wiring",
-          "Other (please describe)"
+          "Doorbell Not Working Repair",
+          "New Doorbell Installation",
+          "Video Doorbell Installation",
+          "Video Doorbell Repair",
+          "Intercom Not Working Repair",
+          "New Intercom Installation",
+          "Doorbell Chime & Transformer Repair",
+          "Gate Intercom Installation & Repair",
+          "Other Electrical Issue"
         ]
       },
       {
         "id": "safety_earthing",
-        "name": "Safety, Earthing and Inspection",
+        "name": "Earthing & Electrical Safety",
         "code": "ELE-10",
         "issues": [
-          "Earthing problem",
-          "Earthing test",
-          "Electrical safety audit",
-          "Thermal scan",
-          "Surge protector installation",
-          "Lightning arrestor installation",
-          "Pre-purchase electrical inspection",
-          "Other (please describe)"
+          "Earthing Problem Repair",
+          "New Earthing Installation",
+          "Earthing Resistance Testing",
+          "Electrical Safety Inspection",
+          "Electrical Thermal Scanning",
+          "Surge Protector Installation",
+          "Lightning Arrester Installation",
+          "Home Electrical Safety Check",
+          "Pre-Purchase Electrical Inspection",
+          "Other Electrical Issue"
         ]
-      }
+      },
     ]
   },
   {
@@ -230,192 +208,189 @@ export const SERVICE_CATALOGUE_TAXONOMY: TaxonomyServiceType[] = [
     "categories": [
       {
         "id": "taps_faucets",
-        "name": "Taps and Faucets",
+        "name": "Taps & Faucets",
         "code": "PLU-01",
         "issues": [
-          "Tap leaking",
-          "Tap dripping",
-          "Low water flow from tap",
-          "Tap handle broken",
-          "Replace tap",
-          "Mixer tap installation",
-          "Tap loose at base",
-          "Bib cock or garden tap fault",
-          "Sensor tap not working",
-          "Tap spout cracked",
-          "Other (please describe)"
+          "Tap Leakage Repair",
+          "Low Water Flow Repair",
+          "Tap Handle Repair & Replacement",
+          "Tap Replacement",
+          "Mixer Tap Installation",
+          "Loose Tap Repair",
+          "Bib Cock & Garden Tap Repair",
+          "Sensor Tap Repair",
+          "Tap Spout Repair & Replacement",
+          "Other Tap & Faucet Issue"
         ]
       },
       {
         "id": "pipes_pipelines",
-        "name": "Pipes and Pipelines",
+        "name": "Pipes & Plumbing Lines",
         "code": "PLU-02",
         "issues": [
-          "Pipe leakage",
-          "Burst pipe",
-          "Pipe joint leaking",
-          "Pipe replacement (PVC, CPVC, GI)",
-          "Concealed leak inside wall",
-          "Pipe making noise or hammering",
-          "New pipeline laying",
-          "Pipe corrosion or rust",
-          "Pipe supports or clamps broken",
-          "Water meter leak",
-          "Other (please describe)"
+          "Pipe Leakage Repair",
+          "Burst Pipe Repair",
+          "Pipe Joint Leakage Repair",
+          "Pipe Replacement (PVC, CPVC & GI)",
+          "Noisy Pipe & Water Hammer Repair",
+          "New Pipe Line Installation",
+          "Rusted Pipe Replacement",
+          "Pipe Clamp & Support Repair",
+          "Water Meter Leakage Repair",
+          "Other Pipe & Pipeline Issue"
         ]
       },
       {
         "id": "drainage_blockage",
-        "name": "Drainage and Blockage",
+        "name": "Drainage & Blockage",
         "code": "PLU-03",
         "issues": [
-          "Kitchen sink blocked",
-          "Bathroom drain blocked",
-          "Floor drain clogged",
-          "Foul smell from drain",
-          "Main drain overflow",
-          "Slow draining",
-          "Grease trap cleaning",
-          "Roof drain choke",
-          "Drain pipe cracked",
-          "Rainwater pipe blocked",
-          "Other (please describe)"
+          "Kitchen Sink Blockage Removal",
+          "Bathroom Drain Cleaning",
+          "Floor Drain Blockage Removal",
+          "Drain Bad Smell Removal",
+          "Main Drain Overflow Repair",
+          "Slow Drainage Problem",
+          "Grease Trap Cleaning",
+          "Roof & Rainwater Drain Cleaning",
+          "Damaged Drain Pipe Repair",
+          "Other Drainage Issue"
         ]
       },
       {
         "id": "toilet_sanitary",
-        "name": "Toilet and Sanitary",
+        "name": "Toilet & Sanitary Fittings",
         "code": "PLU-04",
         "issues": [
-          "Flush tank leaking",
-          "Flush not working",
-          "Toilet seat broken or replacement",
-          "Toilet clogged",
-          "Commode leaking at base",
-          "Commode loose",
-          "New commode installation",
-          "Health faucet leaking",
-          "Urinal flush fault",
-          "Cistern running continuously",
-          "Concealed flush tank fault",
-          "Other (please describe)"
+          "Flush Tank Leakage Repair",
+          "Flush System Repair",
+          "Toilet Seat Replacement",
+          "Toilet Blockage Removal",
+          "Toilet Base Leakage Repair",
+          "Loose Toilet Repair",
+          "New Toilet Installation",
+          "Health Faucet Repair & Replacement",
+          "Urinal Flush Repair",
+          "Continuous Flush Water Leakage Repair",
+          "Concealed Flush Tank Repair",
+          "Other Toilet & Sanitary Issue"
         ]
       },
       {
         "id": "wash_basin_sink",
-        "name": "Wash Basin and Kitchen Sink",
+        "name": "Washbasin & Kitchen Sink",
         "code": "PLU-05",
         "issues": [
-          "Basin leaking",
-          "Basin cracked",
-          "New basin installation",
-          "Sink trap leaking",
-          "Waste coupling leaking",
-          "Pop-up waste stuck",
-          "Kitchen sink installation",
-          "Sink overflow",
-          "Sink water not draining",
-          "Basin loose from wall",
-          "Other (please describe)"
+          "Washbasin Leakage Repair",
+          "Cracked Washbasin Replacement",
+          "New Washbasin Installation",
+          "Sink Trap Leakage Repair",
+          "Basin Waste Coupling Repair",
+          "Washbasin Pop-up Waste Repair",
+          "New Kitchen Sink Installation",
+          "Kitchen Sink Overflow Repair",
+          "Kitchen Sink Drainage Repair",
+          "Loose Washbasin Fixing",
+          "Other Washbasin & Sink Issue"
         ]
       },
       {
         "id": "tank_motor_pump",
-        "name": "Water Tank, Motor and Pump",
+        "name": "Water Tanks, Pumps & Motors",
         "code": "PLU-06",
         "issues": [
-          "Overhead tank overflowing",
-          "Tank leakage",
-          "Float valve faulty",
-          "Motor not starting",
-          "Motor running but no water",
-          "Pump noisy",
-          "Pump overheating",
-          "Auto starter or controller fault",
-          "Borewell motor problem",
-          "New tank installation",
-          "Tank level indicator not working",
-          "Pump installation",
-          "Other (please describe)"
+          "Overhead Tank Overflow Repair",
+          "Water Tank Leakage Repair",
+          "Float Valve Repair & Replacement",
+          "Water Motor Not Starting Repair",
+          "Motor Running Without Water Supply",
+          "Water Pump Noise Repair",
+          "Water Pump Overheating Repair",
+          "Pump Auto Starter & Controller Repair",
+          "Borewell Motor Repair",
+          "New Water Tank Installation",
+          "Water Tank Level Indicator Repair",
+          "Water Pump Installation",
+          "Water Tank Cleaning",
+          "Other Water Tank & Pump Issue"
         ]
       },
       {
         "id": "geyser_hot_water",
-        "name": "Geyser and Hot Water Lines",
+        "name": "Geyser & Water Heater",
         "code": "PLU-07",
         "issues": [
-          "Geyser leaking",
-          "No hot water",
-          "Geyser installation",
-          "Pressure release valve fault",
-          "Hot water pipe leaking",
-          "Solar water heater plumbing",
-          "Hot and cold water mixing problem",
-          "Other (please describe)"
+          "Geyser Water Leakage Repair",
+          "Geyser Not Heating Water",
+          "New Geyser Installation",
+          "Geyser Pressure Relief Valve Repair",
+          "Hot Water Pipe Leakage Repair",
+          "Solar Water Heater Plumbing",
+          "Hot & Cold Water Mixing Problem",
+          "Other Geyser & Water Heater Issue"
         ]
       },
       {
         "id": "shower_fittings",
-        "name": "Shower and Bathroom Fittings",
+        "name": "Shower & Bathroom Fittings",
         "code": "PLU-08",
         "issues": [
-          "Shower low pressure",
-          "Shower head replacement",
-          "Diverter faulty",
-          "Concealed valve leaking",
-          "Overhead shower installation",
-          "Bathtub installation or repair",
-          "Shower cubicle fitting",
-          "Towel rod or accessory fitting",
-          "Bathroom hook or shelf fitting",
-          "Other (please describe)"
+          "Low Shower Water Pressure Repair",
+          "Shower Head Replacement",
+          "Shower Diverter Repair & Replacement",
+          "Concealed Shower Valve Leakage Repair",
+          "Overhead Shower Installation",
+          "Bathtub Installation & Repair",
+          "Shower Cubicle Installation",
+          "Bathroom Accessories Installation",
+          "Other Shower & Bathroom Fittings Issue"
         ]
       },
       {
         "id": "water_pressure",
-        "name": "Water Pressure and Supply",
+        "name": "Water Supply & Pressure Problems",
         "code": "PLU-09",
         "issues": [
-          "Low water pressure",
-          "No water supply",
-          "Pressure booster pump installation",
-          "Water hammer",
-          "Uneven hot and cold supply",
-          "Pressure reducing valve fault",
-          "Dirty or coloured water",
-          "Air in pipes",
-          "Other (please describe)"
+          "Low Water Pressure Problem",
+          "No Water Supply Problem",
+          "Water Pressure Booster Pump Installation",
+          "Water Hammer Problem",
+          "Hot & Cold Water Supply Problem",
+          "Pressure Reducing Valve Repair",
+          "Dirty Water Supply Problem",
+          "Air Lock in Water Pipes",
+          "Other Water Supply Issue"
         ]
       },
       {
         "id": "leakage_seepage",
-        "name": "Leakage and Seepage",
+        "name": "Water Leakage & Seepage",
         "code": "PLU-10",
         "issues": [
-          "Ceiling seepage from upper bathroom",
-          "Wall dampness due to pipe",
-          "Bathroom floor leakage",
-          "Terrace tank leakage",
-          "Leak detection service",
-          "Kitchen sink cabinet leak",
-          "Basement water seepage",
-          "Other (please describe)"
+          "Ceiling Water Leakage Repair",
+          "Wall Dampness & Leakage Repair",
+          "Bathroom Floor Leakage Repair",
+          "Terrace Water Tank Leakage Repair",
+          "Hidden Water Leakage Detection",
+          "Kitchen Cabinet Water Leakage Repair",
+          "Basement Water Seepage Repair",
+          "Other Water Leakage & Seepage Issue"
         ]
       },
       {
         "id": "sewage_septic",
-        "name": "Sewage and Septic",
+        "name": "Sewerage & Septic Tank",
         "code": "PLU-11",
         "issues": [
-          "Septic tank full",
-          "Sewer line blockage",
-          "Sewage smell",
-          "Drain backflow",
-          "Inspection chamber overflow",
-          "Soak pit problem",
-          "Septic tank cleaning",
-          "Sewer line inspection with camera",
-          "Other (please describe)"
+          "Septic Tank Emptying Service",
+          "Sewer Line Blockage Removal",
+          "Sewage Bad Smell Problem",
+          "Sewer & Drain Backflow Repair",
+          "Inspection Chamber Overflow Repair",
+          "Soak Pit Repair & Cleaning",
+          "Septic Tank Cleaning",
+          "CCTV Sewer Line Inspection",
+          "Other Sewerage & Septic Tank Issue"
         ]
       }
     ]
@@ -437,21 +412,21 @@ export const SERVICE_CATALOGUE_TAXONOMY: TaxonomyServiceType[] = [
         "name": "Split AC",
         "code": "ACR-01",
         "issues": [
-          "Not cooling",
-          "Water leaking from indoor unit",
-          "Strange noise",
-          "Bad smell",
-          "Remote not working",
-          "Ice formation on coil or pipe",
-          "AC tripping MCB",
-          "AC not turning on",
-          "Display showing error code",
-          "Gas leakage",
-          "Compressor not starting",
-          "Outdoor fan not running",
-          "Remote or sensor fault",
-          "Swing flap not working",
-          "Other (please describe)"
+          "AC Not Cooling",
+          "Indoor Unit Water Leakage",
+          "AC Making Noise",
+          "Bad Smell from AC",
+          "AC Remote Not Working",
+          "Ice Formation on AC Coil",
+          "AC Tripping Power Supply",
+          "AC Not Switching On",
+          "AC Error Code Problem",
+          "Refrigerant Gas Leakage",
+          "AC Compressor Not Starting",
+          "Outdoor Fan Not Working",
+          "AC Temperature Sensor Fault",
+          "AC Swing Flap Not Working",
+          "Other Split AC Issue"
         ]
       },
       {
@@ -459,86 +434,88 @@ export const SERVICE_CATALOGUE_TAXONOMY: TaxonomyServiceType[] = [
         "name": "Window AC",
         "code": "ACR-02",
         "issues": [
-          "Not cooling",
-          "Noisy operation",
-          "Water dripping inside room",
-          "Compressor tripping",
-          "Thermostat fault",
-          "Fan motor fault",
-          "Knob or switch broken",
-          "Foul smell",
-          "Frame or sleeve damage",
-          "Other (please describe)"
+          "Window AC Not Cooling",
+          "Window AC Making Noise",
+          "Window AC Water Leakage",
+          "Compressor Tripping Problem",
+          "Thermostat Not Working",
+          "Window AC Fan Motor Repair",
+          "AC Knob & Switch Repair",
+          "Bad Smell from Window AC",
+          "Window AC Frame Repair",
+          "Other Window AC Issue"
         ]
       },
       {
         "id": "cassette_ducted",
-        "name": "Cassette, Ducted and VRF Systems",
+        "name": "Cassette, Ductable & VRF AC Systems",
         "code": "ACR-03",
         "issues": [
-          "Not cooling",
-          "Water leak from cassette",
-          "Drain pump fault",
-          "Duct leakage",
-          "Controller fault",
-          "Outdoor unit error",
-          "Zone not cooling",
-          "Filter blocked",
-          "Refrigerant leak",
-          "Other (please describe)"
+          "Cassette / Ducted AC Not Cooling",
+          "Cassette AC Water Leakage",
+          "AC Drain Pump Repair",
+          "AC Duct Leakage Repair",
+          "AC Controller Not Working",
+          "Outdoor Unit Error Repair",
+          "Zone Cooling Problem",
+          "AC Filter Cleaning",
+          "Refrigerant Gas Leakage Repair",
+          "Other Cassette / Ducted / VRF Issue"
         ]
       },
       {
         "id": "ac_installation",
-        "name": "AC Installation and Relocation",
+        "name": "AC Installation, Uninstallation & Relocation",
         "code": "ACR-04",
         "issues": [
-          "New AC installation",
-          "AC uninstallation",
-          "AC relocation",
-          "Copper piping work",
-          "Stand or bracket fixing",
-          "Drain pipe extension",
-          "Stabilizer fitting",
-          "Outdoor unit stand or cage",
-          "Electrical point for AC",
-          "Other (please describe)"
+          "New AC Installation",
+          "AC Uninstallation",
+          "AC Shifting & Relocation",
+          "AC Copper Pipe Installation",
+          "AC Outdoor Unit Stand Installation",
+          "AC Drain Pipe Extension",
+          "AC Stabilizer Installation",
+          "AC Outdoor Unit Cage Installation",
+          "New Electrical Point for AC",
+          "Other AC Installation Work"
         ]
       },
       {
         "id": "ac_servicing",
-        "name": "AC Servicing and Maintenance",
+        "name": "AC Service & Maintenance",
         "code": "ACR-05",
         "issues": [
-          "General service",
-          "Jet pump deep cleaning",
-          "Gas top-up",
-          "Annual maintenance contract",
-          "Filter cleaning",
-          "Coil cleaning",
-          "Pre-summer check-up",
-          "Performance inspection",
-          "Other (please describe)"
+          "AC General Service",
+          "AC Jet Wash Deep Cleaning",
+          "AC Gas Refill",
+          "AC Annual Maintenance Contract (AMC)",
+          "AC Filter Cleaning",
+          "AC Evaporator & Condenser Coil Cleaning",
+          "AC Pre-Summer Service",
+          "AC Performance Check-up",
+          "Other AC Maintenance Service"
         ]
       },
       {
         "id": "refrigerator_domestic",
-        "name": "Refrigerator (Domestic)",
+        "name": "Home Refrigerator Repair",
         "code": "ACR-06",
         "issues": [
-          "Not cooling",
-          "Freezer not freezing",
-          "Water leaking",
-          "Noisy fridge",
-          "Frost build-up",
-          "Door gasket damaged",
-          "Light not working",
-          "Compressor not starting",
-          "Thermostat fault",
-          "Ice maker not working",
-          "Door not closing",
-          "Bad smell",
-          "Other (please describe)"
+          "Refrigerator Not Cooling",
+          "Freezer Not Freezing",
+          "Refrigerator Water Leakage",
+          "Refrigerator Making Noise",
+          "Excessive Ice Build-up",
+          "Refrigerator Door Gasket Replacement",
+          "Refrigerator Light Not Working",
+          "Refrigerator Compressor Not Starting",
+          "Refrigerator Thermostat Repair",
+          "Ice Maker Not Working",
+          "Refrigerator Door Not Closing",
+          "Bad Smell from Refrigerator",
+          "Other Refrigerator Issue",
+          "Refrigerator PCB / Control Board Repair",
+          "Refrigerator Defrost Problem"
         ]
       },
       {
@@ -546,32 +523,33 @@ export const SERVICE_CATALOGUE_TAXONOMY: TaxonomyServiceType[] = [
         "name": "Commercial Refrigeration",
         "code": "ACR-07",
         "issues": [
-          "Cold room not cooling",
-          "Deep freezer fault",
-          "Display chiller fault",
-          "Visi cooler fault",
-          "Bottle cooler fault",
-          "Ice machine fault",
-          "Walk-in cooler issue",
-          "Temperature controller fault",
-          "Condenser cleaning",
-          "Gas refilling",
-          "Other (please describe)"
+          "Cold Room Not Cooling",
+          "Deep Freezer Repair",
+          "Display Chiller Repair",
+          "Visi Cooler Repair",
+          "Bottle Cooler Repair",
+          "Commercial Ice Machine Repair",
+          "Walk-in Cooler Repair",
+          "Temperature Controller Repair",
+          "Condenser Coil Cleaning",
+          "Commercial Refrigerant Gas Refill",
+          "Other Commercial Refrigeration Issue"
         ]
       },
       {
         "id": "air_coolers_purifiers",
-        "name": "Air Coolers and Air Purifiers",
+        "name": "Air Coolers, Air Purifiers & Humidifiers",
         "code": "ACR-08",
         "issues": [
-          "Cooler pump not working",
-          "Cooler motor fault",
-          "Cooling pad replacement",
-          "Cooler leaking",
-          "Air purifier filter change",
-          "Air purifier not working",
-          "Humidifier fault",
-          "Other (please describe)"
+          "Air Cooler Pump Not Working",
+          "Air Cooler Motor Repair",
+          "Air Cooler Cooling Pad Replacement",
+          "Air Cooler Water Leakage",
+          "Air Purifier Filter Replacement",
+          "Air Purifier Not Working",
+          "Humidifier Repair",
+          "Air Cooler General Service",
+          "Other Air Cooler & Purifier Issue"
         ]
       }
     ]
@@ -593,110 +571,110 @@ export const SERVICE_CATALOGUE_TAXONOMY: TaxonomyServiceType[] = [
         "name": "Washing Machine",
         "code": "APP-01",
         "issues": [
-          "Not starting",
-          "Not draining",
-          "Not spinning",
-          "Water not filling",
-          "Excessive vibration",
-          "Noise during wash",
-          "Door lock error",
-          "Water leaking",
-          "Error code displayed",
-          "Clothes not cleaned",
-          "Drum jammed",
-          "Inlet valve fault",
-          "Control panel fault",
-          "Installation or demo",
-          "Other (please describe)"
+          "Washing Machine Not Starting",
+          "Water Not Draining",
+          "Drum Not Spinning",
+          "Water Not Filling",
+          "Excessive Vibration",
+          "Unusual Noise During Washing",
+          "Door Lock Problem",
+          "Water Leakage",
+          "Error Code on Display",
+          "Clothes Not Washing Properly",
+          "Drum Jammed",
+          "Water Inlet Valve Problem",
+          "Control Panel Not Working",
+          "Washing Machine Installation & Demo",
+          "Other Washing Machine Problem"
         ]
       },
       {
         "id": "television",
-        "name": "Television",
+        "name": "TV (LED, LCD & Smart TV)",
         "code": "APP-02",
         "issues": [
-          "No display",
-          "No sound",
-          "Lines on screen",
-          "Panel broken",
-          "Backlight problem",
-          "HDMI port not working",
-          "Wi-Fi or smart features fault",
-          "Remote not working",
-          "Wall mounting",
-          "Software or app issue",
-          "Stuck on logo",
-          "TV not turning on",
-          "Other (please describe)"
+          "TV Screen Not Displaying",
+          "No Sound",
+          "Lines on TV Screen",
+          "Broken TV Screen",
+          "Screen Backlight Not Working",
+          "HDMI Port Not Working",
+          "Wi-Fi / Smart TV Not Working",
+          "TV Remote Not Working",
+          "TV Wall Mounting & Installation",
+          "TV Software / App Problem",
+          "TV Stuck on Logo",
+          "TV Not Switching On",
+          "Other TV Problem"
         ]
       },
       {
         "id": "microwave_otg",
-        "name": "Microwave Oven and OTG",
+        "name": "Microwave Oven & OTG",
         "code": "APP-03",
         "issues": [
-          "Not heating",
-          "Turntable not rotating",
-          "Sparking inside",
-          "Door not closing",
-          "Display not working",
-          "Buttons not responding",
-          "Noise while running",
-          "Tripping MCB",
-          "Grill element not working",
-          "Other (please describe)"
+          "Microwave Not Heating",
+          "Turntable Not Rotating",
+          "Sparks Inside Microwave",
+          "Door Not Closing Properly",
+          "Display Not Working",
+          "Buttons Not Responding",
+          "Unusual Noise During Operation",
+          "Circuit Breaker Tripping",
+          "Grill Heater Not Working",
+          "Other Microwave / OTG Problem"
         ]
       },
       {
         "id": "kitchen_chimney_hob",
-        "name": "Kitchen Chimney and Hob",
+        "name": "Kitchen Chimney & Hob",
         "code": "APP-04",
         "issues": [
-          "Chimney suction low",
-          "Chimney noisy",
-          "Oil collector issue",
-          "Filter cleaning",
-          "Auto-clean fault",
-          "Gas stove burner problem",
-          "Ignition not working",
-          "Hob glass broken",
-          "Gas leak smell (urgent)",
-          "Gas regulator or pipe replacement",
-          "Chimney installation",
-          "Other (please describe)"
+          "Chimney Suction Is Low",
+          "Chimney Making Noise",
+          "Oil Collector Problem",
+          "Chimney Filter Cleaning",
+          "Auto-Clean Not Working",
+          "Gas Burner Not Working Properly",
+          "Gas Stove Ignition Not Working",
+          "Broken Hob Glass",
+          "Gas Leakage (Emergency)",
+          "Gas Regulator / Pipe Replacement",
+          "Chimney Installation",
+          "Other Chimney / Hob Problem"
         ]
       },
       {
         "id": "mixer_grinder",
-        "name": "Mixer Grinder and Blender",
+        "name": "Mixer Grinder & Blender",
         "code": "APP-05",
         "issues": [
-          "Motor not running",
-          "Jar leaking",
-          "Blade blunt or broken",
-          "Noisy operation",
-          "Burning smell",
-          "Jar coupler broken",
-          "Overload cut-off tripping",
-          "Switch fault",
-          "Other (please describe)"
+          "Motor Not Working",
+          "Mixer Jar Leakage",
+          "Blade Damaged / Not Cutting",
+          "Unusual Noise",
+          "Burning Smell from Motor",
+          "Jar Coupler Damaged",
+          "Overload Protector Keeps Tripping",
+          "Power Switch Not Working",
+          "Other Mixer Grinder Problem"
         ]
       },
       {
         "id": "electric_water_heater",
-        "name": "Electric Water Heater (Appliance)",
+        "name": "Electric Geyser & Water Heater",
         "code": "APP-06",
         "issues": [
-          "Not heating",
-          "Thermostat fault",
-          "Heating element failure",
-          "Water leaking",
-          "Tripping power",
-          "Auto cut-off fault",
-          "Indicator light not working",
-          "Anode rod replacement",
-          "Descaling",
-          "Other (please describe)"
+          "Geyser Not Heating Water",
+          "Thermostat Not Working",
+          "Heating Element Damaged",
+          "Geyser Water Leakage",
+          "Geyser Tripping Circuit Breaker",
+          "Automatic Cut-Off Not Working",
+          "Indicator Light Not Working",
+          "Anode Rod Replacement",
+          "Geyser Descaling / Cleaning",
+          "Other Geyser Problem"
         ]
       },
       {
@@ -704,15 +682,15 @@ export const SERVICE_CATALOGUE_TAXONOMY: TaxonomyServiceType[] = [
         "name": "Dishwasher",
         "code": "APP-07",
         "issues": [
-          "Not draining",
-          "Not cleaning properly",
-          "Door will not close",
-          "Detergent dispenser fault",
-          "Error code",
-          "Water leaking",
-          "Not starting",
-          "Bad smell",
-          "Other (please describe)"
+          "Dishwasher Not Draining",
+          "Dishes Not Getting Clean",
+          "Door Not Closing Properly",
+          "Detergent Dispenser Not Working",
+          "Error Code on Display",
+          "Water Leakage",
+          "Dishwasher Not Starting",
+          "Bad Smell from Dishwasher",
+          "Other Dishwasher Problem"
         ]
       },
       {
@@ -720,45 +698,46 @@ export const SERVICE_CATALOGUE_TAXONOMY: TaxonomyServiceType[] = [
         "name": "Small Kitchen Appliances",
         "code": "APP-08",
         "issues": [
-          "Iron box not heating",
-          "Induction cooktop error",
-          "Electric kettle not working",
-          "Rice cooker fault",
-          "Toaster fault",
-          "Air fryer fault",
-          "Coffee maker fault",
-          "Food processor fault",
-          "Hand blender fault",
-          "Other (please describe)"
+          "Electric Iron Not Heating",
+          "Induction Cooktop Not Working",
+          "Electric Kettle Not Working",
+          "Rice Cooker Not Working",
+          "Toaster Not Working",
+          "Air Fryer Not Working",
+          "Coffee Maker Not Working",
+          "Food Processor Not Working",
+          "Hand Blender Not Working",
+          "Other Kitchen Appliance Problem"
         ]
       },
       {
         "id": "vacuum_cleaner",
-        "name": "Vacuum Cleaner and Floor Care",
+        "name": "Vacuum Cleaner & Floor Care",
         "code": "APP-09",
         "issues": [
-          "Low suction",
-          "Motor not working",
-          "Battery not charging",
-          "Brush not rotating",
-          "Dust bag or filter issue",
-          "Robot vacuum not mapping",
-          "Other (please describe)"
+          "Low Suction / Weak Cleaning",
+          "Motor Not Working",
+          "Battery Not Charging",
+          "Brush Not Rotating",
+          "Dust Bag / Filter Blocked",
+          "Robot Vacuum Mapping Problem",
+          "Other Vacuum Cleaner Problem",
+          "Vacuum Cleaner Overheating / Burning Smell"
         ]
       },
       {
         "id": "water_dispenser_others",
-        "name": "Water Dispenser and Others",
+        "name": "Water Dispenser & Other Appliances",
         "code": "APP-10",
         "issues": [
-          "Dispenser not cooling",
-          "No hot water",
-          "Dispenser leaking",
-          "Tap faulty",
+          "Water Dispenser Not Cooling",
+          "Water Dispenser Not Heating",
+          "Water Dispenser Leakage",
+          "Dispenser Tap Not Working",
           "Sewing machine repair",
-          "Room heater fault",
-          "Hair dryer or trimmer fault",
-          "Other (please describe)"
+          "Room Heater Not Working",
+          "Hair Dryer / Trimmer Not Working",
+          "Other Appliance Problem"
         ]
       }
     ]
@@ -777,21 +756,22 @@ export const SERVICE_CATALOGUE_TAXONOMY: TaxonomyServiceType[] = [
     "categories": [
       {
         "id": "furniture_repair",
-        "name": "Furniture Repair",
+        "name": "Furniture Repair & Restoration",
         "code": "CAR-01",
         "issues": [
-          "Loose joints",
-          "Broken leg",
-          "Drawer stuck",
-          "Hinge broken",
-          "Wobbly table",
-          "Scratches on furniture",
-          "Sofa frame broken",
-          "Bed frame broken",
-          "Chair repair",
-          "Cupboard shutter misaligned",
-          "Table top damaged",
-          "Other (please describe)"
+          "Loose Furniture Joints",
+          "Broken Table or Chair Leg",
+          "Drawer Stuck or Jammed",
+          "Broken Hinge",
+          "Wobbly Table",
+          "Furniture Scratch Repair",
+          "Broken Sofa Frame",
+          "Broken Bed Frame",
+          "Chair Repair",
+          "Cupboard Door Alignment",
+          "Damaged Tabletop",
+          "Furniture Wood Cracked or Damaged",
+          "Other (Please Describe)"
         ]
       },
       {
@@ -799,105 +779,110 @@ export const SERVICE_CATALOGUE_TAXONOMY: TaxonomyServiceType[] = [
         "name": "Modular Kitchen and Wardrobe",
         "code": "CAR-02",
         "issues": [
-          "Wardrobe installation",
-          "Hinge or channel replacement",
-          "Shutter alignment",
-          "Soft-close fitting",
-          "Countertop damage",
-          "Handle replacement",
-          "Kitchen modification",
-          "Laminate peeling",
-          "Basket or tandem unit installation",
-          "Cabinet water damage",
-          "Other (please describe)"
+          "Wardrobe Installation",
+          "Hinge or Drawer Channel Replacement",
+          "Cabinet Shutter Alignment",
+          "Soft-Close Hinge Fitting",
+          "Kitchen Countertop Repair",
+          "Cabinet Handle Replacement",
+          "Modular Kitchen Modification",
+          "Laminate Peeling or Replacement",
+          "Kitchen Basket or Pull-Out Unit Installation",
+          "Water-Damaged Cabinet Repair",
+          "Other (Please Describe)"
         ]
       },
       {
         "id": "wooden_doors",
-        "name": "Wooden Doors",
+        "name": "Wooden Door Repair & Installation",
         "code": "CAR-03",
         "issues": [
-          "Door not closing",
-          "Door jammed",
-          "Door swollen",
-          "Hinge replacement",
-          "Termite-damaged frame",
-          "New door installation",
-          "Door polishing",
-          "Door scraping on floor",
-          "Door handle fitting",
-          "Door gap or alignment fix",
-          "Other (please describe)"
+          "Door Not Closing Properly",
+          "Door Stuck or Jammed",
+          "Door Swollen Due to Moisture",
+          "Door Hinge Replacement",
+          "Termite-Damaged Door Frame",
+          "New Wooden Door Installation",
+          "Wooden Door Polishing",
+          "Door Scraping Against Floor",
+          "Door Handle Installation or Replacement",
+          "Door Gap and Alignment Repair",
+          "Door Lock or Latch Not Working",
+          "Door Frame Damaged or Cracked",
+          "Other (Please Describe)"
         ]
       },
       {
         "id": "custom_furniture",
-        "name": "Custom Furniture",
+        "name": "Custom Furniture Design & Making",
         "code": "CAR-04",
         "issues": [
-          "New bed",
-          "New wardrobe",
-          "TV unit",
-          "Study table",
-          "Shoe rack",
-          "Pooja unit",
-          "Bookshelf",
-          "Dining table",
-          "Dressing table",
-          "Kids furniture",
-          "Office furniture",
-          "Other (please describe)"
+          "Custom Bed Making",
+          "Custom Wardrobe Making",
+          "Custom TV Unit Making",
+          "Custom Study Table Making",
+          "Custom Shoe Rack Making",
+          "Custom Pooja Unit Making",
+          "Custom Bookshelf Making",
+          "Custom Dining Table Making",
+          "Custom Dressing Table Making",
+          "Custom Kids' Furniture Making",
+          "Custom Office Furniture Making",
+          "Other (Please Describe)"
         ]
       },
       {
         "id": "polishing_finishing",
-        "name": "Polishing and Finishing",
+        "name": "Furniture Polishing & Painting",
         "code": "CAR-05",
         "issues": [
-          "Wood polishing",
-          "Melamine or PU polish",
-          "Varnish touch-up",
-          "Laminate or veneer fixing",
-          "Scratch repair",
-          "Colour change of furniture",
-          "Other (please describe)"
+          "Wooden Furniture Polishing",
+          "Melamine or PU Polish Finish",
+          "Varnish Touch-Up",
+          "Furniture Scratch Removal",
+          "Furniture Repainting or Colour Change",
+          "Old Furniture Polishing and Restoration",
+          "Furniture Paint Peeling",
+          "Other (Please Describe)"
         ]
       },
       {
         "id": "furniture_assembly",
-        "name": "Furniture Assembly and Fitting",
+        "name": "Furniture Assembly & Installation",
         "code": "CAR-06",
         "issues": [
-          "Flat-pack furniture assembly",
-          "Furniture dismantle and reassemble",
-          "Curtain rod fitting",
-          "Wall shelf fitting",
-          "TV bracket fitting",
-          "Mirror or frame hanging",
-          "Other (please describe)"
+          "Ready-to-Assemble Furniture Assembly",
+          "Furniture Dismantling and Reassembly",
+          "Bed Assembly",
+          "Wardrobe Assembly",
+          "Table and Chair Assembly",
+          "Furniture Installation",
+          "Other (Please Describe)"
         ]
       },
       {
         "id": "partitions_ceilings",
-        "name": "Partitions and Wooden Ceilings",
+        "name": "Woodwork, Partitions & False Ceilings",
         "code": "CAR-07",
         "issues": [
-          "Wooden partition",
-          "Plywood partition",
-          "Wooden false ceiling",
-          "Wall panelling",
-          "Loft or mezzanine",
-          "Pergola or deck",
-          "Other (please describe)"
+          "Wooden Partition Installation",
+          "Plywood Partition Installation",
+          "Wooden False Ceiling Installation",
+          "Wooden Wall Panelling",
+          "Loft Storage or Mezzanine Work",
+          "Wooden Partition Repair",
+          "False Ceiling Panel Repair",
+          "Wooden Pergola or Deck Installation",
+          "Other (Please Describe)"
         ]
       }
     ]
   },
   {
     "id": "painting",
-    "name": "Painting and Waterproofing",
+    "name": "Painting, Wall Repair & Waterproofing",
     "code": "PNT",
-    "description": "Interior & exterior painting, metal paint, wall defects repair, terrace waterproofing",
+    "description": "Interior and exterior painting, wood and metal painting, wall crack repair, texture painting and terrace waterproofing.",
     "image": "/services/painting.png",
     "theme": {
       "bg": "#FDF2F8",
@@ -910,17 +895,17 @@ export const SERVICE_CATALOGUE_TAXONOMY: TaxonomyServiceType[] = [
         "name": "Interior Painting",
         "code": "PNT-01",
         "issues": [
-          "Full house painting",
-          "Single room painting",
+          "Full House Interior Painting",
+          "Single Room Painting",
           "Ceiling painting",
-          "Touch-up painting",
-          "Texture painting",
-          "Accent or design wall",
-          "Stencil work",
+          "Paint Touch-Up",
+          "Texture Wall Painting",
+          "Feature Wall Painting",
+          "Stencil Wall Painting",
           "Wallpaper installation",
-          "Colour consultation",
-          "Kids room theme",
-          "Other (please describe)"
+          "Paint Colour Selection",
+          "Kids' Room Wall Design",
+          "Other Interior Painting Work"
         ]
       },
       {
@@ -930,61 +915,61 @@ export const SERVICE_CATALOGUE_TAXONOMY: TaxonomyServiceType[] = [
         "issues": [
           "Full exterior painting",
           "Compound wall painting",
-          "Gate painting",
-          "Terrace wall painting",
-          "Weather-proof coat",
-          "Exterior texture",
-          "Other (please describe)"
+          "Main Gate Painting",
+          "Terrace & Parapet Wall Painting",
+          "Weatherproof Exterior Painting",
+          "Exterior Texture Painting",
+          "Other Exterior Painting Work"
         ]
       },
       {
         "id": "wood_metal_painting",
-        "name": "Wood and Metal Painting",
+        "name": "Wood & Metal Painting",
         "code": "PNT-03",
         "issues": [
-          "Door or furniture enamel",
-          "PU finish",
-          "Grill painting",
-          "Gate painting",
-          "Rust removal and primer",
-          "Shutter painting",
-          "Railing painting",
-          "Other (please describe)"
+          "Door & Furniture Enamel Painting",
+          "PU Polish & Finish",
+          "Window & Metal Grill Painting",
+          "Metal Gate Painting",
+          "Rust Removal & Anti-Rust Primer",
+          "Rolling Shutter Painting",
+          "Metal Railing Painting",
+          "Other Wood & Metal Painting"
         ]
       },
       {
         "id": "wall_defects",
-        "name": "Wall Defects",
+        "name": "Wall Repair & Crack Filling",
         "code": "PNT-04",
         "issues": [
-          "Peeling paint",
-          "Cracks on wall",
-          "Dampness on wall",
-          "Seepage patches",
-          "Fungus or mould",
-          "Efflorescence (white powder)",
-          "Paint bubbling",
-          "Putty work",
-          "Hairline cracks",
-          "Stains on ceiling",
-          "Other (please describe)"
+          "Paint Peeling",
+          "Wall Crack Repair",
+          "Damp Wall Treatment",
+          "Water Seepage Repair",
+          "Fungus & Mould Removal",
+          "White Salt Deposits on Walls",
+          "Paint Bubbling & Blistering",
+          "Wall Putty & Surface Repair",
+          "Hairline Crack Filling",
+          "Ceiling Water Stain Repair",
+          "Other Wall Repair Issue"
         ]
       },
       {
         "id": "waterproofing",
-        "name": "Waterproofing",
+        "name": "Waterproofing Services",
         "code": "PNT-05",
         "issues": [
-          "Terrace waterproofing",
+          "Terrace & Roof Waterproofing",
           "Bathroom waterproofing",
           "Basement waterproofing",
           "Water tank waterproofing",
           "External wall waterproofing",
           "Balcony waterproofing",
           "Kitchen waterproofing",
-          "Expansion joint treatment",
-          "Crack injection grouting",
-          "Other (please describe)"
+          "Expansion Joint Sealing",
+          "Crack Injection Treatment",
+          "Other Waterproofing Work"
         ]
       },
       {
@@ -992,13 +977,13 @@ export const SERVICE_CATALOGUE_TAXONOMY: TaxonomyServiceType[] = [
         "name": "Special Finishes",
         "code": "PNT-06",
         "issues": [
-          "Stucco finish",
-          "3D wall panel",
-          "Anti-bacterial coating",
-          "Heat-reflective coating",
-          "Epoxy coating",
-          "Fire-retardant coating",
-          "Other (please describe)"
+          "Stucco Texture Finish",
+          "3D Wall Panel Installation",
+          "Anti-Bacterial Wall Coating",
+          "Heat-Reflective Roof Coating",
+          "Epoxy Floor Coating",
+          "Fire-Resistant Coating",
+          "Other Special Finish"
         ]
       }
     ]
@@ -1158,105 +1143,105 @@ export const SERVICE_CATALOGUE_TAXONOMY: TaxonomyServiceType[] = [
         "name": "Home Deep Cleaning",
         "code": "CLN-01",
         "issues": [
-          "Full home deep clean",
-          "Kitchen deep clean",
-          "Bathroom deep clean",
-          "Balcony cleaning",
-          "Window and glass cleaning",
-          "Post-construction cleaning",
-          "Move-in or move-out cleaning",
-          "Festival cleaning",
-          "Fan and light cleaning",
-          "Other (please describe)"
+          "Full Home Deep Cleaning",
+          "Kitchen Deep Cleaning",
+          "Bathroom Deep Cleaning",
+          "Balcony Cleaning",
+          "Window and Glass Cleaning",
+          "Post-Construction Cleaning",
+          "Move-In / Move-Out Cleaning",
+          "Festival Deep Cleaning",
+          "Fan and Light Cleaning",
+          "Other (Please Describe)"
         ]
       },
       {
         "id": "sofa_carpet_curtain",
-        "name": "Sofa, Carpet, Mattress and Curtain",
+        "name": "Sofa, Carpet, Mattress & Curtain Cleaning",
         "code": "CLN-02",
         "issues": [
-          "Sofa shampooing",
-          "Carpet cleaning",
-          "Mattress cleaning",
-          "Curtain cleaning",
-          "Stain removal",
-          "Odour removal",
-          "Dust mite treatment",
-          "Leather care",
-          "Other (please describe)"
+          "Sofa Shampooing",
+          "Carpet Deep Cleaning",
+          "Mattress Deep Cleaning",
+          "Curtain Cleaning",
+          "Upholstery Stain Removal",
+          "Bad Odour Removal",
+          "Dust Mite Treatment",
+          "Leather Sofa Cleaning",
+          "Other (Please Describe)"
         ]
       },
       {
         "id": "water_tank_sump",
-        "name": "Water Tank and Sump Cleaning",
+        "name": "Water Tank & Sump Cleaning",
         "code": "CLN-03",
         "issues": [
-          "Overhead tank cleaning",
-          "Underground sump cleaning",
-          "Tank disinfection",
-          "Algae or sludge removal",
-          "Water quality problem",
-          "Tank repair after cleaning",
-          "Other (please describe)"
+          "Overhead Water Tank Cleaning",
+          "Underground Sump Cleaning",
+          "Water Tank Disinfection",
+          "Algae and Sludge Removal",
+          "Hard Water Scale Removal",
+          "Water Tank Descaling",
+          "Other (Please Describe)"
         ]
       },
       {
         "id": "kitchen_cleaning",
-        "name": "Kitchen Cleaning",
+        "name": "Kitchen Deep Cleaning",
         "code": "CLN-04",
         "issues": [
-          "Chimney degreasing",
-          "Cabinet cleaning",
-          "Kitchen tile cleaning",
-          "Appliance exterior cleaning",
-          "Gas stove cleaning",
-          "Exhaust fan degreasing",
-          "Other (please describe)"
+          "Kitchen Chimney Degreasing",
+          "Kitchen Cabinet Cleaning",
+          "Kitchen Tile and Backsplash Cleaning",
+          "Kitchen Appliance Cleaning",
+          "Gas Stove and Hob Cleaning",
+          "Exhaust Fan Cleaning",
+          "Other (Please Describe)"
         ]
       },
       {
         "id": "bathroom_cleaning",
-        "name": "Bathroom Cleaning",
+        "name": "Bathroom Deep Cleaning",
         "code": "CLN-05",
         "issues": [
-          "Hard water stains",
-          "Grout cleaning",
-          "Limescale removal",
-          "Drain cleaning",
-          "Glass partition cleaning",
-          "Mould in bathroom",
-          "Other (please describe)"
+          "Hard Water Stain Removal",
+          "Bathroom Tile and Grout Cleaning",
+          "Limescale Removal",
+          "Bathroom Drain Cleaning",
+          "Shower Glass Cleaning",
+          "Mould and Mildew Removal",
+          "Toilet and Washbasin Deep Cleaning"
         ]
       },
       {
         "id": "office_commercial_clean",
-        "name": "Office and Commercial Cleaning",
+        "name": "Office & Commercial Cleaning",
         "code": "CLN-06",
         "issues": [
-          "Daily housekeeping",
-          "Floor scrubbing",
-          "Pantry cleaning",
-          "Glass facade cleaning",
-          "Washroom cleaning",
-          "Carpet cleaning (office)",
-          "Staircase cleaning",
-          "Parking area cleaning",
-          "Other (please describe)"
+          "Daily Office Housekeeping",
+          "Floor Scrubbing and Cleaning",
+          "Office Pantry Cleaning",
+          "Glass Facade Cleaning",
+          "Office Washroom Cleaning",
+          "Office Carpet Cleaning",
+          "Staircase Cleaning",
+          "Parking Area Cleaning",
+          "Other (Please Describe)"
         ]
       },
       {
         "id": "specialised_cleaning",
-        "name": "Specialised Cleaning",
+        "name": "Specialised Cleaning Services",
         "code": "CLN-07",
         "issues": [
-          "Marble polishing",
-          "Disinfection and sanitization",
-          "Facade cleaning",
-          "Solar panel cleaning",
-          "Terrace cleaning",
-          "Sewage tank cleaning",
-          "Industrial cleaning",
-          "Other (please describe)"
+          "Marble Floor Polishing",
+          "Disinfection and Sanitization",
+          "Building Facade Cleaning",
+          "Solar Panel Cleaning",
+          "Terrace Cleaning",
+          "Septic Tank Cleaning",
+          "Industrial Deep Cleaning",
+          "Other (Please Describe)"
         ]
       }
     ]
@@ -1395,7 +1380,7 @@ export const SERVICE_CATALOGUE_TAXONOMY: TaxonomyServiceType[] = [
     "id": "security_systems",
     "name": "CCTV and Security Systems",
     "code": "SEC",
-    "description": "CCTV cameras, DVR/NVR, biometric access, alarm sensors, video doorbell & gates",
+    "description": "CCTV cameras, DVR/NVR, biometric access, alarms, video door phone & gates",
     "image": "/services/security.png",
     "theme": {
       "bg": "#DCFCE7",
@@ -1405,115 +1390,119 @@ export const SERVICE_CATALOGUE_TAXONOMY: TaxonomyServiceType[] = [
     "categories": [
       {
         "id": "cctv_cameras",
-        "name": "CCTV Cameras",
+        "name": "CCTV Cameras & Installation",
         "code": "SEC-01",
         "issues": [
-          "Camera not recording",
-          "No video from camera",
-          "Blurry picture",
-          "Night vision not working",
-          "Camera offline",
-          "New camera installation",
-          "Camera repositioning",
-          "Cable cut or damaged",
-          "Camera lens dirty or fogged",
-          "Audio not working",
-          "PTZ camera not rotating",
-          "Other (please describe)"
+          "No Picture / Video Feed",
+          "Blurry Camera Footage",
+          "Night Vision Not Working",
+          "Camera Offline / Disconnected",
+          "New CCTV Camera Installation",
+          "Camera Angle Adjustment / Relocation",
+          "Camera Cable Damaged",
+          "Camera Lens Cleaning / Fogging",
+          "Camera Microphone / Audio Fault",
+          "PTZ Camera Movement Not Working",
+          "Other CCTV Camera Issue",
+          "Camera Power Supply Fault"
         ]
       },
       {
         "id": "dvr_nvr",
-        "name": "DVR and NVR",
+        "name": "DVR, NVR & Recording Systems",
         "code": "SEC-02",
         "issues": [
-          "DVR not booting",
-          "Hard disk failure",
-          "No signal on monitor",
-          "Storage full",
-          "Password reset",
-          "Playback problem",
-          "Remote view setup",
-          "Date and time wrong",
-          "Mobile app not connecting",
-          "Backup of footage",
-          "Other (please describe)"
+          "Camera Not Recording",
+          "DVR / NVR Not Turning On",
+          "Hard Disk Not Detected",
+          "No Display on Monitor",
+          "Recording Storage Full",
+          "DVR / NVR Password Reset",
+          "Recorded Video Not Playing",
+          "Mobile / Remote Viewing Setup",
+          "Date & Time Incorrect",
+          "CCTV Mobile App Not Connecting",
+          "Video Recording Backup / Export",
+          "Other DVR / NVR Issue"
         ]
       },
       {
         "id": "biometric_access",
-        "name": "Biometric and Access Control",
+        "name": "Biometric Attendance & Access Control",
         "code": "SEC-03",
         "issues": [
-          "Fingerprint not reading",
-          "Door lock fault",
-          "Card reader not working",
-          "Face recognition error",
-          "Attendance sync issue",
-          "Magnetic lock fault",
-          "New access control installation",
-          "Software or user management",
-          "Other (please describe)"
+          "Fingerprint Not Recognized",
+          "Access Door Lock Not Working",
+          "Access Card Not Reading",
+          "Face Recognition Not Working",
+          "Attendance Data Not Syncing",
+          "Magnetic Door Lock Not Working",
+          "New Access Control Installation",
+          "User Registration / Access Management",
+          "Other Biometric / Access Control Issue"
         ]
       },
       {
         "id": "alarms_sensors",
-        "name": "Alarms and Sensors",
+        "name": "Security Alarms & Sensors",
         "code": "SEC-04",
         "issues": [
-          "False alarm",
-          "Siren not working",
-          "Motion sensor fault",
-          "Door sensor fault",
-          "Fire alarm panel fault",
-          "Smoke detector chirping",
-          "Gas leak detector fault",
-          "Panic button not working",
-          "Other (please describe)"
+          "False Alarm Triggering",
+          "Alarm Siren Not Working",
+          "Motion Sensor Not Detecting",
+          "Door / Window Sensor Not Working",
+          "Fire Alarm Control Panel Fault",
+          "Smoke Detector Beeping / Low Battery",
+          "Gas Leak Detector Not Working",
+          "Emergency Panic Button Not Working",
+          "Other Alarm / Sensor Issue"
         ]
       },
       {
         "id": "video_door_phone",
-        "name": "Video Door Phone and Intercom",
+        "name": "Video Door Phone & Intercom",
         "code": "SEC-05",
         "issues": [
-          "No display",
-          "No audio",
-          "Call not ringing",
-          "New installation",
-          "Cable fault",
-          "Door release not working",
-          "Monitor replacement",
-          "Other (please describe)"
+          "Indoor Monitor Screen Not Working",
+          "No Sound / Audio Not Working",
+          "Doorbell Call Not Ringing",
+          "New Video Door Phone Installation",
+          "Door Phone Wiring / Cable Fault",
+          "Door Unlock Button Not Working",
+          "Indoor Monitor Replacement",
+          "Other Video Door Phone Issue"
         ]
       },
       {
         "id": "gate_automation",
-        "name": "Gate and Barrier Automation",
+        "name": "Automatic Gates & Boom Barriers",
         "code": "SEC-06",
         "issues": [
-          "Sliding gate motor fault",
-          "Remote not working",
-          "Swing gate motor fault",
-          "Boom barrier fault",
-          "Limit switch problem",
-          "Safety sensor fault",
-          "Gate stops midway",
-          "Remote duplication",
-          "Other (please describe)"
+          "Sliding Gate Motor Not Working",
+          "Gate Remote Not Working",
+          "Swing Gate Motor Not Working",
+          "Boom Barrier Not Opening / Closing",
+          "Gate Limit Switch Fault",
+          "Safety Sensor Not Working",
+          "Gate Stops or Reverses Midway",
+          "Additional Remote Programming",
+          "Other Gate Automation Issue"
         ]
       },
       {
         "id": "electric_fence",
-        "name": "Electric Fence and Perimeter",
+        "name": "Electric Fencing & Perimeter Security",
         "code": "SEC-07",
         "issues": [
-          "Fence not energized",
-          "False alarm on fence",
-          "Energizer fault",
-          "Fence wire broken",
-          "New fence installation",
-          "Other (please describe)"
+          "Electric Fence Has No Power",
+          "Electric Fence False Alarm",
+          "Fence Energizer Not Working",
+          "Electric Fence Wire Damaged",
+          "New Electric Fence Installation",
+          "Other Electric Fence Issue",
+          "Electric Fence Voltage Too Low",
+          "Electric Fence Short Circuit / Ground Fault",
+          "Electric Fence Maintenance & Inspection"
         ]
       }
     ]
@@ -1665,95 +1654,95 @@ export const SERVICE_CATALOGUE_TAXONOMY: TaxonomyServiceType[] = [
     "categories": [
       {
         "id": "ro_water_purifier",
-        "name": "RO Water Purifier",
+        "name": "Domestic RO Water Purifier",
         "code": "WTR-01",
         "issues": [
-          "Not purifying water",
-          "Water taste bad",
-          "Low water flow",
-          "Leaking",
-          "Noise from purifier",
-          "High TDS in output",
+          "Water not getting purified",
+          "Bad taste or smell in water",
+          "Water flow is very slow",
+          "Water leakage",
+          "Unusual noise from purifier",
+          "High TDS in purified water",
           "Auto shut-off not working",
-          "Membrane replacement",
-          "Filter change",
-          "Error light or alarm",
-          "Pump fault",
-          "SMPS or adapter fault",
-          "Storage tank issue",
+          "RO membrane problem",
+          "RO filter replacement",
+          "Warning light or beeping",
+          "RO booster pump not working",
+          "Power supply or adapter problem",
+          "Storage tank not filling or holding water",
           "Other (please describe)"
         ]
       },
       {
         "id": "uv_uf_gravity",
-        "name": "UV, UF and Gravity Purifiers",
+        "name": "UV, UF & Gravity Water Purifiers",
         "code": "WTR-02",
         "issues": [
-          "UV lamp not glowing",
-          "UF membrane choke",
-          "Gravity filter slow",
-          "Candle replacement",
-          "Tap or tank leaking",
-          "Water smells",
+          "UV lamp not working",
+          "UF membrane blocked",
+          "Slow water flow from gravity filter",
+          "Filter candle replacement",
+          "Water leakage from tap or tank",
+          "Bad smell or taste in water",
           "Other (please describe)"
         ]
       },
       {
         "id": "commercial_ro_plant",
-        "name": "Commercial and Industrial RO Plant",
+        "name": "Commercial & Industrial RO Plants",
         "code": "WTR-03",
         "issues": [
-          "Plant not producing",
-          "Pressure low",
-          "Membrane fouling",
-          "Antiscalant dosing fault",
-          "Tank cleaning",
-          "Pump fault",
-          "Plant AMC",
+          "RO plant not producing water",
+          "Low water pressure",
+          "RO membrane blocked or scaled",
+          "Antiscalant dosing system problem",
+          "RO storage tank cleaning",
+          "RO pump not working",
+          "Annual Maintenance Contract (AMC)",
           "Water quality testing",
           "Other (please describe)"
         ]
       },
       {
         "id": "water_softener",
-        "name": "Water Softener and Filtration",
+        "name": "Water Softeners & Filter Systems",
         "code": "WTR-04",
         "issues": [
-          "Hard water problem",
-          "Softener resin recharge",
-          "Iron filter problem",
+          "Hard water coming from tap",
+          "Water softener resin regeneration",
+          "Iron removal filter not working",
           "Sediment filter replacement",
-          "Whole-house filter installation",
-          "Chlorine or smell removal",
-          "Salt refilling",
+          "Whole-house water filter installation",
+          "Chlorine or bad smell in water",
+          "Water softener salt refill",
           "Other (please describe)"
         ]
       },
       {
         "id": "water_cooler_dispenser",
-        "name": "Water Cooler and Dispenser",
+        "name": "Water Coolers & Dispensers",
         "code": "WTR-05",
         "issues": [
-          "Not cooling",
-          "No hot water",
-          "Leaking",
-          "Tap faulty",
-          "Filter change",
-          "Bottle sensor fault",
-          "Compressor issue",
+          "Water cooler not cooling",
+          "Hot water not dispensing",
+          "Water leakage",
+          "Water dispensing tap not working",
+          "Water filter replacement",
+          "Bottle sensor not working",
+          "Compressor not working",
           "Other (please describe)"
         ]
       },
       {
         "id": "purifier_installation",
-        "name": "Installation and Maintenance",
+        "name": "RO Installation & Maintenance",
         "code": "WTR-06",
         "issues": [
-          "New purifier installation",
-          "Purifier relocation",
-          "Annual maintenance contract",
-          "Water quality test",
-          "Uninstall purifier",
+          "New water purifier installation",
+          "Water purifier shifting or relocation",
+          "Annual Maintenance Contract (AMC)",
+          "Water quality testing",
+          "Water purifier removal",
           "Other (please describe)"
         ]
       }

@@ -30,6 +30,7 @@ import {
   makeDirectoryAsync
 } from "expo-file-system/legacy";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { goBackOrReplace } from "../../../../src/navigation/backNavigation";
 
 import {
   apiClient,
@@ -1655,7 +1656,7 @@ export default function JobCompletionScreen() {
       <Pressable
         accessibilityRole="button"
         disabled={isSubmitting}
-        onPress={() => router.back()}
+        onPress={() => goBackOrReplace(router, "/(app)/jobs")}
         style={styles.backButton}
       >
         <Text style={styles.backText}>

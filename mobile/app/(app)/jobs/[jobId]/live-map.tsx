@@ -8,6 +8,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { goBackOrReplace } from "../../../../src/navigation/backNavigation";
 import { LoadingState } from "../../../../src/components/ScreenState";
 import * as Location from "expo-location";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
@@ -850,7 +851,7 @@ export default function JobLiveMapScreen() {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Return to job details"
-          onPress={() => router.back()}
+          onPress={() => goBackOrReplace(router, "/(app)/jobs")}
           style={styles.backButton}
         >
           <Ionicons name="arrow-back" size={23} color="#16382A" />

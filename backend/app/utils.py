@@ -220,7 +220,7 @@ def map_service_type_to_skill(service_type: str) -> str:
         return "General Maintenance"
 
     # ------------------------------------------------------------------
-    # Painting and Waterproofing
+    # Painting, wall repair and waterproofing
     # ------------------------------------------------------------------
     if any(
         keyword in st
@@ -232,7 +232,7 @@ def map_service_type_to_skill(service_type: str) -> str:
             "WALL DEFECT",
         )
     ):
-        return "Painting & Waterproofing"
+        return "Painting, Wall Repair & Waterproofing"
 
     # ------------------------------------------------------------------
     # Civil, Masonry and Flooring

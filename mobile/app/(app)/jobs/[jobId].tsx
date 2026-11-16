@@ -24,6 +24,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Location from "expo-location";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { goBackOrReplace } from "../../../src/navigation/backNavigation";
 import { useAuthStore } from "../../../src/auth/authStore";
 import { apiClient, isNetworkUnavailableError } from "../../../src/api/client";
 import { setActiveGpsJob } from "../../../src/gps/backgroundLocationService";
@@ -1027,7 +1028,7 @@ export default function JobDetailScreen() {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Go back"
-              onPress={() => router.back()}
+              onPress={() => goBackOrReplace(router, "/(app)/jobs")}
               style={({ pressed }) => [
                 styles.backButton,
                 pressed && styles.pressed

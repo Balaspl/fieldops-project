@@ -13,6 +13,7 @@ import {
   useLocalSearchParams,
   useRouter
 } from "expo-router";
+import { goBackOrReplace } from "../../../../src/navigation/backNavigation";
 
 const GST_PERCENT = 5;
 
@@ -170,7 +171,7 @@ export default function JobExpenseScreen() {
       >
         <Pressable
           accessibilityRole="button"
-          onPress={() => router.back()}
+          onPress={() => goBackOrReplace(router, "/(app)/jobs")}
           style={styles.backButton}
         >
           <Text style={styles.backText}>

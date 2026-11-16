@@ -1,7 +1,7 @@
 """
 Services Catalog API routes.
 
-Provides endpoints for Super Admin to manage the service catalog taxonomy
+Provides endpoints for Super Admins and Dispatchers to manage tenant service offerings
 (Service Type -> Category -> Specific Issues) with multi-tenant organization isolation,
 and for Customer Portal to fetch active services deduplicated across organizations.
 """
@@ -14,7 +14,6 @@ from sqlalchemy import desc, func
 
 from ..database import get_db
 from ..models import ServiceCatalogItem
-from ..models.user import User
 from fastapi import Request
 from fastapi.security import HTTPAuthorizationCredentials
 from ..auth.dependencies import get_current_user, AuthenticatedUser, security
@@ -41,12 +40,25 @@ router = APIRouter(tags=["Services Catalog"])
 def require_service_writer(
     current_user: AuthenticatedUser = Depends(get_service_admin_user),
 ) -> AuthenticatedUser:
-    """Only organization administrators can change the service catalog."""
+    """Restrict service activation and deletion to administrative roles."""
     role = getattr(current_user.role, "value", current_user.role)
-    if str(role).lower() not in {"super_admin", "admin", "head"}:
+    if str(role).strip().lower() not in {"super_admin", "admin", "head"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only Super Admins can create or change services.",
+            detail="Only organization administrators can change service status or remove services.",
+        )
+    return current_user
+
+
+def require_service_creator(
+    current_user: AuthenticatedUser = Depends(get_service_admin_user),
+) -> AuthenticatedUser:
+    """Allow Super Admins and Dispatchers to add offerings for their own tenant."""
+    role = getattr(current_user.role, "value", current_user.role)
+    if str(role).strip().lower() not in {"super_admin", "admin", "head", "dispatcher"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only Super Admins and Dispatchers can add services.",
         )
     return current_user
 
@@ -143,25 +155,17 @@ def get_admin_services(
     db: Session = Depends(get_db),
 ):
     """
-    Get services for the authenticated Super Admin.
+    Get services available to the authenticated organization administrator or dispatcher.
     Scoped strictly to the user's organization (tenant_id).
     Platform Super Admins (__platform__) can see all or filter.
     """
     query = db.query(ServiceCatalogItem)
 
-    # Multi-tenant isolation: Org Super Admin only sees their own organization's services
+    # Tenant isolation is based on the authenticated user's tenant, not who
+    # originally created the item. Super Admins and Dispatchers share one
+    # organization service catalog, so both must see every item in that tenant.
     if current_user.tenant_id != "__platform__":
         query = query.filter(ServiceCatalogItem.tenant_id == current_user.tenant_id)
-
-    role = getattr(current_user.role, "value", current_user.role)
-    if str(role).strip().lower() == "dispatcher":
-        query = query.join(
-            User,
-            ServiceCatalogItem.created_by_user_id == User.id,
-        ).filter(
-            User.tenant_id == current_user.tenant_id,
-            User.role == "super_admin",
-        )
 
     if service_type and service_type != "ALL":
         query = query.filter(ServiceCatalogItem.service_type == service_type)
@@ -236,11 +240,11 @@ def get_taxonomy_suggestions(
 )
 def create_admin_service(
     payload: ServiceCatalogCreateRequest,
-    current_user: AuthenticatedUser = Depends(require_service_writer),
+    current_user: AuthenticatedUser = Depends(require_service_creator),
     db: Session = Depends(get_db),
 ):
     """
-    Create a new service offering for the authenticated Super Admin's organization.
+    Create a new service offering for the authenticated user's organization.
     Exactly 3 fields: service_type, category, issue (strictly NO amount/pricing).
     """
     st = payload.service_type.strip()
@@ -300,11 +304,11 @@ def create_admin_service(
 )
 def create_admin_services_batch(
     payload: ServiceCatalogBatchCreateRequest,
-    current_user: AuthenticatedUser = Depends(require_service_writer),
+    current_user: AuthenticatedUser = Depends(require_service_creator),
     db: Session = Depends(get_db),
 ):
     """
-    Batch creates multiple categories and issues under a single Service Type for the organization.
+    Batch creates multiple categories and issues under a single Service Type for the authenticated user's organization.
     """
     st = payload.service_type.strip()
     if not st:

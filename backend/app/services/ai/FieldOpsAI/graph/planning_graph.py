@@ -25,7 +25,7 @@ from langgraph.graph import StateGraph, START, END
 
 from app.database import SessionLocal
 from app.services.dispatch_eligibility import LOCATION_MAX_AGE_SECONDS
-from app.models import Organization, Technician
+from app.models import Organization, Technician, ServiceCatalogItem
 from app.services.ola_map_client import haversine_distance
 from app.redis_client import get_redis_client
 from app.services.dispatch_eligibility import evaluate_technician_dispatch_eligibility
@@ -318,6 +318,66 @@ def find_nearest_organizations_node(
             )
             .all()
         )
+
+        # Customer marketplace bookings must only be planned against providers
+        # that have explicitly enabled the exact service in their own catalogue.
+        # Other job-creation flows retain the existing skill/location behavior.
+        requires_catalog_offering = bool(
+            job_req.get("requires_catalog_offering", False)
+        )
+        if requires_catalog_offering:
+            service_name = str(service or "").strip()
+            category_name = str(category or "").strip()
+            issue_name = str(issue or "").strip()
+
+            if not (service_name and category_name and issue_name):
+                logger.warning(
+                    "PLANNING CATALOG FILTER SKIPPED | job_id=%s | reason=missing_taxonomy_fields",
+                    state.get("job_id"),
+                )
+                all_candidate_techs = []
+            else:
+                candidate_tenant_ids = list({
+                    str(technician.tenant_id)
+                    for technician in all_candidate_techs
+                    if technician.tenant_id is not None
+                })
+
+                catalog_items = (
+                    db.query(ServiceCatalogItem)
+                    .filter(
+                        ServiceCatalogItem.tenant_id.in_(candidate_tenant_ids),
+                        ServiceCatalogItem.is_active.is_(True),
+                    )
+                    .all()
+                    if candidate_tenant_ids
+                    else []
+                )
+
+                offering_tenant_ids = {
+                    str(item.tenant_id)
+                    for item in catalog_items
+                    if item.tenant_id is not None
+                    and normalize_skill(item.service_type) == normalize_skill(service_name)
+                    and normalize_skill(item.category) == normalize_skill(category_name)
+                    and normalize_skill(item.issue) == normalize_skill(issue_name)
+                }
+
+                all_candidate_techs = [
+                    technician
+                    for technician in all_candidate_techs
+                    if str(technician.tenant_id) in offering_tenant_ids
+                ]
+
+                logger.info(
+                    "PLANNING SERVICE CATALOG FILTER | job_id=%s | service=%s | category=%s | issue=%s | offering_organizations=%s | eligible_technicians=%s",
+                    state.get("job_id"),
+                    service_name,
+                    category_name,
+                    issue_name,
+                    len(offering_tenant_ids),
+                    len(all_candidate_techs),
+                )
 
         techs_by_org = defaultdict(list)
         for t in all_candidate_techs:

@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { goBackOrReplace } from "../../../../src/navigation/backNavigation";
 import { LoadingState } from "../../../../src/components/ScreenState";
 import {
   acknowledgeTechnicianMessageDelivered,
@@ -108,7 +109,7 @@ export default function TechnicianJobChatScreen() {
   return (
     <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       <View style={styles.header}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Back to job" onPress={() => router.back()} style={styles.backButton}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Back to job" onPress={() => goBackOrReplace(router, "/(app)/jobs")} style={styles.backButton}>
           <Ionicons name="arrow-back" size={22} color="#123b33" />
         </Pressable>
         <View style={styles.headerAvatar}><Ionicons name="person" size={19} color="#087653" /></View>
