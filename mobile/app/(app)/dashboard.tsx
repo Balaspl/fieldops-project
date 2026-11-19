@@ -19,6 +19,7 @@ import {
   View,
 } from "react-native";
 import * as Notifications from "expo-notifications";
+import * as Location from "expo-location";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
@@ -27,6 +28,9 @@ import { useAuthStore } from "../../src/auth/authStore";
 import { getTechnicianDashboard } from "../../src/api/dashboard";
 import { getTechnicianNotifications } from "../../src/api/notifications";
 import { getTechnicianJobs, type TechnicianJob } from "../../src/api/technician";
+import { updateTechnicianStatus } from "../../src/api/technicianStatus";
+import { getCurrentTechnicianLocation } from "../../src/gps/locationService";
+import { sendTechnicianAvailabilityPing } from "../../src/gps/gpsService";
 import { normalizeJobStatus, getJobStatusLabel } from "../../src/utils/jobStatus";
 import { apiClient } from "../../src/api/client";
 import { getApiErrorMessage } from "../../src/api/apiError";
@@ -203,6 +207,9 @@ export default function DashboardScreen() {
   const [performance, setPerformance] = useState<Record<string, unknown> | null>(null);
   const [performancePeriod, setPerformancePeriod] = useState<"week" | "month">("week");
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+  const [technicianStatus, setTechnicianStatus] = useState("OFFLINE");
+  const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
+  const [availabilityRetry, setAvailabilityRetry] = useState<boolean | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -323,6 +330,7 @@ export default function DashboardScreen() {
             )
           ) {
             setData(parsedValue.data);
+            setTechnicianStatus(String(parsedValue.data.technician_status ?? "OFFLINE").toUpperCase());
             setIsCached(true);
             setLastUpdatedAt(parsedValue.savedAt);
           } else {
@@ -351,6 +359,7 @@ export default function DashboardScreen() {
       const savedAt = new Date().toISOString();
 
       setData(result);
+      setTechnicianStatus(String(result.technician_status ?? "OFFLINE").toUpperCase());
       setIsCached(false);
       setLastUpdatedAt(savedAt);
       setError(null);
@@ -447,6 +456,27 @@ export default function DashboardScreen() {
   const recentJobs = jobs.slice(0, 4);
   const formatTime = (value?: string | null) => value && !Number.isNaN(Date.parse(value)) ? new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Not recorded";
 
+  async function handleAvailabilityChange(online: boolean) {
+    if (isUpdatingStatus || online === (technicianStatus === "AVAILABLE")) return;
+    setIsUpdatingStatus(true);
+    setError(null);
+    try {
+      if (online) {
+        if (!tenantId) throw new Error("Your organization information is missing. Please sign in again.");
+        const location = await getCurrentTechnicianLocation(Location.Accuracy.High);
+        await sendTechnicianAvailabilityPing(location, tenantId);
+      }
+      const response = await updateTechnicianStatus(online ? "AVAILABLE" : "OFFLINE");
+      setTechnicianStatus(String(response.technician_status ?? (online ? "AVAILABLE" : "OFFLINE")).toUpperCase());
+      setAvailabilityRetry(null);
+    } catch (statusError: unknown) {
+      setAvailabilityRetry(online);
+      setError(getApiErrorMessage(statusError, "Unable to update your availability. Please try again."));
+    } finally {
+      setIsUpdatingStatus(false);
+    }
+  }
+
   if (isLoading) {
     return <LoadingState label="Loading dashboard..." variant="dashboard" />;
   }
@@ -511,6 +541,25 @@ export default function DashboardScreen() {
           </Animated.View>
         </View>
 
+        <View style={styles.availabilityCard}>
+          <View style={styles.availabilityCopy}>
+            <View style={[styles.availabilityDot, technicianStatus === "AVAILABLE" && styles.availabilityDotOnline]} />
+            <View>
+              <Text style={styles.availabilityTitle}>You’re {technicianStatus === "AVAILABLE" ? "Online" : "Offline"}</Text>
+              <Text style={styles.availabilityHint}>{technicianStatus === "AVAILABLE" ? "Ready to receive jobs" : "Go online to receive jobs"}</Text>
+            </View>
+          </View>
+          <View style={styles.availabilityActions}>
+            <Pressable accessibilityRole="button" accessibilityState={{ selected: technicianStatus === "AVAILABLE", disabled: isUpdatingStatus }} disabled={isUpdatingStatus} onPress={() => void handleAvailabilityChange(true)} style={[styles.availabilityButton, technicianStatus === "AVAILABLE" && styles.availabilityButtonOnline]}>
+              <Text style={[styles.availabilityButtonText, technicianStatus === "AVAILABLE" && styles.availabilityButtonTextActive]}>Online</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" accessibilityState={{ selected: technicianStatus !== "AVAILABLE", disabled: isUpdatingStatus }} disabled={isUpdatingStatus} onPress={() => void handleAvailabilityChange(false)} style={[styles.availabilityButton, technicianStatus !== "AVAILABLE" && styles.availabilityButtonOffline]}>
+              <Text style={[styles.availabilityButtonText, technicianStatus !== "AVAILABLE" && styles.availabilityButtonTextActive]}>Offline</Text>
+            </Pressable>
+          </View>
+          {isUpdatingStatus ? <ActivityIndicator size="small" color="#078A4D" /> : null}
+        </View>
+
         <ImageBackground source={require("../../assets/images/technician-banner.png")} style={styles.hero} imageStyle={styles.heroImage} resizeMode="cover">
           <View style={styles.heroOverlay}><Text style={styles.greeting}>{new Date().getHours() < 12 ? "Good morning!" : new Date().getHours() < 18 ? "Good afternoon!" : "Good evening!"}</Text><Text style={styles.greetingName}>Welcome {firstName}</Text></View>
         </ImageBackground>
@@ -535,7 +584,7 @@ export default function DashboardScreen() {
 
             <Pressable
               accessibilityRole="button"
-              onPress={() => void loadDashboard()}
+              onPress={() => availabilityRetry === null ? void loadDashboard() : void handleAvailabilityChange(availabilityRetry)}
               style={styles.retryButton}
             >
               <Text style={styles.retryText}>Try again</Text>
@@ -693,6 +742,19 @@ const styles = StyleSheet.create({
     width: 235,
     height: 76,
   },
+
+  availabilityCard: { marginHorizontal: 16, marginTop: 14, marginBottom: 16, padding: 14, borderRadius: 16, backgroundColor: "#F5FAF7", borderWidth: 1, borderColor: "#DCEBE2", flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
+  availabilityCopy: { flexDirection: "row", alignItems: "center", gap: 10, flex: 1 },
+  availabilityDot: { width: 11, height: 11, borderRadius: 6, backgroundColor: "#94A3B8" },
+  availabilityDotOnline: { backgroundColor: "#12A765" },
+  availabilityTitle: { color: "#18372A", fontSize: 15, fontWeight: "800" },
+  availabilityHint: { color: "#718096", fontSize: 11, marginTop: 3 },
+  availabilityActions: { flexDirection: "row", padding: 3, borderRadius: 11, backgroundColor: "#E7EEE9" },
+  availabilityButton: { minWidth: 58, alignItems: "center", justifyContent: "center", paddingHorizontal: 9, paddingVertical: 8, borderRadius: 8 },
+  availabilityButtonOnline: { backgroundColor: "#078A4D" },
+  availabilityButtonOffline: { backgroundColor: "#475569" },
+  availabilityButtonText: { color: "#52627E", fontSize: 11, fontWeight: "800" },
+  availabilityButtonTextActive: { color: "#FFFFFF" },
 
   notificationButton: {
     width: 48,

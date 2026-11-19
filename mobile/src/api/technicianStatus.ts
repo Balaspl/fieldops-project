@@ -14,3 +14,14 @@ export async function getTechnicianStatus(): Promise<TechnicianStatusResponse> {
 
   return response.data;
 }
+
+/** Updates the authenticated technician's availability. */
+export async function updateTechnicianStatus(
+  technician_status: "AVAILABLE" | "OFFLINE"
+): Promise<TechnicianStatusResponse> {
+  const response = await apiClient.put<TechnicianStatusResponse>(
+    "/api/technician/status",
+    { technician_status }
+  );
+  return response.data;
+}

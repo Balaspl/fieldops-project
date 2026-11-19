@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput,
-  View, type TextInputProps, type ViewStyle, type TextStyle,
+  View, type TextInputProps, type ViewStyle, type TextStyle, type StyleProp,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AlertCircle, ChevronRight, RefreshCw, Search } from 'lucide-react-native';
@@ -12,11 +12,11 @@ export function AppScreen({ children, style }: { children: React.ReactNode; styl
   return <SafeAreaView style={[styles.safe, style]} edges={['top', 'left', 'right']}><View style={styles.screen}>{children}</View></SafeAreaView>;
 }
 
-export function ScreenScroll({ children, contentContainerStyle, refreshControl }: { children: React.ReactNode; contentContainerStyle?: ViewStyle; refreshControl?: React.ReactElement }) {
+export function ScreenScroll({ children, contentContainerStyle, refreshControl }: { children: React.ReactNode; contentContainerStyle?: ViewStyle; refreshControl?: React.ReactElement<any> }) {
   return <ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollContent, contentContainerStyle]} keyboardShouldPersistTaps="handled" refreshControl={refreshControl} showsVerticalScrollIndicator={false}>{children}</ScrollView>;
 }
 
-export function Card({ children, style, onPress }: { children: React.ReactNode; style?: ViewStyle; onPress?: () => void }) {
+export function Card({ children, style, onPress }: { children: React.ReactNode; style?: StyleProp<ViewStyle>; onPress?: () => void }) {
   if (onPress) return <Pressable onPress={onPress} accessibilityRole="button" style={({ pressed }) => [styles.card, style, pressed && { opacity: 0.88 }]}>{children}</Pressable>;
   return <View style={[styles.card, style]}>{children}</View>;
 }
@@ -60,13 +60,13 @@ export function SectionTitle({ title, action, onAction, subtitle }: { title: str
   return <View style={styles.sectionTitle}><View style={{ flex: 1, gap: 3 }}><Text style={styles.sectionHeading}>{title}</Text>{subtitle ? <Text style={styles.sectionSubtitle}>{subtitle}</Text> : null}</View>{action && onAction ? <Pressable onPress={onAction} style={styles.sectionAction}><Text style={styles.sectionActionText}>{action}</Text><ChevronRight size={15} color={colors.forest} /></Pressable> : null}</View>;
 }
 
-export function MetricCard({ label, value, caption, icon, tone = 'green', onPress }: { label: string; value: string | number; caption?: string; icon?: React.ReactNode; tone?: 'green' | 'blue' | 'amber' | 'red' | 'purple'; onPress?: () => void }) {
+export function MetricCard({ label, value, caption, icon, tone = 'green', onPress, compact = false }: { label: string; value: string | number; caption?: string; icon?: React.ReactNode; tone?: 'green' | 'blue' | 'amber' | 'red' | 'purple'; onPress?: () => void; compact?: boolean }) {
   const accent = { green: colors.forest, blue: colors.blue, amber: colors.amber, red: colors.red, purple: colors.purple }[tone];
-  return <Card onPress={onPress} style={styles.metricCard}>
-    <View style={[styles.metricIcon, { backgroundColor: `${accent}15` }]}>{icon}</View>
-    <Text style={styles.metricLabel}>{label}</Text>
-    <Text style={[styles.metricValue, { color: colors.ink }]}>{value}</Text>
-    {caption ? <Text style={styles.metricCaption}>{caption}</Text> : null}
+  return <Card onPress={onPress} style={[styles.metricCard, compact && styles.metricCardCompact]}>
+    <View style={[styles.metricIcon, compact && styles.metricIconCompact, { backgroundColor: `${accent}15` }]}>{icon}</View>
+    <Text numberOfLines={2} style={[styles.metricLabel, compact && styles.metricLabelCompact]}>{label}</Text>
+    <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.metricValue, compact && styles.metricValueCompact, { color: colors.ink }]}>{value}</Text>
+    {caption ? <Text numberOfLines={2} style={[styles.metricCaption, compact && styles.metricCaptionCompact]}>{caption}</Text> : null}
   </Card>;
 }
 
@@ -103,7 +103,7 @@ const styles = StyleSheet.create({
   searchWrap: { height: 46, borderWidth: 1, borderColor: colors.border, borderRadius: 14, backgroundColor: colors.white, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, gap: 9 }, searchInput: { flex: 1, paddingVertical: 0, color: colors.ink, fontSize: 14 },
   pill: { alignSelf: 'flex-start', paddingHorizontal: 9, paddingVertical: 5, borderRadius: radii.pill }, pillText: { fontSize: 10, fontWeight: '800', textTransform: 'capitalize' },
   sectionTitle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 3, gap: 10 }, sectionHeading: { fontSize: 16, fontWeight: '900', color: colors.ink }, sectionSubtitle: { fontSize: 11, color: colors.muted }, sectionAction: { flexDirection: 'row', alignItems: 'center', gap: 2 }, sectionActionText: { fontSize: 12, fontWeight: '800', color: colors.forest },
-  metricCard: { flex: 1, minWidth: '45%', padding: 13, gap: 6 }, metricIcon: { height: 34, width: 34, borderRadius: 11, justifyContent: 'center', alignItems: 'center', marginBottom: 2 }, metricLabel: { color: colors.muted, fontSize: 11, fontWeight: '700' }, metricValue: { fontSize: 24, fontWeight: '900', letterSpacing: -0.6 }, metricCaption: { color: colors.muted, fontSize: 10 },
+  metricCard: { flex: 1, minWidth: '45%', padding: 13, gap: 6 }, metricCardCompact: { width: '100%', flex: 0, flexGrow: 0, flexShrink: 1, minWidth: 0, padding: 8, gap: 4 }, metricIcon: { height: 34, width: 34, borderRadius: 11, justifyContent: 'center', alignItems: 'center', marginBottom: 2 }, metricIconCompact: { height: 27, width: 27, borderRadius: 9 }, metricLabel: { color: colors.muted, fontSize: 11, fontWeight: '700' }, metricLabelCompact: { fontSize: 9, minHeight: 22 }, metricValue: { fontSize: 24, fontWeight: '900', letterSpacing: -0.6 }, metricValueCompact: { fontSize: 18, letterSpacing: -0.4 }, metricCaption: { color: colors.muted, fontSize: 10 }, metricCaptionCompact: { fontSize: 8, lineHeight: 10 },
   loading: { padding: 40, alignItems: 'center', justifyContent: 'center', gap: 12 }, loadingText: { color: colors.muted, fontSize: 12, fontWeight: '600' }, empty: { padding: 28, borderRadius: 18, alignItems: 'center', backgroundColor: colors.white, borderWidth: 1, borderColor: colors.border, gap: 10 }, emptyIcon: { width: 48, height: 48, backgroundColor: colors.mint, borderRadius: 16, alignItems: 'center', justifyContent: 'center' }, emptyTitle: { fontWeight: '900', fontSize: 15, color: colors.ink, textAlign: 'center' }, emptyDetail: { color: colors.muted, fontSize: 12, textAlign: 'center', lineHeight: 18 },
   errorBanner: { borderRadius: 12, borderWidth: 1, borderColor: '#FECACA', backgroundColor: '#FFF5F5', padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }, errorText: { flex: 1, color: '#991B1B', fontSize: 12, fontWeight: '600', lineHeight: 17 }, refreshAction: { width: 40, height: 40, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.white, borderWidth: 1, borderColor: colors.border },
   screenHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }, screenTitle: { fontSize: 24, color: colors.ink, fontWeight: '900', letterSpacing: -0.7 }, screenSubtitle: { fontSize: 12, lineHeight: 18, color: colors.muted },

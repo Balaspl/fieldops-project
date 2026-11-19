@@ -25,7 +25,7 @@
 - [ ] Set `EXPO_PUBLIC_API_BASE_URL` to the address reachable from the phone/emulator.
 - [ ] Set `EXPO_PUBLIC_SOCKET_URL` to the matching `ws://` / `wss://` GPS WebSocket origin.
 - [ ] Set `EXPO_PUBLIC_SOCKET_IO_URL` to the matching `http://` / `https://` Socket.IO origin (the same backend host).
-- [ ] Set `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` for Android native Google map tiles.
+- [ ] Set `EXPO_PUBLIC_OLA_MAPS_API_KEY` to the project's Ola Maps key.
 - [ ] Use HTTPS and WSS, plus a valid certificate, for production deployment.
 - [ ] Keep `.env` and real API keys out of source control.
 
@@ -65,7 +65,7 @@ npm run ios
 - [ ] Provision a test technician and verify the linked login and technician profile.
 - [ ] Verify Dispatcher directory shows only dispatchers from the current tenant.
 - [ ] Verify technician deletion behavior: the supplied backend removes the operational profile but does not deactivate the linked login account; do not use as an offboarding control until this is fixed server-side.
-- [ ] Verify Live Tracking WebSocket connects and current GPS updates are visible.
+- [ ] Verify Live Tracking WebSocket connects and current GPS updates are visible in the technician list.
 - [ ] Verify service create/activate/deactivate/delete operations.
 - [ ] Verify Customer Support case detail, assignment-to-self, status and resolution-note flows.
 - [ ] Verify the notification inbox, unread badge, live Socket.IO event refresh, mark read, mark all read and dismiss actions.

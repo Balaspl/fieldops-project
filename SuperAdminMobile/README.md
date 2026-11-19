@@ -80,14 +80,6 @@ EXPO_PUBLIC_SOCKET_IO_URL=http://127.0.0.1:8000
 
 Physical device: use the reachable LAN IP / DNS name of the computer or server running FastAPI, for example `http://192.168.1.20:8000` and `ws://192.168.1.20:8000`. The phone and backend must be able to reach each other. `EXPO_PUBLIC_SOCKET_URL` is the raw WebSocket endpoint for GPS; `EXPO_PUBLIC_SOCKET_IO_URL` is the HTTP(S) origin used by the authenticated Socket.IO notification client. For production, use HTTPS and WSS with a valid TLS certificate, and set the Socket.IO origin to the HTTPS origin.
 
-For Android map tiles, provide a Google Maps Android API key with Maps SDK for Android enabled:
-
-```env
-EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=your_google_maps_android_key
-```
-
-If using the web project’s Ola Maps key for a future Ola-map implementation, store it only in a local `.env` file and do not commit it. This implementation uses `react-native-maps`; Google Maps tiles on Android need the Android key above. iOS uses the native map provider by default.
-
 Start the Expo bundler:
 
 ```bash
@@ -131,7 +123,7 @@ The queue reads `/jobs/pending` and `/planned-assignments`, splitting Manager/CT
 
 ### Live tracking
 
-The tracking screen loads the latest technician GPS fields and connects to the authenticated `/ws/v1/tracking?token=...` WebSocket. It subscribes to `tenant:{tenant_id}:all`, handles ping/pong, reconnects with backoff, validates coordinates, ignores older GPS timestamps, and applies the web tracking page’s 120-second heartbeat freshness window for Online / Offline filtering. The map is a live view of backend technician coordinates, not the phone's own location.
+The tracking screen loads the latest technician GPS fields and connects to the authenticated `/ws/v1/tracking?token=...` WebSocket. It subscribes to `tenant:{tenant_id}:all`, handles ping/pong, reconnects with backoff, validates coordinates, ignores older GPS timestamps, and applies the web tracking page’s 120-second heartbeat freshness window for Online / Offline filtering. It renders the web project’s Ola Maps SDK in a native WebView; set `EXPO_PUBLIC_OLA_MAPS_API_KEY` in `.env`. Rebuild the Android development app after installing or changing native WebView dependencies.
 
 ### Agent workflow tracking
 

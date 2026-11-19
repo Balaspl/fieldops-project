@@ -13,7 +13,9 @@ export async function requestLocationPermission(): Promise<boolean> {
   return permission.status === "granted";
 }
 
-export async function getCurrentTechnicianLocation(): Promise<TechnicianLocation> {
+export async function getCurrentTechnicianLocation(
+  accuracy: Location.Accuracy = Location.Accuracy.Balanced
+): Promise<TechnicianLocation> {
   const hasPermission = await requestLocationPermission();
 
   if (!hasPermission) {
@@ -23,7 +25,7 @@ export async function getCurrentTechnicianLocation(): Promise<TechnicianLocation
   }
 
   const location = await Location.getCurrentPositionAsync({
-    accuracy: Location.Accuracy.Balanced
+    accuracy
   });
 
   return {

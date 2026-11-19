@@ -8,21 +8,22 @@ This is a native mobile implementation of the organization Super Admin and Dispa
 
 | Web workspace / capability | Super Admin | Dispatcher | Mobile behavior |
 |---|---|---|---|
-| Operations dashboard | Yes | Yes | Live dashboard statistics, recent jobs and quick navigation |
-| Planning / pending queue | Yes | Yes | Separate Pending, Manager/CTO Escalations and Assigned views; tenant-visible queue |
+| Operations dashboard | Yes | Yes | Date-filtered job status and payment metrics, technician availability/performance, service categories, SLA health, searchable recent jobs and quick navigation |
+| Planning / pending queue | Yes | Yes | Separate Pending, Manager/CTO Escalations and Assigned views; tenant-visible queue; backend-ranked technician recommendations and bulk pending-job actions |
 | Normal job assignment | Yes | Yes | Calls `/assign-job`; backend performs eligibility, tenant, workload, timers, notifications and audit logic |
 | Exceptional assignment override | Yes | Yes | Calls `/technicians/assignments/{job_id}/override` with required justification; escalated jobs use `/escalations/{job_id}/force-assign` |
 | SLA escalation response | Yes | Yes | Manager/CTO escalation cards, SLA deadline extension using `/escalations/{job_id}/extend-sla`, and escalation-specific force assignment |
 | Technician directory | Yes | Yes | Search/filter roster, skill, work zone, status, workload, contact details and GPS recency; edit and delete operational profile |
-| Technician availability | Technician controlled | Technician controlled | Status is displayed and filtered; consistent with the web note, availability is changed by the technician in their portal, not from the staff directory |
+| Technician availability | Technician controlled | Technician controlled | Status is displayed and filtered; mobile staff directory cannot change it, and profile edits omit status so they cannot overwrite technician-controlled availability |
 | Provision technician login + profile | Yes | Yes | Calls the new `/dispatchers/provision-technician` endpoint in the included patch |
 | Dispatcher directory | Yes | No | Super Admin only; tenant-scoped `/dispatchers` |
-| Organization live tracking | Yes | Yes | Native map, roster search, All/Online/Offline heartbeat filter, live GPS, job ID and server ETA when available |
+| Organization live tracking | Yes | Yes | Ola Maps live map, roster search, All/Online/Offline heartbeat filter, live GPS, job ID and server ETA when available |
 | Service catalog | Manage | Read only | Super Admin create/activate/deactivate/delete; Dispatcher browse only |
 | Customer support | Yes | Yes | Tenant-visible cases, customer and job context, sentiment triage, transcript/activity, assignment-to-self and status/resolution updates |
 | Staff notifications | Yes | Yes | User-specific inbox, unread counts, mark-read, batch-read and dismiss actions; authenticated Socket.IO event refresh |
 | Staff profile | Yes | Yes | Update first/last name and change password using the same auth APIs |
-| Agent Tracking | Yes | No | Read-only server workflow timeline; Super Admin only in app navigation |
+| Agent Tracking | Yes | No | Read-only live workflow stages, progress, running/completed/failed filters, sentiment, communication/delivery events, closure checks and detailed event payloads; Super Admin only in app navigation |
+| Communication Center | Yes | Yes | Same read-only endpoint with server-side search, channel and delivery-state filters, and pagination in native cards |
 
 The `head` platform role is deliberately excluded. This is an organization-staff app, not the cross-tenant platform control panel.
 
@@ -41,6 +42,7 @@ The `head` platform role is deliberately excluded. This is an organization-staff
 | Notifications | `GET /admin/notifications`, `PATCH /notifications/{id}/read`, `PATCH /notifications/batch-read`, `PATCH /notifications/{id}/dismiss`; Socket.IO `new_notification`, `notification`, `notification:new`, `notification:unread_count` |
 | Staff profile | `PUT /auth/profile`, `PUT /auth/change-password` |
 | Agent Tracking | `GET /api/admin/agent-tracking?limit=250`, `GET /api/admin/agent-tracking/{job_id}` |
+| Communication Center | `GET /admin/communication-center?search=…&channel=…&status=…&limit=50&offset=…` |
 
 The mobile app does not make its own dispatch/AI decisions and does not create fake GPS or agent events. The server remains authoritative for business rules, permissions, assignment and workflow processing.
 
@@ -52,12 +54,19 @@ The mobile package reuses the same supplied web image files (verified byte-for-b
 
 These differences are deliberate and should not be interpreted as server feature replacements:
 
-- The web live-tracking page uses Ola Maps / Google Maps web layers, clustering, advanced viewport controls, geofence visualization/alerts and route-playback controls. The mobile app uses `react-native-maps` with native map tiles, single technician markers, roster filtering, current location data and WebSocket updates. It does not yet port desktop map-layer toggles, route replay, or geofence toast/animation UI.
-- The mobile planning view includes Pending, Manager/CTO Escalations and Assigned, normal assignment, justified override, SLA extension and escalation force assignment. It does not yet port every desktop planning subview, historical redispatch/override panels, bulk assignment, detailed SLA dashboards, AI-ranked candidate comparison or full route playback/ETA exploration.
+- Live Tracking follows the web technician roster filters, online/offline freshness, technician search, counts, refresh behavior, Ola Maps markers and authenticated WebSocket updates. Ola's Web SDK is rendered in a native WebView so Android does not use Google Maps.
+- The mobile planning view includes Pending, Manager/CTO Escalations and Assigned, normal assignment, justified override, backend-ranked candidates, SLA extension, escalation force assignment, and bulk assignment/cancellation. It does not yet port every desktop planning subview, historical redispatch/override panels, detailed SLA dashboards, or full route playback/ETA exploration. These are presentation and investigation gaps; assignment, eligibility, escalation and dispatch decisions remain on the same backend endpoints.
 - The mobile service catalog currently creates one catalog row at a time. The backend batch endpoint is available but the mobile screen does not expose batch creation.
 - The mobile support view assigns a case to the current user when requested. The supplied backend update contract has no explicit unassign operation, so the mobile UI does not claim to support unassigning an already assigned case.
 - The app includes a staff inbox and authenticated Socket.IO notification updates. It does not register a native OS push token; existing backend push/SMS/email delivery continues through the provider registrations already configured on the server.
 - The mobile app uses native bottom navigation and bottom sheets rather than copying desktop sidebars, multi-column tables and desktop-only interaction patterns.
+
+## Backend parity audit
+
+- Mobile staff workflows use the same API routes as the web for assignment, overrides, escalations, ranked planning, support, service catalog operations, agent tracking, notifications and communication activity. Technician ranking, eligibility, dispatch race handling, fallback assignment and job state transitions remain server-owned.
+- The technician directory only edits profile fields and displays backend-reported status. Availability changes remain in the technician portal, matching web admin behavior.
+- Web Super Admin has richer planning history, map controls/route exploration, service batch creation and additional SLA views. These remain UI coverage gaps; they do not require separate mobile backend rules.
+- Technician provisioning uses the same `/dispatchers/provision-technician` endpoint as web. That route is not defined in the checked-in `backend/app/routes` sources in this workspace, so both clients require the matching backend implementation to be deployed for provisioning to work.
 
 ## Important backend gap fixed by the included patch
 

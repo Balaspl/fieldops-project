@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+/* -------------------------------------------------------------
+   Google Maps Watermark & Dev warning overrides
+   ------------------------------------------------------------- */
+.gm-style-pbc {
+  display: none !important;
+}
+
+.gm-style-cc {
+  display: none !important;
+}
+
+.gm-err-container {
+  display: none !important;
+}
+
+.gm-err-content {
+  display: none !important;
+}
+
+/* Bypass gray/dim filter on map tiles in development mode */
+.gm-style img {
+  filter: none !important;
+}
+
+/* Hide standard 'For development purposes only' text overlays */
+.gm-style > div:nth-child(2) {
+  display: none !important;
+}
+
