@@ -418,8 +418,6 @@ class TenantValidator:
                     Job.id == job_id,
                     ServiceRequest.customer_user_id
                     == authenticated_user_id,
-                    ServiceRequest.tenant_id
-                    == jwt_tenant_id,
                 )
                 .first()
             )
@@ -870,8 +868,8 @@ class ConnectionManager:
             websocket,
             str(
                 meta.get(
-                    "tenant_id",
-                    "",
+                    "tenant_key",
+                    meta.get("tenant_id") or "",
                 )
             ),
         )
@@ -926,11 +924,14 @@ class ConnectionManager:
             or ""
         ).lower()
 
-        # All authorization-bound identity information is mandatory.
+        # User and role are always mandatory. Independent customers are
+        # intentionally tenantless; every organization-scoped role must
+        # still carry a tenant from the signed JWT.
         if (
-            not tenant_id
-            or not user_id
+            not user_id
             or role not in ALLOWED_ROLES
+            or (role == "customer" and tenant_id is not None)
+            or (role != "customer" and not tenant_id)
         ):
             await websocket.close(
                 code=1008,
@@ -942,8 +943,16 @@ class ConnectionManager:
 
             return None
 
-        tenant_id = str(
-            tenant_id
+        tenant_key = (
+            str(tenant_id)
+            if tenant_id is not None
+            else "__independent_customers__"
+        )
+
+        tenant_id = (
+            str(tenant_id)
+            if tenant_id is not None
+            else None
         )
 
         user_id = str(
@@ -952,7 +961,7 @@ class ConnectionManager:
 
         current_connections = len(
             self.active_connections.get(
-                tenant_id,
+                tenant_key,
                 [],
             )
         )
@@ -978,7 +987,7 @@ class ConnectionManager:
         )
 
         self.active_connections.setdefault(
-            tenant_id,
+            tenant_key,
             [],
         ).append(
             websocket
@@ -988,6 +997,7 @@ class ConnectionManager:
             websocket_id
         ] = {
             "tenant_id": tenant_id,
+            "tenant_key": tenant_key,
             "user_id": user_id,
             "role": role,
             "connected_at": (
@@ -1006,18 +1016,18 @@ class ConnectionManager:
         ] = asyncio.create_task(
             self._heartbeat(
                 websocket,
-                tenant_id,
+                tenant_key,
                 user_id,
             )
         )
 
         logger.info(
             "[ws:connect] "
-            f"tenant={tenant_id} "
+            f"tenant={tenant_id or 'independent-customer'} "
             f"user={user_id} "
             f"role={role} "
             f"total_tenant="
-            f"{len(self.active_connections[tenant_id])}"
+            f"{len(self.active_connections[tenant_key])}"
         )
 
         return claims
@@ -2280,13 +2290,14 @@ class ConnectionManager:
         )
 
         if not tenant_id:
+            meta = self.connection_metadata.get(
+                websocket_id,
+                {},
+            )
             tenant_id = str(
-                self.connection_metadata.get(
-                    websocket_id,
-                    {},
-                ).get(
-                    "tenant_id",
-                    "",
+                meta.get(
+                    "tenant_key",
+                    meta.get("tenant_id") or "",
                 )
             )
 

@@ -22,7 +22,7 @@ def audit_log(
     db: Session,
     *,
     action: str,
-    tenant_id: str,
+    tenant_id: Optional[str],
     user_id: Optional[str] = None,
     user_email: Optional[str] = None,
     role: Optional[str] = None,
@@ -43,7 +43,7 @@ def audit_log(
     Args:
         db: Database session
         action: Action name (e.g., "LOGIN", "JOB_CREATED", "ORG_SUSPENDED")
-        tenant_id: Tenant/organization ID
+        tenant_id: Tenant/organization ID, or None for an independent customer
         user_id: Acting user ID
         user_email: Acting user email
         role: Acting user role
@@ -57,9 +57,14 @@ def audit_log(
         user_agent: Client User-Agent (extracted from request if not provided)
         correlation_id: Request correlation ID
         request: FastAPI request (for auto-extracting IP, UA, correlation)
-    
+
     Returns:
         The created EnterpriseAuditLog record.
+
+    Note:
+        The EnterpriseAuditLog.tenant_id database column must be nullable
+        for tenantless customer audit entries. Organization audit entries
+        continue to carry their organization tenant ID.
     """
     # Auto-extract from request if available
     if request is not None:
@@ -175,10 +180,10 @@ class AuditAction:
     # Notifications
     NOTIFICATION_SENT = "NOTIFICATION_SENT"
 
-
     # AI / Intent Recognition
     INTENT_CLASSIFIED = "INTENT_CLASSIFIED"
-        # Task runtime / reliability
+
+    # Task runtime / reliability
     TASK_RETRY = "TASK_RETRY"
     TASK_DLQ = "TASK_DLQ"
 
@@ -188,7 +193,7 @@ class AuditAction:
     ACCOUNT_LOCKED = "ACCOUNT_LOCKED"
     ACCOUNT_UNLOCKED = "ACCOUNT_UNLOCKED"
 
-        # Message preview / approval
+    # Message preview / approval
     MESSAGE_PREVIEW_CREATED = "MESSAGE_PREVIEW_CREATED"
     MESSAGE_PREVIEW_EDITED = "MESSAGE_PREVIEW_EDITED"
     MESSAGE_PREVIEW_APPROVED = "MESSAGE_PREVIEW_APPROVED"

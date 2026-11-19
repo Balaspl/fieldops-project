@@ -66,7 +66,7 @@ class AuthenticatedUser:
     def __init__(
         self,
         user_id: str,
-        tenant_id: str,
+        tenant_id: Optional[str],
         role: UserRole | str,
         jti: str,
         session_id: str | None = None,
@@ -308,16 +308,39 @@ async def get_current_user(
     # ---------------------------------------------------------
     # Server-side tenant is authoritative.
     # ---------------------------------------------------------
-    token_tenant_id = str(
-        claims.get(
-            "tenant_id",
-            "",
-        )
-    )
+    # Normalize both values without converting None into the literal
+    # string "None". Independent customers are allowed to have no tenant.
+    token_tenant_id = claims.get("tenant_id")
+    database_tenant_id = user.tenant_id
 
-    database_tenant_id = str(
-        user.tenant_id
-    )
+    if token_tenant_id is not None:
+        token_tenant_id = str(token_tenant_id)
+    if database_tenant_id is not None:
+        database_tenant_id = str(database_tenant_id)
+
+    # Only customers may be tenant-independent. Every organization
+    # role, including Super Admin (which uses the platform tenant),
+    # must retain a tenant association.
+    if db_role == UserRole.CUSTOMER and database_tenant_id is not None:
+        logger.error(
+            "Independent customer has an organization tenant: user=%s",
+            user.id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Customer accounts must not be associated with an organization",
+        )
+
+    if db_role != UserRole.CUSTOMER and not database_tenant_id:
+        logger.error(
+            "Tenant missing for tenant-bound user: user=%s role=%s",
+            user.id,
+            db_role.value,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account must be associated with a tenant",
+        )
 
     if token_tenant_id != database_tenant_id:
         logger.warning(
@@ -349,7 +372,7 @@ async def get_current_user(
     session = validate_session(
         session_id=session_id,
         user_id=str(user.id),
-        tenant_id=str(user.tenant_id),
+        tenant_id=user.tenant_id,
     )
 
     if session is None:
@@ -406,6 +429,12 @@ def get_tenant_id(
 
     Never use tenant_id from request headers.
     """
+
+    if not current_user.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This operation requires an organization tenant",
+        )
 
     return current_user.tenant_id
 
@@ -537,8 +566,8 @@ def require_same_tenant_or_super_admin(
         return
 
     if (
-        current_user.tenant_id
-        != resource_tenant_id
+        not current_user.tenant_id
+        or current_user.tenant_id != resource_tenant_id
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -623,6 +652,15 @@ async def get_current_user_or_tenant(
         credentials=credentials,
         db=db,
     )
+
+    # This dependency is intended for tenant-scoped endpoints.
+    # Do not let an independent customer enter a tenant-scoped flow
+    # with tenant_id=None.
+    if not user.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This operation requires an organization tenant",
+        )
 
     return user, user.tenant_id
 

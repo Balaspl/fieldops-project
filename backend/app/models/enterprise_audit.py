@@ -7,11 +7,10 @@ Tracks every security-relevant event with full context.
 
 import uuid
 from sqlalchemy import (
-    Column, DateTime, String, Text, JSON, Index, event,ForeignKey,
+    Column, DateTime, String, Text, JSON, Index, event, ForeignKey,
 )
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
-from app.models import Organization
 
 from ..database import Base
 
@@ -40,7 +39,13 @@ class EnterpriseAuditLog(Base):
     user_id = Column(String(36), nullable=True, index=True)
     user_email = Column(String(255), nullable=True)
     role = Column(String(30), nullable=True, index=True)
-    tenant_id = Column(String(50),ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True)
+    # Independent customers have no tenant. Organization events retain their tenant FK.
+    tenant_id = Column(
+        String(50),
+        ForeignKey("organizations.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
 
     # When
     timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
@@ -51,12 +56,9 @@ class EnterpriseAuditLog(Base):
 
     # What
     action = Column(String(100), nullable=False, index=True)
-    # e.g., "LOGIN", "LOGOUT", "FAILED_LOGIN", "USER_CREATED",
-    # "JOB_ASSIGNED", "ORG_SUSPENDED", "ROLE_CHANGED", etc.
 
     # Context
     entity_type = Column(String(50), nullable=True, index=True)
-    # e.g., "user", "job", "technician", "organization"
     entity_id = Column(String(100), nullable=True, index=True)
 
     old_value = Column(JSON, nullable=True)
@@ -69,7 +71,7 @@ class EnterpriseAuditLog(Base):
     # Severity
     severity = Column(String(20), nullable=False, default="INFO")
     # INFO, WARNING, ERROR, CRITICAL
-    organization=relationship("Organization",back_populates="enterprise_audit_logs")
+    organization = relationship("Organization", back_populates="enterprise_audit_logs")
 
     __table_args__ = (
         Index("idx_enterprise_audit_tenant_time", "tenant_id", "timestamp"),

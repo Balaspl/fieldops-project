@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------
 
 DEFAULT_APPOINTMENT_DURATION_HOURS = 3
-DEFAULT_GPS_FRESHNESS_SECONDS = 120
+DEFAULT_GPS_FRESHNESS_SECONDS = 180
 
 # This is an estimate, not a road-routing ETA.
 AVERAGE_TRAVEL_SPEED_KMH = 25

@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Redirect } from "expo-router";
 import { useAuthStore } from "../src/auth/authStore";
-import { AnimatedLaunchScreen } from "../src/components/AnimatedLaunchScreen";
+import { AnimatedLaunchScreen } from "../../fo/src/components/AnimatedLaunchScreen";
 
 export default function IndexScreen() {
   const [sessionRestored, setSessionRestored] = useState(false);

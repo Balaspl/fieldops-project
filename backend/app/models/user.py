@@ -1,8 +1,8 @@
 """
 User and RefreshToken models for authentication.
 
-The User model supports all five roles and is tenant-scoped.
-Super Admins have a special system tenant.
+Customer accounts may be independent (tenant_id=None). Organization
+users remain tenant-scoped, and Super Admins use the system tenant.
 """
 
 import os
@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import (
     Boolean,
     Column,
+    and_,
     DateTime,
     ForeignKey,
     Index,
@@ -29,9 +30,10 @@ class User(Base):
     """
     Platform user account.
 
-    Every user belongs to exactly one tenant (organization),
-    except Super Admins who belong to the system tenant
-    '__platform__'.
+    Customer users may exist independently without an organization
+    (tenant_id=None). Technician, dispatcher, and other organization
+    users must be assigned a valid tenant by the application. Super
+    Admins use the system tenant '__platform__'.
     """
 
     __tablename__ = "users"
@@ -75,7 +77,10 @@ class User(Base):
             "organizations.id",
             ondelete="RESTRICT",
         ),
-        nullable=False,
+        # NULL is permitted for independent customer accounts. The API
+        # and authorization layer must still require a tenant for every
+        # organization-scoped role.
+        nullable=True,
         index=True,
     )
 
@@ -204,6 +209,24 @@ class User(Base):
             "email",
             "tenant_id",
             name="uq_users_email_tenant",
+        ),
+        # PostgreSQL treats NULL values as distinct in a composite
+        # unique constraint. Enforce case-insensitive uniqueness for
+        # active independent customer accounts at the database level.
+        Index(
+            "uq_users_independent_customer_email",
+            func.lower(email),
+            unique=True,
+            postgresql_where=and_(
+                tenant_id.is_(None),
+                role == "customer",
+                deleted_at.is_(None),
+            ),
+            sqlite_where=and_(
+                tenant_id.is_(None),
+                role == "customer",
+                deleted_at.is_(None),
+            ),
         ),
         Index(
             "idx_users_tenant_role",

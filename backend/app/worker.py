@@ -3,6 +3,9 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy import func, or_
 import asyncio
 import uuid
+import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from .services.ai.FieldOpsAI.agents.dispatcher_agent.dispatcher_runtime import (
     get_dispatcher_runtime,
 )
@@ -21,6 +24,72 @@ from .services.sla_escalation_service import SLAEscalationService
 from fastapi import HTTPException
 
 scheduler = BackgroundScheduler()
+
+# Dispatcher planning/force-assignment can take longer than a scheduler tick.
+# Run those operations outside the timeout-checker thread so APScheduler can
+# continue expiring other offers. One resume task per job is allowed at a time.
+_dispatch_resume_executor = ThreadPoolExecutor(
+    max_workers=4,
+    thread_name_prefix="fieldops-dispatch-resume",
+)
+_dispatch_resume_guard = threading.Lock()
+_dispatch_resume_jobs: set[int] = set()
+
+def _run_dispatch_resume(job_id: int, event: str, technician_id: int | None = None):
+    try:
+        asyncio.run(
+            get_dispatcher_runtime().resume_dispatch(
+                job_id=int(job_id),
+                event=event,
+                technician_id=technician_id,
+            )
+        )
+        logger.info(
+            "dispatcher_resume_background_completed job_id=%s event=%s",
+            job_id, event,
+        )
+    except Exception:
+        logger.exception(
+            "dispatcher_resume_background_failed job_id=%s event=%s",
+            job_id, event,
+        )
+    finally:
+        with _dispatch_resume_guard:
+            _dispatch_resume_jobs.discard(int(job_id))
+
+def _schedule_dispatch_resume(
+    job_id: int,
+    event: str,
+    technician_id: int | None = None,
+) -> bool:
+    """Queue one dispatcher resume per job without blocking the scheduler."""
+    normalized_job_id = int(job_id)
+    with _dispatch_resume_guard:
+        if normalized_job_id in _dispatch_resume_jobs:
+            logger.info(
+                "dispatcher_resume_already_queued job_id=%s event=%s",
+                normalized_job_id, event,
+            )
+            return False
+        _dispatch_resume_jobs.add(normalized_job_id)
+
+    try:
+        _dispatch_resume_executor.submit(
+            _run_dispatch_resume, normalized_job_id, event, technician_id
+        )
+        logger.info(
+            "dispatcher_resume_queued job_id=%s event=%s",
+            normalized_job_id, event,
+        )
+        return True
+    except Exception:
+        with _dispatch_resume_guard:
+            _dispatch_resume_jobs.discard(normalized_job_id)
+        logger.exception(
+            "dispatcher_resume_queue_failed job_id=%s event=%s",
+            normalized_job_id, event,
+        )
+        return False
 
 def check_technician_heartbeats():
     """Deprecated: heartbeat freshness no longer changes explicit availability."""
@@ -56,7 +125,12 @@ def checkment_timers():
     Redis key expiry. All expired offers for one job are updated under one
     job lock. The dispatcher is resumed once, after releasing that lock, so
     it can wait for all remaining offers or advance to fresh Planning.
+
+    Diagnostic timing identifies slow Redis, database, lock, or dispatcher work.
     """
+    started_at = time.perf_counter()
+    run_id = str(uuid.uuid4())[:8]
+    logger.info("TIMEOUT_CHECKER: started run_id=%s", run_id)
     db = SessionLocal()
     redis_client = None
     expired_by_job = {}
@@ -64,6 +138,8 @@ def checkment_timers():
     try:
         # Redis is useful for timer cleanup and legacy timers. Its health check
         # must not prevent DB-timestamp-based broadcast expiry from running.
+        redis_started = time.perf_counter()
+        logger.info("TIMEOUT_CHECKER: checking Redis run_id=%s", run_id)
         try:
             candidate_redis = get_redis_client()
             if candidate_redis is not None and candidate_redis.ping():
@@ -76,8 +152,15 @@ def checkment_timers():
         except Exception:
             logger.exception(
                 "TIMEOUT_CHECKER: Redis health check failed; continuing "
-                "broadcast expiry using database timestamps"
+                "broadcast expiry using database timestamps run_id=%s",
+                run_id,
             )
+
+        logger.info(
+            "TIMEOUT_CHECKER: Redis check completed duration=%.2fs run_id=%s",
+            time.perf_counter() - redis_started,
+            run_id,
+        )
 
         now = datetime.now(timezone.utc)
         duration = int(TimerService.ACCEPTANCE_DURATION_SECONDS)
@@ -88,6 +171,11 @@ def checkment_timers():
         # -------------------------------------------------------------
         # 1. Broadcast offers: find expired PENDING rows from the DB.
         # -------------------------------------------------------------
+        query_started = time.perf_counter()
+        logger.info(
+            "TIMEOUT_CHECKER: querying expired offers cutoff=%s run_id=%s",
+            cutoff.isoformat(), run_id,
+        )
         pending_offers = (
             db.query(JobAssignment)
             .filter(
@@ -104,15 +192,29 @@ def checkment_timers():
             len(pending_offers),
         )
 
+        logger.info(
+            "TIMEOUT_CHECKER: expired offer query completed count=%s duration=%.2fs run_id=%s",
+            len(pending_offers), time.perf_counter() - query_started, run_id,
+        )
+
         # Group by job so each job lock and dispatcher coordination run once
         # per scheduler pass, even when several technicians expire together.
         job_ids = sorted({int(row.job_id) for row in pending_offers})
+        logger.info("TIMEOUT_CHECKER: expired jobs=%s run_id=%s", job_ids, run_id)
 
         for job_id in job_ids:
+            job_started = time.perf_counter()
+            logger.info("TIMEOUT_CHECKER: processing job_id=%s run_id=%s", job_id, run_id)
             timed_out_technicians = []
 
             try:
+                lock_started = time.perf_counter()
+                logger.info("TIMEOUT_CHECKER: acquiring job lock job_id=%s run_id=%s", job_id, run_id)
                 with with_job_lock(str(job_id)):
+                    logger.info(
+                        "TIMEOUT_CHECKER: acquired job lock job_id=%s wait=%.2fs run_id=%s",
+                        job_id, time.perf_counter() - lock_started, run_id,
+                    )
                     locked_job = (
                         db.query(Job)
                         .filter(Job.id == job_id)
@@ -154,6 +256,10 @@ def checkment_timers():
                         .all()
                     )
 
+                    logger.info(
+                        "TIMEOUT_CHECKER: locked pending offers job_id=%s count=%s run_id=%s",
+                        job_id, len(locked_offers), run_id,
+                    )
                     # Recheck each row while holding the database locks.
                     # This also handles databases that return naive datetimes.
                     for locked_offer in locked_offers:
@@ -178,10 +284,19 @@ def checkment_timers():
                         )
 
                     if timed_out_technicians:
+                        commit_started = time.perf_counter()
                         db.commit()
+                        logger.info(
+                            "TIMEOUT_CHECKER: committed timeout rows job_id=%s count=%s commit_duration=%.2fs run_id=%s",
+                            job_id, len(timed_out_technicians), time.perf_counter() - commit_started, run_id,
+                        )
                     else:
                         db.rollback()
 
+                logger.info(
+                    "TIMEOUT_CHECKER: released job lock job_id=%s elapsed=%.2fs run_id=%s",
+                    job_id, time.perf_counter() - job_started, run_id,
+                )
                 # The distributed lock has been released before Redis cleanup
                 # and dispatcher resume. Never nest resume_dispatch's job lock.
                 if timed_out_technicians:
@@ -235,6 +350,7 @@ def checkment_timers():
         # identities from the committed JobAssignment history. This prevents
         # seven simultaneous expirations from causing seven replanning runs.
         for job_id, technician_ids in expired_by_job.items():
+            resume_started = time.perf_counter()
             try:
                 logger.info(
                     "TIMEOUT_CHECKER: resuming dispatcher job_id=%s "
@@ -242,21 +358,21 @@ def checkment_timers():
                     job_id,
                     technician_ids,
                 )
-                asyncio.run(
-                    get_dispatcher_runtime().resume_dispatch(
-                        job_id=job_id,
-                        event="TECHNICIAN_TIMEOUT",
-                        technician_id=None,
-                    )
+                logger.info("TIMEOUT_CHECKER: queueing resume_dispatch job_id=%s run_id=%s", job_id, run_id)
+                queued = _schedule_dispatch_resume(
+                    job_id=job_id,
+                    event="TECHNICIAN_TIMEOUT",
+                    technician_id=None,
                 )
                 logger.info(
-                    "broadcast_timeout_coordination_completed job_id=%s",
-                    job_id,
+                    "broadcast_timeout_coordination_%s job_id=%s queue_duration=%.2fs run_id=%s",
+                    "queued" if queued else "already_queued",
+                    job_id, time.perf_counter() - resume_started, run_id,
                 )
             except Exception:
                 logger.exception(
-                    "broadcast_timeout_coordination_failed job_id=%s",
-                    job_id,
+                    "broadcast_timeout_coordination_failed job_id=%s duration=%.2fs run_id=%s",
+                    job_id, time.perf_counter() - resume_started, run_id,
                 )
 
         # -------------------------------------------------------------
@@ -270,13 +386,20 @@ def checkment_timers():
             )
             return
 
+        legacy_query_started = time.perf_counter()
+        logger.info("TIMEOUT_CHECKER: querying legacy assigned jobs run_id=%s", run_id)
         assigned_jobs = (
             db.query(Job)
             .filter(func.upper(Job.status) == "ASSIGNED")
             .all()
         )
 
+        logger.info(
+            "TIMEOUT_CHECKER: legacy assigned jobs count=%s duration=%.2fs run_id=%s",
+            len(assigned_jobs), time.perf_counter() - legacy_query_started, run_id,
+        )
         for job in assigned_jobs:
+            legacy_job_started = time.perf_counter()
             timer_key = f"job:timer:{job.id}"
             warning_key = f"job:timer_warning:{job.id}"
             warned_key = f"job:timer_warned:{job.id}"
@@ -434,12 +557,10 @@ def checkment_timers():
                 # Resume only after releasing the legacy job lock.
                 if legacy_timeout_resume is not None:
                     try:
-                        asyncio.run(
-                            get_dispatcher_runtime().resume_dispatch(
-                                job_id=int(job.id),
-                                event="TECHNICIAN_TIMEOUT",
-                                technician_id=legacy_timeout_resume,
-                            )
+                        _schedule_dispatch_resume(
+                            job_id=int(job.id),
+                            event="TECHNICIAN_TIMEOUT",
+                            technician_id=legacy_timeout_resume,
                         )
                     except Exception:
                         logger.exception(
@@ -455,16 +576,24 @@ def checkment_timers():
                 raise
             except Exception:
                 db.rollback()
-                logger.exception(
-                    "Legacy assignment timer failed job_id=%s",
-                    job.id,
+                logger.exception("Legacy assignment timer failed job_id=%s run_id=%s", job.id, run_id)
+            finally:
+                logger.info(
+                    "TIMEOUT_CHECKER: legacy job finished job_id=%s duration=%.2fs run_id=%s",
+                    job.id, time.perf_counter() - legacy_job_started, run_id,
                 )
 
     except Exception:
         db.rollback()
-        logger.exception("Error checking assignment timers")
+        logger.exception("TIMEOUT_CHECKER: execution failed run_id=%s", run_id)
     finally:
-        db.close()
+        try:
+            db.close()
+        finally:
+            logger.info(
+                "TIMEOUT_CHECKER: finished total_duration=%.2fs expired_jobs=%s run_id=%s",
+                time.perf_counter() - started_at, len(expired_by_job), run_id,
+            )
 
 
 def check_sla_escalations():
@@ -753,7 +882,7 @@ def start_scheduler():
         scheduler.add_job(
             checkment_timers,
             'interval',
-            seconds=5,
+            seconds=10,
             id='timer_checker',
             max_instances=1,
             coalesce=True,
