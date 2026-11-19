@@ -9,7 +9,7 @@ import uuid
 from .database import Base
 from sqlalchemy.types import TypeDecorator
 from datetime import datetime, timezone
-from sqlalchemy import BigInteger
+from sqlalchemy import BigInteger, text
 
 logger = logging.getLogger(__name__)
 
@@ -1624,13 +1624,22 @@ class CustomerProfile(Base):
     __tablename__ = "customer_profiles"
 
     __table_args__ = (
+        # Organization customers remain unique within their tenant. Independent
+        # customers (tenant_id IS NULL) are unique by customer_id.
         UniqueConstraint('tenant_id', 'customer_id', name='uq_customer_profiles_tenant_customer'),
+        Index(
+            'uq_customer_profiles_independent_customer',
+            'customer_id',
+            unique=True,
+            postgresql_where=text("tenant_id IS NULL"),
+            sqlite_where=text("tenant_id IS NULL"),
+        ),
         CheckConstraint('revision >= 1', name='chk_customer_profiles_revision_positive'),
         Index('ix_customer_profiles_tenant_id', 'tenant_id'),
     )
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    tenant_id = Column(String(50), nullable=False)
+    tenant_id = Column(String(50), nullable=True)
     customer_id = Column(String(50), nullable=False)
     preferred_locale = Column(String(10), nullable=False, default="en")
 
@@ -1664,7 +1673,7 @@ class CustomerPreferenceAudit(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     customer_profile_id = Column(String(36), ForeignKey("customer_profiles.id"), nullable=False)
 
-    tenant_id = Column(String(50),ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False)
+    tenant_id = Column(String(50), ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=True)
     previous_revision = Column(Integer, nullable=False)
     new_revision = Column(Integer, nullable=False)
     changed_fields = Column(JSON, nullable=False)

@@ -6,6 +6,7 @@ import re
 
 CustomerPreferenceChannel = Literal["SMS", "EMAIL", "PUSH", "PORTAL"]
 
+
 class CustomerPreferenceValues(BaseModel):
     sms_enabled: bool
     email_enabled: bool
@@ -18,6 +19,7 @@ class CustomerPreferenceValues(BaseModel):
     quiet_hours_end: str = "08:00"
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+
 
 class CustomerPreferenceUpdate(BaseModel):
     sms_enabled: Optional[bool] = None
@@ -51,9 +53,7 @@ class CustomerPreferenceUpdate(BaseModel):
     @model_validator(mode="after")
     def validate_update(self):
         if not self.model_fields_set:
-            raise ValueError(
-                "At least one update field must be provided."
-            )
+            raise ValueError("At least one update field must be provided.")
 
         null_fields = [
             field
@@ -62,15 +62,14 @@ class CustomerPreferenceUpdate(BaseModel):
         ]
 
         if null_fields:
-            raise ValueError(
-                "Explicit null preference values are not allowed."
-            )
+            raise ValueError("Explicit null preference values are not allowed.")
 
         return self
 
+
 class CustomerPreferenceResponse(BaseModel):
     profile_id: Optional[str]
-    tenant_id: str
+    tenant_id: Optional[str]
     customer_id: str
     sms_enabled: bool
     email_enabled: bool
@@ -87,6 +86,7 @@ class CustomerPreferenceResponse(BaseModel):
     updated_by: Optional[str]
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+
 
 class CustomerPreferenceDecision(BaseModel):
     allowed: bool

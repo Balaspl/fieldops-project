@@ -225,7 +225,6 @@ _validate_jwt_configuration()
 REQUIRED_CLAIMS = [
     "exp",
     "sub",
-    "tenant_id",
     "role",
     "iat",
     "jti",
@@ -382,7 +381,7 @@ def _validate_refresh_token_ttl(
 
 def create_access_token(
     user_id: str,
-    tenant_id: str,
+    tenant_id: Optional[str],
     role: str,
     expires_delta: Optional[timedelta] = None,
     scopes: Optional[Iterable[str]] = None,
@@ -427,7 +426,7 @@ def create_access_token(
 
     payload = {
         "sub": str(user_id),
-        "tenant_id": str(tenant_id),
+        "tenant_id": str(tenant_id) if tenant_id is not None else None,
         "role": str(role),
         "exp": expire,
         "iat": now,
@@ -461,7 +460,7 @@ def create_access_token(
 
 def create_refresh_token(
     user_id: str,
-    tenant_id: str,
+    tenant_id: Optional[str],
     role: str,
     expires_delta: Optional[timedelta] = None,
     session_id: Optional[str] = None,
@@ -504,7 +503,7 @@ def create_refresh_token(
 
     payload = {
         "sub": str(user_id),
-        "tenant_id": str(tenant_id),
+        "tenant_id": str(tenant_id) if tenant_id is not None else None,
         "role": str(role),
         "exp": expire,
         "iat": now,
@@ -543,6 +542,7 @@ def decode_token(
     - exp is required and automatically validated.
     - iat is required.
     - Token signature is verified.
+    - tenant_id must exist, but may be None for customers.
     """
 
     if not token:
@@ -550,7 +550,7 @@ def decode_token(
             "Token is required"
         )
 
-    return jwt.decode(
+    claims = jwt.decode(
         token,
         JWT_SECRET,
         algorithms=[JWT_ALGORITHM],
@@ -558,6 +558,15 @@ def decode_token(
             "require": REQUIRED_CLAIMS,
         },
     )
+
+    # tenant_id must exist in every token.
+    # Its value can be None for independent customers.
+    if "tenant_id" not in claims:
+        raise jwt.InvalidTokenError(
+            'Token is missing the "tenant_id" claim'
+        )
+
+    return claims
 
 
 # ============================================================

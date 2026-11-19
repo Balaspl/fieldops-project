@@ -546,6 +546,19 @@ app.include_router(sso.router)
 app.include_router(status_router)
 from .routes import services_catalog
 app.include_router(services_catalog.router)
+# DEBUG: Check which endpoint handles customer profile
+print("\n========== CUSTOMER PROFILE ROUTE DEBUG ==========")
+
+for route in app.routes:
+    if getattr(route, "path", None) == "/api/customer/profile":
+        print("Path:", route.path)
+        print("Methods:", route.methods)
+        print("Module:", route.endpoint.__module__)
+        print("Function:", route.endpoint.__name__)
+        print("Response Model:", route.response_model)
+        print("------------------------------------------------")
+
+print("==================================================\n")
 
 # Lifespan events handled via asynccontextmanager lifespan handler
 

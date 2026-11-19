@@ -187,7 +187,7 @@ class CustomerProfileUpdate(CustomerProfileCreate):
 class CustomerProfileResponse(BaseModel):
     id: str
     user_id: str
-    tenant_id: str
+    tenant_id: Optional[str] = None
     full_name: str
     mobile_number: str
     address: Optional[str] = None
@@ -395,7 +395,7 @@ class CreatedServiceRequestJobResponse(BaseModel):
     id: int
     service_request_id: int
     tenant_id: str
-    customer_tenant_id: str
+    customer_tenant_id: Optional[str] = None
     customer_id: str
     assigned_technician_id: Optional[int] = None
     status: str

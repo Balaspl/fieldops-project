@@ -1,0 +1,70 @@
+
+{
+  "expo": {
+    "name": "FieldOps",
+    "slug": "fo",
+    "version": "1.0.0",
+    "scheme": "fieldops",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+
+    "icon": "./assets/icon/icon.png",
+
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow FieldOps to access your location for technician availability and active job tracking.",
+          "locationWhenInUsePermission": "Allow FieldOps to access your location while using the app.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      [
+        "expo-sqlite",
+        {
+          "useSQLCipher": true
+        }
+      ]
+    ],
+
+    "android": {
+      "package": "com.fieldops.fo",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon/icon.png",
+        "backgroundColor": "#078B36"
+      }
+    },
+
+    "ios": {
+      "bundleIdentifier": "com.fieldops.fo",
+      "supportsTablet": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+
+    "web": {
+      "bundler": "metro"
+    },
+
+    "extra": {
+      "router": {}
+    },
+
+    "androidStatusBar": {
+      "backgroundColor": "#078B36",
+      "barStyle": "light-content"
+    }
+  }
+}

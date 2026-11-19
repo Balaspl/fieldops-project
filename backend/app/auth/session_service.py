@@ -53,7 +53,7 @@ def _now() -> datetime:
 
 def create_session(
     user_id: str,
-    tenant_id: str,
+    tenant_id: Optional[str],
 ) -> dict:
     """
     Create a new server-side application session.
@@ -81,7 +81,7 @@ def create_session(
     session = {
         "session_id": session_id,
         "user_id": str(user_id),
-        "tenant_id": str(tenant_id),
+        "tenant_id": str(tenant_id) if tenant_id is not None else None,
         "created_at": now.isoformat(),
         "last_activity": now.isoformat(),
         "max_expires_at": max_expires_at.isoformat(),
@@ -160,7 +160,7 @@ def get_session(
 def validate_session(
     session_id: str,
     user_id: str,
-    tenant_id: str,
+    tenant_id: Optional[str],
 ) -> Optional[dict]:
     """
     Validate a server-side session.
@@ -212,7 +212,7 @@ def validate_session(
         "tenant_id"
     )
 
-    if str(session_tenant_id) != str(tenant_id):
+    if session_tenant_id != (str(tenant_id) if tenant_id is not None else None):
         return None
 
     # -----------------------------------------------------

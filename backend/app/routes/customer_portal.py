@@ -629,7 +629,6 @@ async def update_customer_profile(
             ServiceRequest.linked_job_id
         ).where(
             ServiceRequest.customer_user_id == current_user.user_id,
-            ServiceRequest.tenant_id == current_user.tenant_id,
             ServiceRequest.linked_job_id.isnot(None),
         )
 
@@ -798,7 +797,6 @@ async def list_service_requests(
         )
         .filter(
             ServiceRequest.customer_user_id == current_user.user_id,
-            ServiceRequest.tenant_id == current_user.tenant_id,
         )
     )
 
@@ -887,7 +885,8 @@ async def create_service_request(
         ↓
     Create Job with selected organization's tenant_id
         ↓
-    Create ServiceRequest under customer's own tenant
+    Create ServiceRequest under the selected provider tenant,
+    with customer ownership recorded by customer_user_id
     """
 
     from ..utils import (
@@ -1142,13 +1141,10 @@ async def create_service_request(
     #
     # IMPORTANT:
     #
-    # ServiceRequest tenant_id
-    #     = customer's tenant
-    #
-    # Job tenant_id
-    #     = selected service organization's tenant
-    #
-    # This is intentional.
+    # ServiceRequest.tenant_id and Job.tenant_id both identify the
+    # selected provider organization. Customer ownership is established
+    # independently through ServiceRequest.customer_user_id.
+
     # ──────────────────────────────────────────────
 
     selected_organization = (
@@ -1255,7 +1251,7 @@ async def create_service_request(
         sr = ServiceRequest(
             request_number=_generate_request_number(),
             customer_user_id=current_user.user_id,
-            tenant_id=current_user.tenant_id,
+            tenant_id=selected_tenant_id,
             title=data.title,
             description=data.description,
             service_type=data.service_type,
@@ -1277,7 +1273,7 @@ async def create_service_request(
         audit_log(
             db,
             action=AuditAction.SERVICE_REQUEST_CREATED,
-            tenant_id=current_user.tenant_id,
+            tenant_id=selected_tenant_id,
             user_id=current_user.user_id,
             role=current_user.role.value,
             entity_type="service_request",
@@ -1377,7 +1373,6 @@ async def get_service_request(
     sr = db.query(ServiceRequest).filter(
         ServiceRequest.id == sr_id,
         ServiceRequest.customer_user_id == current_user.user_id,
-        ServiceRequest.tenant_id == current_user.tenant_id,
     ).first()
 
     if not sr:
@@ -1409,7 +1404,6 @@ async def update_service_request(
         .filter(
             ServiceRequest.id == sr_id,
             ServiceRequest.customer_user_id == current_user.user_id,
-            ServiceRequest.tenant_id == current_user.tenant_id,
         )
         .with_for_update()
         .first()
@@ -1429,7 +1423,6 @@ async def update_service_request(
             .filter(
                 ServiceRequest.id == sr.id,
                 ServiceRequest.customer_user_id == current_user.user_id,
-                ServiceRequest.tenant_id == current_user.tenant_id,
                 Job.id == sr.linked_job_id,
                 or_(
                     Job.customer_id == str(current_user.user_id),
@@ -1480,7 +1473,7 @@ async def update_service_request(
     audit_log(
         db,
         action=AuditAction.SERVICE_REQUEST_UPDATED,
-        tenant_id=current_user.tenant_id,
+        tenant_id=sr.tenant_id,
         user_id=current_user.user_id,
         role=current_user.role.value,
         entity_type="service_request",
@@ -1521,7 +1514,6 @@ async def cancel_service_request(
         .filter(
             ServiceRequest.id == sr_id,
             ServiceRequest.customer_user_id == current_user.user_id,
-            ServiceRequest.tenant_id == current_user.tenant_id,
         )
         .with_for_update()
         .first()
@@ -1541,7 +1533,6 @@ async def cancel_service_request(
             .filter(
                 ServiceRequest.id == sr.id,
                 ServiceRequest.customer_user_id == current_user.user_id,
-                ServiceRequest.tenant_id == current_user.tenant_id,
                 Job.id == sr.linked_job_id,
                 or_(
                     Job.customer_id == str(current_user.user_id),
@@ -1611,7 +1602,7 @@ async def cancel_service_request(
     audit_log(
         db,
         action=AuditAction.SERVICE_REQUEST_CANCELLED,
-        tenant_id=current_user.tenant_id,
+        tenant_id=sr.tenant_id,
         user_id=current_user.user_id,
         role=current_user.role.value,
         entity_type="service_request",
@@ -1654,7 +1645,6 @@ def _customer_invoice_query(
         )
         .filter(
             ServiceRequest.customer_user_id == current_user.user_id,
-            ServiceRequest.tenant_id == current_user.tenant_id,
             ServiceRequest.linked_job_id.isnot(None),
             or_(
                 Job.customer_id == str(current_user.user_id),
@@ -2084,7 +2074,6 @@ async def track_customer_jobs(
         .join(ServiceRequest, ServiceRequest.linked_job_id == Job.id)
         .filter(
             ServiceRequest.customer_user_id == current_user.user_id,
-            ServiceRequest.tenant_id == current_user.tenant_id,
             ServiceRequest.linked_job_id.isnot(None),
             or_(
                 Job.customer_id == str(current_user.user_id),
@@ -2336,7 +2325,6 @@ async def get_customer_job_detail(
                 Job.customer_id.is_(None),
             ),
             ServiceRequest.customer_user_id == current_user.user_id,
-            ServiceRequest.tenant_id == current_user.tenant_id,
         )
         .first()
     )
@@ -2527,7 +2515,6 @@ async def download_customer_job_report(
         .filter(
             Job.id == job_id,
             ServiceRequest.customer_user_id == current_user.user_id,
-            ServiceRequest.tenant_id == current_user.tenant_id,
             or_(
                 Job.customer_id == str(current_user.user_id),
                 Job.customer_id.is_(None),
@@ -2763,7 +2750,6 @@ async def get_service_history(
         )
         .filter(
             ServiceRequest.customer_user_id == current_user.user_id,
-            ServiceRequest.tenant_id == current_user.tenant_id,
             or_(
                 func.lower(ServiceRequest.status).in_(history_statuses),
                 func.lower(Job.status).in_(history_statuses),
@@ -2853,7 +2839,6 @@ def _get_customer_feedback_job(
         .filter(
             ServiceRequest.linked_job_id == job_id,
             ServiceRequest.customer_user_id == current_user.user_id,
-            ServiceRequest.tenant_id == current_user.tenant_id,
         )
         .first()
     )
@@ -3134,7 +3119,7 @@ async def register_customer_notification_device(
         db.query(User)
         .filter(
             User.id == str(current_user.user_id),
-            User.tenant_id == str(current_user.tenant_id),
+            User.tenant_id == current_user.tenant_id,
             User.role == UserRole.CUSTOMER.value,
             User.is_active.is_(True),
             User.deleted_at.is_(None),
@@ -3169,7 +3154,7 @@ async def unregister_customer_notification_device(
         db.query(User)
         .filter(
             User.id == str(current_user.user_id),
-            User.tenant_id == str(current_user.tenant_id),
+            User.tenant_id == current_user.tenant_id,
             User.role == UserRole.CUSTOMER.value,
         )
         .first()
@@ -3204,7 +3189,7 @@ async def get_customer_notification_preferences(
 
     try:
         return service.get_preferences(
-            tenant_id=str(current_user.tenant_id),
+            tenant_id=current_user.tenant_id,
             customer_id=str(current_user.user_id),
         )
 
@@ -3257,7 +3242,7 @@ async def update_customer_notification_preferences(
 
     try:
         return service.update_preferences(
-            tenant_id=str(current_user.tenant_id),
+            tenant_id=current_user.tenant_id,
             customer_id=str(current_user.user_id),
             payload=data,
             actor_id=str(current_user.user_id),
@@ -3320,8 +3305,6 @@ async def get_notifications(
     notifications = db.query(
         InAppNotification
     ).filter(
-        InAppNotification.tenant_id
-        == current_user.tenant_id,
         InAppNotification.customer_user_id
         == str(current_user.user_id),
     ).order_by(
@@ -3333,8 +3316,6 @@ async def get_notifications(
     ).filter(
         InAppNotification.customer_user_id
         == str(current_user.user_id),
-        InAppNotification.tenant_id
-        == current_user.tenant_id,
         func.upper(func.trim(InAppNotification.status)) == "UNREAD",
     ).count()
 
@@ -3342,7 +3323,7 @@ async def get_notifications(
     logger.info(
         "Customer notification feed loaded",
         extra={
-            "tenant_id": str(current_user.tenant_id),
+            "tenant_id": current_user.tenant_id,
             "notification_count": len(notifications),
             "unread_count": unread_count,
             "correlation_id": correlation_id_ctx.get() or None,
@@ -3392,8 +3373,6 @@ async def mark_notification_read(
         InAppNotification
     ).filter(
         func.lower(InAppNotification.id) == func.lower(str(notification_id)),
-        InAppNotification.tenant_id
-        == current_user.tenant_id,
         InAppNotification.customer_user_id
         == str(current_user.user_id),
     ).first()
@@ -3448,8 +3427,6 @@ async def mark_all_read(
     db.query(
         InAppNotification
     ).filter(
-        InAppNotification.tenant_id
-        == current_user.tenant_id,
         InAppNotification.customer_user_id
         == str(current_user.user_id),
         func.upper(func.trim(InAppNotification.status)) == "UNREAD",
@@ -3489,8 +3466,6 @@ async def get_customer_dashboard(
     base = db.query(ServiceRequest).filter(
         ServiceRequest.customer_user_id
         == current_user.user_id,
-        ServiceRequest.tenant_id
-        == current_user.tenant_id,
     )
 
     linked_job_status = (

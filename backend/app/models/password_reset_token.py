@@ -3,6 +3,9 @@ Password reset token model.
 
 Stores only a hash of the reset token.
 Plaintext reset tokens must never be stored or logged.
+
+Independent customer accounts may have tenant_id=None.
+Organization users retain their organization tenant ID.
 """
 
 import uuid
@@ -42,7 +45,9 @@ class PasswordResetToken(Base):
     tenant_id = Column(
         String(50),
         ForeignKey("organizations.id", ondelete="CASCADE"),
-        nullable=False,
+        # Independent customer reset tokens have no organization.
+        # Organization-user reset tokens retain their tenant ID.
+        nullable=True,
         index=True,
     )
 

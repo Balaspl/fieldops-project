@@ -131,12 +131,15 @@ def _authenticate_socket(token: str) -> dict | None:
             return None
 
         user_id = str(claims.get("sub") or "")
-        token_tenant_id = str(claims.get("tenant_id") or "")
+        token_tenant_id = claims.get("tenant_id")
         token_role = str(claims.get("role") or "")
         session_id = str(claims.get("session_id") or "")
 
-        if not user_id or not token_tenant_id or not session_id:
+        if not user_id or not token_role or not session_id:
             return None
+
+        if token_tenant_id is not None:
+            token_tenant_id = str(token_tenant_id)
 
         user = (
             db.query(User)
@@ -151,7 +154,11 @@ def _authenticate_socket(token: str) -> dict | None:
         if user is None or user.is_locked:
             return None
 
-        database_tenant_id = str(user.tenant_id)
+        database_tenant_id = (
+            str(user.tenant_id)
+            if user.tenant_id is not None
+            else None
+        )
         database_role = (
             user.role.value
             if hasattr(user.role, "value")
@@ -162,6 +169,14 @@ def _authenticate_socket(token: str) -> dict | None:
             return None
 
         if token_role != database_role:
+            return None
+
+        # Independent customers must not carry an organization tenant.
+        # Every non-customer role, including Super Admin, remains tenant-bound.
+        if database_role == UserRole.CUSTOMER.value:
+            if database_tenant_id is not None:
+                return None
+        elif database_tenant_id is None:
             return None
 
         session = validate_session(
@@ -201,12 +216,15 @@ def _authenticate_socket(token: str) -> dict | None:
 def _get_technician(
     db: Session,
     user_id: str,
-    tenant_id: str,
+    tenant_id: str | None,
 ) -> Technician | None:
     """
     Match the authenticated user to the technician record,
     following the existing Jobs API mapping.
     """
+
+    if tenant_id is None:
+        return None
 
     numeric_user_id = (
         int(user_id) if user_id.isdigit() else -1
@@ -283,7 +301,8 @@ def _can_access_job(
     # Tenant-wide job visibility requires the existing
     # application's JOBS_VIEW_ALL permission.
     if (
-        str(job.tenant_id) == tenant_id
+        tenant_id is not None
+        and str(job.tenant_id) == tenant_id
         and has_permission(user_role, Permission.JOBS_VIEW_ALL)
     ):
         return True
@@ -291,9 +310,14 @@ def _can_access_job(
     # Customer access requires an explicit customer-to-job
     # identity match. Tenant membership alone is not enough.
     if (
-        job.customer_id is not None
+        user_role == UserRole.CUSTOMER
+        and job.customer_id is not None
         and str(job.customer_id) == user_id
-        and str(job.customer_tenant_id or "") == tenant_id
+        and (
+            str(job.customer_tenant_id)
+            if job.customer_tenant_id is not None
+            else None
+        ) == tenant_id
     ):
         return True
 
@@ -337,8 +361,10 @@ async def connect(sid, environ, auth=None):
     # Store only verified identity details for event handlers.
     await sio.save_session(sid, identity)
 
-    # Authenticated tenant room.
-    await sio.enter_room(sid, f"tenant_{tenant_id}")
+    # Organization room is only available to tenant-bound identities.
+    # Independent customers must never join an organization broadcast room.
+    if tenant_id is not None:
+        await sio.enter_room(sid, f"tenant_{tenant_id}")
 
     # Authenticated user room.
     await sio.enter_room(sid, f"user_{user_id}")
@@ -354,7 +380,8 @@ async def connect(sid, environ, auth=None):
         authenticated_role = None
 
     if (
-        authenticated_role is not None
+        tenant_id is not None
+        and authenticated_role is not None
         and has_permission(authenticated_role, Permission.JOBS_VIEW_ALL)
     ):
         await sio.enter_room(
@@ -366,7 +393,11 @@ async def connect(sid, environ, auth=None):
     db: Session = SessionLocal()
 
     try:
-        technician = _get_technician(db, user_id, tenant_id)
+        technician = (
+            _get_technician(db, user_id, tenant_id)
+            if tenant_id is not None
+            else None
+        )
 
         if technician is not None:
             if technician.tech_id:

@@ -2444,256 +2444,280 @@ async def get_technician_availability_location(
 )
 async def update_technician_availability_location(
     payload: TechnicianAvailabilityLocationRequest,
-    x_tenant_id: str = Header(
-        ...,
-        alias="X-Tenant-ID",
-    ),
-    redis_client=Depends(
-        get_redis_client
-    ),
-    current_user: AuthenticatedUser = Depends(
-        get_current_user
-    ),
+    x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
+    redis_client=Depends(get_redis_client),
+    current_user: AuthenticatedUser = Depends(get_current_user),
     _rate_limit: None = Depends(GPS_AVAILABILITY_RATE_LIMIT),
     db: Session = Depends(get_db),
 ):
-    """Store the technician's latest location before job assignment."""
+    """Store the authenticated technician's latest pre-assignment GPS fix.
 
-    if str(current_user.tenant_id) != str(x_tenant_id):
+    The Technician row is authoritative for force assignment. Redis is a
+    short-lived cache and dispatch wake-up signal; it is written only after
+    the database transaction succeeds.
+    """
+    tenant_id = str(current_user.tenant_id)
+    header_tenant_id = str(x_tenant_id)
+
+    if tenant_id != header_tenant_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Tenant access denied",
         )
 
-    role_value = getattr(
-        current_user.role,
-        "value",
-        current_user.role,
-    )
-
-    if str(role_value).strip().lower() != "technician":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only technicians can update availability location",
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Tenant access denied",
-        )
-
-        role_value = getattr(
-        current_user.role,
-        "value",
-        current_user.role,
-    )
-
+    role_value = getattr(current_user.role, "value", current_user.role)
     if str(role_value).strip().lower() != "technician":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only technicians can update availability location",
         )
 
-    # Reuse the portal's tenant-scoped mapping, which resolves a technician
-    # through tech_id/technician_id and the established profile/user mapping.
+    # Resolve the technician once using the portal's established,
+    # tenant-scoped user/profile mapping. Do not query again using user_id:
+    # user_id, tech_id and technician_id are different identifiers.
     from .technician_portal import _get_tech_for_user
 
     technician = _get_tech_for_user(
         db,
         str(current_user.user_id),
-        str(current_user.tenant_id),
+        tenant_id,
     )
-    if not technician:
+    if technician is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Technician GPS access denied",
         )
 
-    _enforce_gps_actor(
-        current_user,
-        str(x_tenant_id),
-        technician,
-    )
+    _enforce_gps_actor(current_user, header_tenant_id, technician)
 
+    # Normalize the device-reported GPS timestamp to UTC. Naive timestamps
+    # are interpreted as UTC for compatibility with existing mobile clients.
     now = datetime.now(timezone.utc)
     reported_at = payload.timestamp
     if reported_at.tzinfo is None:
         reported_at = reported_at.replace(tzinfo=timezone.utc)
-    age_seconds = (now - reported_at.astimezone(timezone.utc)).total_seconds()
-    organization = db.query(models.Organization).filter(
-        models.Organization.id == str(current_user.tenant_id)
-    ).first()
-    field_operations = ((organization.settings or {}).get("field_operations") or {}) if organization else {}
-    freshness_seconds = int(field_operations.get("location_freshness_seconds", 120))
-    # Accuracy remains a deployment-level limit. Freshness can be tightened
-    # by each organization through its operational settings.
-    max_accuracy = float(os.getenv("GPS_AVAILABILITY_MAX_ACCURACY_METERS", "150"))
+    reported_at_utc = reported_at.astimezone(timezone.utc)
+    age_seconds = (now - reported_at_utc).total_seconds()
+
+    organization = (
+        db.query(models.Organization)
+        .filter(models.Organization.id == tenant_id)
+        .first()
+    )
+    settings = getattr(organization, "settings", None) or {}
+    field_operations = settings.get("field_operations", {}) if isinstance(settings, dict) else {}
+    if not isinstance(field_operations, dict):
+        field_operations = {}
+
+    try:
+        freshness_seconds = int(field_operations.get("location_freshness_seconds", 120))
+    except (TypeError, ValueError):
+        freshness_seconds = 120
+    freshness_seconds = max(1, freshness_seconds)
+
+    try:
+        max_accuracy = float(os.getenv("GPS_AVAILABILITY_MAX_ACCURACY_METERS", "150"))
+    except (TypeError, ValueError):
+        max_accuracy = 150.0
+    if not math.isfinite(max_accuracy) or max_accuracy <= 0:
+        max_accuracy = 150.0
+
     logger.info(
         "GPS availability location validation",
         extra={
             "event": "gps_availability_validation",
+            "tenant_id": tenant_id,
+            "user_id": str(current_user.user_id),
+            "technician_id": str(technician.technician_id),
             "accuracy_meters": payload.accuracy,
-            "coordinates_available": payload.latitude is not None and payload.longitude is not None,
-            "timestamp": payload.timestamp.isoformat(),
+            "coordinates_available": True,
+            "timestamp": reported_at_utc.isoformat(),
             "age_seconds": round(age_seconds, 3),
-            "threshold_meters": max_accuracy,
+            "freshness_seconds": freshness_seconds,
+            "max_accuracy_meters": max_accuracy,
         },
     )
+
     if age_seconds < -30 or age_seconds > freshness_seconds:
-        logger.warning("GPS availability location rejected", extra={"event": "gps_availability_rejected", "reason": "stale_timestamp", "age_seconds": round(age_seconds, 3)})
+        logger.warning(
+            "GPS availability location rejected",
+            extra={
+                "event": "gps_availability_rejected",
+                "reason": "stale_timestamp",
+                "tenant_id": tenant_id,
+                "technician_id": str(technician.technician_id),
+                "age_seconds": round(age_seconds, 3),
+                "freshness_seconds": freshness_seconds,
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"GPS timestamp must be current (within the last {freshness_seconds} seconds)",
+            detail=(
+                "GPS timestamp must be current "
+                f"(within the last {freshness_seconds} seconds)"
+            ),
         )
 
-    if not (
-        -90
-        <= payload.latitude
-        <= 90
-    ):
-        logger.warning("GPS availability location rejected", extra={"event": "gps_availability_rejected", "reason": "invalid_latitude"})
+    if not math.isfinite(payload.latitude) or not -90 <= payload.latitude <= 90:
+        logger.warning(
+            "GPS availability location rejected",
+            extra={"event": "gps_availability_rejected", "reason": "invalid_latitude", "tenant_id": tenant_id},
+        )
         raise HTTPException(
-            status_code=(
-                status.HTTP_422_UNPROCESSABLE_ENTITY
-            ),
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Invalid latitude",
         )
 
-    if not (
-        -180
-        <= payload.longitude
-        <= 180
-    ):
-        logger.warning("GPS availability location rejected", extra={"event": "gps_availability_rejected", "reason": "invalid_longitude"})
+    if not math.isfinite(payload.longitude) or not -180 <= payload.longitude <= 180:
+        logger.warning(
+            "GPS availability location rejected",
+            extra={"event": "gps_availability_rejected", "reason": "invalid_longitude", "tenant_id": tenant_id},
+        )
         raise HTTPException(
-            status_code=(
-                status.HTTP_422_UNPROCESSABLE_ENTITY
-            ),
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Invalid longitude",
         )
 
-    if payload.accuracy is None or not math.isfinite(payload.accuracy) or payload.accuracy <= 0:
-        logger.warning("GPS availability location rejected", extra={"event": "gps_availability_rejected", "reason": "invalid_accuracy"})
+    if (
+        payload.accuracy is None
+        or not math.isfinite(payload.accuracy)
+        or payload.accuracy <= 0
+    ):
+        logger.warning(
+            "GPS availability location rejected",
+            extra={"event": "gps_availability_rejected", "reason": "invalid_accuracy", "tenant_id": tenant_id},
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="GPS accuracy must be a positive value in meters",
         )
 
     if payload.accuracy > max_accuracy:
-        logger.warning("GPS availability location rejected", extra={"event": "gps_availability_rejected", "reason": "poor_accuracy", "accuracy_meters": payload.accuracy, "threshold_meters": max_accuracy})
+        logger.warning(
+            "GPS availability location rejected",
+            extra={
+                "event": "gps_availability_rejected",
+                "reason": "poor_accuracy",
+                "tenant_id": tenant_id,
+                "accuracy_meters": payload.accuracy,
+                "threshold_meters": max_accuracy,
+            },
+        )
         raise HTTPException(
-            status_code=(
-                status.HTTP_422_UNPROCESSABLE_ENTITY
-            ),
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=(
-                f"GPS accuracy "
-                f"{payload.accuracy:.1f}m "
-                f"exceeds allowed "
+                f"GPS accuracy {payload.accuracy:.1f}m exceeds allowed "
                 f"{max_accuracy:.0f}m"
             ),
         )
 
-    technician_id = str(
-        current_user.user_id
-    )
+    # Persist the actual device fix time. Do not use datetime.now() here:
+    # doing so would make delayed/offline GPS fixes appear freshly captured.
+    technician.latitude = float(payload.latitude)
+    technician.longitude = float(payload.longitude)
+    technician.last_ping = reported_at_utc
 
-    tenant_id = str(
-        current_user.tenant_id
-    )
-    # Find only the authenticated technician in the current tenant.
-    tech_query = db.query(models.Technician).filter(
-        models.Technician.tenant_id == tenant_id
-    )
-
-    if technician_id.isdigit():
-        tech = tech_query.filter(
-            (models.Technician.tech_id == technician_id)
-            | (
-                models.Technician.technician_id
-                == int(technician_id)
-            )
-        ).first()
-    else:
-        tech = tech_query.filter(
-            models.Technician.tech_id == technician_id
-        ).first()
-
-    if tech is None:
+    try:
+        db.commit()
+        db.refresh(technician)
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Failed to persist technician availability GPS location",
+            extra={
+                "event": "gps_availability_db_failed",
+                "tenant_id": tenant_id,
+                "technician_id": str(technician.technician_id),
+            },
+        )
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Technician not found",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not store technician location",
         )
 
-    tech.latitude = payload.latitude
-    tech.longitude = payload.longitude
-    tech.last_ping = datetime.now(timezone.utc)
-
-    db.commit()
-
+    # Keep the existing API identity in the response/cache for compatibility,
+    # while also writing aliases used by the dispatcher and technician model.
+    user_id = str(current_user.user_id)
     location_data = {
-        "technician_id": technician_id,
+        "status": "stored",
+        "technician_id": user_id,
         "tenant_id": tenant_id,
-        "latitude": payload.latitude,
-        "longitude": payload.longitude,
-        "accuracy": payload.accuracy,
+        "latitude": float(payload.latitude),
+        "longitude": float(payload.longitude),
+        "accuracy": float(payload.accuracy),
         "altitude": payload.altitude,
-        "timestamp": iso_utc(
-            payload.timestamp
-        ),
+        "timestamp": iso_utc(reported_at_utc),
     }
-
     cache_value = json.dumps(location_data)
-    cache_identities = {
-        technician_id,
-        str(technician.technician_id),
-    }
-    if technician.tech_id:
+
+    cache_identities = {user_id, str(technician.technician_id)}
+    if getattr(technician, "tech_id", None):
         cache_identities.add(str(technician.tech_id))
+
+    cache_ok = True
     try:
-        cache_results = [
-            redis_client.setex(
+        for identity in cache_identities:
+            result = redis_client.setex(
                 f"gps:availability:{tenant_id}:{identity}",
-                120,
+                freshness_seconds,
                 cache_value,
             )
-            for identity in cache_identities
-        ]
-        try:
-            redis_client.set("dispatch:availability_changed", "1")
-        except Exception:
-            pass
+            if result is False or result is None:
+                cache_ok = False
+
     except Exception:
-        cache_results = []
-    if not cache_results or not all(result is not False and result is not None for result in cache_results):
-        logger.error(
-            "GPS availability location cache write failed",
-            extra={"event": "gps_availability_cache_failed", "tenant_id": tenant_id},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Location could not be stored; retry shortly",
-            headers={"Retry-After": "5"},
+        cache_ok = False
+        logger.exception(
+            "Technician availability GPS Redis cache write failed",
+            extra={
+                "event": "gps_availability_cache_failed",
+                "tenant_id": tenant_id,
+                "technician_id": str(technician.technician_id),
+            },
         )
 
-    # Notify the dispatcher that this technician's pre-assignment location
-    # changed. This signal is best-effort; the stored location remains valid
-    # even if the notification write fails.
+    # This is a best-effort wake-up signal. The DB row and cache write above
+    # are the location data; dispatcher notification failure must not undo it.
     try:
         redis_client.set(
             "dispatch:availability_changed",
-            json.dumps({"tenant_id": tenant_id, "technician_id": technician_id, "timestamp": iso_utc(now)}),
+            json.dumps(
+                {
+                    "tenant_id": tenant_id,
+                    "technician_id": str(technician.technician_id),
+                    "timestamp": iso_utc(now),
+                }
+            ),
             ex=30,
         )
     except Exception:
-        logger.warning("Could not publish availability-change signal", extra={"tenant_id": tenant_id})
+        logger.warning(
+            "Could not publish technician availability-change signal",
+            extra={
+                "event": "gps_availability_signal_failed",
+                "tenant_id": tenant_id,
+                "technician_id": str(technician.technician_id),
+            },
+            exc_info=True,
+        )
+
+    if not cache_ok:
+        # The authoritative DB update succeeded. Return the stored result but
+        # expose the cache problem so the client can retry without treating
+        # the GPS database write as failed.
+        logger.warning(
+            "Technician GPS saved to database but Redis cache is unavailable",
+            extra={
+                "event": "gps_availability_db_only",
+                "tenant_id": tenant_id,
+                "technician_id": str(technician.technician_id),
+            },
+        )
 
     return {
-        "status": "stored",
-        "technician_id": technician_id,
-        "latitude": payload.latitude,
-        "longitude": payload.longitude,
-        "accuracy": payload.accuracy,
-        "timestamp": payload.timestamp,
-        "expires_in_seconds": 120,
+        **location_data,
+        "cache_status": "stored" if cache_ok else "unavailable",
+        "expires_in_seconds": freshness_seconds,
     }
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,2198 @@
+
+
+========== app\technician\(app)\_layout.tsx ==========
+
+import { useEffect } from "react";
+import { Redirect, Tabs, usePathname, useRouter } from "expo-router";
+import { AppState, BackHandler, Platform, StyleSheet, Text, ToastAndroid, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+import { useAuthStore } from "../../../src/technician/auth/authStore";
+import { LoadingState } from "../../../src/technician/components/ScreenState";
+import { TechnicianJobAssignmentOffer } from "../../../src/technician/components/TechnicianJobAssignmentOffer";
+import { useNetworkStatus } from "../../../src/technician/hooks/useNetworkStatus";
+import { syncPendingJobActions } from "../../../src/technician/offline/jobActionSync";
+import {
+  registerPushTokenForTechnician,
+  subscribeToNotificationEvents
+} from "../../../src/technician/notifications/notificationService";
+import {
+  logError,
+  logEvent
+} from "../../../src/technician/observability/logger";
+
+import {
+  flushPendingGpsPings,
+  startTechnicianLocationTracking,
+  stopTechnicianLocationTracking
+} from "../../../src/technician/gps/backgroundLocationService";
+
+export default function AppLayout() {
+  const isLoading = useAuthStore((state) => state.isLoading);
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const user = useAuthStore((state) => state.user);
+  const router = useRouter();
+  const pathname = usePathname();
+  const networkStatus = useNetworkStatus();
+  const insets = useSafeAreaInsets();
+
+  // Synchronize persisted job actions when the technician is online
+  // and when the app returns to the foreground. The synchronizer
+  // reconciles each action against authoritative backend state.
+  useEffect(() => {
+    if (
+      isLoading ||
+      !isAuthenticated ||
+      !user ||
+      user.role.toLowerCase() !== "technician" ||
+      user.id == null ||
+      user.tenant_id == null ||
+      String(user.id).trim() === "" ||
+      String(user.tenant_id).trim() === "" ||
+      networkStatus.isLoading ||
+      networkStatus.isOffline
+    ) {
+      return;
+    }
+
+    let active = true;
+
+    const syncScope = {
+      technicianId: String(user.id).trim(),
+      tenantId: String(user.tenant_id).trim()
+    };
+
+    const synchronize = async () => {
+      try {
+        const result = await syncPendingJobActions(syncScope);
+
+        if (!active) {
+          return;
+        }
+
+        logEvent("offline.job_actions.sync_finished", {
+          result: result.result,
+          processed: result.processed,
+          synced: result.synced,
+          conflicts: result.conflicts,
+          failed: result.failed
+        });
+
+        if (
+          result.result !== "synced" &&
+          result.result !== "empty" &&
+          result.result !== "already-syncing"
+        ) {
+          logEvent("offline.job_actions.sync_not_complete", {
+            result: result.result,
+            message: result.message ?? "No additional details"
+          });
+        }
+      } catch (error: unknown) {
+        if (active) {
+          logError("offline.job_actions.sync_failed", error);
+        }
+      }
+    };
+
+    void synchronize();
+
+    const appStateSubscription = AppState.addEventListener(
+      "change",
+      (nextState) => {
+        if (nextState === "active") {
+          void synchronize();
+        }
+      }
+    );
+
+    return () => {
+      active = false;
+      appStateSubscription.remove();
+    };
+  }, [
+    isLoading,
+    isAuthenticated,
+    user?.id,
+    user?.tenant_id,
+    user?.role,
+    networkStatus.isLoading,
+    networkStatus.isOffline,
+    networkStatus.isConnected,
+    networkStatus.isInternetReachable
+  ]);
+
+  // Register the native push token for the authenticated technician.
+  useEffect(() => {
+    if (
+      !isAuthenticated ||
+      !user ||
+      user.role.toLowerCase() !== "technician" ||
+      networkStatus.isLoading ||
+      networkStatus.isOffline
+    ) {
+      return;
+    }
+
+    let active = true;
+    let registrationInFlight = false;
+
+    const registerPushToken = async () => {
+      if (!active || registrationInFlight) {
+        return;
+      }
+
+      registrationInFlight = true;
+
+      try {
+        await registerPushTokenForTechnician({
+          id: user.id,
+          tenant_id: user.tenant_id
+        });
+      } catch (error: unknown) {
+        // Push registration failures must not block app access.
+        logError("notifications.registration_failed", error);
+      } finally {
+        registrationInFlight = false;
+      }
+    };
+
+    void registerPushToken();
+
+    const appStateSubscription = AppState.addEventListener(
+      "change",
+      (nextState) => {
+        if (nextState === "active") {
+          void registerPushToken();
+        }
+      }
+    );
+
+    return () => {
+      active = false;
+      appStateSubscription.remove();
+    };
+  }, [
+    isAuthenticated,
+    user?.id,
+    user?.tenant_id,
+    user?.role,
+    networkStatus.isLoading,
+    networkStatus.isOffline,
+    networkStatus.isConnected,
+    networkStatus.isInternetReachable
+  ]);
+
+  // Track GPS only for an authenticated technician.
+  // Permission and network failures must not block app access.
+  useEffect(() => {
+    if (
+      !isAuthenticated ||
+      !user ||
+      user.tenant_id == null ||
+      String(user.tenant_id).trim() === "" ||
+      user.role.toLowerCase() !== "technician"
+    ) {
+      return;
+    }
+
+    let active = true;
+
+    const startPromise = startTechnicianLocationTracking({
+      technicianId: user.id,
+      tenantId: user.tenant_id
+    }).catch((error: unknown) => {
+      if (active) {
+        logError("gps.tracking_start_failed", error);
+      }
+    });
+
+    const appStateSubscription = AppState.addEventListener(
+      "change",
+      (nextState) => {
+        if (nextState !== "active") {
+          return;
+        }
+
+        void startPromise
+          .then(async () => {
+            if (!active) {
+              return;
+            }
+
+            await flushPendingGpsPings();
+          })
+          .catch((error: unknown) => {
+            if (active) {
+              logError(
+                "gps.foreground_queue_flush_failed",
+                error
+              );
+            }
+          });
+      }
+    );
+
+    return () => {
+      active = false;
+      appStateSubscription.remove();
+
+      logEvent("gps.tracking_effect_cleanup", {
+        previousTechnicianId: user.id
+      });
+
+      void startPromise.then(async () => {
+        try {
+          const currentAuth = useAuthStore.getState();
+          const currentUser = currentAuth.user;
+
+          const activeTechnicianSession =
+            currentAuth.isAuthenticated &&
+            currentUser != null &&
+            currentUser.role.toLowerCase() === "technician" &&
+            currentUser.tenant_id != null &&
+            String(currentUser.tenant_id).trim() !== "";
+
+          if (activeTechnicianSession) {
+            logEvent(
+              "gps.tracking_cleanup_skipped_active_technician",
+              {
+                currentTechnicianId: currentUser.id,
+                currentTenantId: currentUser.tenant_id
+              }
+            );
+
+            return;
+          }
+
+          await stopTechnicianLocationTracking({
+            preservePendingQueues: true
+          });
+        } catch (error: unknown) {
+          logError("gps.tracking_stop_failed", error);
+        }
+      });
+    };
+  }, [
+    isAuthenticated,
+    user?.id,
+    user?.tenant_id,
+    user?.role
+  ]);
+
+  // Handle notification taps after the technician session is ready.
+  useEffect(() => {
+    if (
+      isLoading ||
+      !isAuthenticated ||
+      !user ||
+      user.role.toLowerCase() !== "technician"
+    ) {
+      return;
+    }
+
+    let active = true;
+    let unsubscribe: (() => void) | undefined;
+
+    void subscribeToNotificationEvents((data) => {
+      if (!active) {
+        return;
+      }
+
+      const rawJobId = data.job_id ?? data.jobId;
+
+      const jobId =
+        typeof rawJobId === "number" &&
+        Number.isFinite(rawJobId)
+          ? String(rawJobId)
+          : typeof rawJobId === "string"
+            ? rawJobId.trim()
+            : "";
+
+      if (jobId && !/[\\/]/.test(jobId)) {
+        router.push({
+          pathname: "/technician/(app)/jobs/[jobId]",
+          params: { jobId }
+        });
+      } else {
+        router.push("/technician/(app)/notifications");
+      }
+    })
+      .then((cleanup) => {
+        if (active) {
+          unsubscribe = cleanup;
+        } else {
+          cleanup();
+        }
+      })
+      .catch((error: unknown) => {
+        logError(
+          "notifications.navigation_setup_failed",
+          error
+        );
+      });
+
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, [
+    isLoading,
+    isAuthenticated,
+    user?.id,
+    user?.tenant_id,
+    user?.role,
+    router
+  ]);
+
+  useEffect(() => {
+    if (!isAuthenticated || user?.role.toLowerCase() !== "technician" || Platform.OS !== "android") return;
+    let lastBackPress = 0;
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (router.canGoBack()) return false;
+      if (pathname !== "/dashboard") {
+        router.replace("/technician/(app)/dashboard");
+        return true;
+      }
+      const now = Date.now();
+      if (now - lastBackPress < 2000) BackHandler.exitApp();
+      else {
+        lastBackPress = now;
+        ToastAndroid.show("Press back again to exit", ToastAndroid.SHORT);
+      }
+      return true;
+    });
+    return () => subscription.remove();
+  }, [isAuthenticated, pathname, router, user?.role]);
+
+  if (isLoading) {
+    return <LoadingState label="Checking your session..." variant="dashboard" />;
+  }
+
+  if (!isAuthenticated || !user) {
+    return <Redirect href="/login" />;
+  }
+
+  if (user.role.toLowerCase() !== "technician") {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.title}>Access restricted</Text>
+        <Text style={styles.message}>
+          This mobile workspace is for technician accounts.
+          Contact your FieldOps administrator if you need access.
+        </Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.appContainer}>
+      {networkStatus.isOffline ? (
+        <View
+          accessibilityRole="alert"
+          style={styles.offlineBanner}
+        >
+          <Ionicons
+            name="cloud-offline-outline"
+            size={23}
+            color="#8A4B08"
+          />
+          <View style={styles.offlineBannerContent}>
+            <Text style={styles.offlineBannerTitle}>
+              No internet connection
+            </Text>
+            <Text style={styles.offlineBannerMessage}>
+              Saved information may be outdated. Job actions need a connection.
+            </Text>
+          </View>
+        </View>
+      ) : null}
+
+      <View style={styles.tabsContainer}>
+        <Tabs
+          backBehavior="fullHistory"
+          screenOptions={{
+            headerShown: false,
+            tabBarActiveTintColor: "#007F5F",
+            tabBarInactiveTintColor: "#91A39B",
+            tabBarLabelStyle: styles.tabLabel,
+            tabBarStyle: [
+              styles.tabBar,
+              {
+                height: 62 + insets.bottom,
+                paddingBottom: Math.max(insets.bottom, 5)
+              }
+            ]
+          }}
+        >
+          <Tabs.Screen
+            name="dashboard"
+            options={{
+              title: "Home",
+              tabBarLabel: "Home",
+              tabBarIcon: ({ color, size, focused }) => (
+                <Ionicons
+                  name={focused ? "home" : "home-outline"}
+                  size={size}
+                  color={color}
+                />
+              )
+            }}
+          />
+
+          <Tabs.Screen
+            name="jobs"
+            options={{
+              title: "My Jobs",
+              tabBarLabel: "My Jobs",
+              tabBarIcon: ({ color, size, focused }) => (
+                <Ionicons
+                  name={focused ? "briefcase" : "briefcase-outline"}
+                  size={size}
+                  color={color}
+                />
+              )
+            }}
+          />
+
+          <Tabs.Screen
+            name="history"
+            options={{
+              title: "Job History",
+              tabBarLabel: "History",
+              tabBarIcon: ({ color, size, focused }) => (
+                <Ionicons
+                  name={focused ? "time" : "time-outline"}
+                  size={size}
+                  color={color}
+                />
+              )
+            }}
+          />
+
+          <Tabs.Screen
+            name="notifications"
+            options={{
+              href: null,
+              title: "Notifications",
+              tabBarLabel: "Alerts",
+              tabBarIcon: ({ color, size, focused }) => (
+                <Ionicons
+                  name={focused ? "notifications" : "notifications-outline"}
+                  size={size}
+                  color={color}
+                />
+              )
+            }}
+          />
+
+          <Tabs.Screen
+            name="profile"
+            options={{
+              title: "My Profile",
+              tabBarLabel: "Profile",
+              tabBarIcon: ({ color, size, focused }) => (
+                <Ionicons
+                  name={focused ? "person-circle" : "person-circle-outline"}
+                  size={size}
+                  color={color}
+                />
+              )
+            }}
+          />
+
+          <Tabs.Screen
+            name="jobs/[jobId]"
+            options={{
+              href: null,
+              title: "Job Details",
+              tabBarStyle: { display: "none" }
+            }}
+          />
+
+          <Tabs.Screen
+            name="jobs/[jobId]/chat"
+            options={{
+              href: null,
+              title: "Job Chat"
+            }}
+          />
+
+          <Tabs.Screen
+            name="jobs/[jobId]/expenses"
+            options={{
+              href: null,
+              title: "Submit Expense"
+            }}
+          />
+
+          <Tabs.Screen
+            name="jobs/[jobId]/completion"
+            options={{
+              href: null,
+              title: "Complete Job"
+            }}
+          />
+
+          <Tabs.Screen
+            name="jobs/[jobId]/customer-signature"
+            options={{
+              href: null,
+              title: "Customer Signature"
+            }}
+          />
+
+          <Tabs.Screen
+            name="jobs/[jobId]/live-map"
+            options={{
+              href: null,
+              title: "Live Route"
+            }}
+          />
+        </Tabs>
+      </View>
+      <TechnicianJobAssignmentOffer />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  appContainer: {
+    flex: 1,
+    backgroundColor: "#F8FAFC"
+  },
+  tabsContainer: {
+    flex: 1
+  },
+  offlineBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    backgroundColor: "#FFF4D7",
+    borderBottomWidth: 1,
+    borderBottomColor: "#F3D28B"
+  },
+  offlineBannerContent: {
+    flex: 1,
+    gap: 2
+  },
+  offlineBannerTitle: {
+    color: "#7C3F0A",
+    fontSize: 13,
+    fontWeight: "800"
+  },
+  offlineBannerMessage: {
+    color: "#7C3F0A",
+    fontSize: 12,
+    lineHeight: 17
+  },
+  container: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#F8FAFC",
+    padding: 24
+  },
+  title: {
+    color: "#0F172A",
+    fontSize: 23,
+    fontWeight: "700",
+    marginBottom: 12
+  },
+  message: {
+    color: "#64748B",
+    fontSize: 15,
+    lineHeight: 23,
+    textAlign: "center"
+  },
+  tabBar: {
+    backgroundColor: "#FFFFFF",
+    borderTopColor: "#E2E8F0",
+    height: 62,
+    paddingTop: 6,
+    paddingBottom: 5
+  },
+  tabLabel: {
+    fontSize: 12,
+    fontWeight: "600"
+  }
+});
+
+
+========== app\technician\(app)\profile.tsx ==========
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Animated,
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View
+} from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
+import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import { goBackOrReplace } from "../../../src/technician/navigation/backNavigation";
+
+import { useAuthStore } from "../../../src/technician/auth/authStore";
+import { getTechnicianDashboard } from "../../../src/technician/api/dashboard";
+import {
+  getOrganizationServicesTaxonomy,
+  getTechnicianProfile,
+  saveTechnicianProfile,
+  type ServicesTaxonomy,
+  type TechnicianProfile
+} from "../../../src/technician/api/technicianProfile";
+import {
+  hasTechnicianLocationConsent,
+  setTechnicianLocationConsent,
+  startTechnicianLocationTracking,
+  stopTechnicianLocationTracking
+} from "../../../src/technician/gps/backgroundLocationService";
+import { logError } from "../../../src/technician/observability/logger";
+
+type SectionKey = "personal" | "address" | "employment" | "emergency" | "skills";
+
+const GREEN = "#078A4D";
+const DARK_GREEN = "#075B3C";
+
+function emptyProfile(fullName: string): TechnicianProfile {
+  return {
+    full_name: fullName,
+    mobile_number: "",
+    skills: [],
+    certifications: [],
+    profile_completed: false
+  };
+}
+
+function getDisplayDate(value?: string | null): string {
+  if (!value) return "Add your date of birth";
+  const date = new Date(`${value.slice(0, 10)}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
+}
+
+function Field({
+  label,
+  value,
+  onChangeText,
+  placeholder,
+  keyboardType,
+  multiline
+}: {
+  label: string;
+  value: string;
+  onChangeText: (value: string) => void;
+  placeholder?: string;
+  keyboardType?: "default" | "email-address" | "phone-pad" | "numeric";
+  multiline?: boolean;
+}) {
+  return (
+    <View style={styles.fieldWrap}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder || `Enter ${label.toLowerCase()}`}
+        placeholderTextColor="#9AA99F"
+        keyboardType={keyboardType || "default"}
+        autoCapitalize={keyboardType === "email-address" ? "none" : "sentences"}
+        multiline={multiline}
+        textAlignVertical={multiline ? "top" : "center"}
+        style={[styles.input, multiline && styles.multilineInput]}
+      />
+    </View>
+  );
+}
+
+function ProfileSection({
+  icon,
+  title,
+  subtitle,
+  expanded,
+  onPress,
+  children
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  subtitle: string;
+  expanded: boolean;
+  onPress: () => void;
+  children?: React.ReactNode;
+}) {
+  return (
+    <View style={styles.sectionCard}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        onPress={onPress}
+        style={({ pressed }) => [styles.sectionHeader, pressed && styles.pressed]}
+      >
+        <View style={styles.sectionIcon}>
+          <Ionicons name={icon} size={23} color={GREEN} />
+        </View>
+        <View style={styles.sectionCopy}>
+          <Text style={styles.sectionTitle}>{title}</Text>
+          <Text style={styles.sectionSubtitle} numberOfLines={2}>{subtitle}</Text>
+        </View>
+        <Ionicons name={expanded ? "chevron-up" : "chevron-forward"} size={20} color="#234332" />
+      </Pressable>
+      {expanded ? <View style={styles.editor}>{children}</View> : null}
+    </View>
+  );
+}
+
+function ProfileSkeleton() {
+  const pulse = useRef(new Animated.Value(0.4)).current;
+
+  useEffect(() => {
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 0.9, duration: 700, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0.4, duration: 700, useNativeDriver: true })
+      ])
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [pulse]);
+
+  const block = (style: object) => (
+    <Animated.View style={[styles.skeletonBlock, style, { opacity: pulse }]} />
+  );
+
+  return (
+    <ScrollView style={styles.screen} contentContainerStyle={styles.content} accessibilityLabel="Loading profile">
+      <View style={styles.skeletonHero}>
+        <View style={styles.skeletonNav}>
+          {block({ width: 38, height: 38, borderRadius: 13 })}
+          {block({ width: 126, height: 22, borderRadius: 8 })}
+          {block({ width: 38, height: 38, borderRadius: 13 })}
+        </View>
+        {block({ width: 82, height: 28, borderRadius: 16 })}
+        <View style={styles.skeletonIdentity}>
+          {block({ width: 84, height: 84, borderRadius: 42 })}
+          <View style={{ flex: 1, gap: 10 }}>
+            {block({ width: "78%", height: 21, borderRadius: 7 })}
+            {block({ width: "58%", height: 14, borderRadius: 6 })}
+          </View>
+        </View>
+      </View>
+      <View style={styles.skeletonStats}>
+        {[0, 1, 2, 3].map((item) => (
+          <View key={item} style={styles.skeletonStat}>
+            {block({ width: 23, height: 23, borderRadius: 8 })}
+            {block({ width: "72%", height: 11, borderRadius: 5 })}
+            {block({ width: "56%", height: 9, borderRadius: 5 })}
+          </View>
+        ))}
+      </View>
+      <View style={styles.skeletonProgress}>
+        {block({ width: 58, height: 58, borderRadius: 29 })}
+        <View style={{ flex: 1, gap: 9 }}>
+          {block({ width: "64%", height: 17, borderRadius: 6 })}
+          {block({ width: "88%", height: 12, borderRadius: 5 })}
+        </View>
+        {block({ width: 17, height: 17, borderRadius: 7 })}
+      </View>
+      {[0, 1, 2, 3, 4].map((item) => (
+        <View key={item} style={styles.skeletonSection}>
+          {block({ width: 48, height: 48, borderRadius: 15 })}
+          <View style={{ flex: 1, gap: 9 }}>
+            {block({ width: "58%", height: 16, borderRadius: 6 })}
+            {block({ width: "82%", height: 11, borderRadius: 5 })}
+          </View>
+          {block({ width: 15, height: 15, borderRadius: 6 })}
+        </View>
+      ))}
+    </ScrollView>
+  );
+}
+
+export default function ProfileScreen() {
+  const router = useRouter();
+  const user = useAuthStore((state) => state.user);
+  const logout = useAuthStore((state) => state.logout);
+  const fallbackName = user?.full_name?.trim() ||
+    [user?.first_name, user?.last_name].filter(Boolean).join(" ") || "Technician";
+
+  const [profile, setProfile] = useState<TechnicianProfile>(() => emptyProfile(fallbackName));
+  const [savedProfile, setSavedProfile] = useState<TechnicianProfile>(() => emptyProfile(fallbackName));
+  const [taxonomy, setTaxonomy] = useState<ServicesTaxonomy | null>(null);
+  const [technicianStatus, setTechnicianStatus] = useState("Offline");
+  const [completedJobs, setCompletedJobs] = useState(0);
+  const [expandedSection, setExpandedSection] = useState<SectionKey | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [hasLocationConsent, setHasLocationConsent] = useState(false);
+  const [isLoadingConsent, setIsLoadingConsent] = useState(true);
+  const [isUpdatingConsent, setIsUpdatingConsent] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    Promise.allSettled([
+      getTechnicianProfile(),
+      getOrganizationServicesTaxonomy(user?.tenant_id),
+      getTechnicianDashboard()
+    ]).then(([profileResult, taxonomyResult, dashboardResult]) => {
+      if (!active) return;
+      if (profileResult.status === "fulfilled") {
+        const loadedProfile = {
+          ...emptyProfile(fallbackName),
+          ...profileResult.value,
+          skills: profileResult.value.skills || [],
+          certifications: profileResult.value.certifications || []
+        };
+        setProfile(loadedProfile);
+        setSavedProfile(loadedProfile);
+      }
+      if (taxonomyResult.status === "fulfilled") setTaxonomy(taxonomyResult.value);
+      if (dashboardResult.status === "fulfilled") {
+        const dashboard = dashboardResult.value;
+        setTechnicianStatus(String(dashboard.technician_status || "Offline")
+          .replace(/_/g, " ")
+          .toLowerCase()
+          .replace(/\b\w/g, (letter) => letter.toUpperCase()));
+        setCompletedJobs(Number(dashboard.total_completed || dashboard.completed_jobs || 0));
+      }
+      setIsLoading(false);
+    });
+    return () => { active = false; };
+  }, [fallbackName, user?.tenant_id]);
+
+  useEffect(() => {
+    let active = true;
+    if (user?.id == null || user.tenant_id == null) {
+      setIsLoadingConsent(false);
+      return () => { active = false; };
+    }
+    void hasTechnicianLocationConsent({ technicianId: user.id, tenantId: user.tenant_id })
+      .then((granted) => { if (active) setHasLocationConsent(granted); })
+      .catch((error: unknown) => {
+        logError("gps.location_consent_read_failed", error);
+        if (active) setHasLocationConsent(false);
+      })
+      .finally(() => { if (active) setIsLoadingConsent(false); });
+    return () => { active = false; };
+  }, [user?.id, user?.tenant_id]);
+
+  const allCatalogSkills = useMemo(() => {
+    if (!taxonomy) return new Set<string>();
+    const values = new Set<string>();
+    for (const serviceType of taxonomy.service_types || []) {
+      values.add(serviceType);
+      for (const category of taxonomy.categories_by_type?.[serviceType] || []) {
+        values.add(category);
+        for (const issue of taxonomy.issues_by_category?.[category] || []) {
+          values.add(typeof issue === "string" ? issue : issue.issue);
+        }
+      }
+    }
+    return values;
+  }, [taxonomy]);
+
+  const profileCompletion = useMemo(() => {
+    const checks = [
+      Boolean(profile.full_name.trim()),
+      Boolean(profile.mobile_number.trim()),
+      Boolean(profile.date_of_birth),
+      Boolean(profile.address || profile.city),
+      Boolean(profile.emergency_contact),
+      profile.skills.length > 0,
+      profile.certifications.length > 0,
+      Boolean(profile.experience)
+    ];
+    return Math.round(checks.filter(Boolean).length / checks.length * 100);
+  }, [profile]);
+
+  const update = useCallback(<K extends keyof TechnicianProfile>(key: K, value: TechnicianProfile[K]) => {
+    setProfile((current) => ({ ...current, [key]: value }));
+  }, []);
+
+  const saveSection = useCallback(async () => {
+    if (expandedSection === "personal") {
+      if (!profile.full_name.trim()) {
+        Alert.alert("Name required", "Enter your full name before saving.");
+        return;
+      }
+      if (profile.mobile_number.replace(/\D/g, "").length !== 10) {
+        Alert.alert("Check mobile number", "Enter a valid 10-digit mobile number.");
+        return;
+      }
+    }
+    setIsSaving(true);
+    try {
+      const response = await saveTechnicianProfile(
+        { ...profile, profile_completed: true },
+        !profile.profile_completed
+      );
+      const saved = {
+        ...response,
+        skills: response.skills || [],
+        certifications: response.certifications || []
+      };
+      setProfile(saved);
+      setSavedProfile(saved);
+      setExpandedSection(null);
+      Alert.alert("Profile updated", "Your changes have been saved.");
+    } catch (error: unknown) {
+      logError("technician.profile_save_failed", error);
+      Alert.alert("Unable to save profile", "Check your connection and try again.");
+    } finally {
+      setIsSaving(false);
+    }
+  }, [expandedSection, profile]);
+
+  const cancelEditing = useCallback(() => {
+    setProfile(savedProfile);
+    setExpandedSection(null);
+  }, [savedProfile]);
+
+  const toggleSkill = useCallback((skill: string) => {
+    setProfile((current) => ({
+      ...current,
+      skills: current.skills.includes(skill)
+        ? current.skills.filter((value) => value !== skill)
+        : [...current.skills, skill]
+    }));
+  }, []);
+
+  async function updateLocationConsent(granted: boolean): Promise<void> {
+    if (isUpdatingConsent || user?.id == null || user.tenant_id == null) return;
+    const identity = { technicianId: user.id, tenantId: user.tenant_id };
+    setIsUpdatingConsent(true);
+    try {
+      if (granted) {
+        await setTechnicianLocationConsent(identity, true);
+        try {
+          await startTechnicianLocationTracking(identity);
+        } catch (error: unknown) {
+          await setTechnicianLocationConsent(identity, false).catch((rollbackError: unknown) => {
+            logError("gps.location_consent_rollback_failed", rollbackError);
+          });
+          throw error;
+        }
+        setHasLocationConsent(true);
+      } else {
+        await setTechnicianLocationConsent(identity, false);
+        setHasLocationConsent(false);
+        await stopTechnicianLocationTracking();
+      }
+    } catch (error: unknown) {
+      logError("gps.location_consent_update_failed", error);
+      Alert.alert("Unable to update location sharing", "Check your device permissions and try again.");
+    } finally {
+      setIsUpdatingConsent(false);
+    }
+  }
+
+  function confirmLocationConsentChange(): void {
+    const granted = !hasLocationConsent;
+    Alert.alert(
+      granted ? "Enable background location?" : "Turn off location sharing?",
+      granted
+        ? "FieldOps uses your location for technician availability and active job tracking while you are signed in."
+        : "Background GPS tracking will stop when you withdraw consent.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: granted ? "Enable" : "Turn off",
+          style: granted ? "default" : "destructive",
+          onPress: () => { void updateLocationConsent(granted); }
+        }
+      ]
+    );
+  }
+
+  async function handleLogout(): Promise<void> {
+    if (isLoggingOut) return;
+    setIsLoggingOut(true);
+    try {
+      await logout();
+      router.replace("/login");
+    } catch {
+      Alert.alert("Sign-out issue", "Your session could not be cleared completely. Please try again.");
+    } finally {
+      setIsLoggingOut(false);
+    }
+  }
+
+  const setValue = <K extends keyof TechnicianProfile>(key: K, value: string) => {
+    update(key, value as TechnicianProfile[K]);
+  };
+  const skillSummary = profile.skills.slice(0, 3).join(" · ") || "Choose from your organization’s services";
+  const locationSummary = [profile.address, profile.city, profile.state, profile.pincode].filter(Boolean).join(", ") || "Add your address and service area";
+  const employmentSummary = [skillSummary, profile.experience].filter(Boolean).join(" · ");
+  const emergencySummary = profile.emergency_contact || "Add an emergency contact";
+  const fullName = profile.full_name || fallbackName;
+  const initials = fullName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "T";
+
+  if (isLoading) {
+    return <ProfileSkeleton />;
+  }
+
+  return (
+    <ScrollView style={styles.screen} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <View style={styles.hero}>
+        <LinearGradient
+          colors={["#0B8750", "#05643F", "#03462F"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={StyleSheet.absoluteFill}
+        />
+        <View pointerEvents="none" style={styles.heroGlow} />
+        <View pointerEvents="none" style={styles.heroOrbit} />
+        <View pointerEvents="none" style={styles.heroAccent} />
+        <View style={styles.heroNav}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Go back" onPress={() => goBackOrReplace(router, "/technician/(app)/dashboard")} style={styles.heroNavButton}>
+            <Ionicons name="arrow-back" size={21} color="#FFFFFF" />
+          </Pressable>
+          <Text style={styles.heroNavTitle}>My Profile</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel="Open notifications" onPress={() => router.push("/technician/(app)/notifications")} style={styles.heroNavButton}>
+            <Ionicons name="notifications-outline" size={21} color="#FFFFFF" />
+          </Pressable>
+        </View>
+        <View style={[styles.onlinePill, technicianStatus.toLowerCase() !== "available" && styles.offlinePill]}>
+          <View style={[styles.onlineDot, technicianStatus.toLowerCase() !== "available" && styles.offlineDot]} />
+          <Text style={styles.onlineText}>{technicianStatus}</Text>
+        </View>
+        <View style={styles.identityRow}>
+          <View style={styles.avatarWrap}>
+            <View style={styles.avatar}><Text style={styles.avatarText}>{initials}</Text></View>
+            <View style={styles.avatarCamera}><Ionicons name="camera" size={15} color="#FFFFFF" /></View>
+          </View>
+          <View style={styles.identityCopy}>
+            <View style={styles.nameRow}>
+              <Text style={styles.name} numberOfLines={1}>{fullName}</Text>
+              <Ionicons name="checkmark-circle" size={20} color="#55E37A" />
+            </View>
+            <Text style={styles.roleLine}>Technician · {profile.skills[0] || "Add your skills"}</Text>
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.statsCard}>
+        <Stat icon="flash" value={profile.skills[0] || "Skills"} label="Specialty" />
+        <View style={styles.statDivider} />
+        <Stat icon="location" value={profile.city || "Location"} label={profile.state || "Service area"} />
+        <View style={styles.statDivider} />
+        <Stat icon="briefcase" value={String(completedJobs)} label="Jobs done" />
+        <View style={styles.statDivider} />
+        <Stat icon="ribbon" value={profile.experience || "Experience"} label="Experience" />
+      </View>
+
+      <View style={styles.progressCard}>
+        <View style={styles.progressRing}>
+          <Text style={styles.progressValue}>{profileCompletion}%</Text>
+        </View>
+        <View style={styles.progressCopy}>
+          <Text style={styles.progressTitle}>Complete your profile</Text>
+          <Text style={styles.progressSubtitle}>Add contact details, skills and certifications</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={21} color="#173B29" />
+      </View>
+
+      <ProfileSection icon="person-outline" title="Personal Details" subtitle={[profile.full_name, profile.email || user?.email, profile.mobile_number, profile.date_of_birth, profile.gender].filter(Boolean).join(" · ") || "Name, email, mobile, date of birth, gender"} expanded={expandedSection === "personal"} onPress={() => setExpandedSection(expandedSection === "personal" ? null : "personal")}>
+        <Field label="Full name" value={profile.full_name} onChangeText={(value) => setValue("full_name", value)} />
+        <Field label="Mobile number" value={profile.mobile_number} onChangeText={(value) => setValue("mobile_number", value.replace(/\D/g, "").slice(0, 10))} keyboardType="phone-pad" />
+        <Field label="Date of birth (YYYY-MM-DD)" value={profile.date_of_birth || ""} onChangeText={(value) => setValue("date_of_birth", value)} placeholder="1995-04-23" />
+        <Text style={styles.fieldLabel}>Gender</Text>
+        <View style={styles.chipWrap}>
+          {["Male", "Female", "Other", "Prefer not to say"].map((value) => (
+            <ChoiceChip key={value} label={value} selected={profile.gender === value} onPress={() => update("gender", value)} />
+          ))}
+        </View>
+        <View style={styles.readOnlyEmail}><Ionicons name="mail-outline" size={16} color="#6C8374" /><Text style={styles.readOnlyEmailText}>{profile.email || user?.email || "Email unavailable"} · managed by your account</Text></View>
+        <SaveControls saving={isSaving} onSave={() => void saveSection()} onCancel={cancelEditing} />
+      </ProfileSection>
+
+      <ProfileSection icon="location-outline" title="Address & Location" subtitle={locationSummary} expanded={expandedSection === "address"} onPress={() => setExpandedSection(expandedSection === "address" ? null : "address")}>
+        <Field label="Street address" value={profile.address || ""} onChangeText={(value) => setValue("address", value)} multiline />
+        <View style={styles.fieldRow}>
+          <View style={styles.fieldHalf}><Field label="City" value={profile.city || ""} onChangeText={(value) => setValue("city", value)} /></View>
+          <View style={styles.fieldHalf}><Field label="Postal code" value={profile.pincode || ""} onChangeText={(value) => setValue("pincode", value.replace(/\D/g, "").slice(0, 6))} keyboardType="numeric" /></View>
+        </View>
+        <Field label="State" value={profile.state || ""} onChangeText={(value) => setValue("state", value)} />
+        <SaveControls saving={isSaving} onSave={() => void saveSection()} onCancel={cancelEditing} />
+      </ProfileSection>
+
+      <ProfileSection icon="briefcase-outline" title="Employment Details" subtitle={employmentSummary || "Service skills, experience and work status"} expanded={expandedSection === "employment"} onPress={() => setExpandedSection(expandedSection === "employment" ? null : "employment")}>
+        <Field label="Years of experience" value={profile.experience || ""} onChangeText={(value) => setValue("experience", value)} placeholder="e.g. 5 years" />
+        <View style={styles.statusInfo}><Ionicons name="information-circle-outline" size={17} color={GREEN} /><Text style={styles.statusInfoText}>Work status is managed from your dashboard availability control.</Text></View>
+        <SaveControls saving={isSaving} onSave={() => void saveSection()} onCancel={cancelEditing} />
+      </ProfileSection>
+
+      <ProfileSection icon="call-outline" title="Emergency Contact" subtitle={emergencySummary} expanded={expandedSection === "emergency"} onPress={() => setExpandedSection(expandedSection === "emergency" ? null : "emergency")}>
+        <Field label="Emergency contact number" value={profile.emergency_contact || ""} onChangeText={(value) => setValue("emergency_contact", value.replace(/\D/g, "").slice(0, 15))} keyboardType="phone-pad" />
+        <SaveControls saving={isSaving} onSave={() => void saveSection()} onCancel={cancelEditing} />
+      </ProfileSection>
+
+      <ProfileSection icon="ribbon-outline" title="Skills & Certifications" subtitle={`${profile.skills.length} skills · ${profile.certifications.length} certifications`} expanded={expandedSection === "skills"} onPress={() => setExpandedSection(expandedSection === "skills" ? null : "skills")}>
+        <Text style={styles.fieldLabel}>Organization services and skills</Text>
+        {!taxonomy || taxonomy.service_types.length === 0 ? (
+          <Text style={styles.helperText}>Your organization’s active service catalog is not available right now. Pull to refresh and try again.</Text>
+        ) : (
+          <View style={styles.serviceList}>
+            {taxonomy.service_types.map((serviceType) => (
+              <ServiceSkillGroup
+                key={serviceType}
+                serviceType={serviceType}
+                taxonomy={taxonomy}
+                selectedSkills={profile.skills}
+                onToggle={toggleSkill}
+              />
+            ))}
+          </View>
+        )}
+        {profile.skills.filter((skill) => !allCatalogSkills.has(skill)).length > 0 ? (
+          <View style={styles.existingSkillBox}>
+            <Text style={styles.fieldLabel}>Other saved skills</Text>
+            <View style={styles.chipWrap}>
+              {profile.skills.filter((skill) => !allCatalogSkills.has(skill)).map((skill) => (
+                <ChoiceChip key={skill} label={skill} selected onPress={() => toggleSkill(skill)} />
+              ))}
+            </View>
+          </View>
+        ) : null}
+        <Field label="Certifications (comma separated)" value={profile.certifications.join(", ")} onChangeText={(value) => update("certifications", value.split(",").map((item) => item.trim()).filter(Boolean))} placeholder="Electrical safety, OSHA…" multiline />
+        <SaveControls saving={isSaving} onSave={() => void saveSection()} onCancel={cancelEditing} />
+      </ProfileSection>
+
+      <View style={styles.locationPanel}>
+        <View style={styles.locationPanelHeading}>
+          <View style={styles.sectionIcon}><Ionicons name="navigate-outline" size={22} color={GREEN} /></View>
+          <View style={styles.sectionCopy}><Text style={styles.sectionTitle}>Location sharing</Text><Text style={styles.sectionSubtitle}>Background GPS for job tracking</Text></View>
+          {isLoadingConsent ? <ActivityIndicator size="small" color={GREEN} /> : <View style={[styles.onlineDot, !hasLocationConsent && styles.offlineDot]} />}
+        </View>
+        <Text style={styles.locationDescription}>{hasLocationConsent ? "Location sharing is enabled while you are signed in." : "Enable location sharing for availability and active job tracking."}</Text>
+        <Pressable
+          accessibilityRole="button"
+          disabled={isLoadingConsent || isUpdatingConsent || user?.id == null || user.tenant_id == null}
+          onPress={confirmLocationConsentChange}
+          style={({ pressed }) => [styles.consentButton, hasLocationConsent && styles.withdrawButton, pressed && styles.pressed, (isLoadingConsent || isUpdatingConsent) && styles.disabled]}
+        >
+          {isUpdatingConsent ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.consentButtonText}>{hasLocationConsent ? "Turn off location sharing" : "Enable location sharing"}</Text>}
+        </Pressable>
+      </View>
+
+      <Pressable accessibilityRole="button" accessibilityLabel="Sign out" disabled={isLoggingOut} onPress={() => void handleLogout()} style={({ pressed }) => [styles.signOutButton, pressed && styles.pressed, isLoggingOut && styles.disabled]}>
+        {isLoggingOut ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.signOutText}>Sign out</Text>}
+      </Pressable>
+    </ScrollView>
+  );
+}
+
+function Stat({ icon, value, label }: { icon: keyof typeof Ionicons.glyphMap; value: string; label: string }) {
+  return (
+    <View style={styles.stat}>
+      <Ionicons name={icon} size={23} color={GREEN} />
+      <Text style={styles.statValue} numberOfLines={1}>{value}</Text>
+      <Text style={styles.statLabel} numberOfLines={1}>{label}</Text>
+    </View>
+  );
+}
+
+function ChoiceChip({ label, selected, onPress }: { label: string; selected: boolean; onPress: () => void }) {
+  return (
+    <Pressable accessibilityRole="button" accessibilityState={{ selected }} onPress={onPress} style={[styles.choiceChip, selected && styles.choiceChipSelected]}>
+      {selected ? <Ionicons name="checkmark" size={14} color={GREEN} /> : null}
+      <Text style={[styles.choiceText, selected && styles.choiceTextSelected]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function ServiceSkillGroup({
+  serviceType,
+  taxonomy,
+  selectedSkills,
+  onToggle
+}: {
+  serviceType: string;
+  taxonomy: ServicesTaxonomy;
+  selectedSkills: string[];
+  onToggle: (skill: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const categories = taxonomy.categories_by_type?.[serviceType] || [];
+  return (
+    <View style={styles.serviceGroup}>
+      <Pressable onPress={() => setExpanded((current) => !current)} style={styles.serviceHeading}>
+        <ChoiceChip label={serviceType} selected={selectedSkills.includes(serviceType)} onPress={() => onToggle(serviceType)} />
+        <Ionicons name={expanded ? "chevron-up" : "chevron-down"} size={17} color="#547363" />
+      </Pressable>
+      {expanded ? categories.map((category) => {
+        const issueItems = taxonomy.issues_by_category?.[category] || [];
+        const issues = issueItems.map((issue) => typeof issue === "string" ? issue : issue.issue);
+        return (
+          <View key={category} style={styles.categoryGroup}>
+            <ChoiceChip label={category} selected={selectedSkills.includes(category)} onPress={() => onToggle(category)} />
+            <View style={styles.issueList}>
+              {issues.map((issue) => (
+                <ChoiceChip key={issue} label={issue} selected={selectedSkills.includes(issue)} onPress={() => onToggle(issue)} />
+              ))}
+            </View>
+          </View>
+        );
+      }) : null}
+    </View>
+  );
+}
+
+function SaveControls({ saving, onSave, onCancel }: { saving: boolean; onSave: () => void; onCancel: () => void }) {
+  return (
+    <View style={styles.saveRow}>
+      <Pressable accessibilityRole="button" onPress={onCancel} disabled={saving} style={styles.cancelButton}><Text style={styles.cancelText}>Cancel</Text></Pressable>
+      <Pressable accessibilityRole="button" onPress={onSave} disabled={saving} style={({ pressed }) => [styles.saveButton, pressed && styles.pressed, saving && styles.disabled]}>
+        {saving ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="checkmark" size={17} color="#FFFFFF" />}
+        <Text style={styles.saveText}>{saving ? "Saving…" : "Save changes"}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: "#F3F7F4" },
+  content: { paddingBottom: 36 },
+  skeletonHero: { height: 322, paddingHorizontal: 22, paddingTop: 16, paddingBottom: 44, justifyContent: "space-between", backgroundColor: "#DCE8DF", borderBottomLeftRadius: 34, borderBottomRightRadius: 34 },
+  skeletonNav: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  skeletonIdentity: { flexDirection: "row", alignItems: "center", gap: 14 },
+  skeletonStats: { flexDirection: "row", minHeight: 105, marginHorizontal: 16, marginTop: -33, paddingHorizontal: 8, borderRadius: 22, backgroundColor: "#FFFFFF", alignItems: "center", justifyContent: "space-around", elevation: 3 },
+  skeletonStat: { flex: 1, alignItems: "center", gap: 7 },
+  skeletonProgress: { minHeight: 91, flexDirection: "row", alignItems: "center", gap: 13, marginHorizontal: 16, marginTop: 17, marginBottom: 7, padding: 15, borderRadius: 20, backgroundColor: "#FFFFFF", elevation: 2 },
+  skeletonSection: { minHeight: 80, flexDirection: "row", alignItems: "center", gap: 12, marginHorizontal: 16, marginTop: 10, paddingHorizontal: 14, paddingVertical: 12, borderRadius: 19, backgroundColor: "#FFFFFF", elevation: 2 },
+  skeletonBlock: { backgroundColor: "#C8D8CC" },
+  hero: { height: 322, paddingHorizontal: 22, paddingTop: 16, justifyContent: "space-between", overflow: "hidden", backgroundColor: DARK_GREEN, borderBottomLeftRadius: 34, borderBottomRightRadius: 34 },
+  heroGlow: { position: "absolute", width: 270, height: 270, borderRadius: 135, top: -126, right: -70, backgroundColor: "rgba(139,239,171,0.16)" },
+  heroOrbit: { position: "absolute", width: 240, height: 240, borderRadius: 120, borderWidth: 1, borderColor: "rgba(222,255,233,0.16)", top: 30, right: -60 },
+  heroAccent: { position: "absolute", width: 155, height: 155, borderRadius: 78, backgroundColor: "rgba(0,37,25,0.16)", bottom: -96, left: -48 },
+  heroNav: { flexDirection: "row", alignItems: "center", gap: 14 },
+  heroNavButton: { width: 38, height: 38, alignItems: "center", justifyContent: "center", borderRadius: 13, backgroundColor: "rgba(255,255,255,0.14)" },
+  heroNavTitle: { color: "#FFFFFF", fontSize: 21, fontWeight: "900", flex: 1 },
+  onlinePill: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 18, backgroundColor: "#DDF8E4" },
+  offlinePill: { backgroundColor: "#F1F4F1" },
+  onlineDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: "#12A64A" },
+  offlineDot: { backgroundColor: "#95A39A" },
+  onlineText: { color: "#14532D", fontSize: 12, fontWeight: "800", textTransform: "capitalize" },
+  identityRow: { flexDirection: "row", alignItems: "center", gap: 14, paddingBottom: 44 },
+  avatarWrap: { position: "relative" },
+  avatar: { width: 88, height: 88, borderRadius: 44, backgroundColor: "#DDF8E7", borderWidth: 4, borderColor: "#FFFFFF", alignItems: "center", justifyContent: "center" },
+  avatarText: { color: DARK_GREEN, fontSize: 29, fontWeight: "900" },
+  avatarCamera: { position: "absolute", right: -2, bottom: -1, width: 30, height: 30, borderRadius: 15, backgroundColor: GREEN, borderColor: "#FFFFFF", borderWidth: 2, alignItems: "center", justifyContent: "center" },
+  identityCopy: { flex: 1, minWidth: 0 },
+  nameRow: { flexDirection: "row", alignItems: "center", gap: 7 },
+  name: { color: "#FFFFFF", fontSize: 20, fontWeight: "900", flexShrink: 1 },
+  roleLine: { color: "#E2F5E9", fontSize: 13, marginTop: 6 },
+  statsCard: { flexDirection: "row", alignItems: "center", marginHorizontal: 16, marginTop: -33, minHeight: 105, borderRadius: 22, backgroundColor: "#FFFFFF", paddingHorizontal: 8, paddingVertical: 13, shadowColor: "#123B2B", shadowOffset: { width: 0, height: 7 }, shadowOpacity: 0.12, shadowRadius: 12, elevation: 4 },
+  stat: { flex: 1, alignItems: "center", justifyContent: "center", gap: 4, minWidth: 0 },
+  statValue: { color: "#14291E", fontSize: 12, fontWeight: "900", maxWidth: "100%" },
+  statLabel: { color: "#66766C", fontSize: 10, textAlign: "center", maxWidth: "100%" },
+  statDivider: { width: 1, height: 47, backgroundColor: "#DCE5DE" },
+  progressCard: { flexDirection: "row", alignItems: "center", gap: 13, marginHorizontal: 16, marginTop: 17, marginBottom: 7, padding: 15, minHeight: 91, borderRadius: 20, backgroundColor: "#FFFFFF", shadowColor: "#173B2A", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.07, shadowRadius: 9, elevation: 2 },
+  progressRing: { width: 58, height: 58, borderRadius: 29, borderWidth: 5, borderColor: "#19A34A", alignItems: "center", justifyContent: "center", backgroundColor: "#F2FBF4" },
+  progressValue: { color: DARK_GREEN, fontSize: 13, fontWeight: "900" },
+  progressCopy: { flex: 1 },
+  progressTitle: { color: "#16271D", fontSize: 16, fontWeight: "900" },
+  progressSubtitle: { color: "#657369", fontSize: 12, lineHeight: 17, marginTop: 4 },
+  sectionCard: { marginHorizontal: 16, marginTop: 10, borderRadius: 19, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E7EEE8", shadowColor: "#173B2A", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.055, shadowRadius: 8, elevation: 2, overflow: "hidden" },
+  sectionHeader: { minHeight: 80, flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 14, paddingVertical: 12 },
+  sectionIcon: { width: 48, height: 48, borderRadius: 15, backgroundColor: "#E8F7EA", alignItems: "center", justifyContent: "center" },
+  sectionCopy: { flex: 1, minWidth: 0 },
+  sectionTitle: { color: "#16271D", fontSize: 16, fontWeight: "900" },
+  sectionSubtitle: { color: "#627267", fontSize: 12, lineHeight: 17, marginTop: 3 },
+  editor: { borderTopWidth: 1, borderTopColor: "#EAF0EB", paddingHorizontal: 15, paddingTop: 16, paddingBottom: 15 },
+  fieldWrap: { marginBottom: 13 },
+  fieldLabel: { color: "#3F5547", fontSize: 12, fontWeight: "800", marginBottom: 7 },
+  input: { minHeight: 46, borderRadius: 12, borderWidth: 1, borderColor: "#DAE5DC", backgroundColor: "#FBFDFC", paddingHorizontal: 13, color: "#1C3325", fontSize: 14 },
+  multilineInput: { minHeight: 76, paddingTop: 12 },
+  fieldRow: { flexDirection: "row", gap: 11 },
+  fieldHalf: { flex: 1 },
+  chipWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 12 },
+  choiceChip: { flexDirection: "row", alignItems: "center", gap: 5, borderWidth: 1, borderColor: "#DDE8DF", borderRadius: 18, backgroundColor: "#FFFFFF", paddingHorizontal: 11, paddingVertical: 8 },
+  choiceChipSelected: { borderColor: "#8DCBA2", backgroundColor: "#EAF8EE" },
+  choiceText: { color: "#51665A", fontSize: 12, fontWeight: "700" },
+  choiceTextSelected: { color: DARK_GREEN },
+  readOnlyEmail: { flexDirection: "row", alignItems: "center", gap: 7, paddingVertical: 9, marginBottom: 6 },
+  readOnlyEmailText: { color: "#718278", fontSize: 11, flex: 1 },
+  saveRow: { flexDirection: "row", justifyContent: "flex-end", alignItems: "center", gap: 10, marginTop: 7 },
+  cancelButton: { paddingHorizontal: 14, paddingVertical: 11 },
+  cancelText: { color: "#627267", fontSize: 13, fontWeight: "800" },
+  saveButton: { minHeight: 43, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, borderRadius: 12, paddingHorizontal: 15, backgroundColor: GREEN },
+  saveText: { color: "#FFFFFF", fontSize: 12, fontWeight: "900" },
+  serviceList: { gap: 7, marginTop: 3, marginBottom: 12 },
+  serviceGroup: { borderWidth: 1, borderColor: "#E4ECE6", borderRadius: 13, padding: 9, backgroundColor: "#FBFDFC" },
+  serviceHeading: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  categoryGroup: { borderTopWidth: 1, borderTopColor: "#EAF0EB", paddingTop: 9, marginTop: 8, gap: 7 },
+  issueList: { flexDirection: "row", flexWrap: "wrap", gap: 7, paddingLeft: 7 },
+  helperText: { color: "#718278", fontSize: 12, lineHeight: 18, marginBottom: 12 },
+  existingSkillBox: { borderTopWidth: 1, borderTopColor: "#E8EFE9", paddingTop: 12, marginBottom: 7 },
+  statusInfo: { flexDirection: "row", alignItems: "flex-start", gap: 7, borderRadius: 11, backgroundColor: "#F0F8F2", padding: 11, marginBottom: 10 },
+  statusInfoText: { flex: 1, color: "#56705F", fontSize: 11, lineHeight: 16 },
+  locationPanel: { marginHorizontal: 16, marginTop: 15, padding: 16, borderRadius: 18, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E4ECE6" },
+  locationPanelHeading: { flexDirection: "row", alignItems: "center", gap: 11 },
+  locationDescription: { color: "#697A6F", fontSize: 12, lineHeight: 18, marginTop: 12, marginBottom: 13 },
+  consentButton: { minHeight: 45, alignItems: "center", justifyContent: "center", borderRadius: 12, backgroundColor: GREEN, paddingHorizontal: 14 },
+  withdrawButton: { backgroundColor: "#5D7164" },
+  consentButtonText: { color: "#FFFFFF", fontSize: 12, fontWeight: "900" },
+  signOutButton: { minHeight: 48, alignItems: "center", justifyContent: "center", marginHorizontal: 16, marginTop: 16, borderRadius: 13, backgroundColor: "#A93C43" },
+  signOutText: { color: "#FFFFFF", fontSize: 14, fontWeight: "900" },
+  pressed: { opacity: 0.78 },
+  disabled: { opacity: 0.55 }
+});
+
+
+========== src\components\ui.tsx ==========
+
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View, type ViewStyle } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { colors } from "../theme";
+
+export function Screen({ children, scroll = false }: { children: React.ReactNode; scroll?: boolean }) {
+  return <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>{scroll ? <ScrollView contentContainerStyle={styles.content}>{children}</ScrollView> : <View style={styles.content}>{children}</View>}</SafeAreaView>;
+}
+export function Heading({ title, subtitle }: { title: string; subtitle?: string }) {
+  return <View style={styles.heading}><Text style={styles.title}>{title}</Text>{subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}</View>;
+}
+export function Card({ children, style }: { children: React.ReactNode; style?: ViewStyle }) {
+  return <View style={[styles.card, style]}>{children}</View>;
+}
+export function ActionButton({ title, onPress, secondary = false, disabled = false }: { title: string; onPress: () => void; secondary?: boolean; disabled?: boolean }) {
+  return <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.button, secondary && styles.buttonSecondary, disabled && { opacity: 0.6 }]}><Text style={[styles.buttonText, secondary && styles.secondaryText]}>{title}</Text></Pressable>;
+}
+export function LoadingState() {
+  return <View style={styles.loading}><ActivityIndicator color={colors.brand} /><Text style={styles.subtitle}>Loading FieldOps…</Text></View>;
+}
+export function SkeletonRows() {
+  return <View>{[0, 1, 2].map((i) => <View key={i} style={styles.skeletonCard}><View style={styles.skeletonLine} /><View style={[styles.skeletonLine, { width: "55%" }]} /></View>)}</View>;
+}
+export function ErrorMessage({ message }: { message: string }) {
+  return <Card><Text style={{ color: colors.danger, fontWeight: "600" }}>{message}</Text></Card>;
+}
+export function ListRow({ title, detail, onPress }: { title: string; detail?: string; onPress?: () => void }) {
+  const content = <><Text style={styles.rowTitle}>{title}</Text>{detail ? <Text style={styles.subtitle}>{detail}</Text> : null}</>;
+  return onPress ? <Pressable onPress={onPress} style={styles.row}>{content}<Text style={styles.chevron}>›</Text></Pressable> : <View style={styles.row}>{content}</View>;
+}
+export const uiStyles = styles;
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: colors.canvas }, content: { flexGrow: 1, padding: 20, gap: 16 },
+  heading: { gap: 5, marginBottom: 4 }, title: { color: colors.ink, fontSize: 27, fontWeight: "800" }, subtitle: { color: colors.muted, fontSize: 14, lineHeight: 20 },
+  card: { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: 18, padding: 16, gap: 9 },
+  button: { alignItems: "center", justifyContent: "center", minHeight: 50, borderRadius: 14, backgroundColor: colors.brand, paddingHorizontal: 18 }, buttonSecondary: { backgroundColor: colors.accent }, buttonText: { color: "white", fontWeight: "700", fontSize: 15 }, secondaryText: { color: colors.brandDark },
+  loading: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 }, skeletonCard: { height: 82, backgroundColor: colors.surface, borderRadius: 16, padding: 16, gap: 12, marginBottom: 12 }, skeletonLine: { height: 13, width: "75%", borderRadius: 8, backgroundColor: "#E6EEE9" },
+  row: { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: 16, padding: 16, minHeight: 68, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }, rowTitle: { color: colors.ink, fontSize: 15, fontWeight: "700", flexShrink: 1 }, chevron: { fontSize: 26, color: colors.brand },
+});
+
+
+========== src\super-admin\components\UI.tsx ==========
+
+import React from 'react';
+import {
+  ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput,
+  View, type TextInputProps, type ViewStyle, type TextStyle,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { AlertCircle, ChevronRight, RefreshCw, Search } from 'lucide-react-native';
+import { colors, radii, spacing } from '../theme';
+import { statusTone } from '../utils/format';
+
+export function AppScreen({ children, style }: { children: React.ReactNode; style?: ViewStyle }) {
+  return <SafeAreaView style={[styles.safe, style]} edges={['top', 'left', 'right']}><View style={styles.screen}>{children}</View></SafeAreaView>;
+}
+
+export function ScreenScroll({ children, contentContainerStyle, refreshControl }: { children: React.ReactNode; contentContainerStyle?: ViewStyle; refreshControl?: React.ReactElement }) {
+  return <ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollContent, contentContainerStyle]} keyboardShouldPersistTaps="handled" refreshControl={refreshControl} showsVerticalScrollIndicator={false}>{children}</ScrollView>;
+}
+
+export function Card({ children, style, onPress }: { children: React.ReactNode; style?: ViewStyle; onPress?: () => void }) {
+  if (onPress) return <Pressable onPress={onPress} accessibilityRole="button" style={({ pressed }) => [styles.card, style, pressed && { opacity: 0.88 }]}>{children}</Pressable>;
+  return <View style={[styles.card, style]}>{children}</View>;
+}
+
+export function PrimaryButton({ title, onPress, loading, disabled, variant = 'primary', compact, style }: {
+  title: string; onPress: () => void; loading?: boolean; disabled?: boolean; variant?: 'primary' | 'secondary' | 'danger' | 'ghost'; compact?: boolean; style?: ViewStyle;
+}) {
+  const backgroundColor = variant === 'primary' ? colors.forest : variant === 'danger' ? '#FEF2F2' : variant === 'secondary' ? '#E8F3EC' : 'transparent';
+  const color = variant === 'danger' ? colors.red : variant === 'ghost' ? colors.forest : variant === 'primary' ? colors.white : colors.forest;
+  return <Pressable accessibilityRole="button" onPress={onPress} disabled={disabled || loading} style={({ pressed }) => [styles.button, style, { backgroundColor, minHeight: compact ? 38 : 46, paddingHorizontal: compact ? 12 : 16 }, (disabled || loading) && { opacity: 0.5 }, pressed && { opacity: 0.84 }]}>
+    {loading ? <ActivityIndicator size="small" color={color} /> : <Text style={[styles.buttonText, { color, fontSize: compact ? 12 : 14 }]}>{title}</Text>}
+  </Pressable>;
+}
+
+export function Field({ label, error, left, ...props }: TextInputProps & { label: string; error?: string; left?: React.ReactNode }) {
+  return <View style={{ gap: 7 }}>
+    <Text style={styles.fieldLabel}>{label}</Text>
+    <View style={[styles.inputWrap, error && { borderColor: colors.red }]}>
+      {left}
+      <TextInput placeholderTextColor="#9AA59E" style={styles.input} {...props} />
+    </View>
+    {error ? <Text style={styles.fieldError}>{error}</Text> : null}
+  </View>;
+}
+
+export function SearchField({ value, onChangeText, placeholder = 'Search…' }: { value: string; onChangeText: (value: string) => void; placeholder?: string }) {
+  return <View style={styles.searchWrap}><Search size={17} color={colors.muted} /><TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor="#9AA59E" style={styles.searchInput} returnKeyType="search" /></View>;
+}
+
+export function Pill({ label, tone }: { label: string; tone?: 'green' | 'red' | 'amber' | 'blue' | 'purple' | 'neutral' }) {
+  const resolved = tone || statusTone(label);
+  const map = {
+    green: { bg: '#E7F6ED', fg: '#087443' }, red: { bg: '#FEECEC', fg: '#B91C1C' },
+    amber: { bg: '#FFF4DE', fg: '#A65B00' }, blue: { bg: '#EAF1FF', fg: '#2556A8' },
+    purple: { bg: '#F2EBFF', fg: '#6B32C9' }, neutral: { bg: '#EFF2F0', fg: '#536159' },
+  }[resolved];
+  return <View style={[styles.pill, { backgroundColor: map.bg }]}><Text style={[styles.pillText, { color: map.fg }]}>{label.replace(/[_-]/g, ' ')}</Text></View>;
+}
+
+export function SectionTitle({ title, action, onAction, subtitle }: { title: string; action?: string; onAction?: () => void; subtitle?: string }) {
+  return <View style={styles.sectionTitle}><View style={{ flex: 1, gap: 3 }}><Text style={styles.sectionHeading}>{title}</Text>{subtitle ? <Text style={styles.sectionSubtitle}>{subtitle}</Text> : null}</View>{action && onAction ? <Pressable onPress={onAction} style={styles.sectionAction}><Text style={styles.sectionActionText}>{action}</Text><ChevronRight size={15} color={colors.forest} /></Pressable> : null}</View>;
+}
+
+export function MetricCard({ label, value, caption, icon, tone = 'green', onPress }: { label: string; value: string | number; caption?: string; icon?: React.ReactNode; tone?: 'green' | 'blue' | 'amber' | 'red' | 'purple'; onPress?: () => void }) {
+  const accent = { green: colors.forest, blue: colors.blue, amber: colors.amber, red: colors.red, purple: colors.purple }[tone];
+  return <Card onPress={onPress} style={styles.metricCard}>
+    <View style={[styles.metricIcon, { backgroundColor: `${accent}15` }]}>{icon}</View>
+    <Text style={styles.metricLabel}>{label}</Text>
+    <Text style={[styles.metricValue, { color: colors.ink }]}>{value}</Text>
+    {caption ? <Text style={styles.metricCaption}>{caption}</Text> : null}
+  </Card>;
+}
+
+export function LoadingState({ label = 'Loading FieldOps data…' }: { label?: string }) {
+  return <View style={styles.loading}><ActivityIndicator color={colors.forest} size="large" /><Text style={styles.loadingText}>{label}</Text></View>;
+}
+
+export function EmptyState({ title, detail, onRetry }: { title: string; detail?: string; onRetry?: () => void }) {
+  return <View style={styles.empty}><View style={styles.emptyIcon}><AlertCircle size={24} color={colors.forest} /></View><Text style={styles.emptyTitle}>{title}</Text>{detail ? <Text style={styles.emptyDetail}>{detail}</Text> : null}{onRetry ? <PrimaryButton title="Refresh" onPress={onRetry} variant="secondary" compact /> : null}</View>;
+}
+
+export function ErrorBanner({ message, onDismiss }: { message: string; onDismiss?: () => void }) {
+  return <View style={styles.errorBanner}><AlertCircle size={17} color={colors.red} /><Text style={styles.errorText}>{message}</Text>{onDismiss ? <Pressable onPress={onDismiss}><Text style={{ color: colors.red, fontWeight: '800' }}>×</Text></Pressable> : null}</View>;
+}
+
+export function RefreshAction({ onPress, loading }: { onPress: () => void; loading?: boolean }) {
+  return <Pressable onPress={onPress} disabled={loading} style={styles.refreshAction}>{loading ? <ActivityIndicator size="small" color={colors.forest} /> : <RefreshCw size={18} color={colors.forest} />}</Pressable>;
+}
+
+export function BrandMark({ compact = false }: { compact?: boolean }) {
+  return <Image source={require('../../../assets/brand/logo.png')} resizeMode="contain" style={{ width: compact ? 126 : 164, height: compact ? 40 : 50 }} />;
+}
+
+export function ScreenHeading({ title, subtitle, action }: { title: string; subtitle?: string; action?: React.ReactNode }) {
+  return <View style={styles.screenHeading}><View style={{ flex: 1, gap: 4 }}><Text style={styles.screenTitle}>{title}</Text>{subtitle ? <Text style={styles.screenSubtitle}>{subtitle}</Text> : null}</View>{action}</View>;
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: colors.canvas }, screen: { flex: 1, backgroundColor: colors.canvas },
+  scroll: { flex: 1 }, scrollContent: { padding: spacing.lg, paddingBottom: 38, gap: spacing.lg },
+  card: { backgroundColor: colors.white, borderRadius: radii.lg, padding: spacing.lg, borderWidth: 1, borderColor: colors.border, shadowColor: '#153D29', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.045, shadowRadius: 9, elevation: 2 },
+  button: { borderRadius: 13, paddingVertical: 11, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 }, buttonText: { fontWeight: '800', letterSpacing: 0.1 },
+  fieldLabel: { fontSize: 12, color: colors.text, fontWeight: '800' }, inputWrap: { minHeight: 48, borderWidth: 1, borderColor: colors.border, borderRadius: 13, backgroundColor: '#FBFDFC', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13 }, input: { flex: 1, color: colors.ink, fontSize: 14, minHeight: 46, paddingVertical: 8 }, fieldError: { color: colors.red, fontSize: 11 },
+  searchWrap: { height: 46, borderWidth: 1, borderColor: colors.border, borderRadius: 14, backgroundColor: colors.white, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, gap: 9 }, searchInput: { flex: 1, paddingVertical: 0, color: colors.ink, fontSize: 14 },
+  pill: { alignSelf: 'flex-start', paddingHorizontal: 9, paddingVertical: 5, borderRadius: radii.pill }, pillText: { fontSize: 10, fontWeight: '800', textTransform: 'capitalize' },
+  sectionTitle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 3, gap: 10 }, sectionHeading: { fontSize: 16, fontWeight: '900', color: colors.ink }, sectionSubtitle: { fontSize: 11, color: colors.muted }, sectionAction: { flexDirection: 'row', alignItems: 'center', gap: 2 }, sectionActionText: { fontSize: 12, fontWeight: '800', color: colors.forest },
+  metricCard: { flex: 1, minWidth: '45%', padding: 13, gap: 6 }, metricIcon: { height: 34, width: 34, borderRadius: 11, justifyContent: 'center', alignItems: 'center', marginBottom: 2 }, metricLabel: { color: colors.muted, fontSize: 11, fontWeight: '700' }, metricValue: { fontSize: 24, fontWeight: '900', letterSpacing: -0.6 }, metricCaption: { color: colors.muted, fontSize: 10 },
+  loading: { padding: 40, alignItems: 'center', justifyContent: 'center', gap: 12 }, loadingText: { color: colors.muted, fontSize: 12, fontWeight: '600' }, empty: { padding: 28, borderRadius: 18, alignItems: 'center', backgroundColor: colors.white, borderWidth: 1, borderColor: colors.border, gap: 10 }, emptyIcon: { width: 48, height: 48, backgroundColor: colors.mint, borderRadius: 16, alignItems: 'center', justifyContent: 'center' }, emptyTitle: { fontWeight: '900', fontSize: 15, color: colors.ink, textAlign: 'center' }, emptyDetail: { color: colors.muted, fontSize: 12, textAlign: 'center', lineHeight: 18 },
+  errorBanner: { borderRadius: 12, borderWidth: 1, borderColor: '#FECACA', backgroundColor: '#FFF5F5', padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }, errorText: { flex: 1, color: '#991B1B', fontSize: 12, fontWeight: '600', lineHeight: 17 }, refreshAction: { width: 40, height: 40, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.white, borderWidth: 1, borderColor: colors.border },
+  screenHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }, screenTitle: { fontSize: 24, color: colors.ink, fontWeight: '900', letterSpacing: -0.7 }, screenSubtitle: { fontSize: 12, lineHeight: 18, color: colors.muted },
+});
+
+
+========== src\super-admin\screens\ProfileScreen.tsx ==========
+
+import React, { useState } from 'react';
+import { Alert, Text, View } from 'react-native';
+import { KeyRound, Mail, ShieldCheck, UserRound } from 'lucide-react-native';
+import { api, getApiErrorMessage } from '../api/client';
+import { useAuth } from '../auth/AuthContext';
+import { Card, ErrorBanner, Field, PrimaryButton, ScreenHeading, ScreenScroll } from '../components/UI';
+import { colors } from '../theme';
+
+export default function ProfileScreen() {
+  const { user, reloadUser } = useAuth();
+  const [firstName, setFirstName] = useState(user?.first_name || '');
+  const [lastName, setLastName] = useState(user?.last_name || '');
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [savingPassword, setSavingPassword] = useState(false);
+  const [error, setError] = useState('');
+
+  const saveProfile = async () => {
+    setError('');
+    if (!firstName.trim() || !lastName.trim()) { setError('First name and last name are required.'); return; }
+    setSavingProfile(true);
+    try {
+      await api.put('/auth/profile', { first_name: firstName.trim(), last_name: lastName.trim() });
+      await reloadUser();
+      Alert.alert('Profile updated', 'Your staff profile name has been updated.');
+    } catch (e) { setError(getApiErrorMessage(e, 'Profile update failed.')); }
+    finally { setSavingProfile(false); }
+  };
+
+  const changePassword = async () => {
+    setError('');
+    if (!currentPassword || !newPassword || !confirmPassword) { setError('Complete all password fields.'); return; }
+    if (newPassword !== confirmPassword) { setError('New password and confirmation do not match.'); return; }
+    if (newPassword.length < 8) { setError('Use at least 8 characters for the new password.'); return; }
+    setSavingPassword(true);
+    try {
+      await api.put('/auth/change-password', { current_password: currentPassword, new_password: newPassword });
+      setCurrentPassword(''); setNewPassword(''); setConfirmPassword('');
+      Alert.alert('Password changed', 'Your password has been updated.');
+    } catch (e) { setError(getApiErrorMessage(e, 'Password change failed.')); }
+    finally { setSavingPassword(false); }
+  };
+
+  return <ScreenScroll>
+    <ScreenHeading title="My profile" subtitle="Manage your FieldOps staff identity and account security." />
+    <Card style={{ gap: 10, backgroundColor: '#F0F7F2' }}>
+      <View style={{ width: 48, height: 48, borderRadius: 16, backgroundColor: '#DDEFE3', justifyContent: 'center', alignItems: 'center' }}><UserRound size={23} color={colors.forest} /></View>
+      <Text style={{ color: colors.ink, fontSize: 17, fontWeight: '900' }}>{user?.first_name} {user?.last_name}</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}><Mail size={13} color={colors.muted} /><Text style={{ color: colors.muted, fontSize: 11 }}>{user?.email}</Text></View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}><ShieldCheck size={13} color={colors.forest} /><Text style={{ color: colors.forest, fontSize: 10, fontWeight: '900' }}>{user?.role === 'super_admin' ? 'SUPER ADMIN' : 'DISPATCHER'} · {user?.organization_name || 'Organization staff'}</Text></View>
+    </Card>
+    {error ? <ErrorBanner message={error} /> : null}
+    <Card style={{ gap: 13 }}>
+      <Text style={{ color: colors.ink, fontWeight: '900', fontSize: 15 }}>Personal information</Text>
+      <Field label="FIRST NAME" value={firstName} onChangeText={setFirstName} placeholder="First name" left={<UserRound size={16} color={colors.muted} />} />
+      <Field label="LAST NAME" value={lastName} onChangeText={setLastName} placeholder="Last name" />
+      <PrimaryButton title="Save profile" onPress={() => void saveProfile()} loading={savingProfile} />
+    </Card>
+    <Card style={{ gap: 13 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}><KeyRound size={17} color={colors.forest} /><Text style={{ color: colors.ink, fontWeight: '900', fontSize: 15 }}>Change password</Text></View>
+      <Field label="CURRENT PASSWORD" value={currentPassword} onChangeText={setCurrentPassword} secureTextEntry placeholder="Enter current password" />
+      <Field label="NEW PASSWORD" value={newPassword} onChangeText={setNewPassword} secureTextEntry placeholder="At least 8 characters" />
+      <Field label="CONFIRM NEW PASSWORD" value={confirmPassword} onChangeText={setConfirmPassword} secureTextEntry placeholder="Re-enter new password" />
+      <PrimaryButton title="Update password" onPress={() => void changePassword()} loading={savingPassword} />
+    </Card>
+  </ScreenScroll>;
+}
+
+
+========== src\super-admin\screens\TrackingScreen.tsx ==========
+
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Platform, RefreshControl, Text, View } from 'react-native';
+import MapView, { Callout, Marker, PROVIDER_GOOGLE, type Region } from 'react-native-maps';
+import { Activity, MapPin, Navigation, Radio, Search, Signal, SignalZero } from 'lucide-react-native';
+import { useAuth } from '../auth/AuthContext';
+import { getTechnicians } from '../api/operations';
+import { useLiveTracking, type LivePosition } from '../hooks/useLiveTracking';
+import { Card, EmptyState, Pill, PrimaryButton, ScreenHeading, ScreenScroll, SearchField } from '../components/UI';
+import { colors } from '../theme';
+import { statusLabel, statusTone, text, timeAgo } from '../utils/format';
+
+const DEFAULT_REGION: Region = { latitude: 13.0827, longitude: 80.2707, latitudeDelta: 0.28, longitudeDelta: 0.28 };
+const ONLINE_WINDOW_MS = 120_000;
+type Filter = 'ALL' | 'ONLINE' | 'OFFLINE';
+
+function timestampMs(value?: string | null): number {
+  if (!value) return Number.NaN;
+  let normalized = value.trim();
+  // The web live-tracking page treats timezone-naive server timestamps as UTC.
+  if (normalized.includes('T') && !normalized.endsWith('Z') && !/[+-]\d{2}:\d{2}$/.test(normalized)) normalized += 'Z';
+  return Date.parse(normalized);
+}
+
+function validCoordinates(latitude: number, longitude: number) {
+  return Number.isFinite(latitude) && Number.isFinite(longitude)
+    && latitude >= -90 && latitude <= 90
+    && longitude >= -180 && longitude <= 180
+    && !(latitude === 0 && longitude === 0);
+}
+
+export default function TrackingScreen() {
+  const { user, accessToken } = useAuth();
+  const { positions, setPositions, connection, lastFrameAt } = useLiveTracking(user?.tenant_id, accessToken);
+  const [technicians, setTechnicians] = useState<any[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [filter, setFilter] = useState<Filter>('ALL');
+  const [search, setSearch] = useState('');
+  const [now, setNow] = useState(Date.now());
+  const mapRef = useRef<MapView>(null);
+
+  const load = useCallback(async (silent = false) => {
+    if (silent) setRefreshing(true); else setLoading(true);
+    try {
+      const list = await getTechnicians({ page: 1, limit: 200 });
+      setTechnicians(list);
+      setPositions(previous => {
+        const next = { ...previous };
+        for (const tech of list) {
+          const id = String(tech.tech_id || tech.technician_id || tech.id || '');
+          const lat = Number(tech.latitude), lng = Number(tech.longitude);
+          if (!id || !validCoordinates(lat, lng)) continue;
+          const timestamp = tech.last_ping || null;
+          if (!timestamp) continue;
+          const incoming = timestampMs(timestamp), existing = next[id] ? timestampMs(next[id].timestamp) : -1;
+          if (Number.isFinite(existing) && Number.isFinite(incoming) && incoming < existing) continue;
+          next[id] = {
+            technician_id: id,
+            technician_name: tech.technician_name,
+            latitude: lat,
+            longitude: lng,
+            status: tech.technician_status,
+            timestamp: timestamp || new Date().toISOString(),
+            accuracy: null,
+            job_id: null,
+            eta: null,
+          };
+        }
+        return next;
+      });
+    } catch {
+      // Keep the last good snapshot and current socket positions during a transient API outage.
+    } finally { setLoading(false); setRefreshing(false); }
+  }, [setPositions]);
+
+  useEffect(() => {
+    void load();
+    // The web workspace refreshes the technician roster every 3 seconds. Use a
+    // gentler 10-second roster refresh on mobile; GPS itself remains socket-driven.
+    const timer = setInterval(() => { void load(true); }, 10000);
+    const clock = setInterval(() => setNow(Date.now()), 10000);
+    return () => { clearInterval(timer); clearInterval(clock); };
+  }, [load]);
+
+  const rows = useMemo(() => technicians.map(tech => {
+    const keys = [String(tech.technician_id ?? ''), String(tech.tech_id ?? ''), String(tech.id ?? '')].filter(Boolean);
+    const liveCandidates = keys.map(key => positions[key]).filter(Boolean) as LivePosition[];
+    const live = [...liveCandidates].sort((a, b) => timestampMs(b.timestamp) - timestampMs(a.timestamp))[0];
+    const apiPing = tech.last_ping || null;
+    const livePing = live?.timestamp || null;
+    const useLive = !!live && Number.isFinite(timestampMs(livePing))
+      && (!apiPing || timestampMs(livePing) >= timestampMs(apiPing));
+    const latitude = useLive ? live!.latitude : Number(tech.latitude);
+    const longitude = useLive ? live!.longitude : Number(tech.longitude);
+    const hasLocation = validCoordinates(latitude, longitude);
+    const lastPing = useLive ? livePing : apiPing || livePing;
+    const pingTime = timestampMs(lastPing);
+    const online = Number.isFinite(pingTime) && now >= pingTime - 30000 && now - pingTime <= ONLINE_WINDOW_MS;
+    const id = String(tech.technician_id ?? tech.tech_id ?? tech.id ?? '');
+    return {
+      ...tech,
+      mapId: id,
+      gps: useLive ? live : undefined,
+      lat: hasLocation ? latitude : null,
+      lng: hasLocation ? longitude : null,
+      lastPing,
+      online,
+    };
+  }), [technicians, positions, now]);
+
+  const visible = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return rows.filter(row => {
+      if (filter === 'ONLINE' && !row.online) return false;
+      if (filter === 'OFFLINE' && row.online) return false;
+      return !term || [row.technician_name, row.technician_skill, row.technician_location, row.email, row.phone_number]
+        .some(value => String(value || '').toLowerCase().includes(term));
+    });
+  }, [rows, filter, search]);
+
+  const mapped = useMemo(() => visible.filter(row => row.lat !== null && row.lng !== null), [visible]);
+  const mapRegion = useMemo<Region>(() => mapped.length ? {
+    latitude: mapped[0].lat as number,
+    longitude: mapped[0].lng as number,
+    latitudeDelta: 0.12,
+    longitudeDelta: 0.12,
+  } : DEFAULT_REGION, [mapped]);
+
+  useEffect(() => {
+    if (mapped.length > 0) mapRef.current?.animateToRegion(mapRegion, 350);
+  }, [mapRegion, mapped.length]);
+
+  const selectedRow = rows.find(row => row.mapId === selected);
+  const centerOn = (row: any) => {
+    setSelected(row.mapId);
+    if (row.lat !== null && row.lng !== null) {
+      mapRef.current?.animateToRegion({ latitude: row.lat, longitude: row.lng, latitudeDelta: 0.035, longitudeDelta: 0.035 }, 500);
+    }
+  };
+  const onlineCount = rows.filter(row => row.online).length;
+  const offlineCount = rows.length - onlineCount;
+
+  return <ScreenScroll contentContainerStyle={{ paddingBottom: 30 }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={colors.forest} />}>
+    <ScreenHeading title="Live tracking" subtitle="Tenant-scoped technician locations and heartbeat freshness." action={<Pill label={connection === 'connected' ? 'Live connected' : connection} tone={connection === 'connected' ? 'green' : connection === 'reconnecting' ? 'amber' : 'neutral'} />} />
+    <View style={{ flexDirection: 'row', gap: 9 }}>
+      <Card style={{ flex: 1, padding: 13, gap: 4 }}><View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}><Radio size={15} color={colors.forest} /><Text style={{ color: colors.muted, fontSize: 10 }}>Technicians</Text></View><Text style={{ color: colors.ink, fontSize: 22, fontWeight: '900' }}>{rows.length}</Text></Card>
+      <Card style={{ flex: 1, padding: 13, gap: 4 }}><View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}><Signal size={15} color={colors.forest} /><Text style={{ color: colors.muted, fontSize: 10 }}>Online</Text></View><Text style={{ color: colors.forest, fontSize: 22, fontWeight: '900' }}>{onlineCount}</Text></Card>
+      <Card style={{ flex: 1, padding: 13, gap: 4 }}><View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}><SignalZero size={15} color={colors.amber} /><Text style={{ color: colors.muted, fontSize: 10 }}>Offline</Text></View><Text style={{ color: colors.amber, fontSize: 22, fontWeight: '900' }}>{offlineCount}</Text></Card>
+    </View>
+    <SearchField value={search} onChangeText={setSearch} placeholder="Search technician, skill, zone or contact…" />
+    <View style={{ flexDirection: 'row', backgroundColor: '#E7EFEA', padding: 4, borderRadius: 13, gap: 4 }}>
+      {(['ALL', 'ONLINE', 'OFFLINE'] as Filter[]).map(value => <PrimaryButton key={value} title={value === 'ALL' ? `All (${rows.length})` : value === 'ONLINE' ? `Online (${onlineCount})` : `Offline (${offlineCount})`} compact style={{ flex: 1 }} variant={filter === value ? 'primary' : 'ghost'} onPress={() => setFilter(value)} />)}
+    </View>
+    <Card style={{ padding: 8, gap: 7 }}>
+      <View style={{ paddingHorizontal: 8, paddingTop: 5, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}><Text style={{ color: colors.ink, fontWeight: '900', fontSize: 13 }}>Technician map</Text><Text style={{ color: colors.muted, fontSize: 10 }}>{mapped.length} mapped / {visible.length} visible</Text></View>
+      <View style={{ height: 350, borderRadius: 15, overflow: 'hidden' }}>
+        <MapView ref={mapRef} provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined} style={{ flex: 1 }} initialRegion={DEFAULT_REGION} onMapReady={() => { if (mapped.length > 0) mapRef.current?.animateToRegion(mapRegion, 350); }} showsUserLocation={false} showsCompass showsScale>
+          {mapped.map(row => <Marker key={row.mapId} coordinate={{ latitude: row.lat as number, longitude: row.lng as number }} pinColor={row.online ? '#168653' : '#D97706'} onPress={() => setSelected(row.mapId)}>
+            <Callout onPress={() => setSelected(row.mapId)}><View style={{ width: 190, gap: 4 }}><Text style={{ fontWeight: '900', color: '#17231D' }}>{text(row.technician_name)}</Text><Text style={{ color: '#536159', fontSize: 11 }}>{row.online ? 'Online' : 'Offline'} · {statusLabel(row.technician_status)}</Text><Text style={{ color: '#536159', fontSize: 10 }}>Last GPS: {timeAgo(row.lastPing)}</Text>{row.gps?.job_id ? <Text style={{ color: '#536159', fontSize: 10 }}>Job #{row.gps.job_id}</Text> : null}</View></Callout>
+          </Marker>)}
+        </MapView>
+      </View>
+      <Text style={{ color: colors.muted, fontSize: 10, paddingHorizontal: 7 }}>GPS coordinates are accepted only when valid and non-zero. Live updates arrive through the backend’s authenticated tenant-wide WebSocket subscription.</Text>
+    </Card>
+    {selectedRow ? <Card style={{ gap: 8, borderColor: colors.forest }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}><View style={{ flex: 1, gap: 3 }}><Text style={{ color: colors.ink, fontWeight: '900', fontSize: 14 }}>{text(selectedRow.technician_name, 'Technician')}</Text><Text style={{ color: colors.muted, fontSize: 10 }}>{text(selectedRow.technician_skill)} · {text(selectedRow.technician_location)}</Text></View><Pill label={selectedRow.online ? 'Online' : 'Offline'} tone={selectedRow.online ? 'green' : 'amber'} /></View>
+      <Text style={{ color: colors.text, fontSize: 11 }}>Work status: {statusLabel(selectedRow.technician_status)}</Text>
+      <Text style={{ color: colors.muted, fontSize: 11 }}>Last heartbeat: {selectedRow.lastPing ? timeAgo(selectedRow.lastPing) : 'No heartbeat received'}</Text>
+      {selectedRow.lat !== null && selectedRow.lng !== null ? <Text style={{ color: colors.text, fontSize: 11 }}>GPS: {selectedRow.lat.toFixed(5)}, {selectedRow.lng.toFixed(5)}</Text> : <Text style={{ color: colors.amber, fontSize: 11 }}>No valid GPS location recorded.</Text>}
+      {selectedRow.gps?.job_id ? <Text style={{ color: colors.text, fontSize: 11 }}>Job: #{selectedRow.gps.job_id}</Text> : null}
+      {selectedRow.gps?.eta ? <Text style={{ color: colors.text, fontSize: 11 }}>Live ETA: {selectedRow.gps.eta}</Text> : null}
+      {selectedRow.gps?.eta_duration_minutes != null && Number.isFinite(Number(selectedRow.gps.eta_duration_minutes)) ? <Text style={{ color: colors.text, fontSize: 11 }}>ETA duration: {Math.max(0, Math.round(Number(selectedRow.gps.eta_duration_minutes)))} min</Text> : null}
+      {selectedRow.phone_number || selectedRow.email ? <Text style={{ color: colors.muted, fontSize: 11 }}>{[selectedRow.phone_number, selectedRow.email].filter(Boolean).join(' · ')}</Text> : null}
+      <PrimaryButton title="Clear selection" compact variant="ghost" onPress={() => setSelected(null)} />
+    </Card> : null}
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}><Activity size={13} color={colors.muted} /><Text style={{ color: colors.muted, fontSize: 10 }}>Last WebSocket frame: {lastFrameAt ? new Date(lastFrameAt).toLocaleTimeString() : 'Waiting for server frame'}</Text></View>
+    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}><Text style={{ color: colors.ink, fontWeight: '900', fontSize: 16 }}>Technicians</Text><Text style={{ color: colors.muted, fontSize: 10 }}>{visible.length} shown · roster refresh 10s</Text></View>
+    {visible.length === 0 ? <EmptyState title={loading ? 'Loading technicians…' : 'No matching technicians'} detail="Change the online filter or search, then refresh the roster." onRetry={() => load(true)} /> : visible.map(row => <Card key={row.mapId} onPress={() => centerOn(row)} style={{ flexDirection: 'row', alignItems: 'center', gap: 11 }}>
+      <View style={{ width: 38, height: 38, borderRadius: 13, backgroundColor: row.online ? colors.mint : '#FFF1DF', alignItems: 'center', justifyContent: 'center' }}>{row.online ? <Navigation size={17} color={colors.forest} /> : <MapPin size={17} color={colors.amber} />}</View>
+      <View style={{ flex: 1, gap: 4 }}><Text style={{ color: colors.ink, fontSize: 13, fontWeight: '900' }}>{text(row.technician_name, 'Technician')}</Text><Text style={{ color: colors.muted, fontSize: 10 }}>{text(row.technician_skill)} · {row.lastPing ? timeAgo(row.lastPing) : 'No heartbeat'}</Text><Text style={{ color: colors.muted, fontSize: 10 }}>{row.lat !== null && row.lng !== null ? 'GPS available' : 'No GPS position'}</Text></View>
+      <Pill label={row.online ? 'Online' : 'Offline'} tone={row.online ? 'green' : 'amber'} />
+    </Card>)}
+  </ScreenScroll>;
+}
+
+
+========== src\shared\maps\OlaTechnicianMap.tsx ==========
+
+
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  StyleProp,
+  StyleSheet,
+  Text,
+  View,
+  ViewStyle,
+} from "react-native";
+import { WebView, type WebViewMessageEvent } from "react-native-webview";
+
+export interface OlaTechnician {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  online: boolean;
+  status?: string | null;
+  lastPing?: string | null;
+  jobId?: string | number | null;
+}
+
+interface Props {
+  technicians: OlaTechnician[];
+  selectedTechnicianId: string | null;
+  onSelectTechnician: (id: string) => void;
+  style?: StyleProp<ViewStyle>;
+}
+
+const OLA_STYLE_URL =
+  "https://api.olamaps.io/tiles/vector/v1/styles/default-light-standard/style.json";
+
+function createMapHtml(apiKey: string): string {
+  const safeKey = JSON.stringify(apiKey);
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
+<style>
+html, body, #map {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: #edf3ee;
+  font-family: Arial, sans-serif;
+}
+
+#map-error {
+  display: none;
+  position: absolute;
+  inset: 0;
+  padding: 20px;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: #9A3412;
+  background: #FFF7ED;
+  font-size: 14px;
+}
+
+.tech-marker {
+  width: 38px;
+  height: 38px;
+  border: 3px solid white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-weight: bold;
+  font-size: 13px;
+  box-shadow: 0 3px 12px rgba(0,0,0,.28);
+}
+
+.tech-marker.selected {
+  width: 46px;
+  height: 46px;
+  border-width: 4px;
+  box-shadow: 0 0 0 5px rgba(22,163,74,.22),
+              0 3px 12px rgba(0,0,0,.28);
+}
+
+#map-status {
+  position: absolute;
+  z-index: 5;
+  left: 10px;
+  top: 10px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  background: rgba(255,255,255,.95);
+  color: #334155;
+  font-size: 11px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.12);
+}
+</style>
+<script src="https://www.unpkg.com/olamaps-web-sdk@1.4.0/dist/olamaps-web-sdk.umd.js"></script>
+</head>
+<body>
+<div id="map"></div>
+<div id="map-status">Loading technician locations...</div>
+<div id="map-error"></div>
+
+<script>
+(function () {
+  const apiKey = ${safeKey};
+  const styleUrl = ${JSON.stringify(OLA_STYLE_URL)};
+
+  let ola = null;
+  let map = null;
+  let mapReady = false;
+  let pendingPayload = null;
+  let markers = {};
+  let lastFocusedId = null;
+  let hasInitialView = false;
+
+  function sendMessage(payload) {
+    try {
+      window.ReactNativeWebView.postMessage(JSON.stringify(payload));
+    } catch (_) {}
+  }
+
+  function setStatus(message) {
+    const element = document.getElementById("map-status");
+    if (element) element.textContent = message;
+  }
+
+  function showError(message) {
+    const element = document.getElementById("map-error");
+    element.style.display = "flex";
+    element.textContent = message;
+    sendMessage({ type: "ERROR", message: message });
+  }
+
+  function createMarker(technician) {
+    const element = document.createElement("div");
+    element.className = "tech-marker";
+    element.textContent = (technician.name || "T").trim().charAt(0).toUpperCase() || "T";
+
+    element.style.background = technician.online ? "#168653" : "#D97706";
+
+    element.addEventListener("click", function (event) {
+      event.stopPropagation();
+      sendMessage({
+        type: "SELECT",
+        id: technician.id
+      });
+    });
+
+    return element;
+  }
+
+  function updateMarkers(payload) {
+    if (!mapReady || !map || !payload) return;
+
+    const technicians = Array.isArray(payload.technicians)
+      ? payload.technicians
+      : [];
+
+    const currentIds = {};
+
+    technicians.forEach(function (technician) {
+      if (!technician || !technician.id) return;
+
+      const lat = Number(technician.latitude);
+      const lng = Number(technician.longitude);
+
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return;
+      if (lat === 0 && lng === 0) return;
+
+      const id = String(technician.id);
+      currentIds[id] = true;
+
+      const position = [lng, lat];
+      const selected = id === payload.selectedTechnicianId;
+
+      if (!markers[id]) {
+        const element = createMarker(technician);
+
+        markers[id] = {
+          element: element,
+          marker: ola.addMarker({
+            element: element,
+            anchor: "bottom"
+          }).setLngLat(position).addTo(map)
+        };
+      } else {
+        markers[id].marker.setLngLat(position);
+
+        const element = markers[id].element;
+        element.style.background = technician.online
+          ? "#168653"
+          : "#D97706";
+
+        element.textContent =
+          (technician.name || "T").trim().charAt(0).toUpperCase() || "T";
+
+        element.classList.toggle("selected", selected);
+      }
+
+      markers[id].element.classList.toggle("selected", selected);
+    });
+
+    Object.keys(markers).forEach(function (id) {
+      if (!currentIds[id]) {
+        try {
+          markers[id].marker.remove();
+        } catch (_) {}
+        delete markers[id];
+      }
+    });
+
+    const visibleCount = Object.keys(currentIds).length;
+    setStatus(visibleCount + " technicians mapped");
+
+    if (!hasInitialView && visibleCount > 0) {
+      const first = technicians.find(function (item) {
+        return currentIds[String(item.id)];
+      });
+
+      if (first) {
+        map.flyTo({
+          center: [Number(first.longitude), Number(first.latitude)],
+          zoom: 11,
+          duration: 500
+        });
+        hasInitialView = true;
+      }
+    }
+
+    const focusId = payload.selectedTechnicianId
+      ? String(payload.selectedTechnicianId)
+      : null;
+
+    if (focusId && focusId !== lastFocusedId && markers[focusId]) {
+      const position = markers[focusId].marker.getLngLat();
+
+      map.flyTo({
+        center: [position.lng, position.lat],
+        zoom: 15,
+        duration: 500
+      });
+    }
+
+    lastFocusedId = focusId;
+  }
+
+  window.updateTechnicianMarkers = function (payload) {
+    pendingPayload = payload;
+
+    if (mapReady) {
+      updateMarkers(payload);
+    }
+  };
+
+  async function initializeMap() {
+    try {
+      if (!apiKey) {
+        throw new Error("Ola Maps API key is missing.");
+      }
+
+      if (typeof window.OlaMaps !== "function") {
+        throw new Error("Ola Maps SDK could not be loaded. Check internet connectivity.");
+      }
+
+      ola = new window.OlaMaps({ apiKey: apiKey });
+
+      map = await ola.init({
+        style: styleUrl,
+        container: "map",
+        center: [80.2707, 13.0827],
+        zoom: 10
+      });
+
+      try {
+        map.addControl(
+          ola.addNavigationControls({ showCompass: true }),
+          "top-right"
+        );
+      } catch (_) {}
+
+      mapReady = true;
+
+      setStatus("Live technician locations");
+
+      sendMessage({ type: "READY" });
+
+      if (pendingPayload) {
+        updateMarkers(pendingPayload);
+      }
+    } catch (error) {
+      showError(
+        error instanceof Error
+          ? error.message
+          : "Unable to initialize Ola Maps."
+      );
+    }
+  }
+
+  initializeMap();
+})();
+</script>
+</body>
+</html>`;
+}
+
+export default function OlaTechnicianMap({
+  technicians,
+  selectedTechnicianId,
+  onSelectTechnician,
+  style,
+}: Props) {
+  const webViewRef = useRef<WebView>(null);
+  const [mapReady, setMapReady] = useState(false);
+  const [mapError, setMapError] = useState("");
+
+  const apiKey =
+    process.env.EXPO_PUBLIC_OLA_MAPS_API_KEY?.trim() ?? "";
+
+  const mapHtml = useMemo(
+    () => (apiKey ? createMapHtml(apiKey) : null),
+    [apiKey]
+  );
+
+  const payload = useMemo(
+    () => ({
+      technicians,
+      selectedTechnicianId,
+    }),
+    [technicians, selectedTechnicianId]
+  );
+
+  useEffect(() => {
+    if (!mapReady) return;
+
+    const json = JSON.stringify(payload);
+
+    webViewRef.current?.injectJavaScript(
+      `window.updateTechnicianMarkers && window.updateTechnicianMarkers(${json}); true;`
+    );
+  }, [mapReady, payload]);
+
+  const handleMessage = (event: WebViewMessageEvent) => {
+    try {
+      const message = JSON.parse(event.nativeEvent.data);
+
+      if (message.type === "READY") {
+        setMapReady(true);
+        setMapError("");
+      }
+
+      if (message.type === "SELECT" && message.id) {
+        onSelectTechnician(String(message.id));
+      }
+
+      if (message.type === "ERROR") {
+        setMapError(message.message || "Ola Maps failed to load.");
+      }
+    } catch {
+      // Ignore invalid WebView messages.
+    }
+  };
+
+  if (!apiKey) {
+    return (
+      <View style={[styles.container, style, styles.centered]}>
+        <Text style={styles.errorText}>
+          Ola Maps API key is missing from fo/.env.
+        </Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={[styles.container, style]}>
+      <WebView
+        ref={webViewRef}
+        source={{ html: mapHtml ?? "" }}
+        javaScriptEnabled
+        domStorageEnabled
+        onMessage={handleMessage}
+        onError={() => setMapError("Ola Maps WebView failed to load.")}
+        style={styles.webView}
+      />
+
+      {mapError ? (
+        <View style={styles.errorOverlay}>
+          <Text style={styles.errorText}>{mapError}</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    overflow: "hidden",
+    borderRadius: 15,
+    backgroundColor: "#edf3ee",
+  },
+  webView: {
+    flex: 1,
+    backgroundColor: "transparent",
+  },
+  centered: {
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+  errorOverlay: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    padding: 10,
+    backgroundColor: "#FFF7ED",
+  },
+  errorText: {
+    color: "#9A3412",
+    fontSize: 12,
+    textAlign: "center",
+  },
+});

@@ -168,6 +168,61 @@ def _validate_scope(
         )
 
 
+def _validate_user_tenant(
+    db: Session,
+    user: User,
+    *,
+    revoke_refresh_record: Optional[RefreshToken] = None,
+) -> None:
+    """Enforce independent customer accounts and tenant-bound staff roles."""
+    from ..auth.rbac import UserRole
+
+    try:
+        role = UserRole(user.role)
+    except ValueError:
+        raise GrantError(
+            "invalid_grant",
+            "User role is invalid",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if role == UserRole.CUSTOMER:
+        if user.tenant_id is not None:
+            raise GrantError(
+                "invalid_grant",
+                "Customer account must not be associated with an organization",
+                status.HTTP_401_UNAUTHORIZED,
+            )
+        return
+
+    if not user.tenant_id:
+        raise GrantError(
+            "invalid_grant",
+            "Organization tenant is required for this account",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    organization = (
+        db.query(Organization)
+        .filter(
+            Organization.id == user.tenant_id,
+            Organization.status == "ACTIVE",
+            Organization.deleted_at.is_(None),
+        )
+        .first()
+    )
+
+    if organization is None:
+        if revoke_refresh_record is not None:
+            revoke_refresh_record.revoked_at = datetime.now(timezone.utc)
+            db.commit()
+        raise GrantError(
+            "invalid_grant",
+            "Organization is inactive or deleted",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+
 def _authenticate_password(
     db: Session,
     request: Request,
@@ -189,14 +244,26 @@ def _authenticate_password(
 
     normalized_username = username.lower().strip()
 
-    user = (
+    matching_users = (
         db.query(User)
         .filter(
             User.email == normalized_username,
             User.deleted_at.is_(None),
         )
-        .first()
+        .limit(2)
+        .all()
     )
+
+    # Never choose an account arbitrarily when legacy data contains
+    # duplicate email addresses across organizations/accounts.
+    if len(matching_users) > 1:
+        raise GrantError(
+            "invalid_grant",
+            "Multiple accounts use this email address. Contact support.",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    user = matching_users[0] if matching_users else None
 
     # Keep unknown/inactive accounts on the generic authentication
     # response, but return a distinct lockout response for an account
@@ -237,6 +304,8 @@ def _authenticate_password(
         )
 
     user.record_successful_login()
+
+    _validate_user_tenant(db, user)
 
     granted_scope = _validate_scope(
         user,
@@ -356,8 +425,8 @@ def _refresh_token_grant(
     4. Ensure the stored token is still valid.
     5. Verify token ownership.
     6. Verify the user is active and not deleted.
-    7. Verify the organization is active and not deleted.
-    8. Verify tenant_id matches the database user.
+    7. Verify customers are tenantless and staff organizations are active.
+    8. Verify tenant_id matches the database user, including NULL customers.
     9. Verify role matches the database user.
     10. Revoke the old refresh token.
     11. Issue a new access token.
@@ -434,31 +503,16 @@ def _refresh_token_grant(
             status.HTTP_401_UNAUTHORIZED,
         )
 
-    organization = (
-        db.query(Organization)
-        .filter(
-            Organization.id == user.tenant_id,
-            Organization.status == "ACTIVE",
-            Organization.deleted_at.is_(None),
-        )
-        .first()
+    _validate_user_tenant(
+        db,
+        user,
+        revoke_refresh_record=stored,
     )
 
-    if organization is None:
-        stored.revoked_at = datetime.now(
-            timezone.utc
-        )
-        db.commit()
+    token_tenant_id = claims.get("tenant_id")
+    database_tenant_id = user.tenant_id
 
-        raise GrantError(
-            "invalid_grant",
-            "Organization is inactive or deleted",
-            status.HTTP_401_UNAUTHORIZED,
-        )
-
-    if str(claims.get("tenant_id")) != str(
-        user.tenant_id
-    ):
+    if token_tenant_id != database_tenant_id:
         raise GrantError(
             "invalid_grant",
             "Refresh token tenant validation failed",

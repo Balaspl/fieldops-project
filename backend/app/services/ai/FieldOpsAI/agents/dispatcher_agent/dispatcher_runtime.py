@@ -160,6 +160,25 @@ class DispatcherRuntime:
                     result.add(identity)
         return result
 
+    @staticmethod
+    def _pending_offer_identities(job_id: int) -> set[tuple[str, int]]:
+        """Read persisted PENDING offers; DB state wins over delivery errors."""
+        with SessionLocal() as db:
+            rows = (
+                db.query(models.JobAssignment.tenant_id, models.JobAssignment.technician_id)
+                .filter(
+                    models.JobAssignment.job_id == int(job_id),
+                    models.JobAssignment.status == "PENDING",
+                    models.JobAssignment.assigned_at.isnot(None),
+                )
+                .all()
+            )
+        return {
+            (str(tenant_id), int(technician_id))
+            for tenant_id, technician_id in rows
+            if tenant_id is not None and technician_id is not None
+        }
+
     async def start_dispatch(
         self,
         job_id: int,
@@ -288,9 +307,16 @@ class DispatcherRuntime:
             ),
             return_exceptions=True,
         )
+        # A notification/timer can fail after the PENDING offer has committed.
+        # Treat the persisted database row as the source of truth so this
+        # candidate is not misclassified as an uncreated offer.
+        pending_identities = self._pending_offer_identities(job_id)
         successful = [
             candidate for candidate, outcome in zip(candidates, outcomes)
-            if not isinstance(outcome, Exception)
+            if (
+                not isinstance(outcome, Exception)
+                or self._candidate_identity(candidate) in pending_identities
+            )
         ]
         workload_skipped = [
             candidate for candidate, outcome in zip(candidates, outcomes)
@@ -330,6 +356,24 @@ class DispatcherRuntime:
             job_id, len(candidates), len(successful), len(failed),
         )
         if not successful:
+            # Defensive second check: a post-commit exception may have left a
+            # PENDING offer even if its candidate could not be matched above.
+            pending_identities = self._pending_offer_identities(job_id)
+            if pending_identities:
+                state["current_batch_technicians"] = [
+                    self._identity_payload(identity)
+                    for identity in sorted(pending_identities)
+                ]
+                state["next_action"] = "WAIT_FOR_ALL_OFFERS_TERMINAL"
+                state["status"] = "OFFERS_BROADCAST"
+                state["pending_offer_count"] = len(pending_identities)
+                self._persist_dispatch_state(job_id, state)
+                logger.warning(
+                    "dispatch_waiting_for_persisted_offers job_id=%s pending=%s",
+                    job_id, len(pending_identities),
+                )
+                return state
+
             # A workload-excluded technician was never offered. Ask Planning for
             # the next eligible pool instead of treating that candidate as a
             # rejected/timed-out offer. Tenant-scoped identities avoid excluding
@@ -535,7 +579,8 @@ class DispatcherRuntime:
         """
 
         try:
-            result = try_force_assign_job(
+            result = await asyncio.to_thread(
+                try_force_assign_job,
                 job_id=job_id,
                 dispatch_state=dispatch_state,
             )
@@ -648,23 +693,25 @@ class DispatcherRuntime:
                 "preferred_visit_date": getattr(
                     job, "preferred_service_date", None
                 ),
+                "preferred_visit_time": getattr(
+                    job, "preferred_service_time", None
+                ),
             }
 
-            result = planning_graph.invoke(
-                {
-                    "job_id": job_id,
-                    "job_requirement": job_requirement,
-                    # Planning's current exclusion input is numeric-only. Do
-                    # not pass IDs here: that would exclude another tenant's
-                    # technician if numeric IDs overlap. Filter below instead.
-                    "excluded_technician_ids": [],
-                }
-            )
-            ranked_all = result.get("all_ranked_technicians") or []
+            # Copy primitive job fields above, then release the SQLAlchemy
+            # session before running the synchronous LangGraph invocation.
+            planning_input = {
+                "job_id": job_id,
+                "job_requirement": job_requirement,
+                # Planning's current exclusion input is numeric-only. Do
+                # not pass IDs here: that would exclude another tenant's
+                # technician if numeric IDs overlap. Filter below instead.
+                "excluded_technician_ids": [],
+            }
 
-            ranked = ranked_all
-
-            log_planning_top3(job_id, ranked, excluded_identities)
+        result = await asyncio.to_thread(planning_graph.invoke, planning_input)
+        ranked_all = result.get("all_ranked_technicians") or []
+        log_planning_top3(job_id, ranked_all, excluded_identities)
 
         recommendations = (
             result.get("all_ranked_technicians")
@@ -873,12 +920,6 @@ class DispatcherRuntime:
             if current_status not in OFFERABLE_JOB_STATUSES:
                 raise RuntimeError(f"job_not_dispatchable:{getattr(job, 'status', None)}")
 
-            current_status = str(getattr(job, "status", "") or "").strip().upper()
-            if current_status not in OFFERABLE_JOB_STATUSES:
-                raise RuntimeError(
-                    f"job_not_dispatchable:{getattr(job, 'status', None)}"
-                )
-
             dispatch_state = job_state.get("_dispatch_state")
             if isinstance(dispatch_state, dict):
                 job.dispatch_state = dispatch_state
@@ -1059,31 +1100,42 @@ class DispatcherRuntime:
                 )
                 raise
 
-            # Start an independent acceptance timer for this technician's offer.
-            redis_client = get_redis_client()
-            if redis_client is not None:
-                TimerService.start_timer(
-                    redis_client,
-                    str(job_id),
-                    str(technician.technician_id),
-                )
-            else:
-                logger.error(
-                    "offer_timer_not_started job_id=%s technician_id=%s reason=redis_unavailable",
+            # Timer and push delivery are post-commit side effects. Their
+            # failure must not make gather() believe the DB offer was not made.
+            try:
+                redis_client = get_redis_client()
+                if redis_client is not None:
+                    TimerService.start_timer(
+                        redis_client,
+                        str(job_id),
+                        str(technician.technician_id),
+                    )
+                else:
+                    logger.error(
+                        "offer_timer_not_started job_id=%s technician_id=%s reason=redis_unavailable",
+                        job_id, technician_id,
+                    )
+            except Exception:
+                logger.exception(
+                    "offer_timer_start_failed_after_commit job_id=%s technician_id=%s",
                     job_id, technician_id,
                 )
 
-            # The in-app card above does not deliver a mobile push. Send
-            # the native FCM notification only after the assignment commits.
-            from app.services.assignment_push import send_assignment_push
+            try:
+                from app.services.assignment_push import send_assignment_push
 
-            await send_assignment_push(
-                job_id=job.id,
-                tenant_id=str(technician.tenant_id),
-                technician_id=str(technician.tech_id),
-                job_title=getattr(job, "service_type", None),
-                location=getattr(job, "location", None),
-            )
+                await send_assignment_push(
+                    job_id=job.id,
+                    tenant_id=str(technician.tenant_id),
+                    technician_id=str(technician.tech_id),
+                    job_title=getattr(job, "service_type", None),
+                    location=getattr(job, "location", None),
+                )
+            except Exception:
+                logger.exception(
+                    "offer_push_failed_after_commit job_id=%s technician_id=%s",
+                    job_id, technician_id,
+                )
 
             # ----------------------------------------------------------
             # Refresh

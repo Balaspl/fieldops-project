@@ -207,8 +207,8 @@ class RegisterRequest(BaseModel):
     # E.164-style values as well as local digits and normalize whitespace.
     phone_number: Optional[str] = Field(default=None, min_length=7, max_length=20)
 
-    # Public signup is scoped to the organization selected by the client.
-    # The role is intentionally not accepted from the client.
+    # Deprecated compatibility field. Customer signup ignores this value;
+    # customer accounts are always independent from organizations.
     tenant_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
 
     # Optional address fields collected by the customer registration screen.
@@ -320,7 +320,7 @@ class UserProfileResponse(BaseModel):
     first_name: str
     last_name: str
     role: str
-    tenant_id: str
+    tenant_id: Optional[str] = None
     is_active: bool
     is_email_verified: bool
     last_login: Optional[datetime] = None
@@ -463,7 +463,7 @@ def _build_token_response(
 
     session = create_session(
         user_id=str(user.id),
-        tenant_id=str(user.tenant_id),
+        tenant_id=user.tenant_id,
     )
 
     session_id = session["session_id"]
@@ -494,13 +494,13 @@ def _build_token_response(
     # Organization information
     # ---------------------------------------------------------
 
-    org = (
-        db.query(Organization)
-        .filter(
-            Organization.id == user.tenant_id,
+    org = None
+    if user.tenant_id is not None:
+        org = (
+            db.query(Organization)
+            .filter(Organization.id == user.tenant_id)
+            .first()
         )
-        .first()
-    )
 
     # ---------------------------------------------------------
     # Hash refresh token before database storage
@@ -629,40 +629,31 @@ def _log_audit(
         EnterpriseAuditLog,
     )
 
-    if not tenant_id:
-        logger.warning(
-            "Authentication audit event without tenant: "
-            "action=%s user_id=%s details=%s",
-            action,
-            user_id,
-            details,
+    # Independent customer events intentionally have no tenant.
+    # Validate the organization only when a tenant ID is present.
+    if tenant_id is not None:
+        organization_exists = (
+            db.query(Organization.id)
+            .filter(Organization.id == tenant_id)
+            .first()
         )
-        return
 
-    organization_exists = (
-        db.query(Organization.id)
-        .filter(
-            Organization.id == tenant_id,
-        )
-        .first()
-    )
-
-    if organization_exists is None:
-        logger.warning(
-            "Authentication audit event skipped because "
-            "tenant does not exist: action=%s tenant_id=%s "
-            "user_id=%s details=%s",
-            action,
-            tenant_id,
-            user_id,
-            details,
-        )
-        return
+        if organization_exists is None:
+            logger.warning(
+                "Authentication audit event skipped because "
+                "tenant does not exist: action=%s tenant_id=%s "
+                "user_id=%s details=%s",
+                action,
+                tenant_id,
+                user_id,
+                details,
+            )
+            return
 
     audit = EnterpriseAuditLog(
         id=str(uuid.uuid4()),
         user_id=user_id,
-        tenant_id=tenant_id,
+        tenant_id=None,
         action=action,
         ip_address=(
             request.client.host
@@ -718,14 +709,15 @@ async def register(
             },
         )
 
-    # Require an explicit organization scope. Never silently route a signup
-    # into a default tenant: that can place customers in the wrong organization.
-    raw_tenant_id = payload.tenant_id
-    tenant_id = raw_tenant_id.strip() if isinstance(raw_tenant_id, str) else ""
-    if not tenant_id:
+    # Customer accounts are independent from provider organizations.
+    # Ignore any legacy tenant_id sent by older clients and always persist NULL.
+    tenant_id = None
+
+    email = payload.email.lower().strip()
+    if not email:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="tenant_id is required",
+            detail="Email address is required",
         )
 
     phone_number = payload.phone_number.strip() if payload.phone_number else None
@@ -735,27 +727,12 @@ async def register(
             detail="Phone number must contain 7 to 20 characters",
         )
 
-    org = (
-        db.query(Organization)
-        .filter(
-            Organization.id == tenant_id,
-            Organization.status == "ACTIVE",
-            Organization.deleted_at.is_(None),
-        )
-        .first()
-    )
-
-    if org is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Organization not found or inactive",
-        )
-
+    # Email login must resolve to one account. Prevent a new independent
+    # customer from colliding with an existing account in any organization.
     existing = (
         db.query(User)
         .filter(
-            User.email == payload.email.lower().strip(),
-            User.tenant_id == tenant_id,
+            User.email == email,
             User.deleted_at.is_(None),
         )
         .first()
@@ -764,22 +741,19 @@ async def register(
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "A user with this email already exists "
-                "in this organization"
-            ),
+            detail="A user with this email already exists",
         )
 
     user = User(
         id=str(uuid.uuid4()),
-        email=payload.email.lower().strip(),
+        email=email,
         password_hash=hash_password(
             payload.password,
         ),
         first_name=payload.first_name.strip(),
         last_name=payload.last_name.strip(),
         role=role.value,
-        tenant_id=tenant_id,
+        tenant_id=None,
         phone_number=phone_number,
         is_active=True,
         is_email_verified=False,
@@ -1825,21 +1799,28 @@ async def google_oidc_login(
             detail="FieldOps account is disabled",
         )
 
-    organization = (
-        db.query(Organization)
-        .filter(
-            Organization.id == user.tenant_id,
-            Organization.status == "ACTIVE",
-            Organization.deleted_at.is_(None),
-        )
-        .first()
-    )
+    if user.role != UserRole.CUSTOMER.value:
+        if user.tenant_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Organization membership is required",
+            )
 
-    if organization is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Organization is inactive",
+        organization = (
+            db.query(Organization)
+            .filter(
+                Organization.id == user.tenant_id,
+                Organization.status == "ACTIVE",
+                Organization.deleted_at.is_(None),
+            )
+            .first()
         )
+
+        if organization is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Organization is inactive",
+            )
 
     response = _build_token_response(
         user=user,
@@ -2379,16 +2360,25 @@ async def forgot_password(
 
     email = payload.email.lower().strip()
 
-    user = (
+    # Email must resolve to exactly one account. This avoids issuing a
+    # reset link for an arbitrary organization/customer account if legacy
+    # duplicate email records exist from before global email uniqueness.
+    matching_users = (
         db.query(User)
         .filter(
             User.email == email,
             User.deleted_at.is_(None),
         )
-        .first()
+        .limit(2)
+        .all()
     )
 
-    if user is None:
+    if len(matching_users) != 1:
+        return generic_response
+
+    user = matching_users[0]
+
+    if not user.is_active:
         return generic_response
 
     now = datetime.now(timezone.utc)
@@ -2563,6 +2553,7 @@ async def reset_password(
         .filter(
             PasswordResetToken.token_hash == token_hash,
         )
+        .with_for_update()
         .first()
     )
 
@@ -2600,6 +2591,7 @@ async def reset_password(
             User.tenant_id == reset_token.tenant_id,
             User.deleted_at.is_(None),
         )
+        .with_for_update()
         .first()
     )
 
