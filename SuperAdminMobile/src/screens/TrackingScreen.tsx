@@ -61,6 +61,40 @@ function validCoordinates(latitude: number, longitude: number): boolean {
   );
 }
 
+function formatLastSeen(
+  value: string | null | undefined,
+  currentTime: number,
+): string {
+  if (!value) return 'No heartbeat received';
+
+  let normalized = value.trim();
+
+  if (
+    normalized.includes('T') &&
+    !normalized.endsWith('Z') &&
+    !/[+-]\d{2}:\d{2}$/.test(normalized)
+  ) {
+    normalized += 'Z';
+  }
+
+  const timestamp = Date.parse(normalized);
+
+  if (!Number.isFinite(timestamp)) {
+    return 'No heartbeat received';
+  }
+
+  const seconds = Math.max(
+    0,
+    Math.floor((currentTime - timestamp) / 1000),
+  );
+
+  if (seconds < 60) return `Last seen ${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+
+  if (minutes < 60) return `Last seen ${minutes}m ago`;
+  return `Last seen ${Math.floor(minutes / 60)}h ago`;
+}
+
 export default function TrackingScreen() {
   const { user, accessToken } = useAuth();
 
@@ -74,7 +108,10 @@ export default function TrackingScreen() {
   const [technicians, setTechnicians] = useState<any[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
+  const [mapReady, setMapReady] = useState(false);
+  const [mapError, setMapError] = useState('');
   const [filter, setFilter] = useState<Filter>('ALL');
   const [search, setSearch] = useState('');
   const [now, setNow] = useState(Date.now());
@@ -302,6 +339,15 @@ export default function TrackingScreen() {
   ).length;
 
   const offlineCount = rows.length - onlineCount;
+  const mappedRows = useMemo(() => visible.filter(row => row.latitude !== null && row.longitude !== null), [visible]);
+  const mapPayload = useMemo(() => mappedRows.map(row => ({
+    id: row.trackingId,
+    name: row.technician_name || `Technician ${row.trackingId}`,
+    online: row.online,
+    latitude: row.latitude,
+    longitude: row.longitude,
+    lastSeen: formatLastSeen(row.lastPing, now),
+  })), [mappedRows, now]);
 
   const connectionLabel =
     connection === 'connected'
@@ -786,4 +832,66 @@ export default function TrackingScreen() {
       )}
     </ScreenScroll>
   );
+}
+
+function buildOlaMapHtml(apiKey: string) {
+  const escapedKey = JSON.stringify(apiKey);
+  return `<!doctype html>
+<html><head><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<style>
+html,body,#map{width:100%;height:100%;margin:0;padding:0;overflow:hidden;background:#eaf0ed}
+.tech-marker{border:0;background:transparent;padding:0;display:flex;flex-direction:column;align-items:center;gap:4px;white-space:nowrap;font-family:Arial,sans-serif}
+.tech-dot{width:32px;height:32px;border:3px solid white;border-radius:50%;display:grid;place-items:center;color:white;font-size:11px;font-weight:800;box-shadow:0 2px 8px rgba(15,23,42,.3)}
+.tech-label{max-width:170px;overflow:hidden;text-overflow:ellipsis;padding:3px 6px;border-radius:6px;color:#1f2937;background:rgba(255,255,255,.96);border:1px solid #dde7e1;font-size:10px;font-weight:700;box-shadow:0 1px 4px rgba(15,23,42,.12)}
+</style><script src="https://unpkg.com/olamaps-web-sdk@1.4.0/dist/olamaps-web-sdk.umd.js"></script></head>
+<body><div id="map"></div><script>
+(function(){
+  var markers = new Map();
+  var map = null;
+  var fitted = false;
+  var key = ${escapedKey};
+  function send(message){try{if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify(message));}catch(e){}}
+  window.onerror=function(message){send({type:'error',message:String(message||'Ola Maps failed to load.')});};
+  window.__updateTechnicians=function(serialized){
+    if(!map)return;
+    var items=[];
+    try{items=JSON.parse(serialized)||[];}catch(e){return;}
+    var valid=items.filter(function(t){return Number.isFinite(Number(t.latitude))&&Number.isFinite(Number(t.longitude))&&Number(t.latitude)>=-90&&Number(t.latitude)<=90&&Number(t.longitude)>=-180&&Number(t.longitude)<=180&&!(Number(t.latitude)===0&&Number(t.longitude)===0);});
+    var wanted=new Set(valid.map(function(t){return String(t.id);}));
+    markers.forEach(function(entry,id){if(!wanted.has(id)){try{entry.marker.remove();}catch(e){}markers.delete(id);}});
+    valid.forEach(function(t){
+      var id=String(t.id),lng=Number(t.longitude),lat=Number(t.latitude),entry=markers.get(id);
+      if(!entry){
+        var el=document.createElement('div');el.className='tech-marker';
+        var dot=document.createElement('div');dot.className='tech-dot';
+        var label=document.createElement('div');label.className='tech-label';
+        el.appendChild(dot);el.appendChild(label);
+        el.addEventListener('click',function(){send({type:'select',id:id});});
+        var marker=window.__ola.addMarker({element:el,anchor:'bottom'}).setLngLat([lng,lat]).addTo(map);
+        entry={marker:marker,element:el};markers.set(id,entry);
+      }else{entry.marker.setLngLat([lng,lat]);}
+      var initials=String(t.name||'').split(/\\s+/).filter(Boolean).slice(0,2).map(function(part){return part.charAt(0).toUpperCase();}).join('')||'?';
+      entry.element.querySelector('.tech-dot').style.background=t.online?'#059669':'#64748b';
+      entry.element.querySelector('.tech-dot').textContent=initials;
+      entry.element.querySelector('.tech-label').textContent=String(t.name||'Technician')+' · '+(t.online?'Online':'Offline');
+      entry.element.title=String(t.name||'Technician')+' — '+(t.online?'Online':'Offline')+'\\n'+String(t.lastSeen||'No heartbeat received');
+    });
+    if(valid.length&&!fitted){
+      fitted=true;
+      if(valid.length===1){map.flyTo({center:[Number(valid[0].longitude),Number(valid[0].latitude)],zoom:14});}
+      else{var lngs=valid.map(function(t){return Number(t.longitude);}),lats=valid.map(function(t){return Number(t.latitude);});map.fitBounds([[Math.min.apply(null,lngs),Math.min.apply(null,lats)],[Math.max.apply(null,lngs),Math.max.apply(null,lats)]],{padding:44,maxZoom:14});}
+    }
+  };
+  window.__focusTechnician=function(id){var entry=markers.get(String(id));if(!entry)return;var p=entry.marker.getLngLat();map.flyTo({center:[p.lng,p.lat],zoom:15,essential:true});};
+  if(!key){send({type:'error',message:'Ola Maps API key is not configured.'});return;}
+  if(typeof window.OlaMaps!=='function'){send({type:'error',message:'Ola Maps Web SDK could not be loaded.'});return;}
+  (async function(){try{
+    window.__ola=new window.OlaMaps({apiKey:key});
+    map=await window.__ola.init({style:'https://api.olamaps.io/tiles/vector/v1/styles/default-light-standard/style.json',container:'map',center:[80.2707,13.0827],zoom:11});
+    if(!map)throw new Error('Ola Maps did not return a map instance.');
+    try{map.addControl(window.__ola.addNavigationControls({showCompass:true}),'top-right');}catch(e){}
+    send({type:'ready'});
+  }catch(error){send({type:'error',message:error&&error.message?error.message:'Unable to initialize Ola Maps.'});}})();
+})();
+</script></body></html>`;
 }

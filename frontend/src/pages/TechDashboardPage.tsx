@@ -75,6 +75,10 @@ function normalizeStatus(s: string) {
   return s || "Unknown";
 }
 
+function displayStatus(s: string) {
+  return String(s || "").toLowerCase() === "available" ? "Online" : normalizeStatus(s);
+}
+
 function getInitials(n = "") {
   return n
     .trim()
@@ -1312,6 +1316,7 @@ export default function TechnicianListPage({
   const [selected, setSelected] = useState<NormalizedTech | null>(null);
   const [techToDelete, setTechToDelete] = useState<NormalizedTech | null>(null);
   const [deleteTechBusy, setDeleteTechBusy] = useState(false);
+  const [availabilityUpdatingId, setAvailabilityUpdatingId] = useState<string | null>(null);
   const [assignedJobs, setAssignedJobs] = useState<any[]>([]);
   const [loadedJobsTechnicianId, setLoadedJobsTechnicianId] = useState<number | string | null>(null);
   const [jobsLoading, setJobsLoading] = useState(false);
@@ -1725,6 +1730,22 @@ export default function TechnicianListPage({
     setCountdown(0);
   }
 
+  async function toggleTechnicianAvailability(tech: NormalizedTech) {
+    const id = String(tech.id);
+    const nextStatus = tech.status.toLowerCase() === "available" ? "Offline" : "Available";
+    setAvailabilityUpdatingId(id);
+    try {
+      await updateTechnicianAvailability(tech.id, nextStatus);
+      setTechnicians((current) => current.map((row) => String(row.id) === id ? { ...row, status: nextStatus } : row));
+      setSelected((current) => current && String(current.id) === id ? { ...current, status: nextStatus } : current);
+      showToast(`${tech.name} is now ${nextStatus === "Available" ? "Online" : "Offline"}`);
+    } catch (err: any) {
+      showToast(err.response?.data?.detail || "Could not update technician availability.", "error");
+    } finally {
+      setAvailabilityUpdatingId(null);
+    }
+  }
+
   function handleDeleteTech(tech: NormalizedTech) {
     setTechToDelete(tech);
   }
@@ -1880,7 +1901,7 @@ export default function TechnicianListPage({
               {visibleTechnicians.map((tech) => (
                 <button key={tech.id} className="tech-profile-technician-option" onClick={() => openSidebar(tech)} style={{ display: "flex", alignItems: "center", gap: 9, textAlign: "left", padding: 9, border: `1px solid ${String(tech.id) === String(selected.id) ? "#13804c" : "#e3ece7"}`, borderRadius: 11, background: String(tech.id) === String(selected.id) ? "#eff9f3" : "#fff", cursor: "pointer" }}>
                   <span style={{ width: 36, height: 36, flexShrink: 0, borderRadius: 10, display: "grid", placeItems: "center", background: "linear-gradient(145deg,#77bb83,#17633d)", color: "white", fontSize: 13, fontWeight: 800 }}>{getInitials(tech.name)}</span>
-                  <span style={{ minWidth: 0, flex: 1 }}><strong style={{ display: "block", color: "#183b2d", fontSize: 14 }}>{tech.name}</strong><small style={{ display: "block", color: "#64748b", marginTop: 2, fontSize: 11 }}>{tech.skill}</small><span style={{ display: "block", marginTop: 4 }}><small style={{ color: "#64748b", marginRight: 6, fontSize: 11 }}>{normalizeStatus(tech.status)}</small><span style={{ display: "inline-block", padding: "2px 6px", borderRadius: 999, background: "#d8f3e3", color: "#075b36", fontSize: 10, fontWeight: 800, lineHeight: 1.3 }}>Workload {Math.min(String(tech.id) === String(selected.id) ? acceptedOpenJobs : tech.currentJobs, 5)}/5</span></span></span>
+                  <span style={{ minWidth: 0, flex: 1 }}><strong style={{ display: "block", color: "#183b2d", fontSize: 14 }}>{tech.name}</strong><small style={{ display: "block", color: "#64748b", marginTop: 2, fontSize: 11 }}>{tech.skill}</small><span style={{ display: "block", marginTop: 4 }}><small style={{ color: "#64748b", marginRight: 6, fontSize: 11 }}>{displayStatus(tech.status)}</small><span style={{ display: "inline-block", padding: "2px 6px", borderRadius: 999, background: "#d8f3e3", color: "#075b36", fontSize: 10, fontWeight: 800, lineHeight: 1.3 }}>Workload {Math.min(String(tech.id) === String(selected.id) ? acceptedOpenJobs : tech.currentJobs, 5)}/5</span></span></span>
                   <span style={{ width: 8, height: 8, flexShrink: 0, borderRadius: "50%", background: /online|available|busy|assigned/i.test(tech.status) ? "#16a34a" : "#94a3b8" }} />
                 </button>
               ))}
@@ -1895,7 +1916,7 @@ export default function TechnicianListPage({
               </button>
               <div className="tech-profile-hero-avatar" style={{ width: 50, height: 50, flexShrink: 0, borderRadius: "50%", display: "grid", placeItems: "center", border: "2px solid rgba(255,255,255,.92)", background: "rgba(220,255,226,.22)", color: "#f3fff5", fontSize: 17, fontWeight: 800 }}>{getInitials(selected.name)}</div>
               <div className="tech-profile-hero-divider" style={{ width: 1, alignSelf: "stretch", maxHeight: 70, background: "rgba(255,255,255,.5)" }} />
-              <div style={{ position: "relative", zIndex: 1, minWidth: 0, flex: "0 1 155px" }}><h1 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 750 }}>{selected.name}</h1><div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", fontSize: 11 }}><span>Technician</span><span style={{ padding: "3px 7px", color: "#075b36", background: "#e7fff0", borderRadius: 24, fontSize: 9, fontWeight: 700 }}>● {normalizeStatus(selected.status)}</span></div></div>
+              <div style={{ position: "relative", zIndex: 1, minWidth: 0, flex: "0 1 155px" }}><h1 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 750 }}>{selected.name}</h1><div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", fontSize: 11 }}><span>Technician</span><span style={{ padding: "3px 7px", color: "#075b36", background: "#e7fff0", borderRadius: 24, fontSize: 9, fontWeight: 700 }}>● {displayStatus(selected.status)}</span></div></div>
               <div className="tech-profile-hero-details" style={{ position: "relative", zIndex: 1, flex: "0 1 43%", maxWidth: 520, minWidth: 0, marginLeft: 0, display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "9px 14px", padding: "11px 14px", border: "1px solid rgba(215,255,228,.24)", borderRadius: 9, background: "rgba(0,42,25,.64)", backdropFilter: "blur(5px)", boxShadow: "0 5px 14px rgba(0,0,0,.16)" }}>
                 {[
                   ["Phone", selected.phone || "—"],
@@ -1959,7 +1980,7 @@ export default function TechnicianListPage({
                       <strong style={{ display: "block", color: "#183b2d", fontSize: 14 }}>{tech.name}</strong>
                       <span style={{ display: "block", overflow: "hidden", marginTop: 3, color: "#64748b", fontSize: 11, textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tech.skill || "No skill listed"}</span>
                       <span style={{ display: "block", overflow: "hidden", marginTop: 2, color: "#64748b", fontSize: 11, textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tech.location || "Location not listed"}</span>
-                      <span style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 7 }}><small style={{ color: "#64748b", fontSize: 10 }}>{normalizeStatus(tech.status)}</small><small style={{ padding: "2px 7px", borderRadius: 999, background: "#d8f3e3", color: "#075b36", fontSize: 10, fontWeight: 800 }}>Workload {Math.min(tech.currentJobs, 5)}/5</small></span>
+                      <span style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 7 }}><small style={{ color: "#64748b", fontSize: 10 }}>{displayStatus(tech.status)}</small><small style={{ padding: "2px 7px", borderRadius: 999, background: "#d8f3e3", color: "#075b36", fontSize: 10, fontWeight: 800 }}>Workload {Math.min(tech.currentJobs, 5)}/5</small></span>
                     </span>
                   </button>
                   <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
@@ -2341,7 +2362,7 @@ export default function TechnicianListPage({
                           position: "relative",
                         }}
                       >
-                        <StatusBadge status={tech.status as any} size="sm" />
+                        <StatusBadge status={(tech.status.toLowerCase() === "available" ? "ONLINE" : tech.status.toUpperCase().replace(/[ -]/g, "_")) as any} size="sm" />
                       </td>
                       <td data-label="Workload" style={styles.tldTableTd}>
                         <div style={styles.tldWorkloadCell}>
@@ -2375,6 +2396,13 @@ export default function TechnicianListPage({
                           style={styles.tldActions}
                           onClick={(e) => e.stopPropagation()}
                         >
+                          {!showDeactivatedTechnicians && <button
+                            className="icon-action-btn-style"
+                            style={{ ...styles.iconActionBtn, color: tech.status.toLowerCase() === "available" ? "#475569" : "#16a34a", width: "auto", padding: "0 8px", fontSize: 10, fontWeight: 700 }}
+                            disabled={availabilityUpdatingId === String(tech.id)}
+                            onClick={() => void toggleTechnicianAvailability(tech)}
+                            title={tech.status.toLowerCase() === "available" ? "Set technician offline" : "Set technician online"}
+                          >{availabilityUpdatingId === String(tech.id) ? "Updating…" : tech.status.toLowerCase() === "available" ? "Set Offline" : "Set Online"}</button>}
                           {showDeactivatedTechnicians ? (
                             <button
                               className="icon-action-btn-style"

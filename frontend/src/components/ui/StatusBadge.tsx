@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 
 export interface StatusBadgeProps {
-  status: "AVAILABLE" | "BUSY" | "ASSIGNED" | "OFFLINE" | "EN_ROUTE" | "ON_SITE" | "ON_BREAK" | "SUSPENDED";
+  status: "AVAILABLE" | "ONLINE" | "BUSY" | "ASSIGNED" | "OFFLINE" | "EN_ROUTE" | "ON_SITE" | "ON_BREAK" | "SUSPENDED";
   size?: "sm" | "md" | "lg";
   showIcon?: boolean;
   pulse?: boolean;
@@ -32,6 +32,11 @@ const STATUS_CONFIG: Record<StatusBadgeProps["status"], StatusConfigItem> = {
     label: "Available",
     icon: CheckCircle,
     description: "Technician is available for assignment",
+  },
+  ONLINE: {
+    label: "Online",
+    icon: CheckCircle,
+    description: "Technician is online and available for assignment",
   },
   BUSY: {
     label: "Busy",
@@ -117,6 +122,7 @@ const styleConfig = {
 
   colors: {
     AVAILABLE: { background: "#DDEEE5", color: "#1D6B3E", borderColor: "#B5D9C4", dot: "#2F9E59" },
+    ONLINE: { background: "#DDEEE5", color: "#1D6B3E", borderColor: "#B5D9C4", dot: "#2F9E59" },
     BUSY: { background: "#DBEAFE", color: "#1D4ED8", borderColor: "#BFDBFE", dot: "#2563EB" },
     ASSIGNED: { background: "#E0F2FE", color: "#0369A1", borderColor: "#7DD3FC", dot: "#0284C7" },
     OFFLINE: { background: "#F0F4F2", color: "#6B7280", borderColor: "#D1D5DB", dot: "#9CA3AF", opacity: 0.75 },
