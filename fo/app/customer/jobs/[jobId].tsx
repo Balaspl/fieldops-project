@@ -406,7 +406,7 @@ function createOlaMapHtml(apiKey: string): string {
   async function initialize() {
     try {
       if (!apiKey) {
-        showError("Ola Maps API key is missing. Add EXPO_PUBLIC_OLA_MAPS_API_KEY to customer-mobile/.env.");
+        showError("Ola Maps API key is missing. Add EXPO_PUBLIC_OLA_MAPS_API_KEY to fo/.env.");
         return;
       }
       if (typeof window.OlaMaps !== "function") {
@@ -586,7 +586,7 @@ function MapPreview({ job }: { job: TrackingJob }) {
           </Text>
           <Text style={styles.mapNoticeSubtitle}>
             {!env.OLA_MAPS_API_KEY
-              ? "Set EXPO_PUBLIC_OLA_MAPS_API_KEY in customer-mobile/.env and restart Expo."
+              ? "Set EXPO_PUBLIC_OLA_MAPS_API_KEY in fo/.env and restart Expo."
               : "The backend has not returned valid service-site or live technician coordinates yet."}
           </Text>
         </View>

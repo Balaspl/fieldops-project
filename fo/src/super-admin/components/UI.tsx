@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput,
-  View, type TextInputProps, type ViewStyle, type TextStyle, type RefreshControlProps,
+  View, type TextInputProps, type ViewStyle, type StyleProp, type TextStyle, type RefreshControlProps,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AlertCircle, ChevronRight, RefreshCw, Search } from 'lucide-react-native';
@@ -34,7 +34,7 @@ export function ScreenScroll({
   );
 }
 
-export function Card({ children, style, onPress }: { children: React.ReactNode; style?: ViewStyle; onPress?: () => void }) {
+export function Card({ children, style, onPress }: { children: React.ReactNode; style?: StyleProp<ViewStyle>; onPress?: () => void }) {
   if (onPress) return <Pressable onPress={onPress} accessibilityRole="button" style={({ pressed }) => [styles.card, style, pressed && { opacity: 0.88 }]}>{children}</Pressable>;
   return <View style={[styles.card, style]}>{children}</View>;
 }
@@ -78,14 +78,55 @@ export function SectionTitle({ title, action, onAction, subtitle }: { title: str
   return <View style={styles.sectionTitle}><View style={{ flex: 1, gap: 3 }}><Text style={styles.sectionHeading}>{title}</Text>{subtitle ? <Text style={styles.sectionSubtitle}>{subtitle}</Text> : null}</View>{action && onAction ? <Pressable onPress={onAction} style={styles.sectionAction}><Text style={styles.sectionActionText}>{action}</Text><ChevronRight size={15} color={colors.forest} /></Pressable> : null}</View>;
 }
 
-export function MetricCard({ label, value, caption, icon, tone = 'green', onPress }: { label: string; value: string | number; caption?: string; icon?: React.ReactNode; tone?: 'green' | 'blue' | 'amber' | 'red' | 'purple'; onPress?: () => void }) {
-  const accent = { green: colors.forest, blue: colors.blue, amber: colors.amber, red: colors.red, purple: colors.purple }[tone];
-  return <Card onPress={onPress} style={styles.metricCard}>
-    <View style={[styles.metricIcon, { backgroundColor: `${accent}15` }]}>{icon}</View>
-    <Text style={styles.metricLabel}>{label}</Text>
-    <Text style={[styles.metricValue, { color: colors.ink }]}>{value}</Text>
-    {caption ? <Text style={styles.metricCaption}>{caption}</Text> : null}
-  </Card>;
+export function MetricCard({
+  label,
+  value,
+  caption,
+  icon,
+  tone = 'green',
+  onPress,
+  backgroundColor,
+}: {
+  label: string;
+  value: string | number;
+  caption?: string;
+  icon?: React.ReactNode;
+  tone?: 'green' | 'blue' | 'amber' | 'red' | 'purple';
+  onPress?: () => void;
+  backgroundColor?: string;
+}) {
+  const palette = {
+    green: { accent: '#28734B', tint: '#E1F1E6' },
+    blue: { accent: '#416FAE', tint: '#E4EDFF' },
+    amber: { accent: '#A96D18', tint: '#FFF0D9' },
+    red: { accent: '#B94B4B', tint: '#FCE7E7' },
+    purple: { accent: '#7955A5', tint: '#F0E8FC' },
+  }[tone];
+
+  return (
+    <Card
+      onPress={onPress}
+      style={[
+        styles.metricCard,
+        { backgroundColor: backgroundColor || palette.tint },
+      ]}
+    >
+      <View style={[styles.metricIcon, { backgroundColor: '#FFFFFFB8' }]}>
+        {icon}
+      </View>
+      <Text numberOfLines={2} style={styles.metricLabel}>{label}</Text>
+      <Text
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        style={[styles.metricValue, { color: '#173B2A' }]}
+      >
+        {value}
+      </Text>
+      {caption ? (
+        <Text numberOfLines={2} style={styles.metricCaption}>{caption}</Text>
+      ) : null}
+    </Card>
+  );
 }
 
 export function LoadingState({ label = 'Loading FieldOps data…' }: { label?: string }) {
@@ -121,7 +162,7 @@ const styles = StyleSheet.create({
   searchWrap: { height: 46, borderWidth: 1, borderColor: colors.border, borderRadius: 14, backgroundColor: colors.white, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, gap: 9 }, searchInput: { flex: 1, paddingVertical: 0, color: colors.ink, fontSize: 14 },
   pill: { alignSelf: 'flex-start', paddingHorizontal: 9, paddingVertical: 5, borderRadius: radii.pill }, pillText: { fontSize: 10, fontWeight: '800', textTransform: 'capitalize' },
   sectionTitle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 3, gap: 10 }, sectionHeading: { fontSize: 16, fontWeight: '900', color: colors.ink }, sectionSubtitle: { fontSize: 11, color: colors.muted }, sectionAction: { flexDirection: 'row', alignItems: 'center', gap: 2 }, sectionActionText: { fontSize: 12, fontWeight: '800', color: colors.forest },
-  metricCard: { flex: 1, minWidth: '45%', padding: 13, gap: 6 }, metricIcon: { height: 34, width: 34, borderRadius: 11, justifyContent: 'center', alignItems: 'center', marginBottom: 2 }, metricLabel: { color: colors.muted, fontSize: 11, fontWeight: '700' }, metricValue: { fontSize: 24, fontWeight: '900', letterSpacing: -0.6 }, metricCaption: { color: colors.muted, fontSize: 10 },
+  metricCard: { width: '100%', minWidth: 0, minHeight: 148, padding: 15, gap: 8, borderRadius: 19, borderColor: '#D8E7DC', shadowColor: '#173B2A', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 10, elevation: 3 }, metricIcon: { height: 42, width: 42, borderRadius: 13, justifyContent: 'center', alignItems: 'center', marginBottom: 2 }, metricLabel: { color: '#52675B', fontSize: 11, fontWeight: '800' }, metricValue: { fontSize: 29, fontWeight: '900', letterSpacing: -0.8 }, metricCaption: { color: '#65796D', fontSize: 10, lineHeight: 14 },
   loading: { padding: 40, alignItems: 'center', justifyContent: 'center', gap: 12 }, loadingText: { color: colors.muted, fontSize: 12, fontWeight: '600' }, empty: { padding: 28, borderRadius: 18, alignItems: 'center', backgroundColor: colors.white, borderWidth: 1, borderColor: colors.border, gap: 10 }, emptyIcon: { width: 48, height: 48, backgroundColor: colors.mint, borderRadius: 16, alignItems: 'center', justifyContent: 'center' }, emptyTitle: { fontWeight: '900', fontSize: 15, color: colors.ink, textAlign: 'center' }, emptyDetail: { color: colors.muted, fontSize: 12, textAlign: 'center', lineHeight: 18 },
   errorBanner: { borderRadius: 12, borderWidth: 1, borderColor: '#FECACA', backgroundColor: '#FFF5F5', padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }, errorText: { flex: 1, color: '#991B1B', fontSize: 12, fontWeight: '600', lineHeight: 17 }, refreshAction: { width: 40, height: 40, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.white, borderWidth: 1, borderColor: colors.border },
   screenHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }, screenTitle: { fontSize: 24, color: colors.ink, fontWeight: '900', letterSpacing: -0.7 }, screenSubtitle: { fontSize: 12, lineHeight: 18, color: colors.muted },
