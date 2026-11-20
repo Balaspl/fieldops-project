@@ -950,7 +950,7 @@ export default function JobLiveMapScreen() {
         ) : !apiKey ? (
           <View style={styles.centered}>
             <Text style={styles.centeredText}>
-              The Ola Maps key is missing from mobile/.env. Check the Expo environment configuration.
+              The Ola Maps key is missing from fo/.env. Check the Expo environment configuration.
             </Text>
           </View>
         ) : (

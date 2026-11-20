@@ -157,7 +157,7 @@ function createPickerHtml(
   async function initialize() {
     try {
       if (!apiKey) {
-        showError("Ola Maps API key is missing. Add EXPO_PUBLIC_OLA_MAPS_API_KEY to customer-mobile/.env.");
+        showError("Ola Maps API key is missing. Add EXPO_PUBLIC_OLA_MAPS_API_KEY to fo/.env.");
         return;
       }
       if (typeof window.OlaMaps !== "function") {
@@ -570,7 +570,7 @@ export default function LocationPickerScreen() {
               <Ionicons name="map-outline" size={32} color={colors.brand} />
               <Text style={styles.mapUnavailableTitle}>Ola Maps API key missing</Text>
               <Text style={styles.mapUnavailableText}>
-                Add EXPO_PUBLIC_OLA_MAPS_API_KEY to customer-mobile/.env and restart Expo.
+                Add EXPO_PUBLIC_OLA_MAPS_API_KEY to fo/.env and restart Expo.
               </Text>
             </View>
           )}
