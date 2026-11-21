@@ -37,7 +37,8 @@ type Route =
   | 'support'
   | 'agents'
   | 'notifications'
-  | 'profile';
+  | 'profile'
+  | 'technician-details';
 
 const MAIN_NAV: { id: Route; label: string; icon: React.ReactNode }[] = [
   { id: 'dashboard', label: 'Home', icon: <LayoutDashboard size={20} /> },
@@ -69,6 +70,7 @@ export default function StaffShell() {
         'agents',
         'notifications',
         'profile',
+        'technician-details',
       ].includes(next)
     ) {
       setRoute(next as Route);
@@ -174,6 +176,7 @@ export default function StaffShell() {
         {/* Top navigation / app bar */}
         <View
           style={{
+            display: route === 'technician-details' ? 'none' : 'flex',
             minHeight: 76,
             paddingHorizontal: 17,
             paddingVertical: 10,
@@ -321,7 +324,7 @@ export default function StaffShell() {
           ) : null}
           {route === 'planning' ? <PlanningScreen /> : null}
           {route === 'tracking' ? <TrackingScreen /> : null}
-          {route === 'team' ? <TeamScreen onNavigate={go} /> : null}
+          {route === 'team' || route === 'technician-details' ? <TeamScreen onNavigate={go} /> : null}
           {route === 'services' ? <ServicesScreen /> : null}
           {route === 'support' ? <SupportScreen /> : null}
           {route === 'agents' && isSuperAdmin ? <AgentTrackingScreen /> : null}
@@ -337,6 +340,7 @@ export default function StaffShell() {
         {/* Floating bottom navigation */}
         <View
           style={{
+            display: route === 'technician-details' ? 'none' : 'flex',
             paddingHorizontal: 13,
             paddingTop: 8,
             paddingBottom: 5,
@@ -418,7 +422,7 @@ export default function StaffShell() {
           </View>
         </View>
 
-        <FloatingSupportButton onPress={() => go('support')} />
+        {route !== 'technician-details' ? <FloatingSupportButton onPress={() => go('support')} /> : null}
       </View>
 
     </SafeAreaView>

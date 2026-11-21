@@ -542,7 +542,7 @@ export default function TechnicianProfilePage({
       .map((part) => part[0].toUpperCase())
       .join("");
     const formattedDob = form.date_of_birth
-      ? new Date(`${form.date_of_birth}T00:00:00`).toLocaleDateString()
+      ? new Date(`${form.date_of_birth}T00:00:00`).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" })
       : "";
     const formattedJoinedDate = profileMetadata?.createdAt
       ? new Date(profileMetadata.createdAt).toLocaleDateString(undefined, {

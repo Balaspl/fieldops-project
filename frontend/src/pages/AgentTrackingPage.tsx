@@ -60,11 +60,13 @@ function formatTimestamp(value: string | null): string {
   if (!value) return "Not recorded";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Not recorded";
-  return date.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
+  return date.toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    hour12: true,
   });
 }
 

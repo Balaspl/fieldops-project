@@ -113,7 +113,7 @@ export const TechnicianMarker: React.FC<TechnicianMarkerProps> = ({
 
   const formatTime = (timeStr: string) => {
     try {
-      return new Date(timeStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      return new Date(timeStr).toLocaleTimeString("en-IN", { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true});
     } catch (e) {
       return '—';
     }

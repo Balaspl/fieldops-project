@@ -26,7 +26,7 @@ export default function PublicTrackingPage({ token }: { token: string }) {
       {technician && <p><b>Technician:</b> {technician.name}</p>}
       {eta != null && <p><b>Estimated arrival:</b> about {eta} minutes</p>}
       {latestGps && <p>
-        Technician location updated {latestGps.timestamp ? new Date(latestGps.timestamp).toLocaleString() : "recently"}.{" "}
+        Technician location updated {latestGps.timestamp ? new Date(latestGps.timestamp).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) : "recently"}.{" "}
         <a href={`https://www.google.com/maps/search/?api=1&query=${latestGps.latitude},${latestGps.longitude}`} target="_blank" rel="noreferrer">View current location</a>
       </p>}
       {!technician && <p>Technician details will appear here when assigned.</p>}

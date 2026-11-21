@@ -50,7 +50,7 @@ function emptyProfile(fullName: string): TechnicianProfile {
 function getDisplayDate(value?: string | null): string {
   if (!value) return "Add your date of birth";
   const date = new Date(`${value.slice(0, 10)}T00:00:00`);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
 function Field({

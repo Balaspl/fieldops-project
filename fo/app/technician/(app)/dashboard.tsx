@@ -105,7 +105,7 @@ function getSavedAtLabel(value: string | null): string | null {
     return null;
   }
 
-  return date.toLocaleString();
+  return date.toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true });
 }
 
 function getMetricValue(
@@ -445,7 +445,7 @@ export default function DashboardScreen() {
   ].filter(Boolean) as Metric[];
   const currentJob = jobs.find((job) => ["ACTIVE", "ACCEPTED", "EN_ROUTE", "ON_SITE", "IN_PROGRESS", "PAUSED", "AWAITING_ACCEPTANCE"].includes(normalizeJobStatus(job.status))) ?? jobs[0];
   const recentJobs = jobs.slice(0, 4);
-  const formatTime = (value?: string | null) => value && !Number.isNaN(Date.parse(value)) ? new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Not recorded";
+  const formatTime = (value?: string | null) => value && !Number.isNaN(Date.parse(value)) ? new Date(value).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true}) : "Not recorded";
 
   if (isLoading) {
     return <LoadingState label="Loading dashboard..." variant="dashboard" />;

@@ -3031,7 +3031,7 @@ export default function CustomerServiceRequestsPage({
                       Preferred Date:{" "}
                       <strong style={{ color: "#334155" }}>
                         {sr.preferred_visit_date
-                          ? new Date(sr.preferred_visit_date).toLocaleDateString()
+                          ? new Date(sr.preferred_visit_date).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" })
                           : "Flexible"}
                       </strong>
                     </span>
@@ -4296,7 +4296,7 @@ export default function CustomerServiceRequestsPage({
                         <span style={{ color: "#64748B", display: "block", fontSize: "10.5px", fontWeight: 700, letterSpacing: "0.3px" }}>PREFERRED DATE</span>
                         <strong style={{ color: "#0F172A" }}>
                           {trackingModalRequest.preferred_visit_date
-                            ? new Date(trackingModalRequest.preferred_visit_date).toLocaleDateString()
+                            ? new Date(trackingModalRequest.preferred_visit_date).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" })
                             : "Flexible"}
                         </strong>
                       </div>

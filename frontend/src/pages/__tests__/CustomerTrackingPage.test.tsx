@@ -163,10 +163,9 @@ describe("CustomerTrackingPage - Task 6 ETA Display", () => {
 
     const expectedEtaTime = new Date(
       activeJob.estimated_arrival
-    ).toLocaleTimeString([], {
+    ).toLocaleTimeString("en-IN", {
       hour: "numeric",
-      minute: "2-digit",
-    });
+      minute: "2-digit", hour12: true});
 
     expect(
       screen.getByTestId("eta-card-101")
@@ -552,7 +551,7 @@ describe("CustomerTrackingPage - Task 6 ETA Display", () => {
       screen.getByText(
         `Created: ${new Date(
           completedJob.created_at
-        ).toLocaleDateString()}`
+        ).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" })}`
       )
     ).toBeTruthy();
 
@@ -560,7 +559,7 @@ describe("CustomerTrackingPage - Task 6 ETA Display", () => {
       screen.getByText(
         `Completed: ${new Date(
           completedJob.completed_at
-        ).toLocaleDateString()}`
+        ).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" })}`
       )
     ).toBeTruthy();
   });

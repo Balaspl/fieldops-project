@@ -388,7 +388,7 @@ const CardContent: React.FC<{
                     if (typeof dateStr === 'string' && dateStr.includes('T') && !dateStr.endsWith('Z') && !dateStr.match(/[\+\-]\d{2}:\d{2}$/)) {
                       dateStr = dateStr + 'Z';
                     }
-                    return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    return new Date(dateStr).toLocaleTimeString("en-IN", { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true});
                   })()
                 : '—'}
             </p>

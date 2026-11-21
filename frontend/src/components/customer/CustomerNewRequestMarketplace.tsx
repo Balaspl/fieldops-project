@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Search,
   LayoutGrid,
@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import {
   getCustomerCatalog,
+  getCachedCustomerCatalog,
   type ServiceCatalogItem,
 } from "../../services/servicesCatalogService";
 import {
@@ -321,8 +322,9 @@ export default function CustomerNewRequestMarketplace({
   const [searchQuery, setSearchQuery] = useState("");
 
   // Live active catalog items from database
-  const [catalogItems, setCatalogItems] = useState<ServiceCatalogItem[]>([]);
-  const [loadingCatalog, setLoadingCatalog] = useState(true);
+  const [catalogItems, setCatalogItems] = useState<ServiceCatalogItem[]>(() => getCachedCustomerCatalog() ?? []);
+  const [loadingCatalog, setLoadingCatalog] = useState(() => getCachedCustomerCatalog() === null);
+  const catalogRequestRef = useRef<Promise<void> | null>(null);
 
   // Profile data for pre-populating location and phone number
   const [profileData, setProfileData] = useState<any>(null);
@@ -493,17 +495,17 @@ export default function CustomerNewRequestMarketplace({
   const [tempResolvedAddress, setTempResolvedAddress] = useState<string>("");
 
   // Fetch catalog function
-  const fetchActiveCatalog = async () => {
-    try {
-      const items = await getCustomerCatalog();
-      if (Array.isArray(items)) {
-        setCatalogItems(items);
-      }
-    } catch (err) {
-      console.error("Failed to load customer catalog:", err);
-    } finally {
-      setLoadingCatalog(false);
-    }
+  const fetchActiveCatalog = () => {
+    if (catalogRequestRef.current) return catalogRequestRef.current;
+    const request = getCustomerCatalog()
+      .then((items) => setCatalogItems(items))
+      .catch((err) => console.error("Failed to load customer catalog:", err))
+      .finally(() => {
+        setLoadingCatalog(false);
+        catalogRequestRef.current = null;
+      });
+    catalogRequestRef.current = request;
+    return request;
   };
 
   // Hydrate location & 10-digit phone directly from customer profile
@@ -545,7 +547,7 @@ export default function CustomerNewRequestMarketplace({
 
     const onFocus = () => fetchActiveCatalog();
     window.addEventListener("focus", onFocus);
-    const interval = setInterval(fetchActiveCatalog, 5000);
+    const interval = setInterval(fetchActiveCatalog, 60000);
 
     return () => {
       window.removeEventListener("focus", onFocus);
@@ -573,30 +575,96 @@ export default function CustomerNewRequestMarketplace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewLevel]);
 
-  // An issue is available when at least one organization currently offers it.
+  // Normalize each catalog row once and calculate availability once per response.
+  // The old render path rescanned every catalog row for every taxonomy issue on
+  // every render, which became noticeably slow as the multi-tenant catalog grew.
+  const catalogAvailability = useMemo(() => {
+    const activeItems = catalogItems
+      .filter((item) => item.is_active)
+      .map((item) => ({
+        serviceType: normalize(item.service_type),
+        category: normalize(item.category),
+        issue: normalize(item.issue || item.category || item.service_type),
+      }));
+    const activeIssues = new Set<string>();
+    const categoryCounts = new Map<string, number>();
+    const serviceTypeCounts = new Map<string, number>();
+
+    for (const sType of SERVICE_CATALOGUE_TAXONOMY) {
+      const typeName = normalize(sType.name);
+      const typeId = normalize(sType.id);
+      const typeItems = activeItems.filter((item) => {
+        if (item.serviceType === typeName || item.serviceType === typeId) return true;
+        if (
+          item.serviceType.includes(typeId) ||
+          typeName.includes(item.serviceType) ||
+          item.serviceType.includes(typeName)
+        ) return true;
+        return sType.categories.some((cat) => {
+          const categoryName = normalize(cat.name);
+          const categoryId = normalize(cat.id);
+          return item.category === categoryName || item.category === categoryId ||
+            categoryName.includes(item.category) || item.category.includes(categoryName);
+        });
+      });
+
+      let serviceTypeCount = 0;
+      for (const category of sType.categories) {
+        const categoryName = normalize(category.name);
+        const categoryId = normalize(category.id);
+        const aliases: Record<string, string> = {
+          sofacarpetmattressandcurtain: "sofacarpetmattresscurtaincleaning",
+          watertankandsumpcleaning: "watertanksumpcleaning",
+          kitchencleaning: "kitchendeepcleaning",
+          bathroomcleaning: "bathroomdeepcleaning",
+          officeandcommercialcleaning: "officecommercialcleaning",
+          specialisedcleaning: "specialisedcleaningservices",
+        };
+        const candidates = typeItems.filter((item) =>
+          item.category === categoryName ||
+          aliases[item.category] === categoryName ||
+          item.category === categoryId ||
+          item.category.includes(categoryName) ||
+          categoryName.includes(item.category),
+        );
+
+        let categoryCount = 0;
+        for (const issue of category.issues) {
+          const normalizedIssue = normalize(issue);
+          if (!normalizedIssue) continue;
+          const available = candidates.some((item) =>
+            item.issue === normalizedIssue ||
+            item.issue.includes(normalizedIssue) ||
+            normalizedIssue.includes(item.issue),
+          );
+          if (available) {
+            activeIssues.add(`${sType.id}|${category.id}|${normalizedIssue}`);
+            categoryCount += 1;
+          }
+        }
+        categoryCounts.set(`${sType.id}|${category.id}`, categoryCount);
+        serviceTypeCount += categoryCount;
+      }
+      serviceTypeCounts.set(sType.id, serviceTypeCount);
+    }
+
+    return { activeIssues, categoryCounts, serviceTypeCounts };
+  }, [catalogItems]);
+
   const isTaxonomyIssueActive = (
     sType: TaxonomyServiceType,
     category: TaxonomyCategory,
     issueName: string,
-  ): boolean => {
-    const normIssue = normalize(issueName);
-    return catalogItems.some((item) => {
-      const itemIssue = normalize(item.issue || item.category || item.service_type);
-      const matchesIssue = normIssue.length > 0 && (
-        itemIssue === normIssue ||
-        itemIssue.includes(normIssue) ||
-        normIssue.includes(itemIssue)
-      );
-      return itemMatchesServiceType(item, sType) && itemMatchesCategory(item, category) && matchesIssue;
-    });
-  };
+  ): boolean => catalogAvailability.activeIssues.has(
+    `${sType.id}|${category.id}|${normalize(issueName)}`,
+  );
 
-  // Count each taxonomy issue once, even when several organizations offer it.
+  // Counts are precomputed alongside issue availability to keep rendering cheap.
   const getActiveCountForCategory = (sType: TaxonomyServiceType, cat: TaxonomyCategory) =>
-    cat.issues.filter((issue) => isTaxonomyIssueActive(sType, cat, issue)).length;
+    catalogAvailability.categoryCounts.get(`${sType.id}|${cat.id}`) ?? 0;
 
   const getActiveCountForServiceType = (sType: TaxonomyServiceType) =>
-    sType.categories.reduce((count, cat) => count + getActiveCountForCategory(sType, cat), 0);
+    catalogAvailability.serviceTypeCounts.get(sType.id) ?? 0;
 
   // Handle clicking a Service Type Card (Level 1 ➔ Level 2)
   const handleServiceTypeClick = (sType: TaxonomyServiceType) => {

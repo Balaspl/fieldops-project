@@ -38,6 +38,8 @@ function createMapHtml(apiKey: string): string {
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
+<link rel="preconnect" href="https://api.olamaps.io" crossorigin />
+<link rel="preconnect" href="https://www.unpkg.com" crossorigin />
 <style>
 html, body, #map {
   width: 100%;

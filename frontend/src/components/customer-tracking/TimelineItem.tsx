@@ -60,7 +60,7 @@ export const TimelineItem: React.FC<TimelineItemProps> = ({
 
   const timelineColor = getTimelineColor(item);
 
-  const formattedTime = new Date(item.timestamp).toLocaleString();
+  const formattedTime = new Date(item.timestamp).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true });
 
   const displayStatus =
     item.to_status?.toUpperCase() === 'CREATED'

@@ -51,7 +51,7 @@ export const NotificationPanel: React.FC = () => {
     if (diffMins < 60) return `${diffMins}m ago`;
     const diffHours = Math.floor(diffMins / 60);
     if (diffHours < 24) return `${diffHours}h ago`;
-    return new Date(isoString).toLocaleDateString();
+    return new Date(isoString).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" });
   };
 
   const handleAlertClick = (alert: GeofenceAlert) => {

@@ -8,6 +8,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, List
+from weakref import WeakKeyDictionary
 
 import aiohttp
 
@@ -16,8 +17,36 @@ from ..context import correlation_id_ctx
 logger = logging.getLogger("fieldops")
 
 OLA_BASE_URL = "https://api.olamaps.io"
+OLA_REQUEST_TIMEOUT_SECONDS = 2.4
 CB_FAILURE_THRESHOLD = 5
 CB_RECOVERY_TIMEOUT = 60
+_http_sessions: WeakKeyDictionary = WeakKeyDictionary()
+
+
+async def _get_http_session() -> aiohttp.ClientSession:
+    """Reuse a keep-alive connection pool for Ola requests on the current loop."""
+    loop = asyncio.get_running_loop()
+    session = _http_sessions.get(loop)
+    if session is None or session.closed:
+        timeout = aiohttp.ClientTimeout(
+            total=OLA_REQUEST_TIMEOUT_SECONDS,
+            connect=1.0,
+            sock_connect=1.0,
+            sock_read=2.0,
+        )
+        connector = aiohttp.TCPConnector(limit=32, ttl_dns_cache=300)
+        session = aiohttp.ClientSession(timeout=timeout, connector=connector)
+        _http_sessions[loop] = session
+    return session
+
+
+async def close_ola_maps_sessions() -> None:
+    """Close pooled HTTP sessions when the API worker shuts down."""
+    sessions = list(_http_sessions.values())
+    _http_sessions.clear()
+    for session in sessions:
+        if not session.closed:
+            await session.close()
 
 
 def is_valid_coordinate(latitude: Any, longitude: Any) -> bool:
@@ -219,8 +248,19 @@ class OlaMapsClient:
 
     async def search_places(self, query: str) -> list[dict[str, Any]]:
         """Search addresses using Ola's existing server-side geocoding API."""
+        normalized_query = query.strip()
+        if not normalized_query:
+            return []
+        cache_key = f"maps:ola:places:search:{hashlib.sha256(normalized_query.casefold().encode()).hexdigest()}"
+        try:
+            cached = self.redis.get(cache_key) if self.redis else None
+            if cached:
+                self._metric_cache_hit()
+                return json.loads(cached)
+        except Exception:
+            pass
         payload, _ = await self._request(
-            "/places/v1/geocode", {"address": query.strip()}
+            "/places/v1/geocode", {"address": normalized_query}
         )
         raw_results = payload.get("geocodingResults", [])
         results: list[dict[str, Any]] = []
@@ -256,9 +296,22 @@ class OlaMapsClient:
                 "place_id": result.get("place_id"),
                 "type": result_types[0] if result_types else None,
             })
+        try:
+            if self.redis:
+                self.redis.setex(cache_key, 3600, json.dumps(results))
+        except Exception:
+            pass
         return results
 
     async def reverse_geocode(self, latitude: float, longitude: float) -> dict[str, Any] | None:
+        cache_key = f"maps:ola:places:reverse:{latitude:.5f}:{longitude:.5f}"
+        try:
+            cached = self.redis.get(cache_key) if self.redis else None
+            if cached:
+                self._metric_cache_hit()
+                return json.loads(cached)
+        except Exception:
+            pass
         payload, _ = await self._request(
             "/places/v1/reverse-geocode",
             {"latlng": f"{latitude},{longitude}"},
@@ -304,7 +357,7 @@ class OlaMapsClient:
             "postal_code",
         )
 
-        return {
+        result = {
             "name": result.get("name") or result.get("premise") or "",
             "formatted_address": address,
             "latitude": latitude,
@@ -313,6 +366,12 @@ class OlaMapsClient:
             "state": state,
             "pincode": pincode,
         }
+        try:
+            if self.redis:
+                self.redis.setex(cache_key, 86400, json.dumps(result))
+        except Exception:
+            pass
+        return result
     
     def _fallback_route(self, origin_lat: float, origin_lng: float, dest_lat: float, dest_lng: float) -> dict:
         distance_meters = int(haversine_distance(origin_lat, origin_lng, dest_lat, dest_lng) * 1000)
@@ -339,34 +398,30 @@ class OlaMapsClient:
         start = time.perf_counter()
         last_error: Exception | None = None
 
-        for attempt in range(3):
-            try:
-                self._metric_call()
-                timeout = aiohttp.ClientTimeout(total=6.0)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.request(
-                        method,
-                        f"{OLA_BASE_URL}{path}",
-                        params=params,
-                        headers={"X-Request-Id": correlation_id, "X-Correlation-ID": correlation_id},
-                    ) as response:
-                        payload = await response.json(content_type=None)
-                        latency = time.perf_counter() - start
-                        self._metric_latency(latency)
-                        if response.status == 200:
-                            self.cb.record_success()
-                            logger.info("ola_maps_call", extra={"path": path, "status": response.status, "latency_ms": round(latency * 1000), "correlation_id": correlation_id})
-                            return payload, response.status
-                        if response.status == 429:
-                            last_error = MapsAPIException("maps_quota", "Ola Maps returned HTTP 429")
-                        else:
-                            last_error = MapsAPIException("maps_error", f"Ola Maps HTTP {response.status}: {payload}")
-            except asyncio.TimeoutError as exc:
-                last_error = MapsAPIException("maps_timeout", "Ola Maps request timed out")
-            except Exception as exc:
-                last_error = exc
-            if attempt < 2:
-                await asyncio.sleep(0.5 * (2 ** attempt))
+        try:
+            self._metric_call()
+            session = await _get_http_session()
+            async with session.request(
+                method,
+                f"{OLA_BASE_URL}{path}",
+                params=params,
+                headers={"X-Request-Id": correlation_id, "X-Correlation-ID": correlation_id},
+            ) as response:
+                payload = await response.json(content_type=None)
+                latency = time.perf_counter() - start
+                self._metric_latency(latency)
+                if response.status == 200:
+                    self.cb.record_success()
+                    logger.info("ola_maps_call", extra={"path": path, "status": response.status, "latency_ms": round(latency * 1000), "correlation_id": correlation_id})
+                    return payload, response.status
+                if response.status == 429:
+                    last_error = MapsAPIException("maps_quota", "Ola Maps returned HTTP 429")
+                else:
+                    last_error = MapsAPIException("maps_error", f"Ola Maps HTTP {response.status}")
+        except (asyncio.TimeoutError, aiohttp.ServerTimeoutError):
+            last_error = MapsAPIException("maps_timeout", "Ola Maps request timed out")
+        except Exception as exc:
+            last_error = exc
 
         self.cb.record_failure()
         if isinstance(last_error, MapsAPIException):

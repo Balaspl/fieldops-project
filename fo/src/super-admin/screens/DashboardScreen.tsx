@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ImageBackground, Pressable, RefreshControl, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
-import { Activity, AlertTriangle, BriefcaseBusiness, CalendarClock, CheckCircle2, ClipboardList, CreditCard } from 'lucide-react-native';
+import { Activity, AlertTriangle, BarChart3, BriefcaseBusiness, CalendarClock, CheckCircle2, ClipboardList, CreditCard } from 'lucide-react-native';
 import { getDashboardData } from '../api/operations';
 import { Card, MetricCard, ScreenScroll, SectionTitle } from '../components/UI';
 import { colors } from '../theme';
@@ -54,14 +54,14 @@ export default function DashboardScreen({ user, onNavigate }: { user: AuthUser; 
   const jobs = stats.jobs || {};
   const total = cards.total ?? jobs.total ?? 0;
   const metrics = [
-    { label: 'Total Jobs', value: total, icon: <ClipboardList size={18} color={colors.forest} />, tone: 'green' as const, caption: 'Jobs in selected period', onPress: () => onNavigate('planning') },
-    { label: 'Unassigned', value: cards.unassigned ?? jobs.pending ?? 0, icon: <CalendarClock size={18} color={colors.amber} />, tone: 'amber' as const, caption: 'Awaiting dispatch', onPress: () => onNavigate('planning') },
-    { label: 'Accepted', value: cards.accepted ?? 0, icon: <CheckCircle2 size={18} color={colors.blue} />, tone: 'blue' as const, caption: 'Accepted by technician' },
-    { label: 'Rejected', value: cards.rejected ?? 0, icon: <AlertTriangle size={18} color={colors.red} />, tone: 'red' as const, caption: 'Rejected by technician' },
-    { label: 'En Route', value: cards.en_route ?? 0, icon: <Activity size={18} color={colors.purple} />, tone: 'purple' as const, caption: 'Technician travelling' },
-    { label: 'In Progress', value: cards.in_progress ?? jobs.in_progress ?? jobs.active ?? 0, icon: <BriefcaseBusiness size={18} color={colors.amber} />, tone: 'amber' as const, caption: 'Work ongoing', onPress: () => onNavigate('planning') },
-    { label: 'Completed', value: cards.completed ?? jobs.completed ?? 0, icon: <CheckCircle2 size={18} color={colors.forest} />, tone: 'green' as const, caption: 'Completed jobs' },
-    { label: 'Payments', value: money((stats.payment_summary || {}).total_recorded), icon: <CreditCard size={18} color="#0D9488" />, tone: 'green' as const, caption: `Cash ${money((stats.payment_summary || {}).cash_total)} · UPI ${money((stats.payment_summary || {}).upi_total)}` },
+    { label: 'Total Jobs', value: total, icon: <ClipboardList size={14} color={colors.forest} />, tone: 'green' as const, caption: 'Jobs in selected period', onPress: () => onNavigate('planning') },
+    { label: 'Unassigned', value: cards.unassigned ?? jobs.pending ?? 0, icon: <CalendarClock size={14} color={colors.amber} />, tone: 'amber' as const, caption: 'Awaiting dispatch', onPress: () => onNavigate('planning') },
+    { label: 'Accepted', value: cards.accepted ?? 0, icon: <CheckCircle2 size={14} color={colors.blue} />, tone: 'blue' as const, caption: 'Accepted by technician' },
+    { label: 'Rejected', value: cards.rejected ?? 0, icon: <AlertTriangle size={14} color={colors.red} />, tone: 'red' as const, caption: 'Rejected by technician' },
+    { label: 'En Route', value: cards.en_route ?? 0, icon: <Activity size={14} color={colors.purple} />, tone: 'purple' as const, caption: 'Technician travelling' },
+    { label: 'In Progress', value: cards.in_progress ?? jobs.in_progress ?? jobs.active ?? 0, icon: <BriefcaseBusiness size={14} color={colors.amber} />, tone: 'amber' as const, caption: 'Work ongoing', onPress: () => onNavigate('planning') },
+    { label: 'Completed', value: cards.completed ?? jobs.completed ?? 0, icon: <CheckCircle2 size={14} color={colors.forest} />, tone: 'green' as const, caption: 'Completed jobs' },
+    { label: 'Payments', value: money((stats.payment_summary || {}).total_recorded), icon: <CreditCard size={14} color="#0D9488" />, tone: 'green' as const, caption: `Cash ${money((stats.payment_summary || {}).cash_total)} · UPI ${money((stats.payment_summary || {}).upi_total)}` },
   ];
   const categories = stats.categories || stats.service_technicians || {};
   const categoryRows = Object.entries(categories).filter(([, value]) => Number(value) > 0).sort((a, b) => Number(b[1]) - Number(a[1]));
@@ -170,19 +170,22 @@ export default function DashboardScreen({ user, onNavigate }: { user: AuthUser; 
     setCustomRange({ start_date: startDate, end_date: endDate });
   };
 
-  return <ScreenScroll refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={colors.forest} />}>
-    <ImageBackground source={require('../../../assets/banners/dashboard-banner.jpeg')} resizeMode="cover" style={{ minHeight: 172, borderRadius: 20, overflow: 'hidden', justifyContent: 'flex-end', padding: 18 }}>
+  return <ScreenScroll contentContainerStyle={{ paddingHorizontal: 14, paddingTop: 14, paddingBottom: 34, gap: 16 }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={colors.forest} />}>
+    <ImageBackground source={require('../../../assets/banners/dashboard-banner.jpeg')} resizeMode="cover" style={{ minHeight: 184, borderRadius: 24, overflow: 'hidden', justifyContent: 'flex-end', padding: 22 }}>
       <View style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(3, 54, 31, 0.72)' }} />
-      <Text style={{ color: '#D4F2DE', fontSize: 10, fontWeight: '900', letterSpacing: 1.3 }}>FIELDOPS COMMANDER</Text>
-      <Text style={{ color: '#fff', fontSize: 25, lineHeight: 31, fontWeight: '900', marginTop: 7 }}>Good day, {user.first_name || 'Team'}.</Text>
-      <Text style={{ color: '#E8F5ED', fontSize: 12, marginTop: 4 }}>{user.organization_name || 'Operations Control'} · Live operations overview</Text>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 14 }}><View style={{ width: 7, height: 7, borderRadius: 8, backgroundColor: '#66E29C' }} /><Text style={{ color: '#E8F5ED', fontSize: 10, fontWeight: '800' }}>CONNECTED TO YOUR OPERATIONS WORKSPACE</Text></View>
+      <Text style={{ color: '#D4F2DE', fontSize: 11, fontWeight: '900', letterSpacing: 1.5 }}>FIELDOPS COMMANDER</Text>
+      <Text style={{ color: '#fff', fontSize: 28, lineHeight: 34, fontWeight: '900', marginTop: 8 }}>Good day, {user.first_name || 'Team'}.</Text>
+      <Text style={{ color: '#E8F5ED', fontSize: 14, marginTop: 5 }}>{user.organization_name || 'Operations Control'} · Live operations overview</Text>
+      <View style={{ alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 15, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 20, backgroundColor: 'rgba(15, 115, 73, 0.58)', borderWidth: 1, borderColor: 'rgba(185, 244, 209, 0.5)' }}><View style={{ width: 8, height: 8, borderRadius: 8, backgroundColor: '#66E29C' }} /><Text style={{ color: '#E8F5ED', fontSize: 10, fontWeight: '800' }}>CONNECTED TO YOUR OPERATIONS WORKSPACE</Text></View>
     </ImageBackground>
 
     {error ? <Card><Text style={{ color: colors.red, fontSize: 12 }}>{error}</Text></Card> : null}
-    <Card style={{ gap: 11 }}>
-      <Text style={{ color: colors.ink, fontWeight: '900', fontSize: 13 }}>Dashboard date range</Text>
-      <View style={{ flexDirection: 'row', flexWrap: 'nowrap', gap: 5 }}>{periodOptions.map(option => <Pressable key={option.id} onPress={() => setPeriod(option.id)} style={{ flex: 1, minWidth: 0, alignItems: 'center', paddingHorizontal: 4, paddingVertical: 8, borderRadius: 10, backgroundColor: period === option.id ? colors.forest : '#F1F5F2' }}><Text numberOfLines={1} adjustsFontSizeToFit style={{ color: period === option.id ? '#fff' : colors.ink, fontWeight: '800', fontSize: 10 }}>{option.label}</Text></Pressable>)}</View>
+    <Card style={{ gap: 13, padding: 18, borderRadius: 24 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <View style={{ width: 42, height: 42, borderRadius: 14, backgroundColor: '#DDF5E7', alignItems: 'center', justifyContent: 'center' }}><CalendarClock size={23} color={colors.forest} /></View>
+        <Text style={{ color: colors.ink, fontWeight: '900', fontSize: 18 }}>Dashboard date range</Text>
+      </View>
+      <View style={{ flexDirection: 'row', flexWrap: 'nowrap', gap: 6 }}>{periodOptions.map(option => <Pressable key={option.id} onPress={() => setPeriod(option.id)} style={{ flex: 1, minWidth: 0, alignItems: 'center', paddingHorizontal: 4, paddingVertical: 10, borderRadius: 14, backgroundColor: period === option.id ? colors.forest : '#F1F5F2' }}><Text numberOfLines={1} adjustsFontSizeToFit style={{ color: period === option.id ? '#fff' : colors.ink, fontWeight: '800', fontSize: 11 }}>{option.label}</Text></Pressable>)}</View>
       {period === 'custom' ? <View style={{ gap: 9 }}>
         <Text style={{ color: colors.muted, fontSize: 10, fontWeight: '800' }}>Quick date ranges</Text>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 7 }}>{[{ label: '12 months', months: 12 }, { label: '9 months', months: 9 }, { label: '6 months', months: 6 }, { label: '3 months', months: 3 }].map(preset => <Pressable key={preset.months} onPress={() => applyMonthPreset(preset.months)} style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 9, backgroundColor: '#EAF4EE' }}><Text style={{ color: colors.forest, fontWeight: '800', fontSize: 10 }}>{preset.label}</Text></Pressable>)}</View>
@@ -190,11 +193,14 @@ export default function DashboardScreen({ user, onNavigate }: { user: AuthUser; 
         {dateError ? <Text style={{ color: colors.red, fontSize: 10 }}>{dateError}</Text> : null}
         <Pressable onPress={applyCustomRange} style={{ alignSelf: 'flex-end', paddingHorizontal: 14, paddingVertical: 9, backgroundColor: colors.forest, borderRadius: 10 }}><Text style={{ color: colors.white, fontWeight: '900', fontSize: 11 }}>Apply range</Text></Pressable>
       </View> : null}
-      <Text style={{ color: period === 'custom' && !customRange ? colors.amber : colors.muted, fontSize: 10 }}>{period === 'all' ? 'Showing all available history' : period === 'custom' ? customRange ? `${customRange.start_date} to ${customRange.end_date}` : 'Enter a valid date range and apply it' : (() => { const range = rangeFor(period); return `${range?.start_date} to ${range?.end_date}`; })()}</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}><CalendarClock size={16} color={colors.muted} /><Text style={{ color: period === 'custom' && !customRange ? colors.amber : colors.muted, fontSize: 12 }}>{period === 'all' ? 'Showing all available history' : period === 'custom' ? customRange ? `${customRange.start_date} to ${customRange.end_date}` : 'Enter a valid date range and apply it' : (() => { const range = rangeFor(period); return `${range?.start_date} to ${range?.end_date}`; })()}</Text></View>
     </Card>
 
-    <SectionTitle title="Job status" subtitle="Status counts from the selected range" />
-    {loading ? <View style={{ padding: 20 }}><Text style={{ textAlign: 'center', color: colors.muted }}>Loading operations metrics…</Text></View> : <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 7 }}>{metrics.map(item => <View key={item.label} style={{ width: '23%' }}><MetricCard {...item}  onPress={item.onPress} /></View>)}</View>}
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 11 }}>
+      <BarChart3 size={29} color={colors.forest} strokeWidth={2.8} />
+      <View style={{ gap: 3 }}><Text style={{ color: colors.ink, fontWeight: '900', fontSize: 23 }}>Job status</Text><Text style={{ color: colors.muted, fontSize: 12 }}>Status counts from the selected range</Text></View>
+    </View>
+    {loading ? <View style={{ padding: 20 }}><Text style={{ textAlign: 'center', color: colors.muted }}>Loading operations metrics…</Text></View> : <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 6 }}>{metrics.map(item => <View key={item.label} style={{ width: '23.5%' }}><MetricCard {...item} compact backgroundColor="#FFFFFF" onPress={item.onPress} /></View>)}</View>}
 
     <Card style={{ padding: 0, overflow: 'hidden' }}>
       <View style={{ paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#EAF1ED', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>

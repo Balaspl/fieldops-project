@@ -383,7 +383,7 @@ export default function TechnicianNotificationsPage() {
             textAlign: "right",
           }}
         >
-          Last updated: {lastUpdated.toLocaleString()}
+          Last updated: {lastUpdated.toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })}
         </div>
       )}
 
@@ -528,7 +528,7 @@ export default function TechnicianNotificationsPage() {
                       }}
                     >
                       <Clock size={12} />
-                      {n.createdAt ? new Date(n.createdAt).toLocaleString() : ""}
+                      {n.createdAt ? new Date(n.createdAt).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) : ""}
                     </div>
 
                     {/* Quick Job Action Buttons */}

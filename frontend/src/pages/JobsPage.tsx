@@ -1387,7 +1387,7 @@ function JobCreationForm({
         event.title,
         event.description,
         event.timestamp
-          ? new Date(event.timestamp).toLocaleString()
+          ? new Date(event.timestamp).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
           : "",
         event.actor_name,
         event.actor_role,
@@ -4394,11 +4394,11 @@ function JobCreationForm({
                           {closureDetails?.completed_at
                             ? new Date(
                                 closureDetails.completed_at
-                              ).toLocaleString()
+                              ).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
                             : viewJob.completed_at
                               ? new Date(
                                   viewJob.completed_at
-                                ).toLocaleString()
+                                ).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
                               : "N/A"}
                         </div>
                       </div>
@@ -4895,7 +4895,7 @@ function JobCreationForm({
                                   {closureDetails.completed_at
                                     ? new Date(
                                         closureDetails.completed_at
-                                      ).toLocaleString()
+                                      ).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
                                     : "N/A"}
                                 </div>
                               </div>
@@ -4914,7 +4914,7 @@ function JobCreationForm({
                                   {closureDetails.created_at
                                     ? new Date(
                                         closureDetails.created_at
-                                      ).toLocaleString()
+                                      ).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
                                     : "N/A"}
                                 </div>
                               </div>
@@ -4933,7 +4933,7 @@ function JobCreationForm({
                                   {closureDetails.updated_at
                                     ? new Date(
                                         closureDetails.updated_at
-                                      ).toLocaleString()
+                                      ).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
                                     : "N/A"}
                                 </div>
                               </div>
@@ -5592,7 +5592,7 @@ function JobCreationForm({
                                 {customerFeedbackDetails.feedback.created_at
                                   ? new Date(
                                       customerFeedbackDetails.feedback.created_at
-                                    ).toLocaleString()
+                                    ).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
                                   : "N/A"}
                               </div>
                             </div>
@@ -5612,7 +5612,7 @@ function JobCreationForm({
                                 {customerFeedbackDetails.feedback.updated_at
                                   ? new Date(
                                       customerFeedbackDetails.feedback.updated_at
-                                    ).toLocaleString()
+                                    ).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
                                   : "N/A"}
                               </div>
                             </div>
@@ -6019,7 +6019,7 @@ function JobCreationForm({
                                   {event.timestamp
                                     ? new Date(
                                         event.timestamp
-                                      ).toLocaleString()
+                                      ).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
                                     : "N/A"}
                                 </span>
                               </div>
@@ -6370,7 +6370,7 @@ function JobCreationForm({
                             {customerSignatureDetails.signed_at
                               ? new Date(
                                   customerSignatureDetails.signed_at
-                                ).toLocaleString()
+                                ).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
                               : "N/A"}
                           </div>
                         </div>
@@ -6738,7 +6738,7 @@ function JobCreationForm({
                               {paymentStatus?.updated_at
                                 ? new Date(
                                     paymentStatus.updated_at
-                                  ).toLocaleString()
+                                  ).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
                                 : "N/A"}
                             </div>
                           </div>
@@ -6881,7 +6881,7 @@ function JobCreationForm({
                             {invoiceDetails.completed_at
                               ? new Date(
                                   invoiceDetails.completed_at
-                                ).toLocaleString()
+                                ).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
                               : "N/A"}
                           </div>
                         </div>

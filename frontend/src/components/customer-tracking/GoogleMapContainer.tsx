@@ -141,7 +141,7 @@ export const GoogleMapContainer: React.FC<GoogleMapContainerProps> = ({ technici
               <p className="text-slate-500 text-xs mt-0.5">Status: <span className="font-medium text-emerald-600">{selectedTech.status}</span></p>
               {selectedTech.lastPing && (
                 <p className="text-[10px] text-slate-400 mt-1">
-                  Last Active: {new Date(selectedTech.lastPing).toLocaleTimeString()}
+                  Last Active: {new Date(selectedTech.lastPing).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true })}
                 </p>
               )}
             </div>

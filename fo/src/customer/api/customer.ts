@@ -11,7 +11,6 @@ import type {
   PaymentStatus,
   ReverseLocation,
   ServiceCatalogItem,
-  ServiceHistoryItem,
   ServiceRequest,
   CustomerProfile,
   CustomerProfilePayload,
@@ -263,15 +262,6 @@ export const customerApi = {
         `/api/v1/job-messages/jobs/${jobId}/messages/${encodeURIComponent(messageId)}/delivered`,
       )
     ).data,
-
-  history: async () =>
-    arrayFrom<ServiceHistoryItem>(
-      (
-        await apiClient.get(
-          "/api/customer/service-history",
-        )
-      ).data,
-    ),
 
   invoices: async () =>
     arrayFrom<CustomerInvoice>(

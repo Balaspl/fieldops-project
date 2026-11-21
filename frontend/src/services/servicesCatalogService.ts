@@ -12,6 +12,22 @@ export interface ServiceCatalogItem {
   required_skill?: string;
 }
 
+const customerCatalogCacheKey = (tenantId?: string) =>
+  `fieldops:customer-service-catalog:${tenantId || "all"}`;
+
+/** Return the last successful catalog immediately while a fresh copy loads. */
+export const getCachedCustomerCatalog = (tenantId?: string): ServiceCatalogItem[] | null => {
+  if (typeof window === "undefined") return null;
+  try {
+    const cached = window.localStorage.getItem(customerCatalogCacheKey(tenantId));
+    if (!cached) return null;
+    const items: unknown = JSON.parse(cached);
+    return Array.isArray(items) ? items as ServiceCatalogItem[] : null;
+  } catch {
+    return null;
+  }
+};
+
 export interface CreateServiceCatalogPayload {
   service_type: string;
   category: string;
@@ -90,7 +106,15 @@ export const getCustomerCatalog = async (tenantId?: string): Promise<ServiceCata
   const params: any = {};
   if (tenantId) params.tenant_id = tenantId;
   const res = await api.get("/api/services/catalog", { params });
-  return res.data;
+  const items = Array.isArray(res.data) ? res.data as ServiceCatalogItem[] : [];
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(customerCatalogCacheKey(tenantId), JSON.stringify(items));
+    } catch {
+      // Storage can be disabled or full; the live response is still usable.
+    }
+  }
+  return items;
 };
 
 export const getServicesTaxonomy = async (tenantId?: string): Promise<ServicesTaxonomyResponse> => {

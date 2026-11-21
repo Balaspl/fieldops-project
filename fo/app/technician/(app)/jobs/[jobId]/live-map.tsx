@@ -87,6 +87,8 @@ function createMapHtml(apiKey: string, destination: Point): string {
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <link rel="preconnect" href="https://api.olamaps.io" crossorigin>
+  <link rel="preconnect" href="https://www.unpkg.com" crossorigin>
   <style>
     html, body, #map {
       margin: 0;

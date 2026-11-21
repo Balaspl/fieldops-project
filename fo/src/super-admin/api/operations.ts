@@ -574,6 +574,32 @@ export async function getJobClosure(
   );
 }
 
+export async function getCustomerSignature(
+  id: number | string
+) {
+  return unwrap<any>(
+    await api.get(
+      `/jobs/${id}/customer-signature`
+    )
+  );
+}
+
+export async function getJobInvoice(id: number | string) {
+  return unwrap<any>(await api.get(`/api/v1/jobs/${id}/invoice`));
+}
+
+export async function getJobPaymentStatus(id: number | string) {
+  return unwrap<any>(await api.get(`/api/v1/jobs/${id}/payment-status`));
+}
+
+export async function getJobCustomerFeedback(id: number | string) {
+  return unwrap<any>(await api.get(`/api/v1/jobs/${id}/customer-feedback`));
+}
+
+export async function getJobTimeline(id: number | string) {
+  return unwrap<any>(await api.get(`/api/v1/jobs/${id}/timeline`));
+}
+
 // ==================================================
 // CUSTOMER SUPPORT
 // ==================================================

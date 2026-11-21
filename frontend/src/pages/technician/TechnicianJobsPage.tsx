@@ -2042,7 +2042,7 @@ const assignmentDistanceDisplay = !isValidCustomerLocation
 
         >
 
-          Last synced {lastJobsSync.toLocaleTimeString()}
+          Last synced {lastJobsSync.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true })}
 
         </div>
 
@@ -2261,7 +2261,7 @@ const assignmentDistanceDisplay = !isValidCustomerLocation
                             )}`}
                       </span>
                     )}
-                  <span style={{ color: "#718096", fontSize: 12 }}>Assigned {job.assigned_at ? `on ${new Date(job.assigned_at).toLocaleString()}` : "date not recorded"}</span>
+                  <span style={{ color: "#718096", fontSize: 12 }}>Assigned {job.assigned_at ? `on ${new Date(job.assigned_at).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })}` : "date not recorded"}</span>
                 </div>
 
                 <div

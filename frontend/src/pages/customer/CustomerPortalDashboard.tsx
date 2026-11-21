@@ -369,7 +369,7 @@ export default function CustomerPortalDashboard({
                 </div>
                 <div style={{ fontSize: "12px", color: "#6B7280" }}>
                   {sr.request_number} •{" "}
-                  {new Date(sr.created_at).toLocaleDateString()}
+                  {new Date(sr.created_at).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" })}
                 </div>
               </div>
 

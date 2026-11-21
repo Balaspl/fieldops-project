@@ -27,7 +27,7 @@ function formatMessageTime(value: string | null) {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? ""
-    : date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    : date.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true});
 }
 
 export default function TechnicianJobChatScreen() {

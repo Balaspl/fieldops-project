@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, ImageBackground, Modal, Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
-import { AlertCircle, ArrowDown, ArrowUp, Check, CheckCircle2, CircleMinus, CircleX, Clock3, Equal, Eye, Filter, Layers, Leaf, LoaderCircle, MapPin, Navigation, RotateCcw, UserRound } from 'lucide-react-native';
+import { Alert, Image, ImageBackground, Modal, Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
+import { AlertCircle, ArrowDown, ArrowUp, Camera, Check, CheckCircle2, CircleMinus, CircleX, Clock3, CreditCard, Equal, Eye, FileText, Filter, Layers, Leaf, LoaderCircle, MapPin, Navigation, Package, RotateCcw, UserRound } from 'lucide-react-native';
 import { api } from '../api/client';
 import {
   assignJob,
@@ -10,12 +10,18 @@ import {
   extendEscalatedSla,
   forceAssignEscalation,
   getAvailableTechnicians,
+  getCustomerSignature,
+  getJobCustomerFeedback,
+  getJobClosure,
+  getJobInvoice,
+  getJobPaymentStatus,
+  getJobTimeline,
   getJobPlan,
   overrideAssignment,
   asArray,
   unwrap,
 } from '../api/operations';
-import { Card, EmptyState, ErrorBanner, Field, Pill, PrimaryButton, ScreenScroll, SectionTitle } from '../components/UI';
+import { Card, EmptyState, ErrorBanner, Field, Pill, PrimaryButton, ScreenScroll } from '../components/UI';
 import { colors } from '../theme';
 import { dateTime, statusLabel, statusTone, text } from '../utils/format';
 
@@ -24,6 +30,12 @@ type FilterState = { technician: string; service: string; status: string; priori
 const DEFAULT_FILTERS: FilterState = { technician: 'ALL', service: 'ALL', status: 'ALL', priority: 'ALL', sla: 'ALL' };
 
 const jobStatus = (job: any) => String(job?.status || job?.job_status || '').toUpperCase();
+const formatPreferredTime = (value?: string | null) => {
+  const match = value?.match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return value || '';
+  return new Date(2000, 0, 1, Number(match[1]), Number(match[2]))
+    .toLocaleTimeString('en-GB', { hour: 'numeric', minute: '2-digit', hour12: true });
+};
 const isEscalated = (job: any) => ['ESCALATED', 'ESCALATED_TO_CTO'].includes(jobStatus(job));
 const technicianName = (tech: any) => tech?.technician_name || tech?.technician || tech?.name || tech?.full_name || tech?.user?.full_name || [tech?.first_name, tech?.last_name].filter(Boolean).join(' ') || 'Technician';
 const assignedTechnicianName = (job: any, directory: any[]) => {
@@ -69,7 +81,7 @@ const hiddenStatusTabs: Tab[] = ['enroute', 'inprogress', 'completed'];
 
 export default function PlanningScreen() {
   const [tab, setTab] = useState<Tab>('planned');
-  const [showFilters, setShowFilters] = useState(false);
+  const [showFilters, setShowFilters] = useState(true);
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
   const [serviceOptions, setServiceOptions] = useState<string[]>([]);
   const [filterPicker, setFilterPicker] = useState<'technician' | 'service' | null>(null);
@@ -89,6 +101,16 @@ export default function PlanningScreen() {
   const [selectedJob, setSelectedJob] = useState<any | null>(null);
   const [detailJob, setDetailJob] = useState<any | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailClosure, setDetailClosure] = useState<any | null>(null);
+  const [detailSignature, setDetailSignature] = useState<any | null>(null);
+  const [detailInvoice, setDetailInvoice] = useState<any | null>(null);
+  const [detailPayment, setDetailPayment] = useState<any | null>(null);
+  const [detailFeedback, setDetailFeedback] = useState<any | null>(null);
+  const [detailTimeline, setDetailTimeline] = useState<any[]>([]);
+  const [detailTimelineLoading, setDetailTimelineLoading] = useState(false);
+  const [detailCompletionLoading, setDetailCompletionLoading] = useState(false);
+  const [detailCompletionMessage, setDetailCompletionMessage] = useState('');
+  const detailRequestId = useRef(0);
   const [declinedJobForReassign, setDeclinedJobForReassign] = useState<any | null>(null);
   const [cancelEscalationJob, setCancelEscalationJob] = useState<any | null>(null);
   const [escalationCancelReason, setEscalationCancelReason] = useState('');
@@ -244,16 +266,69 @@ export default function PlanningScreen() {
   };
 
   const openJobDetails = async (job: any) => {
+    const requestId = ++detailRequestId.current;
+    const jobId = job.id ?? job.job_id;
     setDetailJob(job);
+    setDetailClosure(null);
+    setDetailSignature(null);
+    setDetailInvoice(null);
+    setDetailPayment(null);
+    setDetailFeedback(null);
+    setDetailTimeline([]);
+    setDetailTimelineLoading(true);
+    setDetailCompletionLoading(false);
+    setDetailCompletionMessage('');
     setDetailLoading(true);
     try {
-      const result = unwrap<any>(await api.get(`/jobs/${job.id ?? job.job_id}`));
+      const [jobResult, timelineResult] = await Promise.allSettled([
+        api.get(`/jobs/${jobId}`),
+        getJobTimeline(jobId),
+      ]);
+      if (jobResult.status === 'rejected') throw jobResult.reason;
+      const result = unwrap<any>(jobResult.value);
+      if (requestId !== detailRequestId.current) return;
       setDetailJob(result);
+      if (timelineResult.status === 'fulfilled') {
+        setDetailTimeline(Array.isArray(timelineResult.value?.events) ? timelineResult.value.events : []);
+      }
+      if (String(result?.status || result?.job_status || '').toUpperCase() === 'COMPLETED') {
+        setDetailCompletionLoading(true);
+        const [closureResult, signatureResult, invoiceResult, paymentResult, feedbackResult] = await Promise.allSettled([
+          getJobClosure(jobId),
+          getCustomerSignature(jobId),
+          getJobInvoice(jobId),
+          getJobPaymentStatus(jobId),
+          getJobCustomerFeedback(jobId),
+        ]);
+        if (requestId !== detailRequestId.current) return;
+        if (closureResult.status === 'fulfilled') setDetailClosure(closureResult.value);
+        if (signatureResult.status === 'fulfilled') setDetailSignature(signatureResult.value);
+        if (invoiceResult.status === 'fulfilled') setDetailInvoice(invoiceResult.value);
+        if (paymentResult.status === 'fulfilled') setDetailPayment(paymentResult.value);
+        if (feedbackResult.status === 'fulfilled') setDetailFeedback(feedbackResult.value);
+        if ([closureResult, signatureResult, invoiceResult, paymentResult, feedbackResult].some((result) => result.status === 'rejected')) setDetailCompletionMessage('Some completion records could not be loaded. Close and reopen the details to try again.');
+      }
     } catch {
       // The list row remains usable as a read-only fallback if details are unavailable.
     } finally {
-      setDetailLoading(false);
+      if (requestId === detailRequestId.current) {
+        setDetailLoading(false);
+        setDetailTimelineLoading(false);
+        setDetailCompletionLoading(false);
+      }
     }
+  };
+
+  const closeJobDetails = () => {
+    detailRequestId.current += 1;
+    setDetailJob(null);
+    setDetailClosure(null);
+    setDetailSignature(null);
+    setDetailInvoice(null);
+    setDetailPayment(null);
+    setDetailFeedback(null);
+    setDetailTimeline([]);
+    setDetailTimelineLoading(false);
   };
 
   const submitEscalationCancel = async () => {
@@ -391,18 +466,15 @@ export default function PlanningScreen() {
       style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}
     />
     <ScreenScroll contentContainerStyle={{ gap: 12, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 28, backgroundColor: 'transparent' }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={colors.forest} />}>
-      <View style={{ gap: 12 }}>
-        <View style={{ gap: 4 }}>
-          <Text style={{ color: '#104D32', fontSize: 23, fontWeight: '900' }}>Planning & Dispatch</Text>
-          <Text style={{ color: colors.muted, fontSize: 12, lineHeight: 18 }}>Manage job assignments, technician workload and SLA response.</Text>
-        </View>
-        <Card style={{ padding: 14, gap: 12, borderRadius: 18, backgroundColor: '#E7F4DF', borderColor: '#C4DDB9', borderWidth: 1 }}>
-          <Pressable onPress={() => setShowFilters(value => !value)} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-            <View style={{ width: 42, height: 42, borderRadius: 14, backgroundColor: '#D8EED5', alignItems: 'center', justifyContent: 'center' }}><Filter size={19} color={colors.forest} /></View>
-            <View style={{ flex: 1, gap: 2 }}><Text style={{ color: colors.ink, fontSize: 15, fontWeight: '900' }}>Job filters</Text><Text style={{ color: colors.muted, fontSize: 11 }}>{showFilters ? 'Choose filters to narrow the job list' : 'Technician, service, status, priority and SLA'}</Text></View>
-            <Text style={{ color: colors.forest, fontSize: 12, fontWeight: '900' }}>{showFilters ? 'Hide' : 'Filter'}</Text>
-          </Pressable>
-          {showFilters ? <View style={{ gap: 13, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.border }}>
+      <Card style={{ padding: 10, gap: 8, borderRadius: 14, backgroundColor: '#FFFFFF', borderColor: '#DCE8DF', borderWidth: 1 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Pressable onPress={() => setShowFilters(value => !value)} style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <View style={{ width: 28, height: 28, borderRadius: 9, backgroundColor: '#EAF4EE', alignItems: 'center', justifyContent: 'center' }}><Filter size={15} color={colors.forest} /></View>
+              <View style={{ flex: 1, gap: 1 }}><Text style={{ color: colors.ink, fontSize: 12, fontWeight: '900' }}>Job Filters</Text><Text style={{ color: colors.muted, fontSize: 9 }}>Search and narrow down jobs</Text></View>
+            </Pressable>
+            <Pressable onPress={clearFilters} style={{ minHeight: 28, paddingHorizontal: 9, borderRadius: 9, borderWidth: 1, borderColor: colors.border, backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', gap: 4 }}><RotateCcw size={11} color={colors.muted} /><Text style={{ color: colors.muted, fontSize: 9, fontWeight: '800' }}>Clear</Text></Pressable>
+          </View>
+          {showFilters ? <View style={{ gap: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: colors.border }}>
             <View style={{ flexDirection: 'row', gap: 8 }}>
               <View style={{ flex: 1, gap: 5 }}><Text style={filterLabel}>TECHNICIAN</Text><Pressable onPress={() => setFilterPicker('technician')} style={selectField}><Text numberOfLines={1} style={selectText}>{technicianTitle}</Text><Text style={selectChevron}>⌄</Text></Pressable></View>
               <View style={{ flex: 1, gap: 5 }}><Text style={filterLabel}>SERVICE</Text><Pressable onPress={() => setFilterPicker('service')} style={selectField}><Text numberOfLines={1} style={selectText}>{serviceTitle}</Text><Text style={selectChevron}>⌄</Text></Pressable></View>
@@ -414,25 +486,23 @@ export default function PlanningScreen() {
             <View style={{ gap: 7 }}><Text style={filterLabel}>SLA</Text><View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 7 }}>{[
               { label: 'All SLA', value: 'ALL', icon: Clock3, color: '#087B50', tint: '#E9F8EF' }, { label: 'Within SLA', value: 'WITHIN_SLA', icon: Check, color: '#047857', tint: '#E9FBF3' }, { label: 'Approaching Breach', value: 'APPROACHING_BREACH', icon: AlertCircle, color: '#92400E', tint: '#FFF7E2' }, { label: 'Breached', value: 'BREACHED', icon: AlertCircle, color: '#B91C1C', tint: '#FFF0F0' },
             ].map(item => <FilterChip key={item.value} {...item} selected={filters.sla === item.value} onPress={() => updateFilter('sla', item.value)} />)}</View></View>
-            <Pressable onPress={clearFilters} style={{ alignSelf: 'flex-start', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#DCEED6' }}><Text style={{ color: colors.forest, fontSize: 11, fontWeight: '900' }}>Reset all filters</Text></Pressable>
           </View> : null}
-        </Card>
-      </View>
+      </Card>
       {error ? <ErrorBanner message={error} /> : null}
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 8 }}>
+      <View style={tabGrid}>
         {[
-          { key: 'total' as Tab, label: 'Total Jobs', tint: '#E2F1E5', color: '#17643F' },
-          { key: 'planned' as Tab, label: 'Planned', tint: '#DDF2DF', color: '#147342' },
-          { key: 'enroute' as Tab, label: 'En Route', tint: '#E4F0FF', color: '#2868B2' },
-          { key: 'inprogress' as Tab, label: 'In Progress', tint: '#FFF0D9', color: '#B76A12' },
-          { key: 'completed' as Tab, label: 'Completed', tint: '#DDF3EA', color: '#087B58' },
-          { key: 'declined' as Tab, label: 'Tech. Declined', tint: '#FCE8E7', color: '#B83A42' },
-          { key: 'escalations' as Tab, label: 'SLA Escalations', tint: '#F1E9FC', color: '#7846B3' },
+          { key: 'total' as Tab, label: 'Total Jobs' },
+          { key: 'planned' as Tab, label: 'Planned Assignments' },
+          { key: 'enroute' as Tab, label: 'En Route Jobs' },
+          { key: 'inprogress' as Tab, label: 'In Progress' },
+          { key: 'completed' as Tab, label: 'Completed' },
+          { key: 'declined' as Tab, label: 'Technician Declined Jobs' },
+          { key: 'escalations' as Tab, label: 'SLA Escalations' },
         ].map(metric => {
           const active = tab === metric.key;
-          return <Pressable key={metric.key} onPress={() => changeTab(metric.key)} style={{ width: '31.5%', minHeight: 82, paddingVertical: 9, paddingHorizontal: 9, borderRadius: 17, borderWidth: 1, borderColor: active ? '#17643F' : `${metric.color}35`, backgroundColor: active ? '#0B5B3A' : metric.tint, justifyContent: 'space-between', gap: 3 }}>
-            <Text style={{ color: active ? '#FFFFFF' : metric.color, fontSize: 20, fontWeight: '900' }}>{tabCounts[metric.key]}</Text>
-            <Text numberOfLines={2} adjustsFontSizeToFit style={{ color: active ? '#FFFFFF' : '#304B3A', fontSize: 10, lineHeight: 13, fontWeight: '800' }}>{metric.label}</Text>
+          return <Pressable key={metric.key} onPress={() => changeTab(metric.key)} style={[tabButton, active && tabButtonActive]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 }}><View style={[tabDot, { backgroundColor: tabDotColors[metric.key] }]} /><Text style={[tabCount, active && tabCountActive]}>{tabCounts[metric.key]}</Text></View>
+            <Text numberOfLines={2} adjustsFontSizeToFit style={[tabText, active && tabTextActive]}>{metric.label}</Text>
           </Pressable>;
         })}
       </View>
@@ -548,13 +618,90 @@ export default function PlanningScreen() {
         </View>
       </View>
     </Modal>
-    <Modal visible={!!detailJob} animationType="slide" transparent onRequestClose={() => setDetailJob(null)}>
-      <View style={{ flex: 1, backgroundColor: 'rgba(7,25,16,.55)', justifyContent: 'flex-end' }}>
-        <View style={{ backgroundColor: '#F7FBF5', borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 16, maxHeight: '82%', gap: 10 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}><View><Text style={{ color: colors.ink, fontSize: 17, fontWeight: '900' }}>Job Details</Text><Text style={{ color: colors.muted, fontSize: 10 }}>#{detailJob?.id ?? detailJob?.job_id}{detailLoading ? ' · Refreshing…' : ''}</Text></View><PrimaryButton title="Close" compact variant="secondary" onPress={() => setDetailJob(null)} /></View>
-          <ScrollView><View style={{ gap: 9, paddingBottom: 6 }}>{[
-            ['Customer', detailJob?.customer_name || detailJob?.customer], ['Service', detailJob?.service_type || detailJob?.required_skill], ['Technician', assignedTechnicianName(detailJob, technicianOptions)], ['Status', statusLabel(detailJob?.status || detailJob?.job_status)], ['Priority', detailJob?.priority], ['Location', detailJob?.location], ['Issue', detailJob?.issue_description], ['SLA deadline', dateTime(detailJob?.sla_deadline)], ['Created', dateTime(detailJob?.created_at)], ['Assigned', dateTime(detailJob?.assigned_at)], ['Rejection reason', detailJob?.rejection_reason],
-          ].filter(([, value]) => value != null && value !== '').map(([label, value]) => <View key={String(label)} style={{ paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: colors.border }}><Text style={{ color: colors.muted, fontSize: 9, fontWeight: '800' }}>{label}</Text><Text style={{ color: colors.ink, fontSize: 12, marginTop: 2 }}>{String(value)}</Text></View>)}</View></ScrollView>
+    <Modal visible={!!detailJob} animationType="slide" transparent onRequestClose={closeJobDetails}>
+      <View style={{ flex: 1, backgroundColor: 'rgba(7,25,16,.58)', justifyContent: 'flex-end' }}>
+        <View style={{ height: '96%', backgroundColor: '#F3F8F5', borderTopLeftRadius: 26, borderTopRightRadius: 26, overflow: 'hidden' }}>
+          <View style={{ paddingHorizontal: 18, paddingTop: 16, paddingBottom: 14, backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.border, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: colors.muted, fontSize: 10, fontWeight: '900', letterSpacing: 1 }}>PLANNING · JOB RECORD</Text>
+              <Text style={{ color: colors.ink, fontSize: 22, fontWeight: '900', marginTop: 3 }}>Job #{detailJob?.id ?? detailJob?.job_id}</Text>
+              {detailLoading ? <Text style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>Refreshing job information…</Text> : null}
+            </View>
+            <Pressable accessibilityRole="button" accessibilityLabel="Close job details" onPress={closeJobDetails} style={{ minWidth: 62, height: 42, paddingHorizontal: 13, borderRadius: 14, backgroundColor: '#EAF4EE', alignItems: 'center', justifyContent: 'center' }}>
+              <Text style={{ color: colors.forest, fontSize: 13, fontWeight: '900' }}>Close</Text>
+            </Pressable>
+          </View>
+          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 34, gap: 13 }} showsVerticalScrollIndicator={false}>
+            <View style={{ padding: 16, borderRadius: 20, backgroundColor: colors.forestDark, gap: 11 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+                <View style={{ flex: 1, gap: 4 }}>
+                  <Text style={{ color: '#A7D7BC', fontSize: 10, fontWeight: '900', letterSpacing: 1 }}>SERVICE REQUEST</Text>
+                  <Text style={{ color: colors.white, fontSize: 18, lineHeight: 23, fontWeight: '900' }}>{text(detailJob?.service_type || detailJob?.required_skill, 'Service request')}</Text>
+                  <Text style={{ color: '#D2E7DA', fontSize: 12 }}>{text(detailJob?.customer_name || detailJob?.customer)}</Text>
+                </View>
+                <Pill label={statusLabel(detailJob?.status || detailJob?.job_status)} tone={statusTone(detailJob?.status || detailJob?.job_status)} />
+              </View>
+              <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,.18)' }} />
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
+                <View style={{ flex: 1 }}><Text style={{ color: '#A7D7BC', fontSize: 9, fontWeight: '800' }}>PRIORITY</Text><Text style={{ color: colors.white, fontSize: 12, fontWeight: '800', marginTop: 3 }}>{statusLabel(detailJob?.priority)}</Text></View>
+                <View style={{ flex: 1 }}><Text style={{ color: '#A7D7BC', fontSize: 9, fontWeight: '800' }}>TECHNICIAN</Text><Text numberOfLines={2} style={{ color: colors.white, fontSize: 12, fontWeight: '800', marginTop: 3 }}>{assignedTechnicianName(detailJob, technicianOptions)}</Text></View>
+              </View>
+            </View>
+
+            <Card style={{ padding: 15, gap: 12 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}><View style={{ width: 36, height: 36, borderRadius: 12, backgroundColor: '#EAF4EE', alignItems: 'center', justifyContent: 'center' }}><FileText size={18} color={colors.forest} /></View><View><Text style={{ color: colors.ink, fontSize: 15, fontWeight: '900' }}>Request details</Text><Text style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>Customer, service and booking information</Text></View></View>
+              <View style={{ gap: 0 }}>
+                {[
+                  ['Customer', detailJob?.customer_name || detailJob?.customer],
+                  ['Contact number', detailJob?.contact_number],
+                  ['Service type', detailJob?.service_type || detailJob?.required_skill],
+                  ['Issue reported', detailJob?.issue_description],
+                  ['Service address', detailJob?.site_address || detailJob?.location],
+                  ['Preferred visit', detailJob?.preferred_service_date ? `${dateTime(detailJob.preferred_service_date)}${detailJob?.preferred_service_time ? ` · ${formatPreferredTime(detailJob.preferred_service_time)}` : ''}` : null],
+                ].filter(([, value]) => value != null && value !== '').map(([label, value]) => <View key={String(label)} style={{ paddingVertical: 10, borderTopWidth: 1, borderTopColor: colors.softBorder }}><Text style={{ color: colors.muted, fontSize: 10, fontWeight: '800' }}>{label}</Text><Text selectable style={{ color: colors.ink, fontSize: 13, lineHeight: 19, fontWeight: '600', marginTop: 3 }}>{String(value)}</Text></View>)}
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 11, borderRadius: 13, backgroundColor: '#F3F8F5' }}><MapPin size={16} color={colors.forest} /><Text selectable style={{ flex: 1, color: colors.text, fontSize: 12, lineHeight: 18 }}>{text(detailJob?.site_address || detailJob?.location, 'Service location not recorded')}</Text></View>
+            </Card>
+
+            <Card style={{ padding: 15, gap: 12 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}><View style={{ width: 36, height: 36, borderRadius: 12, backgroundColor: '#EDF4FF', alignItems: 'center', justifyContent: 'center' }}><Clock3 size={18} color={colors.blue} /></View><View><Text style={{ color: colors.ink, fontSize: 15, fontWeight: '900' }}>Job progress</Text><Text style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>Status timestamps and service deadline</Text></View></View>
+              {detailTimelineLoading ? <Text style={{ color: colors.muted, fontSize: 11, paddingVertical: 8 }}>Loading job activity…</Text> : detailTimeline.length ? detailTimeline.map((event: any, index: number) => <View key={String(event.id || `${event.title}-${index}`)} style={{ flexDirection: 'row', gap: 10, minHeight: 42 }}><View style={{ width: 22, alignItems: 'center' }}><View style={{ width: 11, height: 11, borderRadius: 6, marginTop: 4, backgroundColor: event.is_current_state ? colors.green : colors.blue }} />{index < detailTimeline.length - 1 ? <View style={{ width: 1, flex: 1, backgroundColor: colors.border }} /> : null}</View><View style={{ flex: 1, paddingBottom: 10 }}><Text style={{ color: colors.ink, fontSize: 12, fontWeight: '900' }}>{text(event.title, 'Job update')}</Text>{event.description ? <Text style={{ color: colors.text, fontSize: 11, lineHeight: 16, marginTop: 2 }}>{event.description}</Text> : null}<Text style={{ color: colors.muted, fontSize: 10, marginTop: 3 }}>{dateTime(event.timestamp)}{event.actor_name ? ` · ${event.actor_name}` : ''}</Text></View></View>) : <View style={{ gap: 0 }}>{[
+                ['Created', detailJob?.created_at], ['Assigned', detailJob?.assigned_at], ['En route', detailJob?.en_route_at], ['Arrived on site', detailJob?.on_site_at], ['Work started', detailJob?.work_started_at], ['Completed', detailJob?.completed_at || detailJob?.closed_at], ['Cancelled', detailJob?.cancelled_at],
+              ].filter(([, value]) => value).map(([label, value]) => <View key={String(label)} style={{ paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.softBorder }}><Text style={{ color: colors.ink, fontSize: 11, fontWeight: '800' }}>{label}</Text><Text style={{ color: colors.muted, fontSize: 11, marginTop: 2 }}>{dateTime(String(value))}</Text></View>)}</View>}
+              {detailJob?.sla_deadline ? <View style={{ padding: 11, borderRadius: 12, backgroundColor: '#EDF4FF', flexDirection: 'row', alignItems: 'center', gap: 8 }}><Clock3 size={15} color={colors.blue} /><View><Text style={{ color: colors.blue, fontSize: 9, fontWeight: '900' }}>SLA DEADLINE</Text><Text style={{ color: colors.ink, fontSize: 11, fontWeight: '700', marginTop: 2 }}>{dateTime(detailJob.sla_deadline)}</Text></View></View> : null}
+              {detailJob?.rejection_reason ? <View style={{ padding: 11, borderRadius: 12, backgroundColor: '#FFF5F5' }}><Text style={{ color: colors.red, fontSize: 10, fontWeight: '900' }}>REJECTION REASON</Text><Text style={{ color: colors.text, fontSize: 12, lineHeight: 18, marginTop: 4 }}>{detailJob.rejection_reason}</Text></View> : null}
+              {detailJob?.cancellation_reason ? <View style={{ padding: 11, borderRadius: 12, backgroundColor: '#FFF5F5' }}><Text style={{ color: colors.red, fontSize: 10, fontWeight: '900' }}>CANCELLATION REASON</Text><Text style={{ color: colors.text, fontSize: 12, lineHeight: 18, marginTop: 4 }}>{detailJob.cancellation_reason}</Text></View> : null}
+            </Card>
+
+            {String(detailJob?.status || detailJob?.job_status || '').toUpperCase() === 'COMPLETED' ? (
+              <Card style={{ padding: 15, gap: 12, borderColor: '#B9E3CB' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}><View style={{ width: 36, height: 36, borderRadius: 12, backgroundColor: '#E9FBF3', alignItems: 'center', justifyContent: 'center' }}><CheckCircle2 size={19} color="#087B58" /></View><View><Text style={{ color: colors.ink, fontSize: 15, fontWeight: '900' }}>Completion record</Text><Text style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>Work report, evidence and customer sign-off</Text></View></View>
+                {detailCompletionLoading ? <Text style={{ color: colors.muted, fontSize: 12, paddingVertical: 8 }}>Loading completion report and signature…</Text> : null}
+                {detailCompletionMessage ? <Text style={{ color: colors.amber, fontSize: 11, lineHeight: 16 }}>{detailCompletionMessage}</Text> : null}
+                {detailClosure ? <>
+                  <View style={{ padding: 12, borderRadius: 13, backgroundColor: '#F3F8F5', gap: 5 }}><Text style={{ color: colors.forest, fontSize: 10, fontWeight: '900' }}>WORK SUMMARY</Text><Text style={{ color: colors.ink, fontSize: 13, lineHeight: 19 }}>{text(detailClosure.work_summary || detailClosure.completion_notes)}</Text></View>
+                  {detailClosure.work_report?.duration_minutes != null ? <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}><Clock3 size={15} color={colors.forest} /><Text style={{ color: colors.text, fontSize: 12 }}>Time on job: {detailClosure.work_report.duration_minutes} minutes</Text></View> : null}
+                  {detailClosure.work_report?.parts_used?.length ? <View style={{ gap: 6 }}><View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}><Package size={15} color={colors.forest} /><Text style={{ color: colors.ink, fontSize: 12, fontWeight: '900' }}>Parts used</Text></View>{detailClosure.work_report.parts_used.map((part: string, index: number) => <Text key={`${part}-${index}`} style={{ color: colors.text, fontSize: 12 }}>• {part}</Text>)}</View> : null}
+                  {detailClosure.checklist?.items?.length ? <View style={{ gap: 6 }}><Text style={{ color: colors.ink, fontSize: 12, fontWeight: '900' }}>Completion checklist</Text>{detailClosure.checklist.items.map((item: any) => <View key={item.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}><CheckCircle2 size={14} color={item.status === 'COMPLETED' ? colors.green : colors.red} /><Text style={{ flex: 1, color: colors.text, fontSize: 11 }}>{item.label}</Text><Text style={{ color: item.status === 'COMPLETED' ? colors.green : colors.red, fontSize: 9, fontWeight: '900' }}>{statusLabel(item.status)}</Text></View>)}</View> : null}
+                  <View style={{ flexDirection: 'row', gap: 8 }}>
+                    {[['Labour', detailClosure.labour_cost], ['Materials', detailClosure.material_cost], ['Total', detailClosure.subtotal]].map(([label, value]) => <View key={String(label)} style={{ flex: 1, padding: 10, borderRadius: 12, backgroundColor: '#F3F8F5' }}><Text style={{ color: colors.muted, fontSize: 9, fontWeight: '800' }}>{label}</Text><Text style={{ color: colors.ink, fontSize: 12, fontWeight: '900', marginTop: 3 }}>{value == null ? '—' : `₹${Number(value).toLocaleString('en-IN')}`}</Text></View>)}
+                  </View>
+                  {detailClosure.before_images?.length || detailClosure.after_images?.length ? <View style={{ gap: 8 }}><View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}><Camera size={15} color={colors.forest} /><Text style={{ color: colors.ink, fontSize: 12, fontWeight: '900' }}>Completion photos</Text></View>{[['Before', detailClosure.before_images || []], ['After', detailClosure.after_images || []]].map(([label, images]: any) => images.length ? <View key={label} style={{ gap: 6 }}><Text style={{ color: colors.muted, fontSize: 10, fontWeight: '800' }}>{label} · {images.length}</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>{images.map((uri: string, index: number) => <Image key={`${label}-${index}`} source={{ uri }} resizeMode="cover" style={{ width: 112, height: 88, borderRadius: 12, backgroundColor: colors.mint }} />)}</ScrollView></View> : null)}</View> : null}
+                </> : !detailCompletionLoading ? <Text style={{ color: colors.muted, fontSize: 12 }}>No completion report is available for this job.</Text> : null}
+                {detailSignature?.signature_data ? <View style={{ gap: 7 }}><Text style={{ color: colors.ink, fontSize: 12, fontWeight: '900' }}>Customer signature</Text><View style={{ minHeight: 100, borderWidth: 1, borderColor: colors.border, borderRadius: 13, backgroundColor: colors.white, padding: 8, alignItems: 'center', justifyContent: 'center' }}><Image source={{ uri: detailSignature.signature_data }} resizeMode="contain" style={{ width: '100%', height: 100 }} /></View><Text style={{ color: colors.muted, fontSize: 10 }}>Signed {dateTime(detailSignature.signed_at)}</Text></View> : null}
+                {!detailCompletionLoading && !detailSignature && !detailCompletionMessage ? <View style={{ padding: 11, borderRadius: 12, backgroundColor: '#FFF9ED', flexDirection: 'row', alignItems: 'center', gap: 8 }}><AlertCircle size={15} color={colors.amber} /><Text style={{ flex: 1, color: colors.text, fontSize: 11, lineHeight: 16 }}>Customer signature is not available for this job.</Text></View> : null}
+              </Card>
+            ) : null}
+            {String(detailJob?.status || detailJob?.job_status || '').toUpperCase() === 'COMPLETED' ? <Card style={{ padding: 15, gap: 12 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}><View style={{ width: 36, height: 36, borderRadius: 12, backgroundColor: '#EAF4EE', alignItems: 'center', justifyContent: 'center' }}><CreditCard size={18} color={colors.forest} /></View><View><Text style={{ color: colors.ink, fontSize: 15, fontWeight: '900' }}>Billing & feedback</Text><Text style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>Invoice, payment record and customer rating</Text></View></View>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <View style={{ flex: 1, padding: 11, borderRadius: 13, backgroundColor: '#F3F8F5' }}><Text style={{ color: colors.muted, fontSize: 9, fontWeight: '900' }}>INVOICE TOTAL</Text><Text style={{ color: colors.ink, fontSize: 15, fontWeight: '900', marginTop: 4 }}>{detailInvoice?.total_amount == null ? 'Not available' : `₹${Number(detailInvoice.total_amount).toLocaleString('en-IN')}`}</Text></View>
+                <View style={{ flex: 1, padding: 11, borderRadius: 13, backgroundColor: '#F3F8F5' }}><Text style={{ color: colors.muted, fontSize: 9, fontWeight: '900' }}>PAYMENT</Text><Text style={{ color: colors.ink, fontSize: 13, fontWeight: '900', marginTop: 5 }}>{statusLabel(detailPayment?.status || 'UNAVAILABLE')}</Text></View>
+              </View>
+              {detailInvoice ? <View style={{ gap: 5 }}><Text style={{ color: colors.ink, fontSize: 11, fontWeight: '900' }}>Invoice breakdown</Text><Text style={{ color: colors.text, fontSize: 11, lineHeight: 17 }}>Labour ₹{Number(detailInvoice.labour_cost || 0).toLocaleString('en-IN')}  ·  Materials ₹{Number(detailInvoice.material_cost || 0).toLocaleString('en-IN')}</Text><Text style={{ color: colors.text, fontSize: 11, lineHeight: 17 }}>Subtotal ₹{Number(detailInvoice.subtotal || 0).toLocaleString('en-IN')}  ·  GST ₹{Number(detailInvoice.gst_amount || 0).toLocaleString('en-IN')}</Text></View> : null}
+              {detailFeedback?.has_feedback && detailFeedback?.feedback ? <View style={{ padding: 11, borderRadius: 13, backgroundColor: '#FFF9ED', gap: 4 }}><Text style={{ color: colors.amber, fontSize: 12, fontWeight: '900' }}>{'★'.repeat(Math.max(0, Math.min(5, Number(detailFeedback.feedback.rating) || 0)))} <Text style={{ color: colors.ink }}>{detailFeedback.feedback.rating}/5 customer rating</Text></Text>{detailFeedback.feedback.comment ? <Text style={{ color: colors.text, fontSize: 12, lineHeight: 18 }}>{detailFeedback.feedback.comment}</Text> : <Text style={{ color: colors.muted, fontSize: 11 }}>No written comment</Text>}</View> : detailFeedback && !detailFeedback.has_feedback ? <Text style={{ color: colors.muted, fontSize: 11 }}>Customer feedback has not been submitted.</Text> : null}
+            </Card> : null}
+          </ScrollView>
         </View>
       </View>
     </Modal>
@@ -582,7 +729,7 @@ export default function PlanningScreen() {
 }
 
 function FilterChip({ label, icon: Icon, selected, color, tint, onPress }: { label: string; icon: React.ComponentType<any>; selected: boolean; color: string; tint: string; onPress: () => void }) {
-  return <Pressable onPress={onPress} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, minHeight: 29, paddingHorizontal: 7, borderWidth: 1, borderColor: selected ? color : `${color}30`, borderRadius: 16, backgroundColor: selected ? color : tint }}><Icon size={12} color={selected ? colors.white : color} /><Text numberOfLines={1} style={{ color: selected ? colors.white : color, fontSize: 9, fontWeight: '800' }}>{label}</Text></Pressable>;
+  return <Pressable onPress={onPress} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, minHeight: 23, paddingHorizontal: 6, borderWidth: 1, borderColor: selected ? color : `${color}30`, borderRadius: 16, backgroundColor: selected ? color : tint }}><Icon size={10} color={selected ? colors.white : color} /><Text numberOfLines={1} style={{ color: selected ? colors.white : color, fontSize: 8, fontWeight: '800' }}>{label}</Text></Pressable>;
 }
 
 function PickerRow({ label, selected, onPress }: { label: string; selected: boolean; onPress: () => void }) {
@@ -594,11 +741,11 @@ const selectField = { height: 31, borderWidth: 1, borderColor: '#DDE7E1', border
 const selectText = { color: colors.text, fontSize: 9, flex: 1 };
 const selectChevron = { color: colors.muted, fontSize: 14, fontWeight: '800' as const };
 const tabGrid = { flexDirection: 'row' as const, flexWrap: 'wrap' as const, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.border, borderRadius: 12, overflow: 'hidden' as const };
-const tabButton = { width: '25%' as const, minHeight: 46, paddingHorizontal: 3, paddingVertical: 3, flexDirection: 'column' as const, alignItems: 'center' as const, justifyContent: 'center' as const, gap: 2, borderBottomWidth: 2, borderBottomColor: 'transparent' };
+const tabButton = { width: '25%' as const, minHeight: 38, paddingHorizontal: 3, paddingVertical: 3, flexDirection: 'column' as const, alignItems: 'center' as const, justifyContent: 'center' as const, gap: 2, borderBottomWidth: 2, borderBottomColor: 'transparent' };
 const tabButtonActive = { borderBottomColor: '#07965B' };
-const tabDot = { width: 8, height: 8, borderRadius: 5 };
+const tabDot = { width: 9, height: 9, borderRadius: 5 };
 const tabDotColors: Record<Tab, string> = { total: '#0F766E', planned: '#10B981', enroute: '#3B82F6', inprogress: '#F59E0B', completed: '#2563EB', declined: '#DC2626', escalations: '#F59E0B' };
-const tabText = { color: '#718096', fontSize: 8, fontWeight: '800' as const, textAlign: 'center' as const, lineHeight: 10, minHeight: 20 };
+const tabText = { color: '#718096', fontSize: 8, fontWeight: '800' as const, textAlign: 'center' as const, lineHeight: 10, minHeight: 14 };
 const tabTextActive = { color: colors.forest };
-const tabCount = { paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, overflow: 'hidden' as const, color: '#526174', backgroundColor: '#F1F5F9', fontSize: 10, fontWeight: '900' as const };
+const tabCount = { paddingHorizontal: 5, paddingVertical: 1, borderRadius: 8, overflow: 'hidden' as const, color: '#526174', backgroundColor: '#F1F5F9', fontSize: 9, fontWeight: '900' as const };
 const tabCountActive = { color: colors.forest, backgroundColor: '#E9F8EF' };

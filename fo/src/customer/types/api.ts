@@ -218,14 +218,6 @@ export interface PaymentStatus {
   updated_at: string | null;
 }
 
-export interface ServiceHistoryItem {
-  linked_job_id?: number | null;
-  title?: string | null;
-  service_type?: string | null;
-  status?: string | null;
-  created_at?: string | null;
-}
-
 export interface CustomerFeedback {
   job_id: number;
   has_feedback: boolean;

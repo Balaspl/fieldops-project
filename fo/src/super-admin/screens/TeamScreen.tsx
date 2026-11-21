@@ -14,6 +14,7 @@ import {
   ArrowLeft,
   BriefcaseBusiness,
   CircleCheck,
+  CircleX,
   Leaf,
   SlidersHorizontal,
   Users,
@@ -784,7 +785,6 @@ export default function TeamScreen({ onNavigate }: { onNavigate: (tab: string) =
             const workload = Math.max(0, Number(item.current_jobs ?? 0));
             const maxJobs = Math.max(1, Number(item.max_jobs ?? 5));
             const progress = Math.min(100, (workload / maxJobs) * 100);
-            const actionBusy = updatingTechnicianId === String(item.technician_id);
             const isOnline = normalizeStatus(technicianStatus) === 'available';
             const isBusy = normalizeStatus(technicianStatus) === 'busy';
             const location = text(item.technician_location, 'Location not set');
@@ -840,33 +840,6 @@ export default function TeamScreen({ onNavigate }: { onNavigate: (tab: string) =
 
                 </View>
 
-                <View style={{ flexDirection: 'row', justifyContent: 'flex-end', paddingTop: 2 }}>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={showDeactivatedTechnicians ? `Reactivate ${text(item.technician_name, 'technician')}` : `Deactivate ${text(item.technician_name, 'technician')}`}
-                    disabled={actionBusy}
-                    onPress={() => showDeactivatedTechnicians
-                      ? void updateTechnicianLifecycleStatus(item, 'Offline')
-                      : confirmDeactivateTechnician(item)}
-                    style={{
-                      minWidth: 112,
-                      minHeight: 38,
-                      paddingHorizontal: 16,
-                      paddingVertical: 9,
-                      borderRadius: 12,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      backgroundColor: showDeactivatedTechnicians ? '#E4F3E7' : '#FFF0EE',
-                      borderWidth: 1,
-                      borderColor: showDeactivatedTechnicians ? '#9BCBA5' : '#F0B8B3',
-                      opacity: actionBusy ? 0.5 : 1,
-                    }}
-                  >
-                    <Text style={{ color: showDeactivatedTechnicians ? '#17643B' : '#B33B36', fontSize: 12, fontWeight: '900' }}>
-                      {actionBusy ? 'Please wait...' : showDeactivatedTechnicians ? 'Reactivate' : 'Deactivate'}
-                    </Text>
-                  </Pressable>
-                </View>
               </Card>
             );
           })
@@ -938,6 +911,22 @@ export default function TeamScreen({ onNavigate }: { onNavigate: (tab: string) =
               <Pill label={availabilityLabel(profile.technician_status || selectedTechnician?.technician_status)} tone={statusTone(availabilityLabel(profile.technician_status || selectedTechnician?.technician_status))} />
             </View>
           </View>
+          {selectedTechnician ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={showDeactivatedTechnicians ? `Reactivate ${text(selectedTechnician.technician_name, 'technician')}` : `Deactivate ${text(selectedTechnician.technician_name, 'technician')}`}
+              disabled={updatingTechnicianId === String(selectedTechnician.technician_id)}
+              onPress={() => showDeactivatedTechnicians
+                ? void updateTechnicianLifecycleStatus(selectedTechnician, 'Offline')
+                : confirmDeactivateTechnician(selectedTechnician)}
+              style={{ minHeight: 36, paddingHorizontal: 9, borderRadius: 11, backgroundColor: showDeactivatedTechnicians ? '#E4F3E7' : '#FFF0EE', borderWidth: 1, borderColor: showDeactivatedTechnicians ? '#9BCBA5' : '#F0B8B3', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, opacity: updatingTechnicianId === String(selectedTechnician.technician_id) ? 0.5 : 1 }}
+            >
+              {showDeactivatedTechnicians ? <CircleCheck size={14} color="#17643B" /> : <CircleX size={14} color="#B33B36" />}
+              <Text style={{ color: showDeactivatedTechnicians ? '#17643B' : '#B33B36', fontSize: 9, fontWeight: '900' }}>
+                {updatingTechnicianId === String(selectedTechnician.technician_id) ? 'Please wait...' : showDeactivatedTechnicians ? 'Reactivate' : 'Deactivate'}
+              </Text>
+            </Pressable>
+          ) : null}
         </View>
 
         <View style={{ borderWidth: 1, borderColor: 'rgba(220,255,232,.42)', borderRadius: 14, backgroundColor: 'rgba(0,42,25,.72)', padding: 11, flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>

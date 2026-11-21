@@ -67,7 +67,7 @@ export default function ClosureAgentResultsPage() {
                     <strong style={{ fontSize: 16 }}>Job #{result.job_id}</strong>
                     <span style={{ marginLeft: 12, color: "#475569", fontSize: 14 }}>{result.customer_name || "Customer not listed"}</span>
                   </div>
-                  <span style={{ color: "#64748B", fontSize: 12 }}>{result.completed_at ? new Date(result.completed_at).toLocaleString() : "Completion time unavailable"}</span>
+                  <span style={{ color: "#64748B", fontSize: 12 }}>{result.completed_at ? new Date(result.completed_at).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) : "Completion time unavailable"}</span>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12, padding: "14px 18px" }}>
                   <div style={{ display: "flex", alignItems: "flex-start", gap: 9 }}>

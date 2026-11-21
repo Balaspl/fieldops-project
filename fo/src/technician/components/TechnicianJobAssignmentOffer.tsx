@@ -69,7 +69,7 @@ function getPreferredDateTime(job: TechnicianJob): string {
     if (Number.isFinite(timestamp)) {
       const scheduled = new Date(timestamp);
       if (typeof date === "string" && date.trim()) {
-        return `${date} · ${typeof time === "string" && time.trim() ? time : scheduled.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+        return `${date} · ${typeof time === "string" && time.trim() ? time : scheduled.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true})}`;
       }
       return scheduled.toLocaleString([], {
         month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit"

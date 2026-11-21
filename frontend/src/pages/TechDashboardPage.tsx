@@ -95,7 +95,7 @@ function formatAgo(ts: string | number | Date | null) {
     if (diff < 60) return `${diff}m ago`;
     const h = Math.round(diff / 60);
     if (h < 24) return `${h}h ago`;
-    return new Date(ts).toLocaleDateString();
+    return new Date(ts).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" });
   } catch {
     return String(ts);
   }
@@ -160,7 +160,7 @@ function displayJobStatus(status: unknown) {
 function formatJobDate(value: unknown) {
   if (!value) return "—";
   const date = new Date(String(value));
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true });
 }
 
 const styles = {

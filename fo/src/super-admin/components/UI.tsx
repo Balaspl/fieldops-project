@@ -86,6 +86,7 @@ export function MetricCard({
   tone = 'green',
   onPress,
   backgroundColor,
+  compact = false,
 }: {
   label: string;
   value: string | number;
@@ -94,6 +95,7 @@ export function MetricCard({
   tone?: 'green' | 'blue' | 'amber' | 'red' | 'purple';
   onPress?: () => void;
   backgroundColor?: string;
+  compact?: boolean;
 }) {
   const palette = {
     green: { accent: '#28734B', tint: '#E1F1E6' },
@@ -108,22 +110,23 @@ export function MetricCard({
       onPress={onPress}
       style={[
         styles.metricCard,
+        compact && styles.metricCardCompact,
         { backgroundColor: backgroundColor || palette.tint },
       ]}
     >
-      <View style={[styles.metricIcon, { backgroundColor: '#FFFFFFB8' }]}>
+      <View style={[styles.metricIcon, compact && styles.metricIconCompact, { backgroundColor: compact ? palette.tint : '#FFFFFFB8' }]}>
         {icon}
       </View>
-      <Text numberOfLines={2} style={styles.metricLabel}>{label}</Text>
+      <Text numberOfLines={2} style={[styles.metricLabel, compact && styles.metricLabelCompact]}>{label}</Text>
       <Text
         numberOfLines={1}
         adjustsFontSizeToFit
-        style={[styles.metricValue, { color: '#173B2A' }]}
+        style={[styles.metricValue, compact && styles.metricValueCompact, { color: '#173B2A' }]}
       >
         {value}
       </Text>
       {caption ? (
-        <Text numberOfLines={2} style={styles.metricCaption}>{caption}</Text>
+        <Text numberOfLines={2} style={[styles.metricCaption, compact && styles.metricCaptionCompact]}>{caption}</Text>
       ) : null}
     </Card>
   );
@@ -162,7 +165,7 @@ const styles = StyleSheet.create({
   searchWrap: { height: 46, borderWidth: 1, borderColor: colors.border, borderRadius: 14, backgroundColor: colors.white, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, gap: 9 }, searchInput: { flex: 1, paddingVertical: 0, color: colors.ink, fontSize: 14 },
   pill: { alignSelf: 'flex-start', paddingHorizontal: 9, paddingVertical: 5, borderRadius: radii.pill }, pillText: { fontSize: 10, fontWeight: '800', textTransform: 'capitalize' },
   sectionTitle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 3, gap: 10 }, sectionHeading: { fontSize: 16, fontWeight: '900', color: colors.ink }, sectionSubtitle: { fontSize: 11, color: colors.muted }, sectionAction: { flexDirection: 'row', alignItems: 'center', gap: 2 }, sectionActionText: { fontSize: 12, fontWeight: '800', color: colors.forest },
-  metricCard: { width: '100%', minWidth: 0, minHeight: 148, padding: 15, gap: 8, borderRadius: 19, borderColor: '#D8E7DC', shadowColor: '#173B2A', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 10, elevation: 3 }, metricIcon: { height: 42, width: 42, borderRadius: 13, justifyContent: 'center', alignItems: 'center', marginBottom: 2 }, metricLabel: { color: '#52675B', fontSize: 11, fontWeight: '800' }, metricValue: { fontSize: 29, fontWeight: '900', letterSpacing: -0.8 }, metricCaption: { color: '#65796D', fontSize: 10, lineHeight: 14 },
+  metricCard: { width: '100%', minWidth: 0, minHeight: 148, padding: 15, gap: 8, borderRadius: 19, borderColor: '#D8E7DC', shadowColor: '#173B2A', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 10, elevation: 3 }, metricCardCompact: { minHeight: 94, paddingHorizontal: 8, paddingVertical: 7, gap: 3, borderRadius: 15, backgroundColor: '#FFFFFF', borderColor: '#E1EAE4', shadowOpacity: 0.045, shadowRadius: 5, elevation: 1 }, metricIcon: { height: 42, width: 42, borderRadius: 13, justifyContent: 'center', alignItems: 'center', marginBottom: 2 }, metricIconCompact: { height: 23, width: 23, borderRadius: 8, marginBottom: 0 }, metricLabel: { color: '#52675B', fontSize: 11, fontWeight: '800' }, metricLabelCompact: { fontSize: 8, lineHeight: 10 }, metricValue: { fontSize: 29, fontWeight: '900', letterSpacing: -0.8 }, metricValueCompact: { fontSize: 18, lineHeight: 21, letterSpacing: -0.4 }, metricCaption: { color: '#65796D', fontSize: 10, lineHeight: 14 }, metricCaptionCompact: { fontSize: 7, lineHeight: 9 },
   loading: { padding: 40, alignItems: 'center', justifyContent: 'center', gap: 12 }, loadingText: { color: colors.muted, fontSize: 12, fontWeight: '600' }, empty: { padding: 28, borderRadius: 18, alignItems: 'center', backgroundColor: colors.white, borderWidth: 1, borderColor: colors.border, gap: 10 }, emptyIcon: { width: 48, height: 48, backgroundColor: colors.mint, borderRadius: 16, alignItems: 'center', justifyContent: 'center' }, emptyTitle: { fontWeight: '900', fontSize: 15, color: colors.ink, textAlign: 'center' }, emptyDetail: { color: colors.muted, fontSize: 12, textAlign: 'center', lineHeight: 18 },
   errorBanner: { borderRadius: 12, borderWidth: 1, borderColor: '#FECACA', backgroundColor: '#FFF5F5', padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }, errorText: { flex: 1, color: '#991B1B', fontSize: 12, fontWeight: '600', lineHeight: 17 }, refreshAction: { width: 40, height: 40, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.white, borderWidth: 1, borderColor: colors.border },
   screenHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }, screenTitle: { fontSize: 24, color: colors.ink, fontWeight: '900', letterSpacing: -0.7 }, screenSubtitle: { fontSize: 12, lineHeight: 18, color: colors.muted },

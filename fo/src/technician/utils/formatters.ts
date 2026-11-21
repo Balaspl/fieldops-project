@@ -24,7 +24,7 @@ export function formatDateTime(
     return "Invalid date";
   }
 
-  return date.toLocaleString();
+  return date.toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true });
 }
 
 export function formatDate(
@@ -40,7 +40,7 @@ export function formatDate(
     return "Invalid date";
   }
 
-  return date.toLocaleDateString();
+  return date.toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
 export function formatPriority(
