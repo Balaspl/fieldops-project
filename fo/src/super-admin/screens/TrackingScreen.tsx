@@ -576,7 +576,7 @@ export default function TrackingScreen() {
         <Text style={{ color: colors.muted, fontSize: 10 }}>
           Last WebSocket frame:{' '}
           {lastFrameAt
-            ? new Date(lastFrameAt).toLocaleTimeString()
+            ? new Date(lastFrameAt).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true })
             : 'Waiting for server frame'}
         </Text>
       </View>

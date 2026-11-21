@@ -304,6 +304,16 @@ export default function CustomerTabsLayout() {
         />
 
         <Tabs.Screen
+          name="support"
+          options={{
+            title: "Support",
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="chatbubbles-outline" color={color} size={size} />
+            ),
+          }}
+        />
+
+        <Tabs.Screen
           name="tracking"
           options={{ href: null }}
         />
@@ -311,7 +321,7 @@ export default function CustomerTabsLayout() {
         <Tabs.Screen
           name="account"
           options={{
-            title: "Account",
+            title: "Profile",
             tabBarIcon: ({ color, size }) => (
               <Ionicons
                 name="person-circle-outline"

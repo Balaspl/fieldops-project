@@ -1030,7 +1030,7 @@ export default function CustomerServiceHistoryPage() {
                             &bull;{" "}
                             {new Date(
                               feedback.feedback.created_at,
-                            ).toLocaleDateString()}
+                            ).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" })}
                           </span>
                         )}
                       </div>

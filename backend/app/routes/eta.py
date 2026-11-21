@@ -78,6 +78,19 @@ async def get_route(
                 },
             )
 
+        # Keep route, distance, and ETA screens responsive during provider
+        # timeouts. The response explicitly marks this as a straight-line
+        # estimate so clients can distinguish it from Ola road routing.
+        if e.status_code in {"maps_timeout", "maps_unavailable", "maps_quota"}:
+            estimate = client._fallback_route(
+                origin_lat,
+                origin_lng,
+                dest_lat,
+                dest_lng,
+            )
+            estimate["fallback_reason"] = e.status_code
+            return estimate
+
         # Do NOT silently return a straight-line route.
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

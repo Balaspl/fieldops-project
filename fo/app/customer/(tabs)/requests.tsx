@@ -915,7 +915,7 @@ const styles = StyleSheet.create({
   },
 
   metricCard: {
-    width: "48.5%",
+    width: "31.5%",
     height: 105,
     overflow: "hidden",
     position: "relative",

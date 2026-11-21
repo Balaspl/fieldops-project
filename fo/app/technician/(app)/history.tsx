@@ -250,7 +250,7 @@ export default function JobHistoryScreen() {
               </View>
             </LinearGradient>
 
-            {isShowingCachedData ? <View style={styles.offlineNotice}><Text style={styles.offlineTitle}>Saved history · May be outdated</Text><Text style={styles.offlineText}>{cachedAt ? `Last saved ${new Date(cachedAt).toLocaleString()}. ` : ""}Refresh when connected to check for updates.</Text></View> : null}
+            {isShowingCachedData ? <View style={styles.offlineNotice}><Text style={styles.offlineTitle}>Saved history · May be outdated</Text><Text style={styles.offlineText}>{cachedAt ? `Last saved ${new Date(cachedAt).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })}. ` : ""}Refresh when connected to check for updates.</Text></View> : null}
             {error ? <Pressable accessibilityRole="button" onPress={() => void loadHistory(true)} style={styles.warning}><Text style={styles.warningText}>Refresh failed. Tap to retry.</Text></Pressable> : null}
 
             <View style={styles.statsRow}>

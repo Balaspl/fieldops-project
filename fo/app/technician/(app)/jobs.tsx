@@ -553,7 +553,7 @@ export default function JobsScreen() {
                 </Text>
               </Pressable>
             ) : dataSource === "server" && lastSyncedAt ? (
-              <Text style={styles.lastSynced}>Last synced {lastSyncedAt.toLocaleTimeString()}</Text>
+              <Text style={styles.lastSynced}>Last synced {lastSyncedAt.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true })}</Text>
             ) : error && jobs.length > 0 ? (
               <Pressable
                 accessibilityRole="button"

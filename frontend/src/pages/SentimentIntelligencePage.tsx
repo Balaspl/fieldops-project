@@ -186,7 +186,7 @@ export default function SentimentIntelligencePage() {
                   <span className="si-sentiment" style={{ background: colors.bg, color: colors.fg }}>{item.sentiment}</span>
                   <div className="si-subject">{subjectLabel(item)}</div>
                   <div className="si-source">{item.emotion || "Emotion not recorded"} · {sourceLabel(item)}</div>
-                  <div className="si-time">{item.created_at ? new Date(item.created_at).toLocaleString() : ""}</div>
+                  <div className="si-time">{item.created_at ? new Date(item.created_at).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) : ""}</div>
                   {item.requires_human && <div className="si-review-flag"><AlertTriangle size={15} /> Human review</div>}
                 </div>
                 <div className="si-content">
@@ -212,7 +212,7 @@ export default function SentimentIntelligencePage() {
       <section className="si-panel si-escalations">
         <div className="si-panel-head"><h2 className="si-panel-title">Open sentiment escalations</h2></div>
         {alerts.length === 0 ? <p className="si-state">No open sentiment escalations.</p> : alerts.map((alert) => <div className="si-escalation-row" key={alert.escalation_id}>
-          <div><strong>{alert.customer_name}</strong><span style={{ color: "#63748b" }}> · {alert.job_id ? `Job #${alert.job_id}` : "Customer support conversation"}</span><div style={{ marginTop: 5, color: "#63748b", fontSize: 13 }}>{alert.trigger_reason.replace(/_/g, " ").toLowerCase()} · {new Date(alert.created_at).toLocaleString()}</div>{alert.suggested_action && <div style={{ marginTop: 8, color: "#334155", fontSize: 13 }}>Suggested action: {alert.suggested_action}</div>}</div>
+          <div><strong>{alert.customer_name}</strong><span style={{ color: "#63748b" }}> · {alert.job_id ? `Job #${alert.job_id}` : "Customer support conversation"}</span><div style={{ marginTop: 5, color: "#63748b", fontSize: 13 }}>{alert.trigger_reason.replace(/_/g, " ").toLowerCase()} · {new Date(alert.created_at).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })}</div>{alert.suggested_action && <div style={{ marginTop: 8, color: "#334155", fontSize: 13 }}>Suggested action: {alert.suggested_action}</div>}</div>
           <div style={{ textAlign: "right" }}><strong style={{ color: alert.sla_breach ? "#B91C1C" : "#92400E" }}>{alert.sla_breach ? alert.sla_breach.replace(/_/g, " ") : alert.status}</strong><div style={{ color: "#63748b", fontSize: 12, marginTop: 4 }}>{alert.sentiment_label}</div></div>
         </div>)}
       </section>

@@ -863,7 +863,7 @@ export default function CustomerNotificationsPage({
               <div className="customer-notification-card__content">
                 <div className="customer-notification-card__topline">
                   <h2>{notification.title || "Notification"}</h2>
-                  <time dateTime={notification.createdAt} title={notification.createdAt ? new Date(notification.createdAt).toLocaleString() : undefined}>
+                  <time dateTime={notification.createdAt} title={notification.createdAt ? new Date(notification.createdAt).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) : undefined}>
                     {relativeTime(notification.createdAt)}
                   </time>
                 </div>
@@ -904,7 +904,7 @@ export default function CustomerNotificationsPage({
                 <div
                   className="customer-notification-card__date"
                 >
-                  {notification.createdAt ? new Date(notification.createdAt).toLocaleString() : ""}
+                  {notification.createdAt ? new Date(notification.createdAt).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) : ""}
                 </div>
               </div>
 

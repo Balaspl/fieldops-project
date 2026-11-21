@@ -11,7 +11,7 @@ const formatAgo = (ts: string) => {
     if (diff < 60) return `${diff}m ago`;
     const h = Math.round(diff / 60);
     if (h < 24) return `${h}h ago`;
-    return new Date(ts).toLocaleDateString();
+    return new Date(ts).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" });
   } catch {
     return String(ts);
   }

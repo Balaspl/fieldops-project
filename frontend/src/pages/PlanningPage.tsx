@@ -4379,7 +4379,7 @@ const fetchCompletedCount = async () => {
                           </div>
                         </td>
                         <td style={styles.dashboardTableTd}>
-                          {job.rejected_at ? new Date(job.rejected_at).toLocaleString() : "N/A"}
+                          {job.rejected_at ? new Date(job.rejected_at).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) : "N/A"}
                         </td>
                         <td style={styles.dashboardTableTd}>
                           <button

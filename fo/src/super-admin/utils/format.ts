@@ -2,17 +2,17 @@ export const text = (value: any, fallback = '—') => value === null || value ==
 export const statusLabel = (value: any) => text(value, 'UNKNOWN').replace(/[_-]+/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
 export const statusTone = (value: any): 'green' | 'red' | 'amber' | 'blue' | 'purple' | 'neutral' => {
   const s = String(value || '').toUpperCase();
-  if (['AVAILABLE', 'ONLINE', 'COMPLETED', 'CLOSED', 'RESOLVED', 'ACTIVE'].includes(s)) return 'green';
-  if (['OFFLINE', 'CANCELLED', 'CANCELED', 'FAILED', 'REJECTED'].includes(s)) return 'red';
-  if (['PENDING', 'QUEUED', 'CREATED', 'OPEN', 'WAITING', 'AWAITING ACCEPTANCE'].includes(s)) return 'amber';
-  if (['ASSIGNED', 'EN_ROUTE', 'ENROUTE', 'IN_PROGRESS', 'ON_SITE'].includes(s)) return 'blue';
-  if (['CRITICAL', 'URGENT', 'HIGH'].includes(s)) return 'purple';
+  if (['AVAILABLE', 'ONLINE', 'COMPLETED', 'CLOSED', 'RESOLVED', 'ACTIVE', 'ACCEPTED', 'ALL', 'ALL STATUSES', 'ALL SLA', 'LOW'].includes(s)) return 'green';
+  if (['OFFLINE', 'CANCELLED', 'CANCELED', 'FAILED', 'REJECTED', 'CRITICAL', 'URGENT', 'BREACHED'].includes(s)) return 'red';
+  if (['PENDING', 'QUEUED', 'CREATED', 'OPEN', 'WAITING', 'AWAITING ACCEPTANCE', 'HIGH'].includes(s)) return 'amber';
+  if (['ASSIGNED', 'EN_ROUTE', 'ENROUTE', 'IN_PROGRESS', 'ON_SITE', 'MEDIUM', 'MEDIUM PRIORITY'].includes(s)) return 'blue';
+  if (['ESCALATED', 'ESCALATED_TO_CTO'].includes(s)) return 'purple';
   return 'neutral';
 };
 export const dateTime = (value?: string | null) => {
   if (!value) return 'Not recorded';
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true });
 };
 export const timeAgo = (value?: string | null) => {
   if (!value) return 'No recent GPS';

@@ -332,6 +332,10 @@ async def lifespan(app: FastAPI):
         if redis_pubsub_client:
             await redis_pubsub_client.aclose()
 
+        from .services.ola_map_client import close_ola_maps_sessions
+
+        await close_ola_maps_sessions()
+
         stop_scheduler()
 
 

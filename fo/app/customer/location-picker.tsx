@@ -77,6 +77,8 @@ function createPickerHtml(
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<link rel="preconnect" href="https://api.olamaps.io" crossorigin />
+<link rel="preconnect" href="https://www.unpkg.com" crossorigin />
 <style>
   html, body, #map { width:100%; height:100%; margin:0; padding:0; overflow:hidden; background:#edf3ee; }
   #map-error { display:none; position:absolute; inset:0; padding:22px; box-sizing:border-box; align-items:center; justify-content:center; text-align:center; color:#476258; background:#edf3ee; font:600 14px/1.5 -apple-system,BlinkMacSystemFont,Arial,sans-serif; }

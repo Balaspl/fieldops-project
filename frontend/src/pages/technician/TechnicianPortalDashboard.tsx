@@ -836,7 +836,7 @@ export default function TechnicianPortalDashboard({
     const date = new Date(value);
     return Number.isNaN(date.getTime())
       ? "Not recorded"
-      : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      : date.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true});
   };
 
   const currentHour = new Date().getHours();
@@ -918,7 +918,7 @@ export default function TechnicianPortalDashboard({
     <span style={{ color: "#71809B", fontSize: 12 }}>
       Last synced:{" "}
       {availabilityLastSyncedAt !== null
-        ? new Date(availabilityLastSyncedAt).toLocaleTimeString()
+        ? new Date(availabilityLastSyncedAt).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true })
         : "Not available"}
     </span>
   </div>
@@ -1064,7 +1064,7 @@ export default function TechnicianPortalDashboard({
           <span style={{ color: "#71809B", fontSize: 12 }}>
             Last synced:{" "}
             {availabilityLastSyncedAt !== null
-              ? new Date(availabilityLastSyncedAt).toLocaleTimeString()
+              ? new Date(availabilityLastSyncedAt).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true })
               : "Not available"}
           </span>
         </div>

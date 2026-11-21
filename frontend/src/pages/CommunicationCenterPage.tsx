@@ -73,9 +73,13 @@ const formatDate = (value: string | null) => {
   if (!value) return "Time unavailable";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Time unavailable";
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
   }).format(date);
 };
 

@@ -56,58 +56,63 @@ function normalizeCatalogValue(value?: string | null): string {
  * Avoid substring matching: for example, "electrical" must not accidentally
  * match an unrelated value that merely contains the same text.
  */
-function catalogItemMatchesCategory(
+function catalogItemMatchesIssue(
   item: ServiceCatalogItem,
   category: ServiceCategory,
+  taxonomyCategory: TaxonomyServiceType["categories"][number],
+  issue: string,
 ): boolean {
+  if (item.is_active !== true) return false;
+
   const itemType = normalizeCatalogValue(item.service_type);
+  const typeName = normalizeCatalogValue(category.taxonomy.name);
+  const typeId = normalizeCatalogValue(category.taxonomy.id);
   const itemCategory = normalizeCatalogValue(item.category);
+  const categoryName = normalizeCatalogValue(taxonomyCategory.name);
+  const categoryId = normalizeCatalogValue(taxonomyCategory.id);
 
-  const categoryTypeValues = [
-    category.taxonomy.id,
-    category.taxonomy.name,
-  ]
-    .map(normalizeCatalogValue)
-    .filter(Boolean);
+  const matchesType =
+    itemType === typeName ||
+    itemType === typeId ||
+    itemType.includes(typeId) ||
+    typeName.includes(itemType) ||
+    itemType.includes(typeName) ||
+    category.taxonomy.categories.some((entry) => {
+      const name = normalizeCatalogValue(entry.name);
+      const id = normalizeCatalogValue(entry.id);
+      return (
+        itemCategory === name ||
+        itemCategory === id ||
+        name.includes(itemCategory) ||
+        itemCategory.includes(name)
+      );
+    });
 
-  const taxonomyCategoryValues = category.taxonomy.categories
-    .flatMap((entry) => [entry.id, entry.name])
-    .map(normalizeCatalogValue)
-    .filter(Boolean);
-
-  return (
-    (itemType.length > 0 && categoryTypeValues.includes(itemType)) ||
-    (itemCategory.length > 0 && taxonomyCategoryValues.includes(itemCategory))
-  );
-}
-
-/**
- * A catalogue API response should contain one record per service.
- * Prefer the backend ID when available; otherwise use the service fields
- * as a stable fallback so repeated copies of the same record are not counted.
- */
-function getCatalogItemIdentity(item: ServiceCatalogItem): string {
-  const rawItem = item as ServiceCatalogItem & {
-    id?: string | number;
-    service_id?: string | number;
-    catalog_item_id?: string | number;
-    name?: string;
-    title?: string;
+  const aliases: Record<string, string> = {
+    sofacarpetmattressandcurtain: "sofacarpetmattresscurtaincleaning",
+    watertankandsumpcleaning: "watertanksumpcleaning",
+    kitchencleaning: "kitchendeepcleaning",
+    bathroomcleaning: "bathroomdeepcleaning",
+    officeandcommercialcleaning: "officecommercialcleaning",
+    specialisedcleaning: "specialisedcleaningservices",
   };
+  const itemCategoryAlias = aliases[itemCategory];
+  const matchesCategory =
+    itemCategory === categoryName ||
+    itemCategoryAlias === categoryName ||
+    itemCategory === categoryId ||
+    itemCategory.includes(categoryName) ||
+    categoryName.includes(itemCategory);
 
-  const id = rawItem.id ?? rawItem.service_id ?? rawItem.catalog_item_id;
-  if (id !== undefined && id !== null && String(id).trim() !== "") {
-    return `id:${String(id).trim()}`;
-  }
+  const itemIssue = normalizeCatalogValue(item.issue || item.category || item.service_type);
+  const requestedIssue = normalizeCatalogValue(issue);
+  const matchesIssue =
+    requestedIssue.length > 0 &&
+    (itemIssue === requestedIssue ||
+      itemIssue.includes(requestedIssue) ||
+      requestedIssue.includes(itemIssue));
 
-  return [
-    rawItem.service_type,
-    rawItem.category,
-    rawItem.issue,
-    rawItem.name ?? rawItem.title,
-  ]
-    .map((value) => normalizeCatalogValue(value))
-    .join("|");
+  return matchesType && matchesCategory && matchesIssue;
 }
 
 export default function CustomerHomeScreen() {
@@ -120,7 +125,7 @@ export default function CustomerHomeScreen() {
   const refreshCatalog = useCallback(async () => {
     try {
       const items = await customerApi.catalog();
-      setServiceCatalog(items.filter((item) => item.is_active !== false));
+      setServiceCatalog(items.filter((item) => item.is_active === true));
       setCatalogLoadFailed(false);
       setCatalogLoaded(true);
     } catch {
@@ -139,17 +144,25 @@ export default function CustomerHomeScreen() {
     const counts: Record<string, number> = {};
 
     for (const category of CATEGORIES) {
-      const matchingServices = serviceCatalog.filter(
-        (item) => catalogItemMatchesCategory(item, category),
+      counts[category.id] = category.taxonomy.categories.reduce(
+        (total, taxonomyCategory) =>
+          total +
+          taxonomyCategory.issues.filter((issue) =>
+            serviceCatalog.some((item) =>
+              catalogItemMatchesIssue(item, category, taxonomyCategory, issue),
+            ),
+          ).length,
+        0,
       );
-
-      counts[category.id] = new Set(
-        matchingServices.map(getCatalogItemIdentity),
-      ).size;
     }
 
     return counts;
   }, [serviceCatalog]);
+
+  const availableCategories = useMemo(
+    () => CATEGORIES.filter((category) => (categoryCounts[category.id] ?? 0) > 0),
+    [categoryCounts],
+  );
 
   const openRequests = (params?: {
     category?: string;
@@ -347,7 +360,14 @@ export default function CustomerHomeScreen() {
 
         {/* Two-column image card grid */}
         <View style={styles.categoryGrid}>
-          {CATEGORIES.map((category) => (
+          {!catalogLoaded ? (
+            <Text style={styles.catalogMessage}>Loading available services…</Text>
+          ) : catalogLoadFailed ? (
+            <Text style={styles.catalogMessage}>Could not load available services. Pull to refresh and try again.</Text>
+          ) : availableCategories.length === 0 ? (
+            <Text style={styles.catalogMessage}>No services are currently available to book.</Text>
+          ) : null}
+          {catalogLoaded && !catalogLoadFailed && availableCategories.map((category) => (
             <Pressable
               key={category.id}
               style={({ pressed }) => [
@@ -396,7 +416,7 @@ export default function CustomerHomeScreen() {
                     ? "Loading services"
                     : catalogLoadFailed
                       ? "Unavailable"
-                      : `${categoryCounts[category.id] ?? 0} ${(categoryCounts[category.id] ?? 0) === 1 ? "Service" : "Services"}`}
+                      : `${categoryCounts[category.id]} ${categoryCounts[category.id] === 1 ? "Service" : "Services"} Available`}
                 </Text>
 
                 <Feather
@@ -618,6 +638,14 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     justifyContent: "space-between",
     rowGap: 13,
+  },
+
+  catalogMessage: {
+    width: "100%",
+    paddingVertical: 16,
+    color: "#64748B",
+    fontSize: 13,
+    textAlign: "center",
   },
 
   categoryCard: {

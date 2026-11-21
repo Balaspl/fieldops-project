@@ -489,8 +489,8 @@ export default function ServicesScreen() {
       <ImageBackground
         source={require('../../../assets/team/nature_team_background.png')}
         resizeMode="cover"
-        imageStyle={{ opacity: 1 }}
-        style={{ flex: 1, backgroundColor: '#E8F1E6' }}
+        imageStyle={{ opacity: 0.76 }}
+        style={{ flex: 1, backgroundColor: '#D5E3D5' }}
       >
       <ScrollView
         style={{ flex: 1, backgroundColor: 'transparent' }}
@@ -540,8 +540,8 @@ export default function ServicesScreen() {
     <ImageBackground
       source={require('../../../assets/team/nature_team_background.png')}
       resizeMode="cover"
-      imageStyle={{ opacity: 1 }}
-      style={{ flex: 1, backgroundColor: '#E8F1E6' }}
+      imageStyle={{ opacity: 0.76 }}
+      style={{ flex: 1, backgroundColor: '#D5E3D5' }}
     >
     <ScrollView
       style={{ flex: 1, backgroundColor: 'transparent' }}
@@ -577,13 +577,6 @@ export default function ServicesScreen() {
         <>
           {step === 1 ? (
             <>
-              <View style={{ gap: 4, paddingHorizontal: 2 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
-                  <Leaf size={21} color="#3C8A38" fill="#7CBF48" />
-                  <Text style={{ color: '#103F2B', fontSize: 19, fontWeight: '900' }}>Select Service Type</Text>
-                </View>
-                <Text style={{ color: '#244F3A', fontSize: 11, fontWeight: '600' }}>Choose a service type to configure its categories and issues.</Text>
-              </View>
               <SearchField value={serviceSearch} onChangeText={setServiceSearch} placeholder="Search 16 service types…" />
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 12 }}>
                 {visibleServiceTypes.map((serviceType) => {

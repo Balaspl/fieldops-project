@@ -73,10 +73,9 @@ function formatDateTime(value?: string | null): string {
 function formatClock(value?: string | null): string {
   const date = asDate(value);
   if (!date) return "";
-  return date.toLocaleTimeString([], {
+  return date.toLocaleTimeString("en-IN", {
     hour: "numeric",
-    minute: "2-digit",
-  });
+    minute: "2-digit", hour12: true});
 }
 
 function relativeTime(value?: string | null): string {
@@ -130,7 +129,7 @@ function formatAppointment(dateValue?: string | null, timeValue?: string | null)
   const timeMatch = timeValue?.match(/^(\d{1,2}):(\d{2})/);
   if (timeMatch) {
     const clock = new Date(2000, 0, 1, Number(timeMatch[1]), Number(timeMatch[2]));
-    clockLabel = clock.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    clockLabel = clock.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true});
   } else if (timeValue) {
     clockLabel = timeValue;
   }
@@ -268,6 +267,8 @@ function createOlaMapHtml(apiKey: string): string {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<link rel="preconnect" href="https://api.olamaps.io" crossorigin />
+<link rel="preconnect" href="https://www.unpkg.com" crossorigin />
 <style>
   html, body, #map { width:100%; height:100%; margin:0; padding:0; overflow:hidden; background:#edf3ee; }
   #map-error { display:none; position:absolute; inset:0; padding:22px; box-sizing:border-box; align-items:center; justify-content:center; text-align:center; color:#476258; background:#edf3ee; font:600 14px/1.5 -apple-system,BlinkMacSystemFont,Arial,sans-serif; }

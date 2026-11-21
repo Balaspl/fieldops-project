@@ -566,7 +566,7 @@ describe("JobsPage - Task 8 Payment Status", () => {
       expect(payment.getByText("#5001")).toBeTruthy();
       expect(
         payment.getByText(
-          new Date(paymentStatusRecord.updated_at).toLocaleString()
+          new Date(paymentStatusRecord.updated_at).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
         )
       ).toBeTruthy();
     });

@@ -706,7 +706,7 @@ export default function ReDispatchHistory({
     }),
     columnHelper.accessor("created_at", {
       header: "Time",
-      cell: info => new Date(info.getValue()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      cell: info => new Date(info.getValue()).toLocaleTimeString("en-IN", { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true})
     })
   ], []);
 
@@ -892,7 +892,7 @@ export default function ReDispatchHistory({
                   <div style={styles.summaryLabel}>Next Dispatch ETA</div>
                   <div style={{ fontSize: "14px", fontWeight: 700, color: "#1e293b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: "2px", lineHeight: 1.2 }}>
                     {nextDispatchETA
-                      ? new Date(nextDispatchETA).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                      ? new Date(nextDispatchETA).toLocaleTimeString("en-IN", { hour: '2-digit', minute: '2-digit', hour12: true})
                       : <span style={{ color: "#334155" }}>No pending search</span>}
                   </div>
                   <div style={styles.summarySubtitle}>{etaSubtitle}</div>
@@ -1234,7 +1234,7 @@ export default function ReDispatchHistory({
                       <div style={styles.detailRow}>
                         <span style={styles.detailLabel}>Next ETA</span>
                         <span style={styles.detailValue}>
-                          {nextDispatchETA ? new Date(nextDispatchETA).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "No pending search"}
+                          {nextDispatchETA ? new Date(nextDispatchETA).toLocaleTimeString("en-IN", { hour: '2-digit', minute: '2-digit', hour12: true}) : "No pending search"}
                         </span>
                       </div>
                     </div>

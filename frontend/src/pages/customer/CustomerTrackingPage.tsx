@@ -762,7 +762,7 @@ export default function CustomerTrackingPage({
                     {job.created_at
                       ? new Date(
                           job.created_at
-                        ).toLocaleDateString()
+                        ).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" })
                       : "N/A"}
                   </div>
 
@@ -779,7 +779,7 @@ export default function CustomerTrackingPage({
                       Completed:{" "}
                       {new Date(
                         job.completed_at
-                      ).toLocaleDateString()}
+                      ).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" })}
                     </div>
                   )}
                 </div>

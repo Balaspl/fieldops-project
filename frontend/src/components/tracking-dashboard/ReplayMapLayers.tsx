@@ -93,11 +93,11 @@ export const ReplayMapLayers: React.FC = () => {
               </p>
               <p>
                 <strong>Arrived:</strong>{' '}
-                {new Date(selectedStop.arrivalTimestamp).toLocaleTimeString()}
+                {new Date(selectedStop.arrivalTimestamp).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true })}
               </p>
               <p>
                 <strong>Departed:</strong>{' '}
-                {new Date(selectedStop.departureTimestamp).toLocaleTimeString()}
+                {new Date(selectedStop.departureTimestamp).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true })}
               </p>
             </div>
           </div>
